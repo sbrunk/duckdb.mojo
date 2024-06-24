@@ -1,2 +1,3 @@
 # duckdb.mojo
-Mojo Bindings for DuckDB
+
+WIP Mojo Bindings for DuckDB
