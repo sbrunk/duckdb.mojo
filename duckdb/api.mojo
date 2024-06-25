@@ -1,6 +1,7 @@
 from duckdb.libduckdb import *
 from sys.ffi import _get_global
 
+
 fn _init_global(ignored: UnsafePointer[NoneType]) -> UnsafePointer[NoneType]:
     var ptr = UnsafePointer[LibDuckDB].alloc(1)
     ptr[] = LibDuckDB()
@@ -31,6 +32,7 @@ struct _DuckDBInterfaceImpl:
     fn libDuckDB(self) -> LibDuckDB:
         return self._libDuckDB[]
 
+
 struct DuckDB:
     var impl: _DuckDBInterfaceImpl
 
@@ -41,7 +43,18 @@ struct DuckDB:
     def connect(db_path: String) -> Connection:
         return Connection(db_path)
 
+
+# TODO separate opening and connecting but add convenient functions to keep it simple
 struct Connection:
+    """A connection to a DuckDB database.
+
+    Example:
+    ```
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT lst, lst || 'duckdb' FROM range(10) tbl(lst)")
+    ```
+    """
+
     var __db: duckdb_database
     var __conn: duckdb_connection
 
@@ -49,13 +62,17 @@ struct Connection:
         var impl = _get_global_duckdb_itf().libDuckDB()
         self.__db = UnsafePointer[duckdb_database.type]()
         var db_addr = UnsafePointer.address_of(self.__db)
-        if (impl.duckdb_open(db_path.unsafe_cstr_ptr(), db_addr)) == DuckDBError:
+        if (
+            impl.duckdb_open(db_path.unsafe_cstr_ptr(), db_addr)
+        ) == DuckDBError:
             raise Error(
                 "Could not open database"
             )  ## TODO use duckdb_open_ext and return error message
         self.__conn = UnsafePointer[duckdb_connection.type]()
         if (
-            impl.duckdb_connect(self.__db, UnsafePointer.address_of(self.__conn))
+            impl.duckdb_connect(
+                self.__db, UnsafePointer.address_of(self.__conn)
+            )
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
@@ -76,8 +93,6 @@ struct Connection:
         return ResultSet(result)
 
 
-
-@value
 struct ResultSet(Stringable):
     var __result: duckdb_result
     var impl: LibDuckDB
@@ -107,15 +122,28 @@ struct ResultSet(Stringable):
     #     return self.rows
 
     fn column_count(self) -> Int:
-
-        return int(self.impl.duckdb_column_count(UnsafePointer.address_of(self.__result)))
+        return int(
+            self.impl.duckdb_column_count(
+                UnsafePointer.address_of(self.__result)
+            )
+        )
 
     fn column_name(self, col: UInt64) -> String:
-        return self.impl.duckdb_column_name(UnsafePointer.address_of(self.__result), col)
+        return self.impl.duckdb_column_name(
+            UnsafePointer.address_of(self.__result), col
+        )
 
-    fn column_type(self, col: UInt64) -> Int:
+    fn column_types(self) -> List[Int]:
+        var types = List[Int]()
+        for i in range(self.column_count()):
+            types.append(self.column_type(i))
+        return types
+
+    fn column_type(self, col: Int) -> Int:
         return int(
-            self.impl.duckdb_column_type(UnsafePointer.address_of(self.__result), col)
+            self.impl.duckdb_column_type(
+                UnsafePointer.address_of(self.__result), col
+            )
         )
 
     fn __str__(self) -> String:
@@ -142,19 +170,28 @@ struct ResultSet(Stringable):
     fn fetch_chunk(self) raises -> Chunk:
         return Chunk(self.impl.duckdb_fetch_chunk(self.__result), self)
 
-    # TODO del/destroy
+    fn __del__(owned self):
+        print(self.__result.internal_data)
+        self.impl.duckdb_destroy_result(UnsafePointer.address_of(self.__result))
+
+    fn __moveinit__(inout self, owned existing: Self):
+        self.__result = existing.__result
+        self.impl = existing.impl
 
 
 @value
 struct Chunk:
     var impl: LibDuckDB
     var __chunk: duckdb_data_chunk
-    var result: ResultSet
+
+    var column_count: Int
+    var column_types: List[Int]
 
     def __init__(inout self, chunk: duckdb_data_chunk, result: ResultSet):
         self.impl = _get_global_duckdb_itf().libDuckDB()
         self.__chunk = chunk
-        self.result = result
+        self.column_count = result.column_count()
+        self.column_types = result.column_types()
 
     fn __len__(self) -> Int:
         return int(self.impl.duckdb_data_chunk_get_size(self.__chunk))
@@ -162,27 +199,40 @@ struct Chunk:
     fn __get_vector(self, col: UInt64) -> Vector:
         return Vector(self.impl.duckdb_data_chunk_get_vector(self.__chunk, col))
 
-    fn get_string(self, col: Int, row: Int) raises -> String:
+    fn _check_bounds(self, col: Int, row: Int) raises -> NoneType:
         if row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
-        if col >= self.result.column_count():
+        if col >= self.column_count:
             raise Error(String("Column {} out of bounds.").format(col))
-        if self.result.column_type(col) != DUCKDB_TYPE_VARCHAR:
+
+    fn _check_type(self, col: Int, expected: Int) raises -> NoneType:
+        if self.column_types[col] != DUCKDB_TYPE_VARCHAR:
             raise Error(
-                String("Column {} has type {}. Expected string.").format(
-                    col, type_names().get(self.result.column_type(col), "UNKNOWN")
+                String("Column {} has type {}. Expected {}.").format(
+                    col,
+                    type_names().get(self.column_types[col], "UNKNOWN"),
+                    type_names().get(expected, "UNKNOWN"),
                 )
             )
+
+    fn _validate(
+        self, col: Int, row: Int, expected_type: Int
+    ) raises -> NoneType:
+        self._check_bounds(col, row)
+        self._check_type(col, expected_type)
+
+    fn get_string(self, col: Int, row: Int) raises -> String:
+        self._validate(col, row, DUCKDB_TYPE_VARCHAR)
         var vector = self.__get_vector(col)
         # Short strings are inlined so need to check the length and then cast accordingly
         var data_str_ptr = vector.__get_data().bitcast[
             duckdb_string_t_pointer
         ]()
-        var data_str_inlined = vector.__get_data().bitcast[
-            duckdb_string_t_inlined
-        ]()
         var string_value: String
         if data_str_ptr[row].length <= 12:
+            var data_str_inlined = vector.__get_data().bitcast[
+                duckdb_string_t_inlined
+            ]()
             string_value = StringRef(
                 data_str_inlined[row].inlined.unsafe_ptr(), 12
             )
@@ -197,13 +247,11 @@ struct Chunk:
 struct Vector:
     var __vector: duckdb_vector
 
-
     fn __get_data(self) -> UnsafePointer[NoneType]:
         var impl = _get_global_duckdb_itf().libDuckDB()
         return impl.duckdb_vector_get_data(self.__vector)
 
 
-@value
 struct ResultSetIterator:
     var result: ResultSet
     var index: Int
