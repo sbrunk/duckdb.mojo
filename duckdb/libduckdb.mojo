@@ -418,14 +418,13 @@ alias duckdb_value = UnsafePointer[_duckdb_value]
 @value
 struct LibDuckDB:
     var lib: DLHandle
-    var init_error: StringRef
 
     # TODO make this os independent and configurable
     fn __init__(inout self, path: String = "libduckdb.dylib"):
-        self.init_error = ""
         self.lib = DLHandle(path)
-        if not self.lib:
-            self.init_error = "Could not load DuckDB library"
+
+    fn __del__(owned self):
+        self.lib.close()
 
     # ===--------------------------------------------------------------------===#
     # Open/Connect
@@ -473,6 +472,11 @@ struct LibDuckDB:
         ]("duckdb_connect")(database, out_connection)
 
     fn duckdb_disconnect(self, connection: UnsafePointer[duckdb_connection]) -> NoneType:
+        """
+        Closes the specified connection and de-allocates all memory allocated for that connection.
+
+        * connection: The connection to close.
+        """
         return self.lib.get_function[
             fn (UnsafePointer[duckdb_connection]) -> NoneType
         ]("duckdb_disconnect")(connection)
@@ -608,9 +612,6 @@ struct LibDuckDB:
         return self.lib.get_function[
             fn (UnsafePointer[duckdb_result]) -> idx_t
         ]("duckdb_row_count")(result)
-
-    fn __del__(owned self):
-        self.lib.close()
 
     # ===--------------------------------------------------------------------===#
     # Result Functions
