@@ -1,5 +1,13 @@
 from sys.ffi import external_call, DLHandle, C_char
 from utils import StaticTuple, InlineArray
+"""FFI definitions for the DuckDB C API ported to Mojo.
+
+Derived from
+https://github.com/duckdb/duckdb/blob/v1.0.0/src/include/duckdb.h
+
+Once Mojo is able to generate these bindings automatically, we should switch
+to ease maintenance.
+"""
 
 # ===--------------------------------------------------------------------===#
 # Enums
@@ -182,10 +190,11 @@ alias idx_t = UInt64
 
 #! Days are stored as days since 1970-01-01
 #! Use the duckdb_from_date/duckdb_to_date function to extract individual information
+@value
 struct duckdb_date:
     var days: Int32
 
-
+@value
 struct duckdb_date_struct:
     var year: Int32
     var month: Int8
@@ -194,10 +203,11 @@ struct duckdb_date_struct:
 
 #! Time is stored as microseconds since 00:00:00
 #! Use the duckdb_from_time/duckdb_to_time function to extract individual information
+@value
 struct duckdb_time:
     var micros: Int64
 
-
+@value
 struct duckdb_time_struct:
     var hour: Int8
     var min: Int8
@@ -206,10 +216,11 @@ struct duckdb_time_struct:
 
 
 #! TIME_TZ is stored as 40 bits for int64_t micros, and 24 bits for int32_t offset
+@value
 struct duckdb_time_tz:
     var bits: UInt64
 
-
+@value
 struct duckdb_time_tz_struct:
     var time: duckdb_time_struct
     var offset: Int32
@@ -217,15 +228,16 @@ struct duckdb_time_tz_struct:
 
 #! Timestamps are stored as microseconds since 1970-01-01
 #! Use the duckdb_from_timestamp/duckdb_to_timestamp function to extract individual information
+@value
 struct duckdb_timestamp:
     var micros: Int64
 
-
+@value
 struct duckdb_timestamp_struct:
     var date: duckdb_date_struct
     var time: duckdb_time_struct
 
-
+@value
 struct duckdb_interval:
     var months: Int32
     var days: Int32
@@ -235,23 +247,24 @@ struct duckdb_interval:
 #! Hugeints are composed of a (lower, upper) component
 #! The value of the hugeint is upper * 2^64 + lower
 #! For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
+@value
 struct duckdb_hugeint:
     var lower: UInt64
     var upper: Int64
 
-
+@value
 struct duckdb_uhugeint:
     var lower: UInt64
     var upper: UInt64
 
-
+@value
 #! Decimals are composed of a width and a scale, and are stored in a hugeint
 struct duckdb_decimal:
     var width: UInt8
     var scale: UInt8
     var value: duckdb_hugeint
 
-
+@value
 #! A type holding information about the query execution progress
 struct duckdb_query_progress_type:
     var percentage: Float64
@@ -267,13 +280,13 @@ struct duckdb_query_progress_type:
 # This is defined as a C union, which is not yet supported in Mojo so we use two structs and
 # peek into length to determine which one is used.
 
-
+@value
 struct duckdb_string_t_pointer:
     var length: UInt32
     var prefix: InlineArray[C_char, 4]
     var ptr: UnsafePointer[C_char]
 
-
+@value
 struct duckdb_string_t_inlined:
     var length: UInt32
     var inlined: InlineArray[C_char, 12]
@@ -282,6 +295,7 @@ struct duckdb_string_t_inlined:
 #! The internal representation of a list metadata entry contains the list's offset in
 #! the child vector, and its length. The parent vector holds these metadata entries,
 #! whereas the child vector holds the data
+@value
 struct duckdb_list_entry:
     var offset: UInt64
     var length: UInt64
