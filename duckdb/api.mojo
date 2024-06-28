@@ -91,7 +91,7 @@ struct Connection:
         impl.duckdb_disconnect(UnsafePointer.address_of(self.__conn))
         impl.duckdb_close(UnsafePointer.address_of(self.__db))
 
-    fn execute(self, query: String) raises -> ResultSet:
+    fn execute(self, query: String) raises -> Result:
         var impl = _get_global_duckdb_itf().libDuckDB()
         var result = duckdb_result()
         var result_ptr = UnsafePointer.address_of(result)
@@ -100,36 +100,15 @@ struct Connection:
             == DuckDBError
         ):
             raise Error(impl.duckdb_result_error(result_ptr))
-        return ResultSet(result)
+        return Result(result)
 
-
-struct ResultSet(Stringable):
+struct Result(Stringable):
     var __result: duckdb_result
     var impl: LibDuckDB
-    # var rows: UInt64
-    # var columns: UInt64
 
     fn __init__(inout self, result: duckdb_result):
         self.__result = result
         self.impl = _get_global_duckdb_itf().libDuckDB()
-        # self.rows = self.__lib.duckdb_row_count(UnsafePointer.address_of(self.__result))
-        # self.columns = duckdb_column_count(
-        #     UnsafePointer.address_of(self.__result)
-        # )
-
-    # def get_string(
-    #     self,
-    #     col: UInt64,
-    #     row: UInt64,
-    # ) -> String:
-    #     return String(
-    #         self.__lib.duckdb_value_varchar(
-    #             UnsafePointer.address_of(self.__result), col, row
-    #         )
-    #     )
-
-    # fn __len__(self) -> UInt64:
-    #     return self.rows
 
     fn column_count(self) -> Int:
         return int(
@@ -169,16 +148,16 @@ struct ResultSet(Stringable):
                 x
                 + self.column_name(i)
                 + " "
-                + type_names().get(self.column_type(i), "UNKNOWN")
+                + type_names.get(self.column_type(i), "UNKNOWN")
                 + ", "
             )
         return x
 
-    # fn __iter__(self) -> ResultSetIterator:
-    #     return ResultSetIterator(self)
+    # fn __iter__(self) -> ResultIterator:
+    #     return ResultIterator(self)
 
-    fn fetch_chunk(self) raises -> Chunk:
-        return Chunk(self.impl.duckdb_fetch_chunk(self.__result), self)
+    fn fetch_chunk(self) raises -> Chunk[__lifetime_of(self)]:
+        return Chunk[__lifetime_of(self)](self.impl.duckdb_fetch_chunk(self.__result), self)
 
     fn __del__(owned self):
         self.impl.duckdb_destroy_result(UnsafePointer.address_of(self.__result))
@@ -187,20 +166,21 @@ struct ResultSet(Stringable):
         self.__result = existing.__result
         self.impl = existing.impl
 
+    # @always_inline
+    # fn get_ref(ref [_]self: Self) -> ref [__lifetime_of(self)] Self:
+    #     return self
+
 
 @value
-struct Chunk:
+struct Chunk[result_lifetime: AnyLifetime[False].type]:
     var impl: LibDuckDB
     var __chunk: duckdb_data_chunk
+    var result: Reference[Result, result_lifetime]
 
-    var column_count: Int
-    var column_types: List[Int]
-
-    def __init__(inout self, chunk: duckdb_data_chunk, result: ResultSet):
-        self.impl = _get_global_duckdb_itf().libDuckDB()
+    def __init__(inout self, chunk: duckdb_data_chunk, ref [result_lifetime] result: Result):
+        self.result = result
         self.__chunk = chunk
-        self.column_count = result.column_count()
-        self.column_types = result.column_types()
+        self.impl = _get_global_duckdb_itf().libDuckDB()
 
     fn __del__(owned self):
         self.impl.duckdb_destroy_data_chunk(
@@ -216,16 +196,16 @@ struct Chunk:
     fn _check_bounds(self, col: Int, row: Int) raises -> NoneType:
         if row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
-        if col >= self.column_count:
+        if col >= self.result[].column_count():
             raise Error(String("Column {} out of bounds.").format(col))
 
     fn _check_type(self, col: Int, expected: Int) raises -> NoneType:
-        if self.column_types[col] != expected:
+        if self.result[].column_type(col) != expected:
             raise Error(
                 String("Column {} has type {}. Expected {}.").format(
                     col,
-                    type_names().get(self.column_types[col], "UNKNOWN"),
-                    type_names().get(expected, "UNKNOWN"),
+                    type_names.get(self.result[].column_type(col), "UNKNOWN"),
+                    type_names.get(expected, "UNKNOWN"),
                 )
             )
 
@@ -326,11 +306,11 @@ struct Vector:
         return impl.duckdb_vector_get_data(self.__vector)
 
 
-# struct ResultSetIterator:
-#     var result: ResultSet
+# struct ResultIterator:
+#     var result: Result
 #     var index: Int
 
-#     fn __init__(inout self, result: ResultSet):
+#     fn __init__(inout self, result: Result):
 #         self.index = 0
 #         self.result = result
 

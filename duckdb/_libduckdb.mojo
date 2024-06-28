@@ -83,8 +83,7 @@ alias DUCKDB_TYPE_TIME_TZ = 30
 # duckdb_timestamp
 alias DUCKDB_TYPE_TIMESTAMP_TZ = 31
 
-
-fn type_names() -> Dict[Int, String]:
+fn _type_names() -> Dict[Int, String]:
     from collections import Dict
 
     var duckdb_type_names = Dict[Int, String]()
@@ -124,6 +123,7 @@ fn type_names() -> Dict[Int, String]:
     duckdb_type_names[31] = "DUCKDB_TYPE_TIMESTAMP_TZ"
     return duckdb_type_names
 
+var type_names = _type_names()
 
 #! An enum over the returned state of different functions.
 alias duckdb_state = Int32
