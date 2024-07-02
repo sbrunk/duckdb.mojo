@@ -220,7 +220,7 @@ struct Chunk:
         self._validate(col, row, duckdb_type)
         var vector = self.__get_vector(col)
         var data_ptr = vector.__get_data().bitcast[T]()
-        return data_ptr[]
+        return data_ptr[row]
 
     fn get_bool(self, col: Int, row: Int) raises -> Bool:
         return self._get_value[Bool](col, row, DUCKDB_TYPE_BOOLEAN)
