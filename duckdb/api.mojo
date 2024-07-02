@@ -156,8 +156,8 @@ struct Result(Stringable):
     # fn __iter__(self) -> ResultIterator:
     #     return ResultIterator(self)
 
-    fn fetch_chunk(self) raises -> Chunk[__lifetime_of(self)]:
-        return Chunk[__lifetime_of(self)](self.impl.duckdb_fetch_chunk(self.__result), self)
+    fn fetch_chunk(self) raises -> Chunk:
+        return Chunk(self.impl.duckdb_fetch_chunk(self.__result))
 
     fn __del__(owned self):
         self.impl.duckdb_destroy_result(UnsafePointer.address_of(self.__result))
@@ -166,19 +166,11 @@ struct Result(Stringable):
         self.__result = existing.__result
         self.impl = existing.impl
 
-    # @always_inline
-    # fn get_ref(ref [_]self: Self) -> ref [__lifetime_of(self)] Self:
-    #     return self
-
-
-@value
-struct Chunk[result_lifetime: AnyLifetime[False].type]:
+struct Chunk:
     var impl: LibDuckDB
     var __chunk: duckdb_data_chunk
-    var result: Reference[Result, result_lifetime]
 
-    def __init__(inout self, chunk: duckdb_data_chunk, ref [result_lifetime] result: Result):
-        self.result = result
+    def __init__(inout self, chunk: duckdb_data_chunk):
         self.__chunk = chunk
         self.impl = _get_global_duckdb_itf().libDuckDB()
 
@@ -190,21 +182,28 @@ struct Chunk[result_lifetime: AnyLifetime[False].type]:
     fn __len__(self) -> Int:
         return int(self.impl.duckdb_data_chunk_get_size(self.__chunk))
 
-    fn __get_vector(self, col: UInt64) -> Vector:
+    fn __get_vector(self, col: Int) -> Vector:
         return Vector(self.impl.duckdb_data_chunk_get_vector(self.__chunk, col))
 
     fn _check_bounds(self, col: Int, row: Int) raises -> NoneType:
         if row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
-        if col >= self.result[].column_count():
+        if UInt64(col) >= self.impl.duckdb_data_chunk_get_column_count(
+            self.__chunk
+        ):
             raise Error(String("Column {} out of bounds.").format(col))
 
     fn _check_type(self, col: Int, expected: Int) raises -> NoneType:
-        if self.result[].column_type(col) != expected:
+        var type = self.impl.duckdb_get_type_id(
+            self.impl.duckdb_vector_get_column_type(
+                self.impl.duckdb_data_chunk_get_vector(self.__chunk, col)
+            )
+        )
+        if type != expected:
             raise Error(
                 String("Column {} has type {}. Expected {}.").format(
                     col,
-                    type_names.get(self.result[].column_type(col), "UNKNOWN"),
+                    type_names.get(int(type), "UNKNOWN"),
                     type_names.get(expected, "UNKNOWN"),
                 )
             )
