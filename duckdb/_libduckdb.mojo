@@ -309,7 +309,7 @@ struct duckdb_column:
     var __deprecated_name: UnsafePointer[C_char]
     var internal_data: UnsafePointer[NoneType]
 
-    def __init__(inout self):
+    fn __init__(inout self):
         self.__deprecated_data = UnsafePointer[NoneType]()
         self.__deprecated_nullmask = UnsafePointer[Bool]()
         self.__deprecated_type = 0
@@ -347,7 +347,7 @@ struct duckdb_result:
     var __deprecated_error_message: UnsafePointer[C_char]
     var internal_data: UnsafePointer[NoneType]
 
-    def __init__(inout self):
+    fn __init__(inout self):
         self.__deprecated_column_count = 0
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
@@ -962,13 +962,32 @@ struct LibDuckDB:
     fn duckdb_get_type_id(self, type: duckdb_logical_type) -> duckdb_type:
         return self.lib.get_function[
             fn (duckdb_logical_type) -> duckdb_type
-        ]("duckdb_get_type_id")(type)    
+        ]("duckdb_get_type_id")(type)
+
+    #===--------------------------------------------------------------------===#
+    # Threading Information
+    #===--------------------------------------------------------------------===#
+
+    fn duckdb_execution_is_finished(self, con: duckdb_connection) -> Bool:
+        return self.lib.get_function[
+            fn (duckdb_connection) -> Bool
+        ]("duckdb_execution_is_finished")(con)      
 
     #===--------------------------------------------------------------------===#
     # Streaming Result Interface
     #===--------------------------------------------------------------------===#
 
     fn duckdb_fetch_chunk(self, result: duckdb_result) -> duckdb_data_chunk:
+        """
+        Fetches a data chunk from a duckdb_result. This function should be called repeatedly until the result is exhausted.
+
+        The result must be destroyed with `duckdb_destroy_data_chunk`.
+
+        It is not known beforehand how many chunks will be returned by this result.
+
+        * result: The result object to fetch the data chunk from.
+        * returns: The resulting data chunk. Returns `NULL` if the result has an error.
+        """
         return self.lib.get_function[
             fn (duckdb_result) -> duckdb_data_chunk
         ]("duckdb_fetch_chunk")(result)

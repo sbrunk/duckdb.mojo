@@ -31,9 +31,9 @@ for i in range(result.column_count()):
     print(result.column_name(i), end=' ')
 print()
 
-var chunk = result.fetch_chunk()
-for i in range(len(chunk)):
-    print(chunk.get_string(col=0, row=i), " ", chunk.get_int64(col=1, row=i))
+for chunk in result.chunk_iterator():
+    for i in range(len(chunk)):
+        print(chunk.get_string(col=0, row=i), " ", chunk.get_int64(col=1, row=i))
 ```
 
 ## Installation

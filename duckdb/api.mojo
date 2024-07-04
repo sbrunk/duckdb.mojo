@@ -41,15 +41,12 @@ struct _DuckDBInterfaceImpl:
     fn libDuckDB(self) -> LibDuckDB:
         return self._libDuckDB[]
 
+fn _impl() -> LibDuckDB:
+    return _get_global_duckdb_itf().libDuckDB()
 
 struct DuckDB:
-    var impl: _DuckDBInterfaceImpl
-
-    def __init__(inout self):
-        self.impl = _get_global_duckdb_itf()
-
     @staticmethod
-    def connect(db_path: String) -> Connection:
+    fn connect(db_path: String) raises -> Connection:
         return Connection(db_path)
 
 
@@ -65,61 +62,56 @@ struct Connection:
     ```
     """
 
-    var __db: duckdb_database
+    var _db: duckdb_database
     var __conn: duckdb_connection
 
     fn __init__(inout self, db_path: String) raises:
-        var impl = _get_global_duckdb_itf().libDuckDB()
-        self.__db = UnsafePointer[duckdb_database.type]()
-        var db_addr = UnsafePointer.address_of(self.__db)
+        self._db = UnsafePointer[duckdb_database.type]()
+        var db_addr = UnsafePointer.address_of(self._db)
         if (
-            impl.duckdb_open(db_path.unsafe_cstr_ptr(), db_addr)
+            _impl().duckdb_open(db_path.unsafe_cstr_ptr(), db_addr)
         ) == DuckDBError:
             raise Error(
                 "Could not open database"
             )  ## TODO use duckdb_open_ext and return error message
         self.__conn = UnsafePointer[duckdb_connection.type]()
         if (
-            impl.duckdb_connect(
-                self.__db, UnsafePointer.address_of(self.__conn)
+            _impl().duckdb_connect(
+                self._db, UnsafePointer.address_of(self.__conn)
             )
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
     fn __del__(owned self):
-        var impl = _get_global_duckdb_itf().libDuckDB()
-        impl.duckdb_disconnect(UnsafePointer.address_of(self.__conn))
-        impl.duckdb_close(UnsafePointer.address_of(self.__db))
+        _impl().duckdb_disconnect(UnsafePointer.address_of(self.__conn))
+        _impl().duckdb_close(UnsafePointer.address_of(self._db))
 
     fn execute(self, query: String) raises -> Result:
-        var impl = _get_global_duckdb_itf().libDuckDB()
         var result = duckdb_result()
         var result_ptr = UnsafePointer.address_of(result)
         if (
-            impl.duckdb_query(self.__conn, query.unsafe_cstr_ptr(), result_ptr)
+            _impl().duckdb_query(self.__conn, query.unsafe_cstr_ptr(), result_ptr)
             == DuckDBError
         ):
-            raise Error(impl.duckdb_result_error(result_ptr))
+            raise Error(_impl().duckdb_result_error(result_ptr))
         return Result(result)
 
 struct Result(Stringable):
-    var __result: duckdb_result
-    var impl: LibDuckDB
+    var _result: duckdb_result
 
     fn __init__(inout self, result: duckdb_result):
-        self.__result = result
-        self.impl = _get_global_duckdb_itf().libDuckDB()
+        self._result = result
 
     fn column_count(self) -> Int:
         return int(
-            self.impl.duckdb_column_count(
-                UnsafePointer.address_of(self.__result)
+            _impl().duckdb_column_count(
+                UnsafePointer.address_of(self._result)
             )
         )
 
     fn column_name(self, col: UInt64) -> String:
-        return self.impl.duckdb_column_name(
-            UnsafePointer.address_of(self.__result), col
+        return _impl().duckdb_column_name(
+            UnsafePointer.address_of(self._result), col
         )
 
     fn column_types(self) -> List[Int]:
@@ -130,8 +122,8 @@ struct Result(Stringable):
 
     fn column_type(self, col: Int) -> Int:
         return int(
-            self.impl.duckdb_column_type(
-                UnsafePointer.address_of(self.__result), col
+            _impl().duckdb_column_type(
+                UnsafePointer.address_of(self._result), col
             )
         )
 
@@ -157,46 +149,87 @@ struct Result(Stringable):
     #     return ResultIterator(self)
 
     fn fetch_chunk(self) raises -> Chunk:
-        return Chunk(self.impl.duckdb_fetch_chunk(self.__result))
+        return Chunk(_impl().duckdb_fetch_chunk(self._result))
+
+    fn chunk_iterator(self) raises -> _ChunkIter[__lifetime_of(self)]:
+        return _ChunkIter(self)
 
     fn __del__(owned self):
-        self.impl.duckdb_destroy_result(UnsafePointer.address_of(self.__result))
+        _impl().duckdb_destroy_result(UnsafePointer.address_of(self._result))
 
     fn __moveinit__(inout self, owned existing: Self):
-        self.__result = existing.__result
-        self.impl = existing.impl
+        self._result = existing._result
 
-struct Chunk:
-    var impl: LibDuckDB
-    var __chunk: duckdb_data_chunk
+struct _ChunkIter[lifetime: ImmutableLifetime]:
+    var _result: Reference[Result, lifetime]
+    var _next_chunk: duckdb_data_chunk
 
-    def __init__(inout self, chunk: duckdb_data_chunk):
-        self.__chunk = chunk
-        self.impl = _get_global_duckdb_itf().libDuckDB()
+    fn __init__(inout self, ref [lifetime] result: Result) raises:
+        self._result = result
+        self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
 
     fn __del__(owned self):
-        self.impl.duckdb_destroy_data_chunk(
-            UnsafePointer.address_of(self.__chunk)
+        if self._next_chunk:
+            _ = Chunk(self._next_chunk)
+
+    fn __moveinit__(inout self, owned existing: Self):
+        self._result = existing._result
+        self._next_chunk = existing._next_chunk
+
+    fn __iter__(owned self) -> Self:
+        return self^
+
+    fn __next__(inout self) raises -> Chunk:
+        if self._next_chunk:
+            var current = self._next_chunk
+            var next = _impl().duckdb_fetch_chunk(self._result[]._result)
+            self._next_chunk = next
+            return Chunk(current)
+        else:
+            raise Error("No more elements")
+
+    # TODO this is not accurate as we don't know the length in advance but we currently
+    # need it for the for syntax to work. It's done the same way for iterating over Python
+    # objects in the Mojo stdlib currently:
+    # https://github.com/modularml/mojo/blob/8bd1dbdf26c70c634768bfd4c014537f6fdb0fb2/stdlib/src/python/object.mojo#L90
+    fn __len__(self) -> Int:
+        if self._next_chunk:
+            return 1
+        else:
+            return 0
+
+struct Chunk:
+    var _chunk: duckdb_data_chunk
+
+    fn __init__(inout self, chunk: duckdb_data_chunk):
+        self._chunk = chunk
+
+    fn __del__(owned self):
+        _impl().duckdb_destroy_data_chunk(
+            UnsafePointer.address_of(self._chunk)
         )
 
-    fn __len__(self) -> Int:
-        return int(self.impl.duckdb_data_chunk_get_size(self.__chunk))
+    fn __moveinit__(inout self, owned existing: Self):
+        self._chunk = existing._chunk
 
-    fn __get_vector(self, col: Int) -> Vector:
-        return Vector(self.impl.duckdb_data_chunk_get_vector(self.__chunk, col))
+    fn __len__(self) -> Int:
+        return int(_impl().duckdb_data_chunk_get_size(self._chunk))
+
+    fn _get_vector(self, col: Int) -> Vector:
+        return Vector(_impl().duckdb_data_chunk_get_vector(self._chunk, col))
 
     fn _check_bounds(self, col: Int, row: Int) raises -> NoneType:
         if row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
-        if UInt64(col) >= self.impl.duckdb_data_chunk_get_column_count(
-            self.__chunk
+        if UInt64(col) >= _impl().duckdb_data_chunk_get_column_count(
+            self._chunk
         ):
             raise Error(String("Column {} out of bounds.").format(col))
 
     fn _check_type(self, col: Int, expected: Int) raises -> NoneType:
-        var type = self.impl.duckdb_get_type_id(
-            self.impl.duckdb_vector_get_column_type(
-                self.impl.duckdb_data_chunk_get_vector(self.__chunk, col)
+        var type = _impl().duckdb_get_type_id(
+            _impl().duckdb_vector_get_column_type(
+                _impl().duckdb_data_chunk_get_vector(self._chunk, col)
             )
         )
         if type != expected:
@@ -218,8 +251,8 @@ struct Chunk:
         T: Copyable
     ](self, col: Int, row: Int, duckdb_type: Int) raises -> T:
         self._validate(col, row, duckdb_type)
-        var vector = self.__get_vector(col)
-        var data_ptr = vector.__get_data().bitcast[T]()
+        var vector = self._get_vector(col)
+        var data_ptr = vector._get_data().bitcast[T]()
         return data_ptr[row]
 
     fn get_bool(self, col: Int, row: Int) raises -> Bool:
@@ -275,15 +308,15 @@ struct Chunk:
 
     fn get_string(self, col: Int, row: Int) raises -> String:
         self._validate(col, row, DUCKDB_TYPE_VARCHAR)
-        var vector = self.__get_vector(col)
+        var vector = self._get_vector(col)
         # Short strings are inlined so need to check the length and then cast accordingly.
-        var data_str_ptr = vector.__get_data().bitcast[
+        var data_str_ptr = vector._get_data().bitcast[
             duckdb_string_t_pointer
         ]()
         var string_value: String
         var string_length = int(data_str_ptr[row].length)
         if data_str_ptr[row].length <= 12:
-            var data_str_inlined = vector.__get_data().bitcast[
+            var data_str_inlined = vector._get_data().bitcast[
                 duckdb_string_t_inlined
             ]()
             string_value = StringRef(
@@ -298,11 +331,10 @@ struct Chunk:
 
 @value
 struct Vector:
-    var __vector: duckdb_vector
+    var _vector: duckdb_vector
 
-    fn __get_data(self) -> UnsafePointer[NoneType]:
-        var impl = _get_global_duckdb_itf().libDuckDB()
-        return impl.duckdb_vector_get_data(self.__vector)
+    fn _get_data(self) -> UnsafePointer[NoneType]:
+        return _impl().duckdb_vector_get_data(self._vector)
 
 
 # struct ResultIterator:
