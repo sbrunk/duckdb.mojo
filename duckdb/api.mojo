@@ -96,11 +96,30 @@ struct Connection:
             raise Error(_impl().duckdb_result_error(result_ptr))
         return Result(result)
 
-struct Result(Stringable):
+
+@value
+struct Col:
+    var index: Int
+    var name: String
+    var type: DuckDBType
+
+    fn format_to(self, inout writer: Formatter) -> None:
+        writer.write("Column(", self.index, ", ", self.name, ": ", self.type, ")")
+
+    fn __str__(self) -> String: return str(self.type)
+
+struct Result(Stringable, Formattable):
     var _result: duckdb_result
+    var columns: List[Col]
 
     fn __init__(inout self, result: duckdb_result):
         self._result = result
+        self.columns = List[Col]()
+        for i in range(self.column_count()):
+            var col = Col(
+                index=i, name=self.column_name(i), type=self.column_type(i)
+            )
+            self.columns.append(col)
 
     fn column_count(self) -> Int:
         return int(
@@ -109,41 +128,30 @@ struct Result(Stringable):
             )
         )
 
-    fn column_name(self, col: UInt64) -> String:
+    fn column_name(self, col: Int) -> String:
         return _impl().duckdb_column_name(
             UnsafePointer.address_of(self._result), col
         )
 
-    fn column_types(self) -> List[Int]:
-        var types = List[Int]()
+    fn column_types(self) -> List[DuckDBType]:
+        var types = List[DuckDBType]()
         for i in range(self.column_count()):
             types.append(self.column_type(i))
         return types
 
-    fn column_type(self, col: Int) -> Int:
+    fn column_type(self, col: Int) -> DuckDBType:
         return int(
             _impl().duckdb_column_type(
                 UnsafePointer.address_of(self._result), col
             )
         )
 
+    fn format_to(self, inout writer: Formatter) -> None:
+        for col in self.columns:
+            writer.write(col[], ", ")
+
     fn __str__(self) -> String:
-        var x: String
-        try:
-            x = String("Result set with {} columns\n").format(
-                self.column_count()
-            )
-        except e:
-            x = str(e)
-        for i in range(self.column_count()):
-            x = (
-                x
-                + self.column_name(i)
-                + " "
-                + type_names.get(self.column_type(i), "UNKNOWN")
-                + ", "
-            )
-        return x
+        return String.format_sequence(self)
 
     # fn __iter__(self) -> ResultIterator:
     #     return ResultIterator(self)
@@ -159,6 +167,7 @@ struct Result(Stringable):
 
     fn __moveinit__(inout self, owned existing: Self):
         self._result = existing._result
+        self.columns = existing.columns
 
 struct _ChunkIter[lifetime: ImmutableLifetime]:
     var _result: Reference[Result, lifetime]
@@ -249,8 +258,8 @@ struct Chunk:
 
     fn _get_value[
         T: Copyable
-    ](self, col: Int, row: Int, duckdb_type: DuckDBType) raises -> T:
-        self._validate(col, row, duckdb_type)
+    ](self, col: Int, row: Int, expected_type: DuckDBType) raises -> T:
+        self._validate(col, row, expected_type)
         var vector = self._get_vector(col)
         var data_ptr = vector._get_data().bitcast[T]()
         return data_ptr[row]
