@@ -1,6 +1,7 @@
 from duckdb._libduckdb import *
 
 @value
+@register_passable("trivial")
 struct DuckDBType(Stringable, Formattable, CollectionElementNew, EqualityComparable):
     """Represents DuckDB types."""
     var value: Int32
