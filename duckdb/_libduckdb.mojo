@@ -1,6 +1,7 @@
 from sys.ffi import external_call, DLHandle, C_char
 from utils import StaticTuple, InlineArray
 from duckdb.duckdb_type import *
+from sys import os_is_macos
 """FFI definitions for the DuckDB C API ported to Mojo.
 
 Derived from
@@ -382,12 +383,18 @@ alias duckdb_value = UnsafePointer[_duckdb_value]
 # Functions
 #===--------------------------------------------------------------------===#
 
+fn get_libname() -> StringLiteral:
+    @parameter
+    if os_is_macos():
+        return "libduckdb.dylib"
+    else:
+        return "libduckdb.so"
+
 @value
 struct LibDuckDB:
     var lib: DLHandle
 
-    # TODO make this os independent and configurable
-    fn __init__(inout self, path: String = "libduckdb.dylib"):
+    fn __init__(inout self, path: String = get_libname()):
         self.lib = DLHandle(path)
 
     fn __del__(owned self):

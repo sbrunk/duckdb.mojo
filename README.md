@@ -1,10 +1,9 @@
 # duckdb.mojo
 
-Mojo Bindings for DuckDB
+[Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
 Status:
-- Early proof of concept, many parts of the API are still missing (feel free to submit PRs).
-- Only working for macOS for now but we'll add support for Linux soon.
+- Work in progress, many parts of the API are still missing (PRs welcome).
 
 ## Example
 
@@ -46,13 +45,20 @@ for chunk in result.chunk_iterator():
 
 ## Installation
 
-1. Download the [DuckDB C/C++ library](https://github.com/duckdb/duckdb/releases/download/v1.0.0/libduckdb-osx-universal.zip) from the [installation](https://duckdb.org/docs/installation/?version=stable&environment=cplusplus&platform=macos) page.
-2. Extract `libduckdb.dylib` to the project directory.
+1. Download the DuckDB C/C++ library from the [installation](https://duckdb.org/docs/installation/?version=stable&environment=cplusplus) page.
+2. Extract `libduckdb.so` (Linux) or `libduckdb.dylib` (macOS) to the project directory.
 3. Set library path:
 ```shell
-export DYLD_FALLBACK_LIBRARY_PATH=$(realpath .)
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(realpath .) # Linux
+export DYLD_FALLBACK_LIBRARY_PATH=$(realpath .) # macOS
 ```
 4. Run
 ``` shell
 mojo example.mojo
+```
+
+### Run Tests
+
+```shell
+mojo test -I .
 ```
