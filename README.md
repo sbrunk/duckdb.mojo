@@ -38,9 +38,9 @@ print()
 for chunk in result.chunk_iterator():
     for i in range(len(chunk)):
         print(
-            chunk.get_string(col=0, row=i).value(),
+            chunk.get[String](col=0, row=i).value(),
             " ",
-            chunk.get_int64(col=1, row=i).value(),
+            chunk.get[DType.int64](col=1, row=i).value(),
         )
 ```
 

@@ -1,9 +1,13 @@
 from duckdb._libduckdb import *
 
+
 @value
 @register_passable("trivial")
-struct DuckDBType(Stringable, Formattable, CollectionElementNew, EqualityComparable):
+struct DuckDBType(
+    Stringable, Formattable, CollectionElementNew, EqualityComparable
+):
     """Represents DuckDB types."""
+
     var value: Int32
 
     alias invalid = DuckDBType(DUCKDB_TYPE_INVALID)
@@ -95,75 +99,104 @@ struct DuckDBType(Stringable, Formattable, CollectionElementNew, EqualityCompara
     fn format_to(self, inout writer: Formatter) -> None:
         if self == DuckDBType.invalid:
             return writer.write_str["invalid"]()
+        if self == DuckDBType.tinyint:
+            return writer.write_str["tinyint"]()
         if self == DuckDBType.boolean:
             return writer.write_str["boolean"]()
         if self == DuckDBType.smallint:
-           return writer.write_str["smallint"]() 
+            return writer.write_str["smallint"]()
         if self == DuckDBType.integer:
-           return writer.write_str["integer"]() 
+            return writer.write_str["integer"]()
         if self == DuckDBType.bigint:
-           return writer.write_str["bigint"]() 
+            return writer.write_str["bigint"]()
         if self == DuckDBType.utinyint:
-           return writer.write_str["utinyint"]() 
+            return writer.write_str["utinyint"]()
         if self == DuckDBType.usmallint:
-           return writer.write_str["usmallint"]() 
+            return writer.write_str["usmallint"]()
         if self == DuckDBType.uinteger:
-           return writer.write_str["uinteger"]() 
+            return writer.write_str["uinteger"]()
         if self == DuckDBType.ubigint:
-           return writer.write_str["ubigint"]() 
+            return writer.write_str["ubigint"]()
         if self == DuckDBType.float:
-           return writer.write_str["float"]() 
+            return writer.write_str["float"]()
         if self == DuckDBType.double:
-           return writer.write_str["double"]() 
+            return writer.write_str["double"]()
         if self == DuckDBType.timestamp:
-           return writer.write_str["timestamp"]() 
+            return writer.write_str["timestamp"]()
         if self == DuckDBType.date:
-           return writer.write_str["date"]() 
+            return writer.write_str["date"]()
         if self == DuckDBType.time:
-           return writer.write_str["time"]() 
+            return writer.write_str["time"]()
         if self == DuckDBType.interval:
-           return writer.write_str["interval"]() 
+            return writer.write_str["interval"]()
         if self == DuckDBType.hugeint:
-           return writer.write_str["hugeint"]() 
+            return writer.write_str["hugeint"]()
         if self == DuckDBType.uhugeint:
-           return writer.write_str["uhugeint"]() 
+            return writer.write_str["uhugeint"]()
         if self == DuckDBType.varchar:
-           return writer.write_str["varchar"]() 
+            return writer.write_str["varchar"]()
         if self == DuckDBType.blob:
-           return writer.write_str["blob"]() 
+            return writer.write_str["blob"]()
         if self == DuckDBType.decimal:
-           return writer.write_str["decimal"]() 
+            return writer.write_str["decimal"]()
         if self == DuckDBType.timestamp_s:
-           return writer.write_str["timestamp_s"]() 
+            return writer.write_str["timestamp_s"]()
         if self == DuckDBType.timestamp_ms:
-           return writer.write_str["timestamp_ms"]() 
+            return writer.write_str["timestamp_ms"]()
         if self == DuckDBType.timestamp_ns:
-           return writer.write_str["timestamp_ns"]() 
+            return writer.write_str["timestamp_ns"]()
         if self == DuckDBType.enum:
-           return writer.write_str["enum"]() 
+            return writer.write_str["enum"]()
         if self == DuckDBType.list:
-           return writer.write_str["list"]() 
+            return writer.write_str["list"]()
         if self == DuckDBType.struct_t:
-           return writer.write_str["struct"]() 
+            return writer.write_str["struct"]()
         if self == DuckDBType.map:
-           return writer.write_str["map"]() 
+            return writer.write_str["map"]()
         if self == DuckDBType.array:
-           return writer.write_str["array"]() 
+            return writer.write_str["array"]()
         if self == DuckDBType.uuid:
-           return writer.write_str["uuid"]() 
+            return writer.write_str["uuid"]()
         if self == DuckDBType.union:
-           return writer.write_str["union"]() 
+            return writer.write_str["union"]()
         if self == DuckDBType.bit:
-           return writer.write_str["bit"]() 
+            return writer.write_str["bit"]()
         if self == DuckDBType.time_tz:
-           return writer.write_str["time_tz"]() 
+            return writer.write_str["time_tz"]()
         if self == DuckDBType.timestamp_tz:
-           return writer.write_str["timestamp_tz"]() 
+            return writer.write_str["timestamp_tz"]()
         return writer.write_str["<<unknown>>"]()
 
     fn __eq__(self, rhs: DuckDBType) -> Bool:
-        return(self.value == rhs.value)
+        return self.value == rhs.value
 
     @always_inline("nodebug")
     fn __ne__(self, rhs: DuckDBType) -> Bool:
-        return(self.value != rhs.value)
+        return self.value != rhs.value
+
+    @staticmethod
+    fn from_dtype[dtype: DType]() -> Self:
+        """Convert a Mojo numeric DType to a DuckDBType."""
+        if dtype == DType.bool:
+            return DuckDBType.boolean
+        if dtype == DType.int8:
+            return DuckDBType.tinyint
+        if dtype == DType.int16:
+            return DuckDBType.smallint
+        if dtype == DType.int32:
+            return DuckDBType.integer
+        if dtype == DType.int64:
+            return DuckDBType.bigint
+        if dtype == DType.uint8:
+            return DuckDBType.utinyint
+        if dtype == DType.uint16:
+            return DuckDBType.usmallint
+        if dtype == DType.uint32:
+            return DuckDBType.uinteger
+        if dtype == DType.uint64:
+            return DuckDBType.ubigint
+        if dtype == DType.float32:
+            return DuckDBType.float
+        if dtype == DType.float64:
+            return DuckDBType.double
+        return DuckDBType.invalid
