@@ -1,4 +1,5 @@
 from duckdb._libduckdb import *
+from duckdb.api import _impl
 
 
 @value
@@ -96,7 +97,7 @@ struct DuckDBType(
     fn __str__(self) -> String:
         return String.format_sequence(self)
 
-    fn format_to(self, inout writer: Formatter) -> None:
+    fn format_to(self, inout writer: Formatter):
         if self == DuckDBType.invalid:
             return writer.write_str["invalid"]()
         if self == DuckDBType.tinyint:
@@ -200,3 +201,113 @@ struct DuckDBType(
         if dtype == DType.float64:
             return DuckDBType.double
         return DuckDBType.invalid
+
+
+@value
+struct Date(EqualityComparable, Formattable, Stringable):
+    """Days are stored as days since 1970-01-01.
+    
+    TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
+    """
+
+    var days: Int32
+
+    # fn __init__(inout self, year: Int32, month: Int8, day: Int8):
+    #     self = _impl().duckdb_to_date(duckdb_date_struct(year, month, day))
+
+    fn format_to(self, inout writer: Formatter):
+        return writer.write(self.days)
+        # return writer.write(self.year(), "-", self.month(), "-", self.day())
+
+    fn __str__(self) -> String:
+        return str(self.days)
+
+    fn __eq__(self, other: Date) -> Bool:
+        return self.days == other.days
+
+    fn __ne__(self, other: Date) -> Bool:
+        return not self == other
+
+    # fn year(self) -> Int32:
+    #     return _impl().duckdb_from_date(self).year
+
+    # fn month(self) -> Int8:
+    #     return _impl().duckdb_from_date(self).month
+
+    # fn day(self) -> Int8:
+    #     return _impl().duckdb_from_date(self).day
+
+
+@value
+struct Time(EqualityComparable, Formattable, Stringable):
+    """Time is stored as microseconds since 00:00:00.
+    
+    TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
+    """
+
+    var micros: Int64
+
+    # fn __init__(
+    #     inout self, hour: Int8, minute: Int8, second: Int8, micros: Int32
+    # ):
+    #     self = _impl().duckdb_to_time(
+    #         duckdb_time_struct(hour, minute, second, micros)
+    #     )
+
+    fn __str__(self) -> String:
+        return str(self.micros)
+
+    fn format_to(self, inout writer: Formatter):
+        return writer.write(self.micros)
+        # return writer.write(self.hour(), ":", self.minute(), ":", self.second())
+
+    fn __eq__(self, other: Time) -> Bool:
+        return self.micros == other.micros
+
+    fn __ne__(self, other: Time) -> Bool:
+        return not self == other
+
+    # fn hour(self) -> Int8:
+    #     return _impl().duckdb_from_time(self).hour
+
+    # fn minute(self) -> Int8:
+    #     return _impl().duckdb_from_time(self).min
+
+    # fn second(self) -> Int8:
+    #     return _impl().duckdb_from_time(self).sec
+
+    # fn micro(self) -> Int32:
+    #     return _impl().duckdb_from_time(self).micros
+
+
+@value
+struct Timestamp(EqualityComparable, Formattable, Stringable):
+    """Timestamps are stored as microseconds since 1970-01-01."""
+
+    var micros: Int64
+
+    # fn __init__(inout self, date: Date, time: Time):
+    #     self = _impl().duckdb_to_timestamp(
+    #         duckdb_timestamp_struct(
+    #             _impl().duckdb_from_date(date), _impl().duckdb_from_time(time)
+    #         )
+    #     )
+
+    fn __str__(self) -> String:
+        return str(self.micros)
+
+    fn format_to(self, inout writer: Formatter):
+        return writer.write(self.micros)
+        # return writer.write(self.date(), " ", self.time())
+
+    fn __eq__(self, other: Timestamp) -> Bool:
+        return self.micros == other.micros
+
+    fn __ne__(self, other: Timestamp) -> Bool:
+        return not self == other
+
+    # fn date(self) -> Date:
+    #     return _impl().duckdb_to_date(_impl().duckdb_from_timestamp(self).date)
+
+    # fn time(self) -> Time:
+    #     return _impl().duckdb_to_time(_impl().duckdb_from_timestamp(self).time)

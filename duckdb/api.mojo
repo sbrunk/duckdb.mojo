@@ -1,12 +1,6 @@
 from duckdb._libduckdb import *
 from sys.ffi import _get_global
 
-alias Date = duckdb_date
-"""Days are stored as days since 1970-01-01"""
-alias Time = duckdb_time
-"""Time is stored as microseconds since 00:00:00"""
-alias Timestamp = duckdb_timestamp
-"""Timestamps are stored as microseconds since 1970-01-01"""
 alias Interval = duckdb_interval
 alias Int128 = duckdb_hugeint
 alias UInt128 = duckdb_uhugeint
@@ -103,7 +97,7 @@ struct Col:
     var name: String
     var type: DuckDBType
 
-    fn format_to(self, inout writer: Formatter) -> None:
+    fn format_to(self, inout writer: Formatter):
         writer.write("Column(", self.index, ", ", self.name, ": ", self.type, ")")
 
     fn __str__(self) -> String: return str(self.type)
@@ -146,7 +140,7 @@ struct Result(Stringable, Formattable):
             )
         )
 
-    fn format_to(self, inout writer: Formatter) -> None:
+    fn format_to(self, inout writer: Formatter):
         for col in self.columns:
             writer.write(col[], ", ")
 
@@ -296,48 +290,6 @@ struct Chunk:
     fn get[type: DType](self, col: Int, row: Int) raises -> Optional[Scalar[type]]:
         return self._get_value[Scalar[type]](col, row, expected_type=DuckDBType.from_dtype[type]())
 
-    fn get[T: __type_of(String)](self, col: Int) raises -> List[String]:
-        return self.get_string(col)
-
-    fn get[T: __type_of(String)](self, col: Int, row: Int) raises -> Optional[String]:
-        return self.get_string(col, row)
-
-    fn get_timestamp(self, col: Int, row: Int) raises -> Optional[Timestamp]:
-        return self._get_value[Timestamp](col, row, DuckDBType.timestamp)
-
-    fn get_timestamp(self, col: Int) raises -> List[Timestamp]:
-        return self._get_values[Timestamp](col, DuckDBType.timestamp)
-
-    fn get_date(self, col: Int, row: Int) raises -> Optional[Date]:
-        return self._get_value[Date](col, row, DuckDBType.date)
-
-    fn get_date(self, col: Int) raises -> List[Date]:
-        return self._get_values[Date](col, DuckDBType.date)
-
-    fn get_time(self, col: Int, row: Int) raises -> Optional[Time]:
-        return self._get_value[Time](col, row, DuckDBType.time)
-
-    fn get_time(self, col: Int) raises -> List[Time]:
-        return self._get_values[Time](col, DuckDBType.time)
-
-    fn get_interval(self, col: Int, row: Int) raises -> Optional[Interval]:
-        return self._get_value[Interval](col, row, DuckDBType.interval)
-
-    fn get_interval(self, col: Int) raises -> List[Interval]:
-        return self._get_values[Interval](col, DuckDBType.interval)
-
-    fn get_int128(self, col: Int, row: Int) raises -> Optional[Int128]:
-        return self._get_value[Int128](col, row, DuckDBType.hugeint)
-
-    fn get_int128(self, col: Int) raises -> List[Int128]:
-        return self._get_values[Int128](col, DuckDBType.hugeint)
-
-    fn get_uint128(self, col: Int, row: Int) raises -> Optional[UInt128]:
-        return self._get_value[UInt128](col, row, DuckDBType.uhugeint)
-
-    fn get_uint128(self, col: Int) raises -> List[UInt128]:
-        return self._get_values[UInt128](col, DuckDBType.uhugeint)
-
     @always_inline
     fn _get_string(self, row: Int, data_str_ptr: UnsafePointer[duckdb_string_t_pointer]) raises -> String:
         # Short strings are inlined so need to check the length and then cast accordingly.
@@ -349,7 +301,16 @@ struct Chunk:
         else:
             return StringRef(data_str_ptr[row].ptr, string_length)
 
-    fn get_string(self, col: Int, row: Int) raises -> Optional[String]:
+    fn get[T: __type_of(String)](self, col: Int) raises -> List[String]:
+        self._check_bounds(col)
+        self._check_type(col, DuckDBType.varchar)
+        var string_data_ptr = self._get_vector(col)._get_data().bitcast[duckdb_string_t_pointer]()
+        var strings = List[String](capacity=len(self))
+        for row in range(len(self)):
+            strings.append(self._get_string(row, string_data_ptr))
+        return strings
+
+    fn get[T: __type_of(String)](self, col: Int, row: Int) raises -> Optional[String]:
         self._validate(col, row, DuckDBType.varchar)
         var vector = self._get_vector(col)
         var validity_mask = _impl().duckdb_vector_get_validity(vector._vector)
@@ -361,14 +322,41 @@ struct Chunk:
             return Optional(self._get_string(row, string_data_ptr))
         return Optional[String](None)
 
-    fn get_string(self, col: Int) raises -> List[String]:
-        self._check_bounds(col)
-        self._check_type(col, DuckDBType.varchar)
-        var string_data_ptr = self._get_vector(col)._get_data().bitcast[duckdb_string_t_pointer]()
-        var strings = List[String](capacity=len(self))
-        for row in range(len(self)):
-            strings.append(self._get_string(row, string_data_ptr))
-        return strings
+    fn get[T: __type_of(Timestamp)](self, col: Int, row: Int) raises -> Optional[Timestamp]:
+        return self._get_value[Timestamp](col, row, DuckDBType.timestamp)
+
+    fn get[T: __type_of(Timestamp)](self, col: Int) raises -> List[Timestamp]:
+        return self._get_values[Timestamp](col, DuckDBType.timestamp)
+
+    fn get[T: __type_of(Date)](self, col: Int, row: Int) raises -> Optional[Date]:
+        return self._get_value[Date](col, row, DuckDBType.date)
+
+    fn get[T: __type_of(Date)](self, col: Int) raises -> List[Date]:
+        return self._get_values[Date](col, DuckDBType.date)
+
+    fn get[T: __type_of(Time)](self, col: Int, row: Int) raises -> Optional[Time]:
+        return self._get_value[Time](col, row, DuckDBType.time)
+
+    fn get[T: __type_of(Time)](self, col: Int) raises -> List[Time]:
+        return self._get_values[Time](col, DuckDBType.time)
+
+    fn get[T: __type_of(Interval)](self, col: Int, row: Int) raises -> Optional[Interval]:
+        return self._get_value[Interval](col, row, DuckDBType.interval)
+
+    fn get[T: __type_of(Interval)](self, col: Int) raises -> List[Interval]:
+        return self._get_values[Interval](col, DuckDBType.interval)
+
+    fn get[T: __type_of(Int128)](self, col: Int, row: Int) raises -> Optional[Int128]:
+        return self._get_value[Int128](col, row, DuckDBType.hugeint)
+
+    fn get[T: __type_of(Int128)](self, col: Int) raises -> List[Int128]:
+        return self._get_values[Int128](col, DuckDBType.hugeint)
+
+    fn get[T: __type_of(UInt128)](self, col: Int, row: Int) raises -> Optional[UInt128]:
+        return self._get_value[UInt128](col, row, DuckDBType.uhugeint)
+
+    fn get[T: __type_of(UInt128)](self, col: Int) raises -> List[UInt128]:
+        return self._get_values[UInt128](col, DuckDBType.uhugeint)
 
     # TODO remaining types
 

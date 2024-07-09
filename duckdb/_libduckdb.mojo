@@ -1,5 +1,6 @@
 from sys.ffi import external_call, DLHandle, C_char
 from utils import StaticTuple, InlineArray
+from duckdb.duckdb_type import *
 """FFI definitions for the DuckDB C API ported to Mojo.
 
 Derived from
@@ -83,48 +84,6 @@ alias DUCKDB_TYPE_TIME_TZ = 30
 # duckdb_timestamp
 alias DUCKDB_TYPE_TIMESTAMP_TZ = 31
 
-fn _type_names() -> Dict[Int, String]:
-    from collections import Dict
-
-    var duckdb_type_names = Dict[Int, String]()
-    duckdb_type_names[0] = "DUCKDB_TYPE_INVALID"
-    duckdb_type_names[1] = "DUCKDB_TYPE_BOOLEAN"
-    duckdb_type_names[2] = "DUCKDB_TYPE_TINYINT"
-    duckdb_type_names[3] = "DUCKDB_TYPE_SMALLINT"
-    duckdb_type_names[4] = "DUCKDB_TYPE_INTEGER"
-    duckdb_type_names[5] = "DUCKDB_TYPE_BIGINT"
-    duckdb_type_names[6] = "DUCKDB_TYPE_UTINYINT"
-    duckdb_type_names[7] = "DUCKDB_TYPE_USMALLINT"
-    duckdb_type_names[8] = "DUCKDB_TYPE_UINTEGER"
-    duckdb_type_names[9] = "DUCKDB_TYPE_UBIGINT"
-    duckdb_type_names[10] = "DUCKDB_TYPE_FLOAT"
-    duckdb_type_names[11] = "DUCKDB_TYPE_DOUBLE"
-    duckdb_type_names[12] = "DUCKDB_TYPE_TIMESTAMP"
-    duckdb_type_names[13] = "DUCKDB_TYPE_DATE"
-    duckdb_type_names[14] = "DUCKDB_TYPE_TIME"
-    duckdb_type_names[15] = "DUCKDB_TYPE_INTERVAL"
-    duckdb_type_names[16] = "DUCKDB_TYPE_HUGEINT"
-    duckdb_type_names[32] = "DUCKDB_TYPE_UHUGEINT"
-    duckdb_type_names[17] = "DUCKDB_TYPE_VARCHAR"
-    duckdb_type_names[18] = "DUCKDB_TYPE_BLOB"
-    duckdb_type_names[19] = "DUCKDB_TYPE_DECIMAL"
-    duckdb_type_names[20] = "DUCKDB_TYPE_TIMESTAMP_S"
-    duckdb_type_names[21] = "DUCKDB_TYPE_TIMESTAMP_MS"
-    duckdb_type_names[22] = "DUCKDB_TYPE_TIMESTAMP_NS"
-    duckdb_type_names[23] = "DUCKDB_TYPE_ENUM"
-    duckdb_type_names[24] = "DUCKDB_TYPE_LIST"
-    duckdb_type_names[25] = "DUCKDB_TYPE_STRUCT"
-    duckdb_type_names[26] = "DUCKDB_TYPE_MAP"
-    duckdb_type_names[33] = "DUCKDB_TYPE_ARRAY"
-    duckdb_type_names[27] = "DUCKDB_TYPE_UUID"
-    duckdb_type_names[28] = "DUCKDB_TYPE_UNION"
-    duckdb_type_names[29] = "DUCKDB_TYPE_BIT"
-    duckdb_type_names[30] = "DUCKDB_TYPE_TIME_TZ"
-    duckdb_type_names[31] = "DUCKDB_TYPE_TIMESTAMP_TZ"
-    return duckdb_type_names
-
-var type_names = _type_names()
-
 #! An enum over the returned state of different functions.
 alias duckdb_state = Int32
 alias DuckDBSuccess = 0
@@ -190,9 +149,7 @@ alias idx_t = UInt64
 
 #! Days are stored as days since 1970-01-01
 #! Use the duckdb_from_date/duckdb_to_date function to extract individual information
-@value
-struct duckdb_date:
-    var days: Int32
+alias duckdb_date = Date
 
 @value
 struct duckdb_date_struct:
@@ -203,9 +160,7 @@ struct duckdb_date_struct:
 
 #! Time is stored as microseconds since 00:00:00
 #! Use the duckdb_from_time/duckdb_to_time function to extract individual information
-@value
-struct duckdb_time:
-    var micros: Int64
+alias duckdb_time = Time
 
 @value
 struct duckdb_time_struct:
@@ -228,9 +183,7 @@ struct duckdb_time_tz_struct:
 
 #! Timestamps are stored as microseconds since 1970-01-01
 #! Use the duckdb_from_timestamp/duckdb_to_timestamp function to extract individual information
-@value
-struct duckdb_timestamp:
-    var micros: Int64
+alias duckdb_timestamp = Timestamp
 
 @value
 struct duckdb_timestamp_struct:
@@ -726,6 +679,115 @@ struct LibDuckDB:
         return self.lib.get_function[
             fn (duckdb_data_chunk, idx_t) -> NoneType
         ]("duckdb_data_chunk_set_size")(chunk, size)
+
+    #===--------------------------------------------------------------------===#
+    # Date/Time/Timestamp Helpers
+    #===--------------------------------------------------------------------===#
+
+    fn duckdb_from_date(self, date: duckdb_date) -> duckdb_date_struct:
+        """Decompose a `duckdb_date` object into year, month and date (stored as `duckdb_date_struct`).
+
+        * date: The date object, as obtained from a `DUCKDB_TYPE_DATE` column.
+        * returns: The `duckdb_date_struct` with the decomposed elements.
+        """
+        return self.lib.get_function[
+            fn (duckdb_date) -> duckdb_date_struct
+        ]("duckdb_from_date")(date)
+
+    fn duckdb_to_date(self, date: duckdb_date_struct) -> duckdb_date:
+        """Re-compose a `duckdb_date` from year, month and date (`duckdb_date_struct`).
+
+        * date: The year, month and date stored in a `duckdb_date_struct`.
+        * returns: The `duckdb_date` element.
+        """
+        return self.lib.get_function[
+            fn (duckdb_date_struct) -> duckdb_date
+        ]("duckdb_to_date")(date)
+
+    fn duckdb_is_finite_date(self, date: duckdb_date) -> Bool:
+        """Test a `duckdb_date` to see if it is a finite value.
+
+        * date: The date object, as obtained from a `DUCKDB_TYPE_DATE` column.
+        * returns: True if the date is finite, false if it is ±infinity.
+        """
+        return self.lib.get_function[
+            fn (duckdb_date) -> Bool
+        ]("duckdb_is_finite_date")(date)
+
+    fn duckdb_from_time(self, time: duckdb_time) -> duckdb_time_struct:
+        """Decompose a `duckdb_time` object into hour, minute, second and microsecond (stored as `duckdb_time_struct`).
+
+        * time: The time object, as obtained from a `DUCKDB_TYPE_TIME` column.
+        * returns: The `duckdb_time_struct` with the decomposed elements.
+        """
+        return self.lib.get_function[
+            fn (duckdb_time) -> duckdb_time_struct
+        ]("duckdb_from_time")(time)
+    
+    fn duckdb_create_time_tz(self, micros: Int64, offset: Int32) -> duckdb_time_tz:
+        """Create a `duckdb_time_tz` object from micros and a timezone offset.
+
+        * micros: The microsecond component of the time.
+        * offset: The timezone offset component of the time.
+        * returns: The `duckdb_time_tz` element.
+        """
+        return self.lib.get_function[
+            fn (Int64, Int32) -> duckdb_time_tz
+            ]("duckdb_create_time_tz")(micros, offset)
+
+    fn duckdb_from_time_tz(self, micros: duckdb_time_tz) -> duckdb_time_tz_struct:
+        """Decompose a TIME_TZ objects into micros and a timezone offset.
+
+        Use `duckdb_from_time` to further decompose the micros into hour, minute, second and microsecond.
+
+        * micros: The time object, as obtained from a `DUCKDB_TYPE_TIME_TZ` column.
+        * out_micros: The microsecond component of the time.
+        * out_offset: The timezone offset component of the time.
+        """
+        return self.lib.get_function[
+            fn (duckdb_time_tz) -> duckdb_time_tz_struct
+        ]("duckdb_from_time_tz")(micros)
+
+    fn duckdb_to_time(self, time: duckdb_time_struct) -> duckdb_time:
+        """Re-compose a `duckdb_time` from hour, minute, second and microsecond (`duckdb_time_struct`).
+
+        * time: The hour, minute, second and microsecond in a `duckdb_time_struct`.
+        * returns: The `duckdb_time` element.
+        """
+        return self.lib.get_function[
+            fn (duckdb_time_struct) -> duckdb_time
+        ]("duckdb_to_time")(time)
+
+    fn duckdb_to_timestamp(self, ts: duckdb_timestamp_struct) -> duckdb_timestamp:
+        """Re-compose a `duckdb_timestamp` from a duckdb_timestamp_struct.
+
+        * ts: The de-composed elements in a `duckdb_timestamp_struct`.
+        * returns: The `duckdb_timestamp` element.
+        """
+        return self.lib.get_function[
+            fn (duckdb_timestamp_struct) -> duckdb_timestamp
+            ]("duckdb_to_timestamp")(ts)
+
+    fn duckdb_from_timestamp(self, timestamp: duckdb_timestamp) -> duckdb_timestamp_struct:
+        """Decompose a `duckdb_timestamp` object into a `duckdb_timestamp_struct`.
+
+        * ts: The ts object, as obtained from a `DUCKDB_TYPE_TIMESTAMP` column.
+        * returns: The `duckdb_timestamp_struct` with the decomposed elements.
+        """
+        return self.lib.get_function[
+            fn (duckdb_timestamp) -> duckdb_timestamp_struct
+        ]("duckdb_from_timestamp")(timestamp)
+
+    fn duckdb_is_finite_timestamp(self, timestamp: duckdb_timestamp) -> Bool:
+        """Test a `duckdb_timestamp` to see if it is a finite value.
+
+        * ts: The timestamp object, as obtained from a `DUCKDB_TYPE_TIMESTAMP` column.
+        * returns: True if the timestamp is finite, false if it is ±infinity.
+        """
+        return self.lib.get_function[
+            fn (duckdb_timestamp) -> Bool
+        ]("duckdb_is_finite_timestamp")(timestamp)
+    
 
     #===--------------------------------------------------------------------===#
     # Vector Interface
