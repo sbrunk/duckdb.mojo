@@ -311,3 +311,92 @@ struct Timestamp(EqualityComparable, Formattable, Stringable):
 
     # fn time(self) -> Time:
     #     return _impl().duckdb_to_time(_impl().duckdb_from_timestamp(self).time)
+
+@value
+struct Interval(Stringable):
+    var months: Int32
+    var days: Int32
+    var micros: Int64
+
+    fn __str__(self) -> String:
+        return "months: " + str(self.months) + ", days: " + str(self.days) + ", micros: " + str(self.micros)
+
+@value
+struct Int128(Stringable):
+    """Hugeints are composed of a (lower, upper) component.
+
+    The value of the hugeint is upper * 2^64 + lower
+    For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
+    """
+    var lower: UInt64
+    var upper: Int64
+
+    fn __str__(self) -> String:
+        return "lower: " + str(self.lower) + ", upper: " + str(self.upper)
+
+@value
+struct UInt128(Stringable):
+    """UHugeints are composed of a (lower, upper) component."""
+    var lower: UInt64
+    var upper: UInt64
+
+    fn __str__(self) -> String:
+        return "lower: " + str(self.lower) + ", upper: " + str(self.upper)
+
+@value
+struct Decimal(Stringable):
+    """Decimals are composed of a width and a scale, and are stored in a hugeint."""
+    var width: UInt8
+    var scale: UInt8
+    var value: UInt128
+
+    fn __str__(self) -> String:
+        return "width: " + str(self.width) + ", scale: " + str(self.scale) + ", value: " + str(self.value)
+
+alias DuckDBValue = Variant[
+    NoneType,
+    Bool,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Float32,
+    Float64,
+    Timestamp,
+    Date,
+    Time,
+    Interval,
+    Int128,
+    UInt128,
+    String,
+    # BLOB,
+    # TODO remaining types
+    ]
+    """Represents a value of any type in DuckDB, including NULL."""
+
+alias DuckDBListValue = Variant[
+    List[Bool],
+    List[Int8],
+    List[Int16],
+    List[Int32],
+    List[Int64],
+    List[UInt8],
+    List[UInt16],
+    List[UInt32],
+    List[UInt64],
+    List[Float32],
+    List[Float64],
+    List[Timestamp],
+    List[Date],
+    List[Time],
+    List[Interval],
+    List[Int128],
+    List[UInt128],
+    List[String],
+    # List[BLOB],
+    # TODO remaining types
+]

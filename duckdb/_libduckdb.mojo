@@ -191,32 +191,14 @@ struct duckdb_timestamp_struct:
     var date: duckdb_date_struct
     var time: duckdb_time_struct
 
-@value
-struct duckdb_interval:
-    var months: Int32
-    var days: Int32
-    var micros: Int64
-
-
 #! Hugeints are composed of a (lower, upper) component
 #! The value of the hugeint is upper * 2^64 + lower
 #! For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
-@value
-struct duckdb_hugeint:
-    var lower: UInt64
-    var upper: Int64
-
-@value
-struct duckdb_uhugeint:
-    var lower: UInt64
-    var upper: UInt64
-
-@value
+alias duckdb_interval = Interval
+alias duckdb_hugeint = Int128
+alias duckdb_uhugeint = UInt128
 #! Decimals are composed of a width and a scale, and are stored in a hugeint
-struct duckdb_decimal:
-    var width: UInt8
-    var scale: UInt8
-    var value: duckdb_hugeint
+alias duckdb_decimal = Decimal
 
 @value
 #! A type holding information about the query execution progress

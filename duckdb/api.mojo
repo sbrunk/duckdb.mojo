@@ -1,9 +1,6 @@
 from duckdb._libduckdb import *
 from sys.ffi import _get_global
 
-alias Interval = duckdb_interval
-alias Int128 = duckdb_hugeint
-alias UInt128 = duckdb_uhugeint
 
 fn _init_global(ignored: UnsafePointer[NoneType]) -> UnsafePointer[NoneType]:
     var ptr = UnsafePointer[LibDuckDB].alloc(1)
@@ -233,12 +230,16 @@ struct Chunk:
         self._check_bounds(col)
 
     @always_inline
-    fn _check_type(self, col: Int, expected: DuckDBType) raises:
-        var type = DuckDBType(_impl().duckdb_get_type_id(
+    fn type(self, col: Int) -> DuckDBType:
+        return DuckDBType(_impl().duckdb_get_type_id(
             _impl().duckdb_vector_get_column_type(
                 _impl().duckdb_data_chunk_get_vector(self._chunk, col)
             ))
         )
+
+    @always_inline
+    fn _check_type(self, col: Int, expected: DuckDBType) raises:
+        var type = self.type(col)
         if type != expected:
             raise Error(
                 String("Column {} has type {}. Expected {}.").format(
@@ -257,22 +258,17 @@ struct Chunk:
 
     @always_inline
     fn _get_value[
-        T: CollectionElement
+        T: StringableCollectionElement
     ](self, col: Int, row: Int, expected_type: DuckDBType) raises -> Optional[T]:
         self._validate(col, row, expected_type)
-        var vector = self._get_vector(col)
-        var validity_mask = _impl().duckdb_vector_get_validity(vector._vector)
-        var entry_idx = row // 64
-        var idx_in_entry = row % 64
-        var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
-        if is_valid:
-            var data_ptr = vector._get_data().bitcast[T]()
-            return Optional[T](data_ptr[row])
-        return Optional[T](None)
+        if self.is_null(col=col, row=row):
+            return Optional[T](None)
+        var data_ptr = self._get_vector(col)._get_data().bitcast[T]()
+        return Optional[T](data_ptr[row])
 
     @always_inline
     fn _get_values[
-        T: CollectionElement
+        T: StringableCollectionElement
     ](self, col: Int, expected_type: DuckDBType) raises -> List[T]:
         self._check_type(col, expected_type)
         self._check_bounds(col)
@@ -283,6 +279,124 @@ struct Chunk:
         var list_buffer = UnsafePointer[T].alloc(size)
         memcpy(dest=list_buffer, src=data_ptr, count=size)
         return List(unsafe_pointer=list_buffer, size=size, capacity=size)
+
+    fn is_null(self, *, col: Int, row: Int) -> Bool:
+        """Check if the value at the given row and column is NULL."""
+        var vector = self._get_vector(col)
+        var validity_mask = _impl().duckdb_vector_get_validity(vector._vector)
+        if not validity_mask: # validity mask can be null if there are no NULL values
+            return False
+        var entry_idx = row // 64
+        var idx_in_entry = row % 64
+        var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+        return not is_valid
+
+    fn __getitem__(self, *, col: Int, row: Int) raises -> DuckDBValue:
+        self._check_bounds(col, row)
+
+        fn get_value[T: CollectionElement]() capturing -> T:
+            var data_ptr = self._get_vector(col)._get_data().bitcast[T]()
+            return data_ptr[row]
+
+        var type = self.type(col)
+
+        # TODO what about type == invalid
+        if self.is_null(col=col, row=row):
+            return DuckDBValue(None)
+        if type == DuckDBType.boolean:
+            return get_value[Bool]()
+        if type == DuckDBType.tinyint:
+            return get_value[Int8]()
+        if type == DuckDBType.smallint:
+            return get_value[Int16]()
+        if type == DuckDBType.integer:
+            return get_value[Int32]()
+        if type == DuckDBType.bigint:
+            return get_value[Int64]()
+        if type == DuckDBType.utinyint:
+            return get_value[UInt8]()
+        if type == DuckDBType.usmallint:
+            return get_value[UInt16]()
+        if type == DuckDBType.uinteger:
+            return get_value[UInt32]()
+        if type == DuckDBType.ubigint:
+            return get_value[UInt64]()
+        if type == DuckDBType.float:
+            return get_value[Float32]()
+        if type == DuckDBType.double:
+            return get_value[Float64]()
+        if type == DuckDBType.timestamp:
+            return get_value[Timestamp]()
+        if type == DuckDBType.date:
+            return get_value[Date]()
+        if type == DuckDBType.time:
+            return get_value[Time]()
+        if type == DuckDBType.interval:
+            return get_value[Interval]()
+        if type == DuckDBType.hugeint:
+            return get_value[Int128]()
+        if type == DuckDBType.uhugeint:
+            return get_value[UInt128]()
+        if type == DuckDBType.varchar:
+            var str_ptr = self._get_vector(col)._get_data().bitcast[duckdb_string_t_pointer]()
+            return DuckDBValue(self._get_string(row, str_ptr))
+        # TODO remaining types
+        raise Error("Unsupported or invalid data type: " + str(type))
+
+    fn __getitem__(self, *, col: Int) raises -> DuckDBListValue:
+        self._check_bounds(col)
+        var type = self.type(col)
+
+        fn get_fixed_size_value[T: CollectionElement](col: Int) capturing -> List[T]:
+            var vector = self._get_vector(col)
+            var data_ptr = vector._get_data().bitcast[T]()
+            var size = len(self)
+            # we need a copy here as closing the chunk will free the original data
+            # List will take ownership of the pointer and free it when it goes out of scope
+            var list_buffer = UnsafePointer[T].alloc(size)
+            memcpy(dest=list_buffer, src=data_ptr, count=size)
+            return List(unsafe_pointer=list_buffer, size=size, capacity=size)
+
+        # TODO handle NULL values
+
+        if type == DuckDBType.boolean:
+            return DuckDBListValue(get_fixed_size_value[Bool](col))
+        if type == DuckDBType.tinyint:
+            return DuckDBListValue(get_fixed_size_value[Int8](col))
+        if type == DuckDBType.smallint:
+            return DuckDBListValue(get_fixed_size_value[Int16](col))
+        if type == DuckDBType.integer:
+            return DuckDBListValue(get_fixed_size_value[Int32](col))
+        if type == DuckDBType.bigint:
+            return DuckDBListValue(get_fixed_size_value[Int64](col))
+        if type == DuckDBType.utinyint:
+            return DuckDBListValue(get_fixed_size_value[UInt8](col))
+        if type == DuckDBType.usmallint:
+            return DuckDBListValue(get_fixed_size_value[UInt16](col))
+        if type == DuckDBType.uinteger:
+            return DuckDBListValue(get_fixed_size_value[UInt32](col))
+        if type == DuckDBType.ubigint:
+            return DuckDBListValue(get_fixed_size_value[UInt64](col))
+        if type == DuckDBType.float:
+            return DuckDBListValue(get_fixed_size_value[Float32](col))
+        if type == DuckDBType.double:
+            return DuckDBListValue(get_fixed_size_value[Float64](col))
+        if type == DuckDBType.timestamp:
+            return DuckDBListValue(get_fixed_size_value[Timestamp](col))
+        if type == DuckDBType.date:
+            return DuckDBListValue(get_fixed_size_value[Date](col))
+        if type == DuckDBType.time:
+            return DuckDBListValue(get_fixed_size_value[Time](col))
+        if type == DuckDBType.interval:
+            return DuckDBListValue(get_fixed_size_value[Interval](col))
+        if type == DuckDBType.hugeint:
+            return DuckDBListValue(get_fixed_size_value[Int128](col))
+        if type == DuckDBType.uhugeint:
+            return DuckDBListValue(get_fixed_size_value[UInt128](col))
+        if type == DuckDBType.varchar:
+            return DuckDBListValue(self.get[String](col=col))
+        # TODO remaining types
+        raise Error("Invalid data type: " + str(type))
 
     fn get[type: DType](self, col: Int) raises -> List[Scalar[type]]:
         return self._get_values[Scalar[type]](col, expected_type=DuckDBType.from_dtype[type]())
