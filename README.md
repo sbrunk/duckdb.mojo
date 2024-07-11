@@ -45,14 +45,15 @@ for chunk in result.chunk_iterator():
 
 ## Installation
 
-1. Download the DuckDB C/C++ library from the [installation](https://duckdb.org/docs/installation/?version=stable&environment=cplusplus) page.
-2. Extract `libduckdb.so` (Linux) or `libduckdb.dylib` (macOS) to the project directory.
-3. Set library path:
+1. [Install Mojo](https://docs.modular.com/mojo/manual/get-started#1-install-mojo). Currently nightly >= `2024.7.1105` is required, so install or update the nightly version: `modular install nightly/mojo`
+2. Download the DuckDB C/C++ library from the [installation](https://duckdb.org/docs/installation/?version=stable&environment=cplusplus) page.
+3. Extract `libduckdb.so` (Linux) or `libduckdb.dylib` (macOS) to the project directory.
+4. Set library path:
 ```shell
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(realpath .) # Linux
 export DYLD_FALLBACK_LIBRARY_PATH=$(realpath .) # macOS
 ```
-4. Run
+5. Run
 ``` shell
 mojo example.mojo
 ```

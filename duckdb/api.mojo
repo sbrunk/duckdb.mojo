@@ -302,7 +302,7 @@ struct Chunk:
 
         # TODO what about type == invalid
         if self.is_null(col=col, row=row):
-            return DuckDBValue(None)
+            return DuckDBValue(NoneType())
         if type == DuckDBType.boolean:
             return get_value[Bool]()
         if type == DuckDBType.tinyint:
