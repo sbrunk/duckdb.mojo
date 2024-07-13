@@ -500,7 +500,7 @@ struct LibDuckDB:
 
     fn duckdb_result_statement_type(self, result: duckdb_result) -> duckdb_statement_type:
         """
-        Returns the statement type of the statement that was executed
+        Returns the statement type of the statement that was executed.
 
         * result: The result object to fetch the statement type from.
         * returns: duckdb_statement_type value or DUCKDB_STATEMENT_TYPE_INVALID
@@ -562,8 +562,7 @@ struct LibDuckDB:
         ]("duckdb_result_error")(result)
 
     fn duckdb_row_count(self, result: UnsafePointer[duckdb_result]) -> idx_t:
-        """
-        deprecated
+        """Deprecated.
         """
         return self.lib.get_function[
             fn (UnsafePointer[duckdb_result]) -> idx_t
@@ -1011,9 +1010,37 @@ struct LibDuckDB:
     #===--------------------------------------------------------------------===#
 
     fn duckdb_get_type_id(self, type: duckdb_logical_type) -> duckdb_type:
+        """Retrieves the enum type class of a `duckdb_logical_type`.
+
+        * type: The logical type object
+        * returns: The type id
+        """
         return self.lib.get_function[
             fn (duckdb_logical_type) -> duckdb_type
         ]("duckdb_get_type_id")(type)
+
+    fn duckdb_list_type_child_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+        """Retrieves the child type of the given list type.
+
+        The result must be freed with `duckdb_destroy_logical_type`.
+
+        * type: The logical type object
+        * returns: The child type of the list type. Must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self.lib.get_function[
+            fn (duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_list_type_child_type")(type)
+
+    fn duckdb_destroy_logical_type(self, type: UnsafePointer[duckdb_logical_type]) -> None:
+        """Destroys the logical type and de-allocates all memory allocated for that type.
+
+        * type: The logical type to destroy.
+        """
+        return self.lib.get_function[
+            fn (UnsafePointer[duckdb_logical_type]) -> None
+        ]("duckdb_destroy_logical_type")(type)
+
+    
 
     #===--------------------------------------------------------------------===#
     # Threading Information
