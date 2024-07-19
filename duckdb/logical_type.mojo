@@ -1,5 +1,6 @@
 from duckdb.api import _impl
 
+
 struct LogicalType:
     var _logical_type: duckdb_logical_type
 
@@ -7,7 +8,9 @@ struct LogicalType:
         self._logical_type = logical_type
 
     fn __del__(owned self):
-        _impl().duckdb_destroy_logical_type(UnsafePointer.address_of(self._logical_type))
+        _impl().duckdb_destroy_logical_type(
+            UnsafePointer.address_of(self._logical_type)
+        )
 
     fn get_type_id(self) -> DuckDBType:
         """Retrieves the enum type class of a `duckdb_logical_type`.
@@ -22,4 +25,6 @@ struct LogicalType:
 
         * type: The logical type object
         """
-        return LogicalType(_impl().duckdb_list_type_child_type(self._logical_type))
+        return LogicalType(
+            _impl().duckdb_list_type_child_type(self._logical_type)
+        )

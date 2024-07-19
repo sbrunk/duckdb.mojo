@@ -5,7 +5,11 @@ from duckdb.api import _impl
 @value
 @register_passable("trivial")
 struct DuckDBType(
-    Stringable, Formattable, CollectionElementNew, EqualityComparable, KeyElement
+    Stringable,
+    Formattable,
+    CollectionElementNew,
+    EqualityComparable,
+    KeyElement,
 ):
     """Represents DuckDB types."""
 
@@ -266,7 +270,7 @@ struct DuckDBType(
 @value
 struct Date(EqualityComparable, Formattable, Representable, Stringable):
     """Days are stored as days since 1970-01-01.
-    
+
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
     """
 
@@ -304,7 +308,7 @@ struct Date(EqualityComparable, Formattable, Representable, Stringable):
 @value
 struct Time(EqualityComparable, Formattable, Representable, Stringable):
     """Time is stored as microseconds since 00:00:00.
-    
+
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
     """
 
@@ -381,6 +385,7 @@ struct Timestamp(EqualityComparable, Formattable, Stringable, Representable):
     # fn time(self) -> Time:
     #     return _impl().duckdb_to_time(_impl().duckdb_from_timestamp(self).time)
 
+
 @value
 struct Interval(Stringable, Representable):
     var months: Int32
@@ -388,10 +393,26 @@ struct Interval(Stringable, Representable):
     var micros: Int64
 
     fn __str__(self) -> String:
-        return "months: " + str(self.months) + ", days: " + str(self.days) + ", micros: " + str(self.micros)
+        return (
+            "months: "
+            + str(self.months)
+            + ", days: "
+            + str(self.days)
+            + ", micros: "
+            + str(self.micros)
+        )
 
     fn __repr__(self) -> String:
-        return "Interval(" + str(self.months) + ", " + str(self.days) + ", " + str(self.micros) + ")"
+        return (
+            "Interval("
+            + str(self.months)
+            + ", "
+            + str(self.days)
+            + ", "
+            + str(self.micros)
+            + ")"
+        )
+
 
 @value
 struct Int128(Stringable, Representable):
@@ -400,6 +421,7 @@ struct Int128(Stringable, Representable):
     The value of the hugeint is upper * 2^64 + lower
     For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
     """
+
     var lower: UInt64
     var upper: Int64
 
@@ -409,9 +431,11 @@ struct Int128(Stringable, Representable):
     fn __repr__(self) -> String:
         return "Int128(" + str(self.lower) + ", " + str(self.upper) + ")"
 
+
 @value
 struct UInt128(Stringable, Representable):
     """UHugeints are composed of a (lower, upper) component."""
+
     var lower: UInt64
     var upper: UInt64
 
@@ -421,48 +445,80 @@ struct UInt128(Stringable, Representable):
     fn __repr__(self) -> String:
         return "UInt128(" + str(self.lower) + ", " + str(self.upper) + ")"
 
+
 @value
 struct Decimal(Stringable, Representable):
-    """Decimals are composed of a width and a scale, and are stored in a hugeint."""
+    """Decimals are composed of a width and a scale, and are stored in a hugeint.
+    """
+
     var width: UInt8
     var scale: UInt8
     var value: UInt128
 
     fn __str__(self) -> String:
-        return "width: " + str(self.width) + ", scale: " + str(self.scale) + ", value: " + str(self.value)
+        return (
+            "width: "
+            + str(self.width)
+            + ", scale: "
+            + str(self.scale)
+            + ", value: "
+            + str(self.value)
+        )
 
     fn __repr__(self) -> String:
-        return "Decimal(" + str(self.width) + ", " + str(self.scale) + ", " + str(self.value) + ")"
+        return (
+            "Decimal("
+            + str(self.width)
+            + ", "
+            + str(self.scale)
+            + ", "
+            + str(self.value)
+            + ")"
+        )
 
 
 trait DBVal(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type."""
+
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         pass
+
     @staticmethod
     fn type() -> DuckDBType:
         pass
 
-trait KeyElementVal(DBVal, KeyElement): pass
+
+trait KeyElementVal(DBVal, KeyElement):
+    pass
+
 
 @value
 struct DTypeVal[duckdb_type: DuckDBType](DBVal, KeyElementVal):
     var value: Scalar[duckdb_type.to_dtype()]
+
     fn __str__(self) -> String:
         return self.value.__str__()
+
     fn __hash__(self) -> UInt:
         return self.value.__hash__()
+
     fn __eq__(self, other: Self) -> Bool:
         return self.value == other.value
+
     fn __ne__(self, other: Self) -> Bool:
         return self.value != other.value
+
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != duckdb_type:
-            raise "Expected type " + str(duckdb_type) + " but got " + str(vector.get_column_type().get_type_id())
+            raise "Expected type " + str(duckdb_type) + " but got " + str(
+                vector.get_column_type().get_type_id()
+            )
         self = vector.get_value[Self](offset=offset)
+
     @staticmethod
     fn type() -> DuckDBType:
         return duckdb_type
+
 
 alias BoolVal = DTypeVal[DuckDBType.boolean]
 alias Int8Val = DTypeVal[DuckDBType.tinyint]
@@ -476,43 +532,61 @@ alias UInt64Val = DTypeVal[DuckDBType.ubigint]
 alias Float32Val = DTypeVal[DuckDBType.float]
 alias Float64Val = DTypeVal[DuckDBType.double]
 
+
 @value
 struct StringVal(DBVal):
     var value: String
+
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != DuckDBType.varchar:
-            raise "Expected type " + str(DuckDBType.varchar) + " but got " + str(vector.get_column_type().get_type_id())
+            raise "Expected type " + str(
+                DuckDBType.varchar
+            ) + " but got " + str(vector.get_column_type().get_type_id())
         var data_str_ptr = vector._get_data().bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
         var string_length = int(data_str_ptr[offset].length)
         # TODO use duckdb_string_is_inlined helper instead
         if data_str_ptr[offset].length <= 12:
-            var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
-            self.value = StringRef(data_str_inlined[offset].inlined.unsafe_ptr(), string_length)
+            var data_str_inlined = data_str_ptr.bitcast[
+                duckdb_string_t_inlined
+            ]()
+            self.value = StringRef(
+                data_str_inlined[offset].inlined.unsafe_ptr(), string_length
+            )
         else:
             self.value = StringRef(data_str_ptr[offset].ptr, string_length)
+
     fn __str__(self) -> String:
         return self.value
+
     @staticmethod
     fn type() -> DuckDBType:
-        return DuckDBType.varchar 
+        return DuckDBType.varchar
+
 
 @value
 struct ListVal[T: DBVal](DBVal):
     """A DuckDB list."""
+
     alias expected_element_type = T.type()
     var value: List[Optional[T]]
+
     fn __str__(self) -> String:
-        return "ListVal" # TODO
+        return "ListVal"  # TODO
+
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()
         if runtime_element_type != Self.expected_element_type:
-            raise "Expected type " + str(Self.expected_element_type) + " but got " + str(runtime_element_type)
+            raise "Expected type " + str(
+                Self.expected_element_type
+            ) + " but got " + str(runtime_element_type)
         self.value = List[Optional[T]](capacity=length)
         if Self.expected_element_type.is_fixed_size():
             # if the element type is fixed size, we can directly get all values from the vector
             # that way we can avoid calling the constructor for each element
-            self.value = vector.get_fixed_size_values[T](length=length, offset=offset)
+            self.value = vector.get_fixed_size_values[T](
+                length=length, offset=offset
+            )
             # for i in range(length):
             #     self.value.append(T(vector, length=1, offset=int(offset + i)))
         elif Self.expected_element_type == DuckDBType.varchar:
@@ -527,20 +601,35 @@ struct ListVal[T: DBVal](DBVal):
             for i in range(length):
                 var list_entry = data_ptr[offset + i]
                 # if the subtime is a list itself, we need to call the constructor for each element recursively
-                self.value.append(Optional(T(child_vector, length = int(list_entry.length), offset = int(list_entry.offset))))
+                self.value.append(
+                    Optional(
+                        T(
+                            child_vector,
+                            length=int(list_entry.length),
+                            offset=int(list_entry.offset),
+                        )
+                    )
+                )
         else:
-            raise Error("Unsupported or invalid type: " + str(runtime_element_type))
+            raise Error(
+                "Unsupported or invalid type: " + str(runtime_element_type)
+            )
+
     @staticmethod
     fn type() -> DuckDBType:
         return DuckDBType.list
-    
+
 
 @value
 struct MapVal[K: KeyElementVal, V: DBVal](DBVal):
     var value: Dict[K, V]
+
     fn __str__(self) -> String:
-        return "MapVal" # TODO 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int = 0) raises:
+        return "MapVal"  # TODO
+
+    fn __init__(
+        inout self, vector: Vector, length: Int, offset: Int = 0
+    ) raises:
         self.value = Dict[K, V]()
         raise "Not implemented"
         # Internally map vectors are stored as a LIST[STRUCT(key KEY_TYPE, value VALUE_TYPE)].
@@ -549,6 +638,7 @@ struct MapVal[K: KeyElementVal, V: DBVal](DBVal):
         # for i in range(length):
         #     self.key = K()
         #     self.value = V()
+
     @staticmethod
     fn type() -> DuckDBType:
         return DuckDBType.map

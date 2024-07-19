@@ -1,6 +1,7 @@
 from duckdb import DuckDB
 from testing import assert_equal, assert_true
 
+
 def test_range():
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT unnest(range(10))")

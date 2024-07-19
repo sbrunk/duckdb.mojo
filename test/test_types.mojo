@@ -71,8 +71,8 @@ def test_types():
         result.fetch_chunk().get[String](0, 0).value(), "hello longer string"
     )
 
-def test_list():
 
+def test_list():
     con = DuckDB.connect(":memory:")
 
     # A list of int
@@ -80,7 +80,7 @@ def test_list():
     chunk = result.fetch_chunk()
     lists = chunk.get[ListVal[Int32Val]](col=0)
     assert_equal(len(lists), 2)
-    
+
     for row_idx in range(2):
         var l = lists[row_idx].value().value
         assert_equal(len(l), 3)
@@ -95,7 +95,7 @@ def test_list():
     assert_equal(len(list_with_nulls), 3)
 
     assert_equal(list_with_nulls[0].value().value, 1)
-    assert_false(list_with_nulls[1]) # NULL gives us an empty optional
+    assert_false(list_with_nulls[1])  # NULL gives us an empty optional
     assert_equal(list_with_nulls[2].value().value, 3)
 
     # A list of lists of int
@@ -109,7 +109,7 @@ def test_list():
     assert_equal(len(nested_lists[0].value().value[1].value().value), 2)
     assert_equal(len(nested_lists[1].value().value), 1)
     assert_equal(len(nested_lists[1].value().value[0].value().value), 2)
-    
+
     for row_idx in range(len(nested_lists)):
         print("row ", row_idx)
         sublists = nested_lists[row_idx].value().value
@@ -122,19 +122,25 @@ def test_list():
             for elem_idx in range(len(sublist)):
                 list_value = sublist[elem_idx].value().value
                 print("val ", list_value)
-                assert_equal(list_value, row_idx * 4 + list_idx * 2 + elem_idx + 1)
+                assert_equal(
+                    list_value, row_idx * 4 + list_idx * 2 + elem_idx + 1
+                )
 
     # A list of strings
-    result = con.execute("SELECT unnest([['a', 'b'], ['cdefghijklmnopqrstuvwxyz']])")
+    result = con.execute(
+        "SELECT unnest([['a', 'b'], ['cdefghijklmnopqrstuvwxyz']])"
+    )
     chunk = result.fetch_chunk()
     string_lists = chunk.get[ListVal[StringVal]](col=0)
     assert_equal(len(string_lists), 2)
 
-    assert_equal(string_lists[0].value().value[0].value().value, 'a')
-    assert_equal(string_lists[0].value().value[1].value().value, 'b')
-    
-    assert_equal(string_lists[1].value().value[0].value().value, 'cdefghijklmnopqrstuvwxyz')
+    assert_equal(string_lists[0].value().value[0].value().value, "a")
+    assert_equal(string_lists[0].value().value[1].value().value, "b")
 
+    assert_equal(
+        string_lists[1].value().value[0].value().value,
+        "cdefghijklmnopqrstuvwxyz",
+    )
 
     ## TODO test remaining types
 

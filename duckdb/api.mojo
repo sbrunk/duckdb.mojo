@@ -34,8 +34,10 @@ struct _DuckDBInterfaceImpl:
     fn libDuckDB(self) -> LibDuckDB:
         return self._libDuckDB[]
 
+
 fn _impl() -> LibDuckDB:
     return _get_global_duckdb_itf().libDuckDB()
+
 
 struct DuckDB:
     @staticmethod
@@ -83,7 +85,9 @@ struct Connection:
         var result = duckdb_result()
         var result_ptr = UnsafePointer.address_of(result)
         if (
-            _impl().duckdb_query(self.__conn, query.unsafe_cstr_ptr(), result_ptr)
+            _impl().duckdb_query(
+                self.__conn, query.unsafe_cstr_ptr(), result_ptr
+            )
             == DuckDBError
         ):
             raise Error(_impl().duckdb_result_error(result_ptr))
@@ -97,9 +101,13 @@ struct Col:
     var type: DuckDBType
 
     fn format_to(self, inout writer: Formatter):
-        writer.write("Column(", self.index, ", ", self.name, ": ", self.type, ")")
+        writer.write(
+            "Column(", self.index, ", ", self.name, ": ", self.type, ")"
+        )
 
-    fn __str__(self) -> String: return str(self.type)
+    fn __str__(self) -> String:
+        return str(self.type)
+
 
 struct Result(Stringable, Formattable):
     var _result: duckdb_result
@@ -116,9 +124,7 @@ struct Result(Stringable, Formattable):
 
     fn column_count(self) -> Int:
         return int(
-            _impl().duckdb_column_count(
-                UnsafePointer.address_of(self._result)
-            )
+            _impl().duckdb_column_count(UnsafePointer.address_of(self._result))
         )
 
     fn column_name(self, col: Int) -> String:
@@ -162,11 +168,12 @@ struct Result(Stringable, Formattable):
         self._result = existing._result
         self.columns = existing.columns
 
+
 struct _ChunkIter[lifetime: ImmutableLifetime]:
     var _result: Reference[Result, lifetime]
     var _next_chunk: duckdb_data_chunk
 
-    fn __init__(inout self, ref [lifetime] result: Result) raises:
+    fn __init__(inout self, ref [lifetime]result: Result) raises:
         self._result = result
         self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
 
@@ -200,17 +207,17 @@ struct _ChunkIter[lifetime: ImmutableLifetime]:
         else:
             return 0
 
+
 struct Chunk:
     """Represents a DuckDB data chunk."""
+
     var _chunk: duckdb_data_chunk
 
     fn __init__(inout self, chunk: duckdb_data_chunk):
         self._chunk = chunk
 
     fn __del__(owned self):
-        _impl().duckdb_destroy_data_chunk(
-            UnsafePointer.address_of(self._chunk)
-        )
+        _impl().duckdb_destroy_data_chunk(UnsafePointer.address_of(self._chunk))
 
     fn __moveinit__(inout self, owned existing: Self):
         self._chunk = existing._chunk
@@ -219,12 +226,18 @@ struct Chunk:
         return int(_impl().duckdb_data_chunk_get_size(self._chunk))
 
     fn _get_vector(self, col: Int) -> Vector[__lifetime_of(self)]:
-        return Vector(_impl().duckdb_data_chunk_get_vector(self._chunk, col), self, length=len(self))
+        return Vector(
+            _impl().duckdb_data_chunk_get_vector(self._chunk, col),
+            self,
+            length=len(self),
+        )
 
     @always_inline
     fn _check_bounds(self, col: Int) raises:
-        if UInt64(col) >= _impl().duckdb_data_chunk_get_column_count(self._chunk):
-            raise Error(String("Column {} out of bounds.").format(col)) 
+        if UInt64(col) >= _impl().duckdb_data_chunk_get_column_count(
+            self._chunk
+        ):
+            raise Error(String("Column {} out of bounds.").format(col))
 
     @always_inline
     fn _check_bounds(self, col: Int, row: Int) raises:
@@ -249,16 +262,16 @@ struct Chunk:
             )
 
     @always_inline
-    fn _validate(
-        self, col: Int, row: Int, expected_type: DuckDBType
-    ) raises:
+    fn _validate(self, col: Int, row: Int, expected_type: DuckDBType) raises:
         self._check_bounds(col, row)
         self._check_type(col, expected_type)
 
     @always_inline
     fn _get_value[
         T: StringableCollectionElement
-    ](self, col: Int, row: Int, expected_type: DuckDBType) raises -> Optional[T]:
+    ](self, col: Int, row: Int, expected_type: DuckDBType) raises -> Optional[
+        T
+    ]:
         self._validate(col, row, expected_type)
         if self.is_null(col=col, row=row):
             return Optional[T](None)
@@ -278,12 +291,14 @@ struct Chunk:
         var list_buffer = UnsafePointer[T].alloc(size)
         memcpy(dest=list_buffer, src=data_ptr, count=size)
         return List(unsafe_pointer=list_buffer, size=size, capacity=size)
-    
+
     fn is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
         var vector = self._get_vector(col)
         var validity_mask = vector._get_validity_mask()
-        if not validity_mask: # validity mask can be null if there are no NULL values
+        if (
+            not validity_mask
+        ):  # validity mask can be null if there are no NULL values
             return False
         # TODO check validity mask doesn't contain any 0 bits
         return False
@@ -292,7 +307,9 @@ struct Chunk:
         """Check if the value at the given row and column is NULL."""
         var vector = self._get_vector(col)
         var validity_mask = vector._get_validity_mask()
-        if not validity_mask: # validity mask can be null if there are no NULL values
+        if (
+            not validity_mask
+        ):  # validity mask can be null if there are no NULL values
             return False
         var entry_idx = row // 64
         var idx_in_entry = row % 64
@@ -312,21 +329,33 @@ struct Chunk:
         return self._get_vector(col).get_values[T]()
 
     fn get[type: DType](self, col: Int) raises -> List[Scalar[type]]:
-        return self._get_values[Scalar[type]](col, expected_type=DuckDBType.from_dtype[type]())
+        return self._get_values[Scalar[type]](
+            col, expected_type=DuckDBType.from_dtype[type]()
+        )
 
-    fn get[type: DType](self, col: Int, row: Int) raises -> Optional[Scalar[type]]:
-        return self._get_value[Scalar[type]](col, row, expected_type=DuckDBType.from_dtype[type]())
+    fn get[
+        type: DType
+    ](self, col: Int, row: Int) raises -> Optional[Scalar[type]]:
+        return self._get_value[Scalar[type]](
+            col, row, expected_type=DuckDBType.from_dtype[type]()
+        )
 
     fn get[T: __type_of(String)](self, col: Int) raises -> List[String]:
         self._check_bounds(col)
         self._check_type(col, DuckDBType.varchar)
-        var string_data_ptr = self._get_vector(col)._get_data().bitcast[duckdb_string_t_pointer]()
+        var string_data_ptr = self._get_vector(col)._get_data().bitcast[
+            duckdb_string_t_pointer
+        ]()
         var strings = List[String](capacity=len(self))
         for row in range(len(self)):
-            strings.append(self._get_vector(col)._get_string(row, string_data_ptr))
+            strings.append(
+                self._get_vector(col)._get_string(row, string_data_ptr)
+            )
         return strings
 
-    fn get[T: __type_of(String)](self, col: Int, row: Int) raises -> Optional[String]:
+    fn get[
+        T: __type_of(String)
+    ](self, col: Int, row: Int) raises -> Optional[String]:
         self._validate(col, row, DuckDBType.varchar)
         var vector = self._get_vector(col)
         var validity_mask = vector._get_validity_mask()
@@ -334,41 +363,57 @@ struct Chunk:
         var idx_in_entry = row % 64
         var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
         if is_valid:
-            var string_data_ptr = vector._get_data().bitcast[duckdb_string_t_pointer]()
-            return Optional(self._get_vector(col)._get_string(row, string_data_ptr))
+            var string_data_ptr = vector._get_data().bitcast[
+                duckdb_string_t_pointer
+            ]()
+            return Optional(
+                self._get_vector(col)._get_string(row, string_data_ptr)
+            )
         return Optional[String](None)
 
-    fn get[T: __type_of(Timestamp)](self, col: Int, row: Int) raises -> Optional[Timestamp]:
+    fn get[
+        T: __type_of(Timestamp)
+    ](self, col: Int, row: Int) raises -> Optional[Timestamp]:
         return self._get_value[Timestamp](col, row, DuckDBType.timestamp)
 
     fn get[T: __type_of(Timestamp)](self, col: Int) raises -> List[Timestamp]:
         return self._get_values[Timestamp](col, DuckDBType.timestamp)
 
-    fn get[T: __type_of(Date)](self, col: Int, row: Int) raises -> Optional[Date]:
+    fn get[
+        T: __type_of(Date)
+    ](self, col: Int, row: Int) raises -> Optional[Date]:
         return self._get_value[Date](col, row, DuckDBType.date)
 
     fn get[T: __type_of(Date)](self, col: Int) raises -> List[Date]:
         return self._get_values[Date](col, DuckDBType.date)
 
-    fn get[T: __type_of(Time)](self, col: Int, row: Int) raises -> Optional[Time]:
+    fn get[
+        T: __type_of(Time)
+    ](self, col: Int, row: Int) raises -> Optional[Time]:
         return self._get_value[Time](col, row, DuckDBType.time)
 
     fn get[T: __type_of(Time)](self, col: Int) raises -> List[Time]:
         return self._get_values[Time](col, DuckDBType.time)
 
-    fn get[T: __type_of(Interval)](self, col: Int, row: Int) raises -> Optional[Interval]:
+    fn get[
+        T: __type_of(Interval)
+    ](self, col: Int, row: Int) raises -> Optional[Interval]:
         return self._get_value[Interval](col, row, DuckDBType.interval)
 
     fn get[T: __type_of(Interval)](self, col: Int) raises -> List[Interval]:
         return self._get_values[Interval](col, DuckDBType.interval)
 
-    fn get[T: __type_of(Int128)](self, col: Int, row: Int) raises -> Optional[Int128]:
+    fn get[
+        T: __type_of(Int128)
+    ](self, col: Int, row: Int) raises -> Optional[Int128]:
         return self._get_value[Int128](col, row, DuckDBType.hugeint)
 
     fn get[T: __type_of(Int128)](self, col: Int) raises -> List[Int128]:
         return self._get_values[Int128](col, DuckDBType.hugeint)
 
-    fn get[T: __type_of(UInt128)](self, col: Int, row: Int) raises -> Optional[UInt128]:
+    fn get[
+        T: __type_of(UInt128)
+    ](self, col: Int, row: Int) raises -> Optional[UInt128]:
         return self._get_value[UInt128](col, row, DuckDBType.uhugeint)
 
     fn get[T: __type_of(UInt128)](self, col: Int) raises -> List[UInt128]:

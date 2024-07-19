@@ -2,6 +2,7 @@ from sys.ffi import external_call, DLHandle, C_char
 from utils import StaticTuple, InlineArray
 from duckdb.duckdb_type import *
 from sys import os_is_macos
+
 """FFI definitions for the DuckDB C API ported to Mojo.
 
 Derived from
@@ -11,9 +12,9 @@ Once Mojo is able to generate these bindings automatically, we should switch
 to ease maintenance.
 """
 
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # Enums
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 
 #! An enum over DuckDB's internal types.
 alias duckdb_type = Int32
@@ -136,21 +137,22 @@ alias DUCKDB_STATEMENT_TYPE_DETACH = 26
 alias DUCKDB_STATEMENT_TYPE_MULTI = 27
 
 
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # General type definitions
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 
 
 alias idx_t = UInt64
 
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # Types (no explicit freeing)
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 
 
 #! Days are stored as days since 1970-01-01
 #! Use the duckdb_from_date/duckdb_to_date function to extract individual information
 alias duckdb_date = Date
+
 
 @value
 struct duckdb_date_struct:
@@ -162,6 +164,7 @@ struct duckdb_date_struct:
 #! Time is stored as microseconds since 00:00:00
 #! Use the duckdb_from_time/duckdb_to_time function to extract individual information
 alias duckdb_time = Time
+
 
 @value
 struct duckdb_time_struct:
@@ -176,6 +179,7 @@ struct duckdb_time_struct:
 struct duckdb_time_tz:
     var bits: UInt64
 
+
 @value
 struct duckdb_time_tz_struct:
     var time: duckdb_time_struct
@@ -186,10 +190,12 @@ struct duckdb_time_tz_struct:
 #! Use the duckdb_from_timestamp/duckdb_to_timestamp function to extract individual information
 alias duckdb_timestamp = Timestamp
 
+
 @value
 struct duckdb_timestamp_struct:
     var date: duckdb_date_struct
     var time: duckdb_time_struct
+
 
 #! Hugeints are composed of a (lower, upper) component
 #! The value of the hugeint is upper * 2^64 + lower
@@ -199,6 +205,7 @@ alias duckdb_hugeint = Int128
 alias duckdb_uhugeint = UInt128
 #! Decimals are composed of a width and a scale, and are stored in a hugeint
 alias duckdb_decimal = Decimal
+
 
 @value
 #! A type holding information about the query execution progress
@@ -216,11 +223,13 @@ struct duckdb_query_progress_type:
 # This is defined as a C union, which is not yet supported in Mojo so we use two structs and
 # peek into length to determine which one is used.
 
+
 @value
 struct duckdb_string_t_pointer:
     var length: UInt32
     var prefix: InlineArray[C_char, 4]
     var ptr: UnsafePointer[C_char]
+
 
 @value
 struct duckdb_string_t_inlined:
@@ -259,9 +268,9 @@ struct _duckdb_vector:
 
 alias duckdb_vector = UnsafePointer[_duckdb_vector]
 
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # Types (explicit freeing/destroying)
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 
 
 struct duckdb_string:
@@ -361,9 +370,10 @@ struct _duckdb_value:
 
 alias duckdb_value = UnsafePointer[_duckdb_value]
 
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # Functions
-#===--------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
+
 
 fn get_libname() -> StringLiteral:
     @parameter
@@ -371,6 +381,7 @@ fn get_libname() -> StringLiteral:
         return "libduckdb.dylib"
     else:
         return "libduckdb.so"
+
 
 @value
 struct LibDuckDB:
@@ -382,24 +393,29 @@ struct LibDuckDB:
     fn __del__(owned self):
         self.lib.close()
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Open/Connect
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
-    fn duckdb_open(self, path: UnsafePointer[C_char], out_database: UnsafePointer[duckdb_database]) -> UInt32:
+    fn duckdb_open(
+        self,
+        path: UnsafePointer[C_char],
+        out_database: UnsafePointer[duckdb_database],
+    ) -> UInt32:
         """
         Creates a new database or opens an existing database file stored at the given path.
         If no path is given a new in-memory database is created instead.
         The instantiated database should be closed with 'duckdb_close'.
-        
+
         * path: Path to the database file on disk, or `nullptr` or `:memory:` to open an in-memory database.
         * out_database: The result database object.
         * returns: `DuckDBSuccess` on success or `DuckDBError` on failure.
         *
         """
-        return self.lib.get_function[fn (__type_of(path), __type_of(out_database)) -> UInt32]("duckdb_open")(path, out_database)
+        return self.lib.get_function[
+            fn (__type_of(path), __type_of(out_database)) -> UInt32
+        ]("duckdb_open")(path, out_database)
 
-    
     fn duckdb_close(self, database: UnsafePointer[duckdb_database]) -> NoneType:
         """
         Closes the specified database and de-allocates all memory allocated for that database.
@@ -413,7 +429,11 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_database]) -> NoneType
         ]("duckdb_close")(database)
 
-    fn duckdb_connect(self, database: duckdb_database, out_connection: UnsafePointer[duckdb_connection]) -> UInt32:
+    fn duckdb_connect(
+        self,
+        database: duckdb_database,
+        out_connection: UnsafePointer[duckdb_connection],
+    ) -> UInt32:
         """
         Opens a connection to a database. Connections are required to query the database, and store transactional state
         associated with the connection.
@@ -427,7 +447,9 @@ struct LibDuckDB:
             fn (duckdb_database, UnsafePointer[duckdb_connection]) -> UInt32
         ]("duckdb_connect")(database, out_connection)
 
-    fn duckdb_disconnect(self, connection: UnsafePointer[duckdb_connection]) -> NoneType:
+    fn duckdb_disconnect(
+        self, connection: UnsafePointer[duckdb_connection]
+    ) -> NoneType:
         """
         Closes the specified connection and de-allocates all memory allocated for that connection.
 
@@ -437,11 +459,16 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_connection]) -> NoneType
         ]("duckdb_disconnect")(connection)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Query Execution
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
-    fn duckdb_query(self, connection: duckdb_connection, query: UnsafePointer[C_char], out_result: UnsafePointer[duckdb_result]) -> UInt32:
+    fn duckdb_query(
+        self,
+        connection: duckdb_connection,
+        query: UnsafePointer[C_char],
+        out_result: UnsafePointer[duckdb_result],
+    ) -> UInt32:
         """
         Executes a SQL query within a connection and stores the full (materialized) result in the out_result pointer.
         If the query fails to execute, DuckDBError is returned and the error message can be retrieved by calling
@@ -456,10 +483,16 @@ struct LibDuckDB:
         * returns: `DuckDBSuccess` on success or `DuckDBError` on failure.
         """
         return self.lib.get_function[
-            fn (duckdb_connection, UnsafePointer[C_char], UnsafePointer[duckdb_result]) -> UInt32
+            fn (
+                duckdb_connection,
+                UnsafePointer[C_char],
+                UnsafePointer[duckdb_result],
+            ) -> UInt32
         ]("duckdb_query")(connection, query, out_result)
 
-    fn duckdb_destroy_result(self, result: UnsafePointer[duckdb_result]) -> NoneType:
+    fn duckdb_destroy_result(
+        self, result: UnsafePointer[duckdb_result]
+    ) -> NoneType:
         """
         Closes the result and de-allocates all memory allocated for that connection.
 
@@ -469,7 +502,9 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_result]) -> NoneType
         ]("duckdb_destroy_result")(result)
 
-    fn duckdb_column_name(self, result: UnsafePointer[duckdb_result], col: idx_t) -> UnsafePointer[C_char]:
+    fn duckdb_column_name(
+        self, result: UnsafePointer[duckdb_result], col: idx_t
+    ) -> UnsafePointer[C_char]:
         """
         Returns the column name of the specified column. The result should not need to be freed; the column names will
         automatically be destroyed when the result is destroyed.
@@ -484,7 +519,9 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_result], idx_t) -> UnsafePointer[C_char]
         ]("duckdb_column_name")(result, col)
 
-    fn duckdb_column_type(self, result: UnsafePointer[duckdb_result], col: idx_t) -> duckdb_type:
+    fn duckdb_column_type(
+        self, result: UnsafePointer[duckdb_result], col: idx_t
+    ) -> duckdb_type:
         """
         Returns the column type of the specified column.
 
@@ -498,7 +535,9 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_result], idx_t) -> duckdb_type
         ]("duckdb_column_type")(result, col)
 
-    fn duckdb_result_statement_type(self, result: duckdb_result) -> duckdb_statement_type:
+    fn duckdb_result_statement_type(
+        self, result: duckdb_result
+    ) -> duckdb_statement_type:
         """
         Returns the statement type of the statement that was executed.
 
@@ -509,7 +548,9 @@ struct LibDuckDB:
             fn (duckdb_result) -> duckdb_statement_type
         ]("duckdb_result_statement_type")(result)
 
-    fn duckdb_column_logical_type(self, result: UnsafePointer[duckdb_result], col: idx_t) -> duckdb_logical_type:
+    fn duckdb_column_logical_type(
+        self, result: UnsafePointer[duckdb_result], col: idx_t
+    ) -> duckdb_logical_type:
         """
         Returns the logical column type of the specified column.
 
@@ -548,7 +589,9 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_result]) -> idx_t
         ]("duckdb_rows_changed")(result)
 
-    fn duckdb_result_error(self, result: UnsafePointer[duckdb_result]) -> UnsafePointer[C_char]:
+    fn duckdb_result_error(
+        self, result: UnsafePointer[duckdb_result]
+    ) -> UnsafePointer[C_char]:
         """
         Returns the error message contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
 
@@ -562,32 +605,35 @@ struct LibDuckDB:
         ]("duckdb_result_error")(result)
 
     fn duckdb_row_count(self, result: UnsafePointer[duckdb_result]) -> idx_t:
-        """Deprecated.
-        """
+        """Deprecated."""
         return self.lib.get_function[
             fn (UnsafePointer[duckdb_result]) -> idx_t
         ]("duckdb_row_count")(result)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Result Functions
-    #===--------------------------------------------------------------------===//
+    # ===--------------------------------------------------------------------===//
 
-    fn duckdb_result_return_type(self, result: duckdb_result) -> duckdb_result_type:
+    fn duckdb_result_return_type(
+        self, result: duckdb_result
+    ) -> duckdb_result_type:
         """
         Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error
 
         * result: The result object
         * returns: The return_type
         """
-        return self.lib.get_function[
-            fn (duckdb_result) -> duckdb_result_type
-        ]("duckdb_result_return_type")(result)
+        return self.lib.get_function[fn (duckdb_result) -> duckdb_result_type](
+            "duckdb_result_return_type"
+        )(result)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Data Chunk Interface
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
-    fn duckdb_create_data_chunk(self, types: UnsafePointer[duckdb_logical_type], column_count: idx_t) -> duckdb_data_chunk:
+    fn duckdb_create_data_chunk(
+        self, types: UnsafePointer[duckdb_logical_type], column_count: idx_t
+    ) -> duckdb_data_chunk:
         """
         Creates an empty DataChunk with the specified set of types.
 
@@ -601,7 +647,9 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_logical_type], idx_t) -> duckdb_data_chunk
         ]("duckdb_create_data_chunk")(types, column_count)
 
-    fn duckdb_destroy_data_chunk(self, chunk: UnsafePointer[duckdb_data_chunk]) -> NoneType:
+    fn duckdb_destroy_data_chunk(
+        self, chunk: UnsafePointer[duckdb_data_chunk]
+    ) -> NoneType:
         """
         Destroys the data chunk and de-allocates all memory allocated for that chunk.
 
@@ -617,22 +665,26 @@ struct LibDuckDB:
 
         * chunk: The data chunk to reset.
         """
-        return self.lib.get_function[
-            fn (duckdb_data_chunk) -> NoneType
-        ]("duckdb_data_chunk_reset")(chunk)
+        return self.lib.get_function[fn (duckdb_data_chunk) -> NoneType](
+            "duckdb_data_chunk_reset"
+        )(chunk)
 
-    fn duckdb_data_chunk_get_column_count(self, chunk: duckdb_data_chunk) -> idx_t:
+    fn duckdb_data_chunk_get_column_count(
+        self, chunk: duckdb_data_chunk
+    ) -> idx_t:
         """
         Retrieves the number of columns in a data chunk.
 
         * chunk: The data chunk to get the data from
         * returns: The number of columns in the data chunk
         """
-        return self.lib.get_function[
-            fn (duckdb_data_chunk) -> idx_t
-        ]("duckdb_data_chunk_get_column_count")(chunk)
+        return self.lib.get_function[fn (duckdb_data_chunk) -> idx_t](
+            "duckdb_data_chunk_get_column_count"
+        )(chunk)
 
-    fn duckdb_data_chunk_get_vector(self, chunk: duckdb_data_chunk, index: idx_t) -> duckdb_vector:
+    fn duckdb_data_chunk_get_vector(
+        self, chunk: duckdb_data_chunk, index: idx_t
+    ) -> duckdb_vector:
         """
         Retrieves the vector at the specified column index in the data chunk.
 
@@ -653,24 +705,26 @@ struct LibDuckDB:
         * chunk: The data chunk to get the data from
         * returns: The number of tuples in the data chunk
         """
-        return self.lib.get_function[
-            fn (duckdb_data_chunk) -> idx_t
-        ]("duckdb_data_chunk_get_size")(chunk)
+        return self.lib.get_function[fn (duckdb_data_chunk) -> idx_t](
+            "duckdb_data_chunk_get_size"
+        )(chunk)
 
-    fn duckdb_data_chunk_set_size(self, chunk: duckdb_data_chunk, size: idx_t) -> NoneType:
+    fn duckdb_data_chunk_set_size(
+        self, chunk: duckdb_data_chunk, size: idx_t
+    ) -> NoneType:
         """
         Sets the current number of tuples in a data chunk.
 
         * chunk: The data chunk to set the size in
         * size: The number of tuples in the data chunk
         """
-        return self.lib.get_function[
-            fn (duckdb_data_chunk, idx_t) -> NoneType
-        ]("duckdb_data_chunk_set_size")(chunk, size)
+        return self.lib.get_function[fn (duckdb_data_chunk, idx_t) -> NoneType](
+            "duckdb_data_chunk_set_size"
+        )(chunk, size)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Date/Time/Timestamp Helpers
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
     fn duckdb_from_date(self, date: duckdb_date) -> duckdb_date_struct:
         """Decompose a `duckdb_date` object into year, month and date (stored as `duckdb_date_struct`).
@@ -678,9 +732,9 @@ struct LibDuckDB:
         * date: The date object, as obtained from a `DUCKDB_TYPE_DATE` column.
         * returns: The `duckdb_date_struct` with the decomposed elements.
         """
-        return self.lib.get_function[
-            fn (duckdb_date) -> duckdb_date_struct
-        ]("duckdb_from_date")(date)
+        return self.lib.get_function[fn (duckdb_date) -> duckdb_date_struct](
+            "duckdb_from_date"
+        )(date)
 
     fn duckdb_to_date(self, date: duckdb_date_struct) -> duckdb_date:
         """Re-compose a `duckdb_date` from year, month and date (`duckdb_date_struct`).
@@ -688,9 +742,9 @@ struct LibDuckDB:
         * date: The year, month and date stored in a `duckdb_date_struct`.
         * returns: The `duckdb_date` element.
         """
-        return self.lib.get_function[
-            fn (duckdb_date_struct) -> duckdb_date
-        ]("duckdb_to_date")(date)
+        return self.lib.get_function[fn (duckdb_date_struct) -> duckdb_date](
+            "duckdb_to_date"
+        )(date)
 
     fn duckdb_is_finite_date(self, date: duckdb_date) -> Bool:
         """Test a `duckdb_date` to see if it is a finite value.
@@ -698,9 +752,9 @@ struct LibDuckDB:
         * date: The date object, as obtained from a `DUCKDB_TYPE_DATE` column.
         * returns: True if the date is finite, false if it is ±infinity.
         """
-        return self.lib.get_function[
-            fn (duckdb_date) -> Bool
-        ]("duckdb_is_finite_date")(date)
+        return self.lib.get_function[fn (duckdb_date) -> Bool](
+            "duckdb_is_finite_date"
+        )(date)
 
     fn duckdb_from_time(self, time: duckdb_time) -> duckdb_time_struct:
         """Decompose a `duckdb_time` object into hour, minute, second and microsecond (stored as `duckdb_time_struct`).
@@ -708,22 +762,26 @@ struct LibDuckDB:
         * time: The time object, as obtained from a `DUCKDB_TYPE_TIME` column.
         * returns: The `duckdb_time_struct` with the decomposed elements.
         """
-        return self.lib.get_function[
-            fn (duckdb_time) -> duckdb_time_struct
-        ]("duckdb_from_time")(time)
-    
-    fn duckdb_create_time_tz(self, micros: Int64, offset: Int32) -> duckdb_time_tz:
+        return self.lib.get_function[fn (duckdb_time) -> duckdb_time_struct](
+            "duckdb_from_time"
+        )(time)
+
+    fn duckdb_create_time_tz(
+        self, micros: Int64, offset: Int32
+    ) -> duckdb_time_tz:
         """Create a `duckdb_time_tz` object from micros and a timezone offset.
 
         * micros: The microsecond component of the time.
         * offset: The timezone offset component of the time.
         * returns: The `duckdb_time_tz` element.
         """
-        return self.lib.get_function[
-            fn (Int64, Int32) -> duckdb_time_tz
-            ]("duckdb_create_time_tz")(micros, offset)
+        return self.lib.get_function[fn (Int64, Int32) -> duckdb_time_tz](
+            "duckdb_create_time_tz"
+        )(micros, offset)
 
-    fn duckdb_from_time_tz(self, micros: duckdb_time_tz) -> duckdb_time_tz_struct:
+    fn duckdb_from_time_tz(
+        self, micros: duckdb_time_tz
+    ) -> duckdb_time_tz_struct:
         """Decompose a TIME_TZ objects into micros and a timezone offset.
 
         Use `duckdb_from_time` to further decompose the micros into hour, minute, second and microsecond.
@@ -742,11 +800,13 @@ struct LibDuckDB:
         * time: The hour, minute, second and microsecond in a `duckdb_time_struct`.
         * returns: The `duckdb_time` element.
         """
-        return self.lib.get_function[
-            fn (duckdb_time_struct) -> duckdb_time
-        ]("duckdb_to_time")(time)
+        return self.lib.get_function[fn (duckdb_time_struct) -> duckdb_time](
+            "duckdb_to_time"
+        )(time)
 
-    fn duckdb_to_timestamp(self, ts: duckdb_timestamp_struct) -> duckdb_timestamp:
+    fn duckdb_to_timestamp(
+        self, ts: duckdb_timestamp_struct
+    ) -> duckdb_timestamp:
         """Re-compose a `duckdb_timestamp` from a duckdb_timestamp_struct.
 
         * ts: The de-composed elements in a `duckdb_timestamp_struct`.
@@ -754,9 +814,11 @@ struct LibDuckDB:
         """
         return self.lib.get_function[
             fn (duckdb_timestamp_struct) -> duckdb_timestamp
-            ]("duckdb_to_timestamp")(ts)
+        ]("duckdb_to_timestamp")(ts)
 
-    fn duckdb_from_timestamp(self, timestamp: duckdb_timestamp) -> duckdb_timestamp_struct:
+    fn duckdb_from_timestamp(
+        self, timestamp: duckdb_timestamp
+    ) -> duckdb_timestamp_struct:
         """Decompose a `duckdb_timestamp` object into a `duckdb_timestamp_struct`.
 
         * ts: The ts object, as obtained from a `DUCKDB_TYPE_TIMESTAMP` column.
@@ -772,16 +834,17 @@ struct LibDuckDB:
         * ts: The timestamp object, as obtained from a `DUCKDB_TYPE_TIMESTAMP` column.
         * returns: True if the timestamp is finite, false if it is ±infinity.
         """
-        return self.lib.get_function[
-            fn (duckdb_timestamp) -> Bool
-        ]("duckdb_is_finite_timestamp")(timestamp)
-    
+        return self.lib.get_function[fn (duckdb_timestamp) -> Bool](
+            "duckdb_is_finite_timestamp"
+        )(timestamp)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Vector Interface
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
-    fn duckdb_vector_get_column_type(self, vector: duckdb_vector) -> duckdb_logical_type:
+    fn duckdb_vector_get_column_type(
+        self, vector: duckdb_vector
+    ) -> duckdb_logical_type:
         """
         Retrieves the column type of the specified vector.
 
@@ -790,11 +853,13 @@ struct LibDuckDB:
         * vector: The vector get the data from
         * returns: The type of the vector
         """
-        return self.lib.get_function[
-            fn (duckdb_vector) -> duckdb_logical_type
-        ]("duckdb_vector_get_column_type")(vector)
+        return self.lib.get_function[fn (duckdb_vector) -> duckdb_logical_type](
+            "duckdb_vector_get_column_type"
+        )(vector)
 
-    fn duckdb_vector_get_data(self, vector: duckdb_vector) -> UnsafePointer[NoneType]:
+    fn duckdb_vector_get_data(
+        self, vector: duckdb_vector
+    ) -> UnsafePointer[NoneType]:
         """
         Retrieves the data pointer of the vector.
 
@@ -808,7 +873,9 @@ struct LibDuckDB:
             fn (duckdb_vector) -> UnsafePointer[NoneType]
         ]("duckdb_vector_get_data")(vector)
 
-    fn duckdb_vector_get_validity(self, vector: duckdb_vector) -> UnsafePointer[UInt64]:
+    fn duckdb_vector_get_validity(
+        self, vector: duckdb_vector
+    ) -> UnsafePointer[UInt64]:
         """
         Retrieves the validity mask pointer of the specified vector.
 
@@ -833,7 +900,9 @@ struct LibDuckDB:
             fn (duckdb_vector) -> UnsafePointer[UInt64]
         ]("duckdb_vector_get_validity")(vector)
 
-    fn duckdb_vector_ensure_validity_writable(self, vector: duckdb_vector) -> NoneType:
+    fn duckdb_vector_ensure_validity_writable(
+        self, vector: duckdb_vector
+    ) -> NoneType:
         """
         Ensures the validity mask is writable by allocating it.
 
@@ -842,11 +911,13 @@ struct LibDuckDB:
 
         * vector: The vector to alter
         """
-        return self.lib.get_function[
-            fn (duckdb_vector) -> NoneType
-        ]("duckdb_vector_ensure_validity_writable")(vector)
+        return self.lib.get_function[fn (duckdb_vector) -> NoneType](
+            "duckdb_vector_ensure_validity_writable"
+        )(vector)
 
-    fn duckdb_vector_assign_string_element(self, vector: duckdb_vector, index: idx_t, str: C_char) -> NoneType:
+    fn duckdb_vector_assign_string_element(
+        self, vector: duckdb_vector, index: idx_t, str: C_char
+    ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location.
 
@@ -858,7 +929,9 @@ struct LibDuckDB:
             fn (duckdb_vector, idx_t, C_char) -> NoneType
         ]("duckdb_vector_assign_string_element")(vector, index, str)
 
-    fn duckdb_vector_assign_string_element_len(self, vector: duckdb_vector, index: idx_t, str: C_char, str_len: idx_t) -> NoneType:
+    fn duckdb_vector_assign_string_element_len(
+        self, vector: duckdb_vector, index: idx_t, str: C_char, str_len: idx_t
+    ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
 
@@ -869,9 +942,13 @@ struct LibDuckDB:
         """
         return self.lib.get_function[
             fn (duckdb_vector, idx_t, C_char, idx_t) -> NoneType
-        ]("duckdb_vector_assign_string_element_len")(vector, index, str, str_len)
+        ]("duckdb_vector_assign_string_element_len")(
+            vector, index, str, str_len
+        )
 
-    fn duckdb_list_vector_get_child(self, vector: duckdb_vector) -> duckdb_vector:
+    fn duckdb_list_vector_get_child(
+        self, vector: duckdb_vector
+    ) -> duckdb_vector:
         """
         Retrieves the child vector of a list vector.
 
@@ -880,9 +957,9 @@ struct LibDuckDB:
         * vector: The vector
         * returns: The child vector
         """
-        return self.lib.get_function[
-            fn (duckdb_vector) -> duckdb_vector
-        ]("duckdb_list_vector_get_child")(vector)
+        return self.lib.get_function[fn (duckdb_vector) -> duckdb_vector](
+            "duckdb_list_vector_get_child"
+        )(vector)
 
     fn duckdb_list_vector_get_size(self, vector: duckdb_vector) -> idx_t:
         """
@@ -891,11 +968,13 @@ struct LibDuckDB:
         * vector: The vector
         * returns: The size of the child list
         """
-        return self.lib.get_function[
-            fn (duckdb_vector) -> idx_t
-        ]("duckdb_list_vector_get_size")(vector)
+        return self.lib.get_function[fn (duckdb_vector) -> idx_t](
+            "duckdb_list_vector_get_size"
+        )(vector)
 
-    fn duckdb_list_vector_set_size(self, vector: duckdb_vector, size: idx_t) -> duckdb_state:
+    fn duckdb_list_vector_set_size(
+        self, vector: duckdb_vector, size: idx_t
+    ) -> duckdb_state:
         """
         Sets the total size of the underlying child-vector of a list vector.
 
@@ -903,11 +982,13 @@ struct LibDuckDB:
         * size: The size of the child list.
         * returns: The duckdb state. Returns DuckDBError if the vector is nullptr.
         """
-        return self.lib.get_function[
-            fn (duckdb_vector, idx_t) -> duckdb_state
-        ]("duckdb_list_vector_set_size")(vector, size)
+        return self.lib.get_function[fn (duckdb_vector, idx_t) -> duckdb_state](
+            "duckdb_list_vector_set_size"
+        )(vector, size)
 
-    fn duckdb_list_vector_reserve(self, vector: duckdb_vector, required_capacity: idx_t) -> duckdb_state:
+    fn duckdb_list_vector_reserve(
+        self, vector: duckdb_vector, required_capacity: idx_t
+    ) -> duckdb_state:
         """
         Sets the total capacity of the underlying child-vector of a list.
 
@@ -915,11 +996,13 @@ struct LibDuckDB:
         * required_capacity: the total capacity to reserve.
         * return: The duckdb state. Returns DuckDBError if the vector is nullptr.
         """
-        return self.lib.get_function[
-            fn (duckdb_vector, idx_t) -> duckdb_state
-        ]("duckdb_list_vector_reserve")(vector, required_capacity)
+        return self.lib.get_function[fn (duckdb_vector, idx_t) -> duckdb_state](
+            "duckdb_list_vector_reserve"
+        )(vector, required_capacity)
 
-    fn duckdb_struct_vector_get_child(self, vector: duckdb_vector, index: idx_t) -> duckdb_vector:
+    fn duckdb_struct_vector_get_child(
+        self, vector: duckdb_vector, index: idx_t
+    ) -> duckdb_vector:
         """
         Retrieves the child vector of a struct vector.
 
@@ -933,7 +1016,9 @@ struct LibDuckDB:
             fn (duckdb_vector, idx_t) -> duckdb_vector
         ]("duckdb_struct_vector_get_child")(vector, index)
 
-    fn duckdb_array_vector_get_child(self, vector: duckdb_vector) -> duckdb_vector:
+    fn duckdb_array_vector_get_child(
+        self, vector: duckdb_vector
+    ) -> duckdb_vector:
         """
         Retrieves the child vector of a array vector.
 
@@ -943,15 +1028,17 @@ struct LibDuckDB:
         * vector: The vector
         * returns: The child vector
         """
-        return self.lib.get_function[
-            fn (duckdb_vector) -> duckdb_vector
-        ]("duckdb_array_vector_get_child")(vector)
+        return self.lib.get_function[fn (duckdb_vector) -> duckdb_vector](
+            "duckdb_array_vector_get_child"
+        )(vector)
 
-    #===--------------------------------------------------------------------===
+    # ===--------------------------------------------------------------------===
     # Validity Mask Functions
-    #===--------------------------------------------------------------------===
+    # ===--------------------------------------------------------------------===
 
-    fn duckdb_validity_row_is_valid(self, validity: UnsafePointer[UInt64], row: idx_t) -> Bool:
+    fn duckdb_validity_row_is_valid(
+        self, validity: UnsafePointer[UInt64], row: idx_t
+    ) -> Bool:
         """
         Returns whether or not a row is valid (i.e. not NULL) in the given validity mask.
 
@@ -959,11 +1046,13 @@ struct LibDuckDB:
         * row: The row index
         * returns: true if the row is valid, false otherwise
         """
-        return self.lib.get_function[
-            fn (UnsafePointer[UInt64], idx_t) -> Bool
-        ]("duckdb_validity_row_is_valid")(validity, row)
+        return self.lib.get_function[fn (UnsafePointer[UInt64], idx_t) -> Bool](
+            "duckdb_validity_row_is_valid"
+        )(validity, row)
 
-    fn duckdb_validity_set_row_validity(self, validity: UnsafePointer[UInt64], row: idx_t, valid: Bool) -> NoneType:
+    fn duckdb_validity_set_row_validity(
+        self, validity: UnsafePointer[UInt64], row: idx_t, valid: Bool
+    ) -> NoneType:
         """
         In a validity mask, sets a specific row to either valid or invalid.
 
@@ -978,7 +1067,9 @@ struct LibDuckDB:
             fn (UnsafePointer[UInt64], idx_t, Bool) -> NoneType
         ]("duckdb_validity_set_row_validity")(validity, row, valid)
 
-    fn duckdb_validity_set_row_invalid(self, validity: UnsafePointer[UInt64], row: idx_t) -> NoneType:
+    fn duckdb_validity_set_row_invalid(
+        self, validity: UnsafePointer[UInt64], row: idx_t
+    ) -> NoneType:
         """
         In a validity mask, sets a specific row to invalid.
 
@@ -991,7 +1082,9 @@ struct LibDuckDB:
             fn (UnsafePointer[UInt64], idx_t) -> NoneType
         ]("duckdb_validity_set_row_invalid")(validity, row)
 
-    fn duckdb_validity_set_row_valid(self, validity: UnsafePointer[UInt64], row: idx_t) -> NoneType:
+    fn duckdb_validity_set_row_valid(
+        self, validity: UnsafePointer[UInt64], row: idx_t
+    ) -> NoneType:
         """
         In a validity mask, sets a specific row to valid.
 
@@ -1004,10 +1097,9 @@ struct LibDuckDB:
             fn (UnsafePointer[UInt64], idx_t) -> NoneType
         ]("duckdb_validity_set_row_valid")(validity, row)
 
-
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Logical Type Interface
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
     fn duckdb_get_type_id(self, type: duckdb_logical_type) -> duckdb_type:
         """Retrieves the enum type class of a `duckdb_logical_type`.
@@ -1015,11 +1107,13 @@ struct LibDuckDB:
         * type: The logical type object
         * returns: The type id
         """
-        return self.lib.get_function[
-            fn (duckdb_logical_type) -> duckdb_type
-        ]("duckdb_get_type_id")(type)
+        return self.lib.get_function[fn (duckdb_logical_type) -> duckdb_type](
+            "duckdb_get_type_id"
+        )(type)
 
-    fn duckdb_list_type_child_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_list_type_child_type(
+        self, type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Retrieves the child type of the given list type.
 
         The result must be freed with `duckdb_destroy_logical_type`.
@@ -1031,7 +1125,9 @@ struct LibDuckDB:
             fn (duckdb_logical_type) -> duckdb_logical_type
         ]("duckdb_list_type_child_type")(type)
 
-    fn duckdb_destroy_logical_type(self, type: UnsafePointer[duckdb_logical_type]) -> None:
+    fn duckdb_destroy_logical_type(
+        self, type: UnsafePointer[duckdb_logical_type]
+    ) -> None:
         """Destroys the logical type and de-allocates all memory allocated for that type.
 
         * type: The logical type to destroy.
@@ -1040,20 +1136,18 @@ struct LibDuckDB:
             fn (UnsafePointer[duckdb_logical_type]) -> None
         ]("duckdb_destroy_logical_type")(type)
 
-    
-
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Threading Information
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
     fn duckdb_execution_is_finished(self, con: duckdb_connection) -> Bool:
-        return self.lib.get_function[
-            fn (duckdb_connection) -> Bool
-        ]("duckdb_execution_is_finished")(con)      
+        return self.lib.get_function[fn (duckdb_connection) -> Bool](
+            "duckdb_execution_is_finished"
+        )(con)
 
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
     # Streaming Result Interface
-    #===--------------------------------------------------------------------===#
+    # ===--------------------------------------------------------------------===#
 
     fn duckdb_fetch_chunk(self, result: duckdb_result) -> duckdb_data_chunk:
         """
@@ -1066,6 +1160,6 @@ struct LibDuckDB:
         * result: The result object to fetch the data chunk from.
         * returns: The resulting data chunk. Returns `NULL` if the result has an error.
         """
-        return self.lib.get_function[
-            fn (duckdb_result) -> duckdb_data_chunk
-        ]("duckdb_fetch_chunk")(result)
+        return self.lib.get_function[fn (duckdb_result) -> duckdb_data_chunk](
+            "duckdb_fetch_chunk"
+        )(result)
