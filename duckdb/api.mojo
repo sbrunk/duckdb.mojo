@@ -95,7 +95,7 @@ struct Connection:
 
 
 @value
-struct Col:
+struct Column:
     var index: Int
     var name: String
     var type: DuckDBType
@@ -111,13 +111,13 @@ struct Col:
 
 struct Result(Stringable, Formattable):
     var _result: duckdb_result
-    var columns: List[Col]
+    var columns: List[Column]
 
     fn __init__(inout self, result: duckdb_result):
         self._result = result
-        self.columns = List[Col]()
+        self.columns = List[Column]()
         for i in range(self.column_count()):
-            var col = Col(
+            var col = Column(
                 index=i, name=self.column_name(i), type=self.column_type(i)
             )
             self.columns.append(col)
