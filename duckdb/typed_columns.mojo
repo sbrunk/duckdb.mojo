@@ -78,7 +78,7 @@ struct Col[T: CollectionElement](AnyCol):
     fn type(self) -> DBType:
         return self.logical_type
 
-    fn get(self) raises -> List[Optional[T]]:
+    fn __call__(self) raises -> List[Optional[T]]:
         # TODO check runtime type
         raise "Not implemented"
 
