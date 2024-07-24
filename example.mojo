@@ -29,7 +29,7 @@ def main():
     for chunk in result.chunk_iterator():
         for i in range(len(chunk)):
             print(
-                chunk.get[String](col=0, row=i).value(),
+                chunk.get(string, col=0, row=i).value(),
                 " ",
-                chunk.get[DType.int64](col=1, row=i).value(),
+                chunk.get(int64, col=1, row=i).value(),
             )
