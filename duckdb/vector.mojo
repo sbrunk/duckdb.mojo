@@ -100,25 +100,3 @@ struct Vector[lifetime: ImmutableLifetime]:
         _ = result
         return converted_result
 
-    fn get_fixed_size_values[
-        T: CollectionElement
-    ](self, length: Int, offset: Int) raises -> List[Optional[T]]:
-        var data_ptr = self._get_data().bitcast[T]()
-        var values = List[Optional[T]](capacity=int(length))
-        var validity_mask = self._get_validity_mask()
-        if (
-            not validity_mask
-        ):  # validity mask can be null if there are no NULL values
-            for row in range(length):
-                if validity_mask[row]:
-                    values.append(Optional(data_ptr[row + offset]))
-            return values
-        for row in range(length):
-            var entry_idx = row // 64
-            var idx_in_entry = row % 64
-            var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
-            if is_valid:
-                values.append(Optional(data_ptr[row + offset]))
-            else:
-                values.append(None)
-        return values

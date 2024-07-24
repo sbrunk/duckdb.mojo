@@ -138,35 +138,83 @@ struct ListVal[T: DBVal](DBVal):
                 Self.expected_element_type
             ) + " but got " + str(runtime_element_type)
         self.value = List[Optional[T]](capacity=length)
+
+        var data_ptr = vector._get_data().bitcast[T]()
+        var validity_mask = vector._get_validity_mask()
+
+        # TODO factor out the validity mask check into a higher-order function to avoid repetition
+
         if Self.expected_element_type.is_fixed_size():
             # if the element type is fixed size, we can directly get all values from the vector
             # that way we can avoid calling the constructor for each element
-            self.value = vector.get_fixed_size_values[T](
-                length=length, offset=offset
-            )
-            # for i in range(length):
-            #     self.value.append(T(vector, length=1, offset=int(offset + i)))
+
+            # validity mask can be null if there are no NULL values
+            if not validity_mask:  
+                for idx in range(length):
+                    self.value.append(Optional(data_ptr[idx + offset]))
+            else: # otherwise we have to check the validity mask for each element
+                for idx in range(length):
+                    var entry_idx = idx // 64
+                    var idx_in_entry = idx % 64
+                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    if is_valid:
+                        self.value.append(Optional(data_ptr[idx + offset]))
+                    else:
+                        self.value.append(None)
         elif Self.expected_element_type == DuckDBType.varchar:
-            for i in range(length):
-                self.value.append(T(vector, length=1, offset=offset + i))
+            # validity mask can be null if there are no NULL values
+            if not validity_mask:  
+                for idx in range(length):
+                    self.value.append(T(vector, length=1, offset=offset + idx))
+            else: # otherwise we have to check the validity mask for each element
+                for idx in range(length):
+                    var entry_idx = idx // 64
+                    var idx_in_entry = idx % 64
+                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    if is_valid:
+                        self.value.append(T(vector, length=1, offset=offset + idx))
+                    else:
+                        self.value.append(None)
         elif Self.expected_element_type == DuckDBType.list:
+            # if the subtype is a list itself, we need to call the constructor for each element recursively
+            
             # pointer to list metadata (length and offset) that allows us to get the
             # correct positions of the actual data in the child vector
-            var data_ptr = vector._get_data().bitcast[duckdb_list_entry]()
+            var data_ptr = data_ptr.bitcast[duckdb_list_entry]()
             # The child vector holds the actual list data in variable size entries (list_entry.length)
             var child_vector = vector.list_get_child()
-            for i in range(length):
-                var list_entry = data_ptr[offset + i]
-                # if the subtime is a list itself, we need to call the constructor for each element recursively
-                self.value.append(
-                    Optional(
-                        T(
-                            child_vector,
-                            length=int(list_entry.length),
-                            offset=int(list_entry.offset),
+
+            # validity mask can be null if there are no NULL values
+            if not validity_mask:  
+                for idx in range(length):
+                    var list_entry = data_ptr[offset + idx]
+                    self.value.append(
+                        Optional(
+                            T(
+                                child_vector,
+                                length=int(list_entry.length),
+                                offset=int(list_entry.offset),
+                            )
                         )
                     )
-                )
+            else: # otherwise we have to check the validity mask for each element
+                for idx in range(length):
+                    var entry_idx = idx // 64
+                    var idx_in_entry = idx % 64
+                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    if is_valid:
+                        var list_entry = data_ptr[offset + idx]
+                        self.value.append(
+                            Optional(
+                                T(
+                                    child_vector,
+                                    length=int(list_entry.length),
+                                    offset=int(list_entry.offset),
+                                )
+                            )
+                        )
+                    else:
+                        self.value.append(None)
         else:
             raise Error(
                 "Unsupported or invalid type: " + str(runtime_element_type)
@@ -175,7 +223,6 @@ struct ListVal[T: DBVal](DBVal):
     @staticmethod
     fn type() -> DuckDBType:
         return DuckDBType.list
-
 
 @value
 struct MapVal[K: KeyElementVal, V: DBVal](DBVal):
