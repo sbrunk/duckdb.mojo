@@ -1,5 +1,9 @@
-from duckdb.api import _impl
+from duckdb._c_api.libduckdb import _impl
+from duckdb._c_api.c_api import *
+from duckdb.logical_type import *
+from duckdb.duckdb_value import *
 
+from sys.intrinsics import _type_is_eq
 
 struct Vector[lifetime: ImmutableLifetime]:
     var _vector: duckdb_vector
@@ -47,11 +51,22 @@ struct Vector[lifetime: ImmutableLifetime]:
         """
         return _impl().duckdb_list_vector_get_size(self._vector)
 
-    fn get_values[T: DBVal](self) raises -> List[Optional[T]]:
-        var type = self.get_column_type().get_type_id()
-        if T.type() != type:
-            raise "Expected type " + str(T.type()) + " but got " + str(type)
+    fn _check_type(self, db_type: DBType) raises:
+        """Recursively check that the runtime type of the vector matches the expected type."""
+        if db_type.isa[DBPrimitiveType]():
+            if self.get_column_type().get_type_id() != get_duckdb_type(db_type):
+                raise "Expected type " + str(get_duckdb_type(db_type)) + " but got " + str(self.get_column_type().get_type_id())
+        if self.get_column_type().get_type_id() == DuckDBType.list:
+            self.list_get_child()._check_type(db_type[DBListType].child())
+        # TODO check remaining nested types
+        # elif vector.get_column_type().get_type_id() == DuckDBType.map:
 
+    fn get[T: CollectionElement, //](self, expected_type: Col[T]) raises -> List[Optional[T]]:
+        """Convert the data from this vector into native Mojo data structures."""
+
+        self._check_type(expected_type.logical_type)
+
+        var type = self.get_column_type().get_type_id()
         if type == DuckDBType.blob:
             raise Error("Blobs are not supported yet")
         if type == DuckDBType.decimal:
@@ -71,15 +86,22 @@ struct Vector[lifetime: ImmutableLifetime]:
         if type == DuckDBType.enum:
             raise Error("Enums are not supported yet")
 
-        # columns are essentially lists so we can use the same logic for getting the values
-        return ListVal[T](self, length=int(self.length), offset=0).value
-
-    fn get_value[T: DBVal](self, offset: Int) -> T:
-        var data_ptr = self._get_data().bitcast[T]()
-        return data_ptr[offset]
+        # Columns are essentially lists so we can use the same logic for getting the values.
+        var result = ListVal[expected_type.Builder](self, length=int(self.length), offset=0).value
+        # The way we are building our Mojo representation of the data currently via the DBVal
+        # trait, with different __init__ implementations depending on the concrete type, means
+        # that the types don't match.
+        #
+        # We can cast the result to the expected type though because
+        # 1. We have ensured that the runtime type matches the expected type through _check_type
+        # 2. The DBVal implementations are all thin wrappers with conversion logic
+        # around the underlying type we're converting into.
+        var converted_result = UnsafePointer.address_of(result).bitcast[List[Optional[T]]]()[]
+        _ = result
+        return converted_result
 
     fn get_fixed_size_values[
-        T: DBVal
+        T: CollectionElement
     ](self, length: Int, offset: Int) raises -> List[Optional[T]]:
         var data_ptr = self._get_data().bitcast[T]()
         var values = List[Optional[T]](capacity=int(length))
@@ -100,20 +122,3 @@ struct Vector[lifetime: ImmutableLifetime]:
             else:
                 values.append(None)
         return values
-
-    @always_inline
-    fn _get_string(
-        self, row: Int, data_str_ptr: UnsafePointer[duckdb_string_t_pointer]
-    ) raises -> String:
-        # Short strings are inlined so need to check the length and then cast accordingly.
-        var string_length = int(data_str_ptr[row].length)
-        # TODO use duckdb_string_is_inlined helper instead
-        if data_str_ptr[row].length <= 12:
-            var data_str_inlined = data_str_ptr.bitcast[
-                duckdb_string_t_inlined
-            ]()
-            return StringRef(
-                data_str_inlined[row].inlined.unsafe_ptr(), string_length
-            )
-        else:
-            return StringRef(data_str_ptr[row].ptr, string_length)

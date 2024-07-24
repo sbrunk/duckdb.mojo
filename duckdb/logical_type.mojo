@@ -1,4 +1,4 @@
-from duckdb.api import _impl
+from duckdb._c_api.libduckdb import _impl
 
 
 struct LogicalType:
