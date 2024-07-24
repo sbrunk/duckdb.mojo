@@ -2,12 +2,25 @@
 
 alias DBType = Variant[DBListType, DBPrimitiveType, DBMapType]
 
+
+fn get_duckdb_type(db_type: DBType) -> DuckDBType:
+    if db_type.isa[DBPrimitiveType]():
+        return db_type[DBPrimitiveType].duckdb_type
+    elif db_type.isa[DBListType]():
+        return DuckDBType.list
+    elif db_type.isa[DBMapType]():
+        return DuckDBType.map
+    return DuckDBType.invalid
+
+
 @value
 struct DBPrimitiveType(Copyable):
     var duckdb_type: DuckDBType
 
+
 # we can't just use DBType itself because the compiler complains about recursive types
 alias ChildType = Variant[DBListType, DBPrimitiveType, DBMapType]
+
 
 @value
 struct DBListType(Copyable):
@@ -34,6 +47,7 @@ struct DBListType(Copyable):
 
 alias KeyType = Variant[DBListType, DBPrimitiveType, DBMapType]
 alias ValueType = KeyType
+
 
 @value
 struct DBMapType(Copyable):
@@ -67,14 +81,18 @@ struct DBMapType(Copyable):
         self._key_type.destroy_pointee()
         self._value_type.destroy_pointee()
 
+
 trait AnyCol(CollectionElement):
-    fn type(self) -> DBType: ...
+    fn type(self) -> DBType:
+        ...
+
 
 @value
-struct Col[T: CollectionElement](AnyCol):
+struct Col[T: CollectionElement, Builder: DBVal](AnyCol):
     """Represents a typed column in a DuckDB result."""
+
     var logical_type: DBType
-    
+
     fn type(self) -> DBType:
         return self.logical_type
 
@@ -82,16 +100,38 @@ struct Col[T: CollectionElement](AnyCol):
         # TODO check runtime type
         raise "Not implemented"
 
-alias string = Col[String](DBPrimitiveType(DuckDBType.varchar))
+
+alias bool_ = Col[Bool, BoolVal](DBPrimitiveType(DuckDBType.boolean))
+alias int8 = Col[Int8, Int8Val](DBPrimitiveType(DuckDBType.tinyint))
+alias int16 = Col[Int16, Int16Val](DBPrimitiveType(DuckDBType.smallint))
+alias int32 = Col[Int32, Int32Val](DBPrimitiveType(DuckDBType.integer))
+alias int64 = Col[Int64, Int64Val](DBPrimitiveType(DuckDBType.bigint))
+alias uint8 = Col[UInt8, UInt8Val](DBPrimitiveType(DuckDBType.utinyint))
+alias uint16 = Col[UInt16, UInt16Val](DBPrimitiveType(DuckDBType.usmallint))
+alias uint32 = Col[UInt32, UInt32Val](DBPrimitiveType(DuckDBType.uinteger))
+alias uint64 = Col[UInt64, UInt64Val](DBPrimitiveType(DuckDBType.ubigint))
+alias float32 = Col[Float32, Float32Val](DBPrimitiveType(DuckDBType.float))
+alias float64 = Col[Float64, Float64Val](DBPrimitiveType(DuckDBType.double))
+alias timestamp = Col[Timestamp, TimestampVal](DBPrimitiveType(DuckDBType.timestamp))
+alias date = Col[Date, DateVal](DBPrimitiveType(DuckDBType.date))
+alias time = Col[Time, TimeVal](DBPrimitiveType(DuckDBType.time))
+alias interval = Col[Interval, IntervalVal](DBPrimitiveType(DuckDBType.interval))
+alias string = Col[String, StringVal](DBPrimitiveType(DuckDBType.varchar))
 """A String column."""
-alias bool = Col[Bool](DBPrimitiveType(DuckDBType.boolean))
-alias int32 = Col[Int32](DBPrimitiveType(DuckDBType.integer))
-alias int64 = Col[Int64](DBPrimitiveType(DuckDBType.bigint))
 
-fn list[T: CollectionElement](c: Col[T]) -> Col[List[Optional[T]]]:
-    return Col[List[Optional[T]]](DBListType(c.logical_type))
+# TODO remaining types
 
-fn map[K: KeyElement, V: CollectionElement](k: Col[K], v: Col[V]) -> Col[Dict[K, Optional[V]]]:
-    return Col[Dict[K, Optional[V]]](DBMapType(k.logical_type, v.logical_type))
+fn list[
+    T: CollectionElement
+](c: Col[T]) -> Col[List[Optional[T]], ListVal[c.Builder]]:
+    return Col[List[Optional[T]], ListVal[c.Builder]](
+        DBListType(c.logical_type)
+    )
 
-# fn db_struct[name: String, T: CollectionElement]() -> Col[]
+
+# fn map[
+#     K: KeyElement, V: CollectionElement
+# ](k: Col[K], v: Col[V]) -> Col[
+#     Dict[K, Optional[V]], MapVal[k.Builder, v.Builder]
+# ]:
+#     return Col[Dict[K, Optional[V]]](DBMapType(k.logical_type, v.logical_type))

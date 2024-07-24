@@ -477,18 +477,4 @@ struct Decimal(Stringable, Representable):
         )
 
 
-trait DBVal(CollectionElement, Stringable):
-    """Represents a DuckDB value of any supported type."""
-
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
-        pass
-
-    @staticmethod
-    fn type() -> DuckDBType:
-        pass
-
-
-trait KeyElementVal(DBVal, KeyElement):
-    pass
-
 

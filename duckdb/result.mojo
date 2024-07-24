@@ -74,3 +74,7 @@ struct Result(Stringable, Formattable):
     fn __moveinit__(inout self, owned existing: Self):
         self._result = existing._result
         self.columns = existing.columns
+
+@value
+struct MaterializedResult[lifetime: ImmutableLifetime]:
+    var chunks: List[Reference[Chunk, lifetime]]

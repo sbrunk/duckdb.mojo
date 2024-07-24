@@ -1,5 +1,19 @@
 from duckdb.vector import Vector
 
+trait DBVal(CollectionElement, Stringable):
+    """Represents a DuckDB value of any supported type."""
+
+    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+        pass
+
+    @staticmethod
+    fn type() -> DuckDBType:
+        pass
+
+
+trait KeyElementVal(DBVal, KeyElement):
+    pass
+
 @value
 @register_passable("trivial")
 struct DTypeVal[duckdb_type: DuckDBType](DBVal, KeyElementVal):
@@ -22,7 +36,8 @@ struct DTypeVal[duckdb_type: DuckDBType](DBVal, KeyElementVal):
             raise "Expected type " + str(duckdb_type) + " but got " + str(
                 vector.get_column_type().get_type_id()
             )
-        self = vector.get_value[Self](offset=offset)
+        
+        self = vector._get_data().bitcast[Self]()[offset=offset]
 
     @staticmethod
     fn type() -> DuckDBType:
@@ -41,6 +56,39 @@ alias UInt64Val = DTypeVal[DuckDBType.ubigint]
 alias Float32Val = DTypeVal[DuckDBType.float]
 alias Float64Val = DTypeVal[DuckDBType.double]
 
+@value
+struct FixedSizeVal[duckdb_type: DuckDBType, underlying: StringableCollectionElement](DBVal):
+    var value: underlying
+
+    fn __str__(self) -> String:
+        return self.value.__str__()
+
+    # fn __hash__(self) -> UInt:
+    #     return self.value.__hash__()
+
+    # fn __eq__(self, other: Self) -> Bool:
+    #     return self.value == other.value
+
+    # fn __ne__(self, other: Self) -> Bool:
+    #     return self.value != other.value
+
+    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+        if vector.get_column_type().get_type_id() != duckdb_type:
+            raise "Expected type " + str(duckdb_type) + " but got " + str(
+                vector.get_column_type().get_type_id()
+            )
+
+        self = vector._get_data().bitcast[Self]()[offset=offset]
+
+    @staticmethod
+    fn type() -> DuckDBType:
+        return duckdb_type
+
+
+alias TimestampVal = FixedSizeVal[DuckDBType.timestamp, Timestamp]
+alias DateVal = FixedSizeVal[DuckDBType.date, Date]
+alias TimeVal = FixedSizeVal[DuckDBType.time, Time]
+alias IntervalVal = FixedSizeVal[DuckDBType.interval, Time]
 
 @value
 struct StringVal(DBVal):

@@ -618,7 +618,7 @@ struct LibDuckDB:
         self, result: duckdb_result
     ) -> duckdb_result_type:
         """
-        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error
+        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error.
 
         * result: The result object
         * returns: The return_type
