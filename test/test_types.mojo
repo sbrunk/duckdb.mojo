@@ -1,5 +1,5 @@
 from duckdb import *
-from testing import assert_equal, assert_false, assert_raises
+from testing import assert_equal, assert_false, assert_raises, assert_true
 
 
 def test_types():
@@ -148,3 +148,12 @@ def test_null():
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT null")
     assert_false(result.fetch_chunk().get(int32, row=0, col=0))
+
+    result = con.execute("SELECT [1, null, 3]")
+    chunk = result.fetch_chunk()
+    assert_equal(len(chunk), 1)
+
+    var first_row_as_list = chunk.get(list(int32), col=0)[0].value()
+    assert_true(first_row_as_list[0])
+    assert_false(first_row_as_list[1])
+    assert_true(first_row_as_list[2])
