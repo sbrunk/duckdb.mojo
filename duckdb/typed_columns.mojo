@@ -88,18 +88,13 @@ trait AnyCol(CollectionElement):
 
 
 @value
-struct Col[T: CollectionElement, Builder: DBVal](AnyCol):
+struct Col[T: CollectionElement, Builder: DuckDBValue](AnyCol):
     """Represents a typed column in a DuckDB result."""
 
     var logical_type: DBType
 
     fn type(self) -> DBType:
         return self.logical_type
-
-    fn __call__(self) raises -> List[Optional[T]]:
-        # TODO check runtime type
-        raise "Not implemented"
-
 
 alias bool_ = Col[Bool, BoolVal](DBPrimitiveType(DuckDBType.boolean))
 alias int8 = Col[Int8, Int8Val](DBPrimitiveType(DuckDBType.tinyint))
@@ -112,19 +107,19 @@ alias uint32 = Col[UInt32, UInt32Val](DBPrimitiveType(DuckDBType.uinteger))
 alias uint64 = Col[UInt64, UInt64Val](DBPrimitiveType(DuckDBType.ubigint))
 alias float32 = Col[Float32, Float32Val](DBPrimitiveType(DuckDBType.float))
 alias float64 = Col[Float64, Float64Val](DBPrimitiveType(DuckDBType.double))
-alias timestamp = Col[Timestamp, TimestampVal](DBPrimitiveType(DuckDBType.timestamp))
-alias date = Col[Date, DateVal](DBPrimitiveType(DuckDBType.date))
-alias time = Col[Time, TimeVal](DBPrimitiveType(DuckDBType.time))
-alias interval = Col[Interval, IntervalVal](DBPrimitiveType(DuckDBType.interval))
-alias string = Col[String, StringVal](DBPrimitiveType(DuckDBType.varchar))
+alias timestamp = Col[Timestamp, DuckDBTimestamp](DBPrimitiveType(DuckDBType.timestamp))
+alias date = Col[Date, DuckDBDate](DBPrimitiveType(DuckDBType.date))
+alias time = Col[Time, DuckDBTime](DBPrimitiveType(DuckDBType.time))
+alias interval = Col[Interval, DuckDBInterval](DBPrimitiveType(DuckDBType.interval))
+alias string = Col[String, DuckDBString](DBPrimitiveType(DuckDBType.varchar))
 """A String column."""
 
 # TODO remaining types
 
 fn list[
     T: CollectionElement
-](c: Col[T]) -> Col[List[Optional[T]], ListVal[c.Builder]]:
-    return Col[List[Optional[T]], ListVal[c.Builder]](
+](c: Col[T]) -> Col[List[Optional[T]], DuckDBList[c.Builder]]:
+    return Col[List[Optional[T]], DuckDBList[c.Builder]](
         DBListType(c.logical_type)
     )
 
@@ -132,6 +127,6 @@ fn list[
 # fn map[
 #     K: KeyElement, V: CollectionElement
 # ](k: Col[K], v: Col[V]) -> Col[
-#     Dict[K, Optional[V]], MapVal[k.Builder, v.Builder]
+#     Dict[K, Optional[V]], DuckDBMap[k.Builder, v.Builder]
 # ]:
 #     return Col[Dict[K, Optional[V]]](DBMapType(k.logical_type, v.logical_type))

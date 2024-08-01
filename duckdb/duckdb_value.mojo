@@ -1,7 +1,12 @@
 from duckdb.vector import Vector
 
-trait DBVal(CollectionElement, Stringable):
-    """Represents a DuckDB value of any supported type."""
+trait DuckDBValue(CollectionElement, Stringable):
+    """Represents a DuckDB value of any supported type.
+
+    Implementations are thin wrappers around native Mojo types
+    but implement a type speciifc __init__ method to convert from a DuckDB vector.
+    
+    """
 
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         pass
@@ -11,12 +16,12 @@ trait DBVal(CollectionElement, Stringable):
         pass
 
 
-trait KeyElementVal(DBVal, KeyElement):
+trait DuckDBKeyElement(DuckDBValue, KeyElement):
     pass
 
 @value
 @register_passable("trivial")
-struct DTypeVal[duckdb_type: DuckDBType](DBVal, KeyElementVal):
+struct DTypeValue[duckdb_type: DuckDBType](DuckDBValue, DuckDBKeyElement):
     var value: Scalar[duckdb_type.to_dtype()]
 
     fn __str__(self) -> String:
@@ -44,20 +49,20 @@ struct DTypeVal[duckdb_type: DuckDBType](DBVal, KeyElementVal):
         return duckdb_type
 
 
-alias BoolVal = DTypeVal[DuckDBType.boolean]
-alias Int8Val = DTypeVal[DuckDBType.tinyint]
-alias Int16Val = DTypeVal[DuckDBType.smallint]
-alias Int32Val = DTypeVal[DuckDBType.integer]
-alias Int64Val = DTypeVal[DuckDBType.bigint]
-alias UInt8Val = DTypeVal[DuckDBType.utinyint]
-alias UInt16Val = DTypeVal[DuckDBType.usmallint]
-alias UInt32Val = DTypeVal[DuckDBType.uinteger]
-alias UInt64Val = DTypeVal[DuckDBType.ubigint]
-alias Float32Val = DTypeVal[DuckDBType.float]
-alias Float64Val = DTypeVal[DuckDBType.double]
+alias BoolVal = DTypeValue[DuckDBType.boolean]
+alias Int8Val = DTypeValue[DuckDBType.tinyint]
+alias Int16Val = DTypeValue[DuckDBType.smallint]
+alias Int32Val = DTypeValue[DuckDBType.integer]
+alias Int64Val = DTypeValue[DuckDBType.bigint]
+alias UInt8Val = DTypeValue[DuckDBType.utinyint]
+alias UInt16Val = DTypeValue[DuckDBType.usmallint]
+alias UInt32Val = DTypeValue[DuckDBType.uinteger]
+alias UInt64Val = DTypeValue[DuckDBType.ubigint]
+alias Float32Val = DTypeValue[DuckDBType.float]
+alias Float64Val = DTypeValue[DuckDBType.double]
 
 @value
-struct FixedSizeVal[duckdb_type: DuckDBType, underlying: StringableCollectionElement](DBVal):
+struct FixedSizeValue[duckdb_type: DuckDBType, underlying: StringableCollectionElement](DuckDBValue):
     var value: underlying
 
     fn __str__(self) -> String:
@@ -85,13 +90,13 @@ struct FixedSizeVal[duckdb_type: DuckDBType, underlying: StringableCollectionEle
         return duckdb_type
 
 
-alias TimestampVal = FixedSizeVal[DuckDBType.timestamp, Timestamp]
-alias DateVal = FixedSizeVal[DuckDBType.date, Date]
-alias TimeVal = FixedSizeVal[DuckDBType.time, Time]
-alias IntervalVal = FixedSizeVal[DuckDBType.interval, Time]
+alias DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
+alias DuckDBDate = FixedSizeValue[DuckDBType.date, Date]
+alias DuckDBTime = FixedSizeValue[DuckDBType.time, Time]
+alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 
 @value
-struct StringVal(DBVal):
+struct DuckDBString(DuckDBValue):
     var value: String
 
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
@@ -122,14 +127,14 @@ struct StringVal(DBVal):
 
 
 @value
-struct ListVal[T: DBVal](DBVal):
+struct DuckDBList[T: DuckDBValue](DuckDBValue):
     """A DuckDB list."""
 
     alias expected_element_type = T.type()
     var value: List[Optional[T]]
 
     fn __str__(self) -> String:
-        return "ListVal"  # TODO
+        return "DuckDBList"  # TODO
 
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()
@@ -225,11 +230,11 @@ struct ListVal[T: DBVal](DBVal):
         return DuckDBType.list
 
 @value
-struct MapVal[K: KeyElementVal, V: DBVal](DBVal):
+struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
     var value: Dict[K, V]
 
     fn __str__(self) -> String:
-        return "MapVal"  # TODO
+        return "DuckDBMap"  # TODO
 
     fn __init__(
         inout self, vector: Vector, length: Int, offset: Int = 0
