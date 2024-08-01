@@ -5,19 +5,16 @@ from duckdb.duckdb_value import *
 
 from sys.intrinsics import _type_is_eq
 
-struct Vector[lifetime: ImmutableLifetime]:
+struct Vector:
     var _vector: duckdb_vector
-    var _chunk: Reference[Chunk, lifetime]
     var length: UInt64
 
     fn __init__(
         inout self,
         vector: duckdb_vector,
-        chunk: Reference[Chunk, lifetime],
         length: UInt64,
     ):
         self._vector = vector
-        self._chunk = chunk
         self.length = length
 
     fn get_column_type(self) -> LogicalType:
@@ -29,7 +26,7 @@ struct Vector[lifetime: ImmutableLifetime]:
     fn _get_validity_mask(self) -> UnsafePointer[UInt64]:
         return _impl().duckdb_vector_get_validity(self._vector)
 
-    fn list_get_child(self) -> Vector[lifetime]:
+    fn list_get_child(self) -> Vector:
         """Retrieves the child vector of a list vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -39,7 +36,6 @@ struct Vector[lifetime: ImmutableLifetime]:
         """
         return Vector(
             _impl().duckdb_list_vector_get_child(self._vector),
-            self._chunk,
             _impl().duckdb_list_vector_get_size(self._vector),
         )
 
@@ -87,14 +83,14 @@ struct Vector[lifetime: ImmutableLifetime]:
             raise Error("Enums are not supported yet")
 
         # Columns are essentially lists so we can use the same logic for getting the values.
-        var result = ListVal[expected_type.Builder](self, length=int(self.length), offset=0).value
-        # The way we are building our Mojo representation of the data currently via the DBVal
+        var result = DuckDBList[expected_type.Builder](self, length=int(self.length), offset=0).value
+        # The way we are building our Mojo representation of the data currently via the DuckDBValue
         # trait, with different __init__ implementations depending on the concrete type, means
         # that the types don't match.
         #
         # We can cast the result to the expected type though because
         # 1. We have ensured that the runtime type matches the expected type through _check_type
-        # 2. The DBVal implementations are all thin wrappers with conversion logic
+        # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
         var converted_result = UnsafePointer.address_of(result).bitcast[List[Optional[T]]]()[]
         _ = result

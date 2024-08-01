@@ -20,10 +20,9 @@ struct Chunk(Movable):
     fn __len__(self) -> Int:
         return int(_impl().duckdb_data_chunk_get_size(self._chunk))
 
-    fn _get_vector(self, col: Int) -> Vector[__lifetime_of(self)]:
+    fn _get_vector(self, col: Int) -> Vector:
         return Vector(
             _impl().duckdb_data_chunk_get_vector(self._chunk, col),
-            self,
             length=len(self),
         )
 
@@ -73,13 +72,13 @@ struct Chunk(Movable):
         if self.is_null(col=col, row=row):
             return NoneType()
         # TODO optimize single row access
-        return self._get_vector(col).get[T](type)[row]
+        return self._get_vector(col).get(type)[row]
 
     fn get[T: CollectionElement, //](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         self._check_bounds(col)
         if self.is_null(col=col):
             return List[Optional[T]](NoneType())
-        return self._get_vector(col).get[T](type)
+        return self._get_vector(col).get(type)
 
     # TODO remaining types
 
