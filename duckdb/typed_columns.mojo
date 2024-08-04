@@ -43,7 +43,7 @@ struct DBListType(Copyable):
 
     fn __del__(owned self):
         self._child.destroy_pointee()
-
+        self._child.free()
 
 alias KeyType = Variant[DBListType, DBPrimitiveType, DBMapType]
 alias ValueType = KeyType
@@ -79,8 +79,9 @@ struct DBMapType(Copyable):
 
     fn __del__(owned self):
         self._key_type.destroy_pointee()
+        self._key_type.free()
         self._value_type.destroy_pointee()
-
+        self._value_type.free()
 
 trait AnyCol(CollectionElement):
     fn type(self) -> DBType:

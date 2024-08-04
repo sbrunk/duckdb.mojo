@@ -7,7 +7,7 @@ from duckdb.vector import Vector
 struct DuckDBType(
     Stringable,
     Formattable,
-    CollectionElementNew,
+    CollectionElement,
     EqualityComparable,
     KeyElement,
 ):
