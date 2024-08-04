@@ -68,6 +68,9 @@ struct Result(Stringable, Formattable):
     fn chunk_iterator(self) raises -> _ChunkIter[__lifetime_of(self)]:
         return _ChunkIter(self)
 
+    fn fetch_all(owned self) raises -> MaterializedResult:
+        return MaterializedResult(self^)
+
     fn __del__(owned self):
         _impl().duckdb_destroy_result(UnsafePointer.address_of(self._result))
 
@@ -75,6 +78,52 @@ struct Result(Stringable, Formattable):
         self._result = existing._result
         self.columns = existing.columns
 
-@value
-struct MaterializedResult[lifetime: ImmutableLifetime]:
-    var chunks: List[Reference[Chunk, lifetime]]
+struct MaterializedResult(Sized):
+    """A result with all rows fetched into memory."""
+
+    var result: Result
+    var chunks: List[UnsafePointer[Chunk]]
+    var size: UInt
+
+    fn __init__(inout self, owned result: Result) raises:
+        self.result = result^
+        self.chunks = List[UnsafePointer[Chunk]]()
+        self.size = 0
+        for chunk in self.result.chunk_iterator():
+            self.size += len(chunk)
+            var chunk_ptr = UnsafePointer[Chunk].alloc(1)
+            chunk_ptr.init_pointee_move(chunk^)
+            self.chunks.append(chunk_ptr)
+
+    fn column_count(self) -> Int:
+        return self.result.column_count()
+
+    fn column_name(self, col: Int) -> String:
+        return self.result.column_name(col)
+
+    fn column_types(self) -> List[DuckDBType]:
+        return self.result.column_types()
+
+    fn column_type(self, col: Int) -> DuckDBType:
+        return self.result.column_type(col)
+
+    fn __len__(self) -> Int:
+        return self.size
+
+    fn get[T: CollectionElement, //](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
+        var result = List[Optional[T]](capacity=len(self.chunks) * int(_impl().duckdb_vector_size()))
+        for chunk_ptr in self.chunks:
+            result.extend(chunk_ptr[][].get(type, col))
+        return result
+
+    fn get[T: CollectionElement, //](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
+        if row < 0 or row >= self.size:
+            raise Error("Row index out of bounds")
+        var chunk_idx = int(row // _impl().duckdb_vector_size())
+        var chunk_offset = int(row % _impl().duckdb_vector_size())
+        return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
+
+    fn __del__(owned self):
+        for chunk_ptr in self.chunks:
+            chunk_ptr[].destroy_pointee()
+            chunk_ptr[].free()

@@ -11,3 +11,13 @@ def test_range():
     var obtained = chunk.get(int64, col=0)
     for i in range(10):
         assert_equal(obtained[i].value(), i)
+
+def test_materialized_result():
+    con = DuckDB.connect(":memory:")
+    result = con.execute("SELECT unnest(range(10))").fetch_all()
+    for i in range(10):
+        assert_equal(result.get(int64, col=0, row=i).value(), i)
+
+    var obtained = result.get(int64, col=0)
+    for i in range(10):
+        assert_equal(obtained[i].value(), i)

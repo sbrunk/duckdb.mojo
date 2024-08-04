@@ -28,19 +28,18 @@ GROUP BY ALL
 ORDER BY num_services DESC
 LIMIT 3;
 """
-)
+).fetch_all()
 
 for i in range(result.column_count()):
     print(result.column_name(i), end=" ")
 print()
 
-for chunk in result.chunk_iterator():
-    for i in range(len(chunk)):
-        print(
-            chunk.get(string, col=0, row=i).value(),
-            " ",
-            chunk.get(int64, col=1, row=i).value(),
-        )
+for row in range(len(result)):
+    print(
+        result.get(string, col=0, row=row).value(),
+        " ",
+        result.get(int64, col=1, row=row).value(),
+    )
 ```
 
 ## Installation

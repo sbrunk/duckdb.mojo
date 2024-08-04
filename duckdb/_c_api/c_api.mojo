@@ -612,7 +612,7 @@ struct LibDuckDB:
 
     # ===--------------------------------------------------------------------===#
     # Result Functions
-    # ===--------------------------------------------------------------------===//
+    # ===--------------------------------------------------------------------===#
 
     fn duckdb_result_return_type(
         self, result: duckdb_result
@@ -626,6 +626,18 @@ struct LibDuckDB:
         return self.lib.get_function[fn (duckdb_result) -> duckdb_result_type](
             "duckdb_result_return_type"
         )(result)
+
+    # ===--------------------------------------------------------------------===#
+    # Helpers
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_vector_size(self) -> idx_t:
+        """The internal vector size used by DuckDB.
+        This is the amount of tuples that will fit into a data chunk created by `duckdb_create_data_chunk`.
+
+        * returns: The vector size.
+        """
+        return self.lib.get_function[fn () -> idx_t]("duckdb_vector_size")()
 
     # ===--------------------------------------------------------------------===#
     # Data Chunk Interface
