@@ -4,6 +4,10 @@ from duckdb._c_api.libduckdb import _impl
 struct LogicalType:
     var _logical_type: duckdb_logical_type
 
+    fn __init__(inout self, type_id: DuckDBType):
+        """Creates a `LogicalType` from a standard primitive type."""
+        self._logical_type = _impl().duckdb_create_logical_type(type_id.value)
+
     fn __init__(inout self, logical_type: duckdb_logical_type):
         self._logical_type = logical_type
 

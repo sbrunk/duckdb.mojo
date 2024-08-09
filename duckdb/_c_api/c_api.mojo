@@ -1114,6 +1114,91 @@ struct LibDuckDB:
     # Logical Type Interface
     # ===--------------------------------------------------------------------===#
 
+    fn duckdb_create_logical_type(self, type_id: duckdb_type) -> duckdb_logical_type:
+        """Creates a `duckdb_logical_type` from a standard primitive type.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        This should not be used with `DUCKDB_TYPE_DECIMAL`.
+
+        * type: The primitive type to create.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (duckdb_type) -> duckdb_logical_type](
+            "duckdb_create_logical_type"
+        )(type_id)
+
+    # fn duckdb_logical_type_get_alias TODO
+
+    fn duckdb_create_list_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+        """Creates a list type from its child type.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * type: The child type of list type to create.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (duckdb_logical_type) -> duckdb_logical_type](
+            "duckdb_create_list_type"
+        )(type)
+
+    fn duckdb_create_array_type(self, type: duckdb_logical_type, array_size: idx_t) -> duckdb_logical_type:
+        """Creates an array type from its child type.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * type: The child type of array type to create.
+        * array_size: The number of elements in the array.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (duckdb_logical_type, idx_t) -> duckdb_logical_type](
+            "duckdb_create_array_type"
+        )(type, array_size)
+
+    fn duckdb_create_map_type(self, key_type: duckdb_logical_type, value_type: duckdb_logical_type) -> duckdb_logical_type:
+        """Creates a map type from its key type and value type.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * type: The key type and value type of map type to create.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (duckdb_logical_type, duckdb_logical_type) -> duckdb_logical_type](
+            "duckdb_create_map_type"
+        )(key_type, value_type)
+
+    fn duckdb_create_union_type(
+        self,
+        member_types: UnsafePointer[duckdb_logical_type],
+        member_names: UnsafePointer[UnsafePointer[C_char]],
+        member_count: idx_t) -> duckdb_logical_type:
+        """Creates a UNION type from the passed types array.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * types: The array of types that the union should consist of.
+        * type_amount: The size of the types array.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (UnsafePointer[duckdb_logical_type], UnsafePointer[UnsafePointer[C_char]], idx_t) -> duckdb_logical_type](
+            "duckdb_create_union_type"
+        )(member_types, member_names, member_count)
+
+    fn duckdb_create_struct_type(
+        self,
+        member_types: UnsafePointer[duckdb_logical_type],
+        member_names: UnsafePointer[UnsafePointer[C_char]],
+        member_count: idx_t) -> duckdb_logical_type:
+        """Creates a STRUCT type from the passed member name and type arrays.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * member_types: The array of types that the struct should consist of.
+        * member_names: The array of names that the struct should consist of.
+        * member_count: The number of members that were specified for both arrays.
+        * returns: The logical type.
+        """
+        return self.lib.get_function[fn (UnsafePointer[duckdb_logical_type], UnsafePointer[UnsafePointer[C_char]], idx_t) -> duckdb_logical_type](
+            "duckdb_create_struct_type"
+        )(member_types, member_names, member_count)
+
+    # fn duckdb_create_enum_type TODO
+    # fn duckdb_create_decimal_type TODO
+
     fn duckdb_get_type_id(self, type: duckdb_logical_type) -> duckdb_type:
         """Retrieves the enum type class of a `duckdb_logical_type`.
 
@@ -1123,6 +1208,13 @@ struct LibDuckDB:
         return self.lib.get_function[fn (duckdb_logical_type) -> duckdb_type](
             "duckdb_get_type_id"
         )(type)
+
+    # fn duckdb_decimal_width TODO
+    # fn duckdb_decimal_scale TODO
+    # fn duckdb_decimal_internal_type TODO
+    # fn duckdb_enum_internal_type TODO
+    # fn duckdb_enum_dictionary_size TODO
+    # fn duckdb_enum_dictionary_value TODO
 
     fn duckdb_list_type_child_type(
         self, type: duckdb_logical_type
@@ -1137,6 +1229,28 @@ struct LibDuckDB:
         return self.lib.get_function[
             fn (duckdb_logical_type) -> duckdb_logical_type
         ]("duckdb_list_type_child_type")(type)
+
+    fn duckdb_array_type_child_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+        """Retrieves the child type of the given array type.
+
+        The result must be freed with `duckdb_destroy_logical_type`.
+
+        * type: The logical type object
+        * returns: The child type of the array type. Must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self.lib.get_function[
+            fn (duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_array_type_child_type")(type)
+
+    # fn duckdb_array_type_array_size TODO
+    # fn duckdb_map_type_key_type TODO
+    # fn duckdb_map_type_value_type TODO
+    # fn duckdb_struct_type_child_count TODO
+    # fn duckdb_struct_type_child_name TODO
+    # fn duckdb_struct_type_child_type TODO
+    # fn duckdb_union_type_member_count TODO
+    # fn duckdb_union_type_member_name TODO
+    # fn duckdb_union_type_member_type TODO
 
     fn duckdb_destroy_logical_type(
         self, type: UnsafePointer[duckdb_logical_type]
