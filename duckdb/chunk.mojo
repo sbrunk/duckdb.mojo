@@ -2,6 +2,7 @@ from duckdb._c_api.c_api import *
 from duckdb._c_api.libduckdb import _impl
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
+from collections import Optional
 
 struct Chunk(Movable):
     """Represents a DuckDB data chunk."""

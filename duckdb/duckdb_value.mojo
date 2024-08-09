@@ -1,4 +1,5 @@
 from duckdb.vector import Vector
+from collections import Optional
 
 trait DuckDBValue(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type.

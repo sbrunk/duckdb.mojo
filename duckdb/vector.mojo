@@ -2,6 +2,7 @@ from duckdb._c_api.libduckdb import _impl
 from duckdb._c_api.c_api import *
 from duckdb.logical_type import *
 from duckdb.duckdb_value import *
+from collections import Optional
 
 from sys.intrinsics import _type_is_eq
 

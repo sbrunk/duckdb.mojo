@@ -1,5 +1,6 @@
 from duckdb._c_api.libduckdb import _impl
 from duckdb.chunk import Chunk, _ChunkIter
+from collections import Optional
 
 @value
 struct Column:

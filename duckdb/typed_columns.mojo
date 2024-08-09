@@ -1,3 +1,5 @@
+from utils import Variant
+
 # we need a way to capture the expected type while building the Col[T] type.
 
 alias DBType = Variant[DBListType, DBPrimitiveType, DBMapType]

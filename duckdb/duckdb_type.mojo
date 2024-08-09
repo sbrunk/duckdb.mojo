@@ -1,6 +1,7 @@
 from duckdb._c_api.libduckdb import *
 from duckdb._c_api.c_api import *
 from duckdb.vector import Vector
+from collections import Set
 
 @value
 @register_passable("trivial")

@@ -1,5 +1,6 @@
 from sys.ffi import external_call, DLHandle, C_char
-from utils import StaticTuple, InlineArray
+from utils import StaticTuple
+from collections import InlineArray
 from duckdb.duckdb_type import *
 from sys import os_is_macos
 
