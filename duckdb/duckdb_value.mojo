@@ -1,5 +1,5 @@
 from duckdb.vector import Vector
-from collections import Optional
+from collections import Dict, Optional
 
 trait DuckDBValue(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type.
@@ -22,7 +22,7 @@ trait DuckDBKeyElement(DuckDBValue, KeyElement):
 
 @value
 @register_passable("trivial")
-struct DTypeValue[duckdb_type: DuckDBType](DuckDBValue, DuckDBKeyElement):
+struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement):
     var value: Scalar[duckdb_type.to_dtype()]
 
     fn __str__(self) -> String:

@@ -116,6 +116,15 @@ struct DuckDBType(
             # TODO what else?
         )
 
+    fn is_nested(self) -> Bool:
+        return self in Set(
+            DuckDBType.list,
+            DuckDBType.struct_t,
+            DuckDBType.map,
+            DuckDBType.array,
+            DuckDBType.union
+        )
+
     @always_inline
     fn __init__(inout self, *, other: Self):
         """Copy this DuckDBType.

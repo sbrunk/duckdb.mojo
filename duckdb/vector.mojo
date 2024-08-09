@@ -48,15 +48,10 @@ struct Vector:
         """
         return _impl().duckdb_list_vector_get_size(self._vector)
 
-    fn _check_type(self, db_type: DBType) raises:
+    fn _check_type(self, db_type: LogicalType) raises:
         """Recursively check that the runtime type of the vector matches the expected type."""
-        if db_type.isa[DBPrimitiveType]():
-            if self.get_column_type().get_type_id() != get_duckdb_type(db_type):
-                raise "Expected type " + str(get_duckdb_type(db_type)) + " but got " + str(self.get_column_type().get_type_id())
-        if self.get_column_type().get_type_id() == DuckDBType.list:
-            self.list_get_child()._check_type(db_type[DBListType].child())
-        # TODO check remaining nested types
-        # elif vector.get_column_type().get_type_id() == DuckDBType.map:
+        if self.get_column_type() != db_type:
+            raise "Expected type " + str(db_type) + " but got " + str(self.get_column_type())
 
     fn get[T: CollectionElement, //](self, expected_type: Col[T]) raises -> List[Optional[T]]:
         """Convert the data from this vector into native Mojo data structures."""

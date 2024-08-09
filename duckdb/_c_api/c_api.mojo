@@ -1243,8 +1243,32 @@ struct LibDuckDB:
         ]("duckdb_array_type_child_type")(type)
 
     # fn duckdb_array_type_array_size TODO
-    # fn duckdb_map_type_key_type TODO
-    # fn duckdb_map_type_value_type TODO
+
+    fn duckdb_map_type_key_type (self, type: duckdb_logical_type) -> duckdb_logical_type:
+        """Retrieves the key type of the given map type.
+
+        The result must be freed with `duckdb_destroy_logical_type`.
+
+        * type: The logical type object
+        * returns: The key type of the map type. Must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self.lib.get_function[
+            fn (duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_map_type_key_type")(type)
+
+    fn duckdb_map_type_value_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+        """Retrieves the value type of the given map type.
+
+        The result must be freed with `duckdb_destroy_logical_type`.
+
+        * type: The logical type object
+        * returns: The value type of the map type. Must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self.lib.get_function[
+            fn (duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_map_type_value_type")(type)
+
+
     # fn duckdb_struct_type_child_count TODO
     # fn duckdb_struct_type_child_name TODO
     # fn duckdb_struct_type_child_type TODO
