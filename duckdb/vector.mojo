@@ -56,7 +56,7 @@ struct Vector:
     fn get[T: CollectionElement, //](self, expected_type: Col[T]) raises -> List[Optional[T]]:
         """Convert the data from this vector into native Mojo data structures."""
 
-        self._check_type(expected_type.logical_type)
+        self._check_type(expected_type.type())
 
         var type = self.get_column_type().get_type_id()
         if type == DuckDBType.blob:
