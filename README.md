@@ -30,15 +30,16 @@ LIMIT 3;
 """
 ).fetch_all()
 
-for i in range(result.column_count()):
-    print(result.column_name(i), end=" ")
+for col in result.columns():
+    print(col[])
+
 print()
 
 for row in range(len(result)):
     print(
         result.get(string, col=0, row=row).value(),
         " ",
-        result.get(int64, col=1, row=row).value(),
+        result.get(bigint, col=1, row=row).value(),
     )
 ```
 

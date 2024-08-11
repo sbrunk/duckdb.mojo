@@ -1,7 +1,7 @@
 from duckdb._c_api.libduckdb import _impl
 
 
-struct LogicalType(EqualityComparable, CollectionElement, Stringable):
+struct LogicalType(EqualityComparable, CollectionElement, Formattable, Stringable):
     """Represents a potentially nested DuckDB type."""
 
     var _logical_type: duckdb_logical_type
@@ -17,6 +17,7 @@ struct LogicalType(EqualityComparable, CollectionElement, Stringable):
         if other.get_type_id() == DuckDBType.list:
             var child = other.list_type_child_type()
             self = child.create_list_type()
+        # TODO remaining nested types
         # if not other.get_type_id().is_nested():
         else:
             self = Self(other.get_type_id())
@@ -90,3 +91,7 @@ struct LogicalType(EqualityComparable, CollectionElement, Stringable):
             )
         # TODO remaining nested types
         return str(self.get_type_id())
+    
+    fn format_to(self, inout writer: Formatter):
+        writer.write(str(self))
+

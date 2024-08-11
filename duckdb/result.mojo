@@ -2,11 +2,12 @@ from duckdb._c_api.libduckdb import _impl
 from duckdb.chunk import Chunk, _ChunkIter
 from collections import Optional
 
+
 @value
-struct Column:
+struct Column(Formattable, Stringable):
     var index: Int
     var name: String
-    var type: DuckDBType
+    var type: LogicalType
 
     fn format_to(self, inout writer: Formatter):
         writer.write(
@@ -17,7 +18,7 @@ struct Column:
         return str(self.type)
 
 
-struct Result(Stringable, Formattable):
+struct Result(Formattable, Stringable):
     var _result: duckdb_result
     var columns: List[Column]
 
@@ -40,15 +41,15 @@ struct Result(Stringable, Formattable):
             UnsafePointer.address_of(self._result), col
         )
 
-    fn column_types(self) -> List[DuckDBType]:
-        var types = List[DuckDBType]()
+    fn column_types(self) -> List[LogicalType]:
+        var types = List[LogicalType]()
         for i in range(self.column_count()):
             types.append(self.column_type(i))
         return types
 
-    fn column_type(self, col: Int) -> DuckDBType:
-        return int(
-            _impl().duckdb_column_type(
+    fn column_type(self, col: Int) -> LogicalType:
+        return LogicalType(
+            _impl().duckdb_column_logical_type(
                 UnsafePointer.address_of(self._result), col
             )
         )
@@ -79,6 +80,7 @@ struct Result(Stringable, Formattable):
         self._result = existing._result
         self.columns = existing.columns
 
+
 struct MaterializedResult(Sized):
     """A result with all rows fetched into memory."""
 
@@ -102,22 +104,31 @@ struct MaterializedResult(Sized):
     fn column_name(self, col: Int) -> String:
         return self.result.column_name(col)
 
-    fn column_types(self) -> List[DuckDBType]:
+    fn column_types(self) -> List[LogicalType]:
         return self.result.column_types()
 
-    fn column_type(self, col: Int) -> DuckDBType:
+    fn column_type(self, col: Int) -> LogicalType:
         return self.result.column_type(col)
+
+    fn columns(self) -> List[Column]:
+        return self.result.columns
 
     fn __len__(self) -> Int:
         return self.size
 
-    fn get[T: CollectionElement, //](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
-        var result = List[Optional[T]](capacity=len(self.chunks) * int(_impl().duckdb_vector_size()))
+    fn get[
+        T: CollectionElement, //
+    ](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
+        var result = List[Optional[T]](
+            capacity=len(self.chunks) * int(_impl().duckdb_vector_size())
+        )
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[][].get(type, col))
         return result
 
-    fn get[T: CollectionElement, //](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
+    fn get[
+        T: CollectionElement, //
+    ](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
         var chunk_idx = int(row // _impl().duckdb_vector_size())

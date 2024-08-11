@@ -1,12 +1,10 @@
 from collections import Optional
 from utils import Variant
 from duckdb.logical_type import LogicalType
+from duckdb.duckdb_value import *
 
-trait AnyCol:
-    fn type(self) -> LogicalType:
-        pass
 
-struct Col[T: CollectionElement, Builder: DuckDBValue](AnyCol):
+struct Col[T: CollectionElement, Builder: DuckDBValue]:
     """Represents a typed column in a DuckDB result."""
 
     # using a variant here allows us to create aliases for simple types below
@@ -24,17 +22,20 @@ struct Col[T: CollectionElement, Builder: DuckDBValue](AnyCol):
             return self._type[LogicalType]
         return LogicalType(self._type[DuckDBType])
 
-alias bool_ = Col[Bool, BoolVal](DuckDBType.boolean)
-alias int8 = Col[Int8, Int8Val](DuckDBType.tinyint)
-alias int16 = Col[Int16, Int16Val](DuckDBType.smallint)
-alias int32 = Col[Int32, Int32Val](DuckDBType.integer)
-alias int64 = Col[Int64, Int64Val](DuckDBType.bigint)
-alias uint8 = Col[UInt8, UInt8Val](DuckDBType.utinyint)
-alias uint16 = Col[UInt16, UInt16Val](DuckDBType.usmallint)
-alias uint32 = Col[UInt32, UInt32Val](DuckDBType.uinteger)
-alias uint64 = Col[UInt64, UInt64Val](DuckDBType.ubigint)
-alias float32 = Col[Float32, Float32Val](DuckDBType.float)
-alias float64 = Col[Float64, Float64Val](DuckDBType.double)
+
+alias boolean = Col[Bool, BoolVal](DuckDBType.boolean)
+alias tinyint = Col[Int8, Int8Val](DuckDBType.tinyint)
+alias smallint = Col[Int16, Int16Val](DuckDBType.smallint)
+alias integer = Col[Int32, Int32Val](DuckDBType.integer)
+alias bigint = Col[Int64, Int64Val](DuckDBType.bigint)
+alias utinyint = Col[UInt8, UInt8Val](DuckDBType.utinyint)
+alias usmallint = Col[UInt16, UInt16Val](DuckDBType.usmallint)
+alias uinteger = Col[UInt32, UInt32Val](DuckDBType.uinteger)
+alias ubigint = Col[UInt64, UInt64Val](DuckDBType.ubigint)
+alias float = Col[Float32, Float32Val](DuckDBType.float)
+"""A float32 column."""
+alias double = Col[Float64, Float64Val](DuckDBType.double)
+"""A float64 column."""
 alias timestamp = Col[Timestamp, DuckDBTimestamp](DuckDBType.timestamp)
 alias date = Col[Date, DuckDBDate](DuckDBType.date)
 alias time = Col[Time, DuckDBTime](DuckDBType.time)
@@ -42,7 +43,6 @@ alias interval = Col[Interval, DuckDBInterval](DuckDBType.interval)
 alias string = Col[String, DuckDBString](DuckDBType.varchar)
 """A String column."""
 
-# TODO remaining types
 
 fn list[
     T: CollectionElement
@@ -51,6 +51,8 @@ fn list[
         c.type().create_list_type()
     )
 
+
+# TODO remaining types
 
 # fn map[
 #     K: KeyElement, V: CollectionElement
