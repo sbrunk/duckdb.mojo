@@ -40,7 +40,7 @@ alias timestamp = Col[Timestamp, DuckDBTimestamp](DuckDBType.timestamp)
 alias date = Col[Date, DuckDBDate](DuckDBType.date)
 alias time = Col[Time, DuckDBTime](DuckDBType.time)
 alias interval = Col[Interval, DuckDBInterval](DuckDBType.interval)
-alias string = Col[String, DuckDBString](DuckDBType.varchar)
+alias varchar = Col[String, DuckDBString](DuckDBType.varchar)
 """A String column."""
 
 

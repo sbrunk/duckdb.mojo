@@ -14,7 +14,7 @@ def test_types():
 
     with assert_raises(contains="Expected type varchar but got boolean"):
         result = con.execute("SELECT true")
-        _ = result.fetch_chunk().get(string, row=0, col=0).value()
+        _ = result.fetch_chunk().get(varchar, row=0, col=0).value()
 
     result = con.execute("SELECT -42::TINYINT")
     assert_equal(result.fetch_chunk().get(tinyint, row=0, col=0).value(), -42)
@@ -64,11 +64,11 @@ def test_types():
     )
 
     result = con.execute("SELECT 'hello'")
-    assert_equal(result.fetch_chunk().get(string, row=0, col=0).value(), "hello")
+    assert_equal(result.fetch_chunk().get(varchar, row=0, col=0).value(), "hello")
 
-    result = con.execute("SELECT 'hello longer string'")
+    result = con.execute("SELECT 'hello longer varchar'")
     assert_equal(
-        result.fetch_chunk().get(string, row=0, col=0).value(), "hello longer string"
+        result.fetch_chunk().get(varchar, row=0, col=0).value(), "hello longer varchar"
     )
 
 def test_list():
@@ -125,7 +125,7 @@ def test_list():
         "SELECT unnest([['a', 'b'], ['cdefghijklmnopqrstuvwxyz']])"
     )
     chunk = result.fetch_chunk()
-    string_lists = chunk.get(list(string), col=0)
+    string_lists = chunk.get(list(varchar), col=0)
     assert_equal(len(string_lists), 2)
 
     assert_equal(string_lists[0].value()[0].value(), "a")

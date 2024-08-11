@@ -29,7 +29,7 @@ def main():
 
     for row in range(len(result)):
         print(
-            result.get(string, col=0, row=row).value(),
+            result.get(varchar, col=0, row=row).value(),
             " ",
             result.get(bigint, col=1, row=row).value(),
         )
