@@ -32,7 +32,7 @@ alias utinyint = Col[UInt8, UInt8Val](DuckDBType.utinyint)
 alias usmallint = Col[UInt16, UInt16Val](DuckDBType.usmallint)
 alias uinteger = Col[UInt32, UInt32Val](DuckDBType.uinteger)
 alias ubigint = Col[UInt64, UInt64Val](DuckDBType.ubigint)
-alias float = Col[Float32, Float32Val](DuckDBType.float)
+alias float_ = Col[Float32, Float32Val](DuckDBType.float)
 """A float32 column."""
 alias double = Col[Float64, Float64Val](DuckDBType.double)
 """A float64 column."""
