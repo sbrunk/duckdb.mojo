@@ -12,15 +12,16 @@ from duckdb import *
 
 var con = DuckDB.connect(":memory:")
 
-_ = con.execute(
-    """
+_ = con.execute("""
+SET autoinstall_known_extensions=1;
+SET autoload_known_extensions=1;
+
 CREATE TABLE train_services AS
 FROM 's3://duckdb-blobs/train_services.parquet';
 """
 )
 
-var result = con.execute(
-    """
+var result = con.execute("""
 -- Get the top-3 busiest train stations
 SELECT station_name, count(*) AS num_services
 FROM train_services
@@ -45,21 +46,15 @@ for row in range(len(result)):
 
 ## Installation
 
-1. [Install Mojo](https://docs.modular.com/mojo/manual/get-started#1-install-mojo). Currently nightly >= `2024.7.1105` is required, so install or update the nightly version: `modular install nightly/mojo`
-2. Download the DuckDB C/C++ library from the [installation](https://duckdb.org/docs/installation/?version=stable&environment=cplusplus) page.
-3. Extract `libduckdb.so` (Linux) or `libduckdb.dylib` (macOS) to the project directory.
-4. Set library path:
-```shell
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(realpath .) # Linux
-export DYLD_FALLBACK_LIBRARY_PATH=$(realpath .) # macOS
-```
-5. Run
-``` shell
-mojo example.mojo
-```
+Currently, you'll need to checkout the source. We'll publish a Conda package soon to make it easier to use from another Mojo project.
+
+1. [Install the Magic package manager for Mojo](https://docs.modular.com/mojo/manual/get-started#1-install-mojo).
+2. Checkout this repo
+3. Run `magic shell`
+4. Run `mojo example.mojo`
 
 ### Run Tests
 
 ```shell
-mojo test -I .
+magic run test
 ```
