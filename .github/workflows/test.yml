@@ -1,0 +1,33 @@
+name: Run tests
+
+on: ["push"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest }
+          - { target: osx-arm64, os: macos-14 }
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install magic
+        run: |
+          curl -ssL https://magic.modular.com | bash
+
+      - name: Execute tests
+        run: |
+          source $HOME/.bash_profile
+
+          magic run test
