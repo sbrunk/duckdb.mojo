@@ -384,15 +384,18 @@ fn get_libname() -> StringLiteral:
         return "libduckdb.so"
 
 
-@value
 struct LibDuckDB:
     var lib: DLHandle
 
     fn __init__(inout self, path: String = get_libname()):
         self.lib = DLHandle(path)
 
-    fn __del__(owned self):
-        self.lib.close()
+    @staticmethod
+    fn destroy(inout existing):
+        existing.lib.close()
+
+    fn __copyinit__(inout self, existing: Self):
+        self.lib = existing.lib
 
     # ===--------------------------------------------------------------------===#
     # Open/Connect
@@ -1136,11 +1139,13 @@ struct LibDuckDB:
         * type: The child type of list type to create.
         * returns: The logical type.
         """
-        return self.lib.get_function[fn (duckdb_logical_type) -> duckdb_logical_type](
-            "duckdb_create_list_type"
-        )(type)
+        return self.lib.get_function[
+            fn (duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_create_list_type")(type)
 
-    fn duckdb_create_array_type(self, type: duckdb_logical_type, array_size: idx_t) -> duckdb_logical_type:
+    fn duckdb_create_array_type(
+        self, type: duckdb_logical_type, array_size: idx_t
+    ) -> duckdb_logical_type:
         """Creates an array type from its child type.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1152,7 +1157,9 @@ struct LibDuckDB:
             "duckdb_create_array_type"
         )(type, array_size)
 
-    fn duckdb_create_map_type(self, key_type: duckdb_logical_type, value_type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_create_map_type(
+        self, key_type: duckdb_logical_type, value_type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Creates a map type from its key type and value type.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1183,7 +1190,8 @@ struct LibDuckDB:
         self,
         member_types: UnsafePointer[duckdb_logical_type],
         member_names: UnsafePointer[UnsafePointer[C_char]],
-        member_count: idx_t) -> duckdb_logical_type:
+        member_count: idx_t,
+    ) -> duckdb_logical_type:
         """Creates a STRUCT type from the passed member name and type arrays.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1267,7 +1275,6 @@ struct LibDuckDB:
         return self.lib.get_function[
             fn (duckdb_logical_type) -> duckdb_logical_type
         ]("duckdb_map_type_value_type")(type)
-
 
     # fn duckdb_struct_type_child_count TODO
     # fn duckdb_struct_type_child_name TODO
