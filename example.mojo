@@ -4,8 +4,10 @@ from duckdb import *
 def main():
     var con = DuckDB.connect(":memory:")
 
-    _ = con.execute(
-        """
+    _ = con.execute("""
+    SET autoinstall_known_extensions=1;
+    SET autoload_known_extensions=1;
+
     CREATE TABLE train_services AS
     FROM 's3://duckdb-blobs/train_services.parquet';
     """

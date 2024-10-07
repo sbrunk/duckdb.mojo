@@ -165,4 +165,8 @@ cython_debug/
 .pixi
 *.egg-info
 # magic environments
+.magic/
+
+.vscode/
+# magic environments
 .magic

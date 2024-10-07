@@ -1,6 +1,7 @@
 from duckdb._c_api.c_api import LibDuckDB
 from sys.ffi import _get_global
 
+
 fn _init_global(ignored: UnsafePointer[NoneType]) -> UnsafePointer[NoneType]:
     var ptr = UnsafePointer[LibDuckDB].alloc(1)
     ptr[] = LibDuckDB()
@@ -8,8 +9,8 @@ fn _init_global(ignored: UnsafePointer[NoneType]) -> UnsafePointer[NoneType]:
 
 
 fn _destroy_global(duckdb: UnsafePointer[NoneType]):
-    # var p = duckdb.bitcast[LibDuckDB]()
-    # LibDuckDB.destroy(p[])
+    var p = duckdb.bitcast[LibDuckDB]()
+    LibDuckDB.destroy(p[])
     duckdb.free()
 
 
