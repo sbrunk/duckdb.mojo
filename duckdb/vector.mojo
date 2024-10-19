@@ -6,6 +6,7 @@ from collections import Optional
 
 from sys.intrinsics import _type_is_eq
 
+
 struct Vector:
     var _vector: duckdb_vector
     var length: UInt64
@@ -49,12 +50,18 @@ struct Vector:
         return _impl().duckdb_list_vector_get_size(self._vector)
 
     fn _check_type(self, db_type: LogicalType) raises:
-        """Recursively check that the runtime type of the vector matches the expected type."""
+        """Recursively check that the runtime type of the vector matches the expected type.
+        """
         if self.get_column_type() != db_type:
-            raise "Expected type " + str(db_type) + " but got " + str(self.get_column_type())
+            raise "Expected type " + str(db_type) + " but got " + str(
+                self.get_column_type()
+            )
 
-    fn get[T: CollectionElement, //](self, expected_type: Col[T]) raises -> List[Optional[T]]:
-        """Convert the data from this vector into native Mojo data structures."""
+    fn get[
+        T: CollectionElement, //
+    ](self, expected_type: Col[T]) raises -> List[Optional[T]]:
+        """Convert the data from this vector into native Mojo data structures.
+        """
 
         self._check_type(expected_type.type())
 
@@ -79,7 +86,9 @@ struct Vector:
             raise Error("Enums are not supported yet")
 
         # Columns are essentially lists so we can use the same logic for getting the values.
-        var result = DuckDBList[expected_type.Builder](self, length=int(self.length), offset=0).value
+        var result = DuckDBList[expected_type.Builder](
+            self, length=int(self.length), offset=0
+        ).value
         # The way we are building our Mojo representation of the data currently via the DuckDBValue
         # trait, with different __init__ implementations depending on the concrete type, means
         # that the types don't match.
@@ -88,7 +97,8 @@ struct Vector:
         # 1. We have ensured that the runtime type matches the expected type through _check_type
         # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
-        var converted_result = UnsafePointer.address_of(result).bitcast[List[Optional[T]]]()[]
+        var converted_result = UnsafePointer.address_of(result).bitcast[
+            List[Optional[T]]
+        ]()[]
         _ = result
         return converted_result
-

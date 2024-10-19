@@ -1,5 +1,6 @@
 from duckdb._c_api.c_api import LibDuckDB
 from sys.ffi import _get_global
+from memory import UnsafePointer
 
 
 fn _init_global(ignored: UnsafePointer[NoneType]) -> UnsafePointer[NoneType]:

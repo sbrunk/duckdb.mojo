@@ -55,7 +55,9 @@ def test_types():
     )
 
     result = con.execute("SELECT DATE '1992-09-20'")
-    assert_equal(result.fetch_chunk().get(date, row=0, col=0).value(), Date(8298))
+    assert_equal(
+        result.fetch_chunk().get(date, row=0, col=0).value(), Date(8298)
+    )
 
     result = con.execute("SELECT TIME '1992-09-20 11:30:00.123456'")
     assert_equal(
@@ -64,12 +66,16 @@ def test_types():
     )
 
     result = con.execute("SELECT 'hello'")
-    assert_equal(result.fetch_chunk().get(varchar, row=0, col=0).value(), "hello")
+    assert_equal(
+        result.fetch_chunk().get(varchar, row=0, col=0).value(), "hello"
+    )
 
     result = con.execute("SELECT 'hello longer varchar'")
     assert_equal(
-        result.fetch_chunk().get(varchar, row=0, col=0).value(), "hello longer varchar"
+        result.fetch_chunk().get(varchar, row=0, col=0).value(),
+        "hello longer varchar",
     )
+
 
 def test_list():
     con = DuckDB.connect(":memory:")

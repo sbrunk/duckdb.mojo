@@ -4,12 +4,12 @@ from collections import Optional
 
 
 @value
-struct Column(Formattable, Stringable):
+struct Column(Writable, Stringable):
     var index: Int
     var name: String
     var type: LogicalType
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         writer.write(
             "Column(", self.index, ", ", self.name, ": ", self.type, ")"
         )
@@ -18,7 +18,7 @@ struct Column(Formattable, Stringable):
         return str(self.type)
 
 
-struct Result(Formattable, Stringable):
+struct Result(Writable, Stringable):
     var _result: duckdb_result
     var columns: List[Column]
 
@@ -54,12 +54,12 @@ struct Result(Formattable, Stringable):
             )
         )
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         for col in self.columns:
             writer.write(col[], ", ")
 
     fn __str__(self) -> String:
-        return String.format_sequence(self)
+        return String.write(self)
 
     # fn __iter__(self) -> ResultIterator:
     #     return ResultIterator(self)
@@ -67,7 +67,7 @@ struct Result(Formattable, Stringable):
     fn fetch_chunk(self) raises -> Chunk:
         return Chunk(_impl().duckdb_fetch_chunk(self._result))
 
-    fn chunk_iterator(self) raises -> _ChunkIter[__lifetime_of(self)]:
+    fn chunk_iterator(self) raises -> _ChunkIter[__origin_of(self)]:
         return _ChunkIter(self)
 
     fn fetch_all(owned self) raises -> MaterializedResult:
