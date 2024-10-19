@@ -1,14 +1,15 @@
 [project]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["conda-forge", "https://conda.modular.com/max"]
+channels = ["conda-forge", "https://conda.modular.com/max-nightly/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
-test = { cmd = "mojo test -I $PIXI_PROJECT_ROOT", env = { DYLD_LIBRARY_PATH = "$CONDA_PREFIX/lib", LD_LIBRARY_PATH = "$CONDA_PREFIX/lib" }, cwd = "test" }
+#test = { cmd = "mojo test -I $PIXI_PROJECT_ROOT", env = { DYLD_LIBRARY_PATH = "$CONDA_PREFIX/lib", LD_LIBRARY_PATH = "$CONDA_PREFIX/lib" }, cwd = "test" }
+test = "mojo test"
 
 [dependencies]
 libduckdb = ">=1.1.1,<2"
-max = ">=24.5.0,<25"
+max = ">=24.6.0.dev2024101905,<25"

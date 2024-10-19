@@ -1,12 +1,14 @@
 from duckdb.vector import Vector
 from collections import Dict, Optional
+from utils import StringRef
+
 
 trait DuckDBValue(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
     but implement a type speciifc __init__ method to convert from a DuckDB vector.
-    
+
     """
 
     fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
@@ -19,6 +21,7 @@ trait DuckDBValue(CollectionElement, Stringable):
 
 trait DuckDBKeyElement(DuckDBValue, KeyElement):
     pass
+
 
 @value
 @register_passable("trivial")
@@ -42,7 +45,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement):
             raise "Expected type " + str(duckdb_type) + " but got " + str(
                 vector.get_column_type().get_type_id()
             )
-        
+
         self = vector._get_data().bitcast[Self]()[offset=offset]
 
     @staticmethod
@@ -62,8 +65,11 @@ alias UInt64Val = DTypeValue[DuckDBType.ubigint]
 alias Float32Val = DTypeValue[DuckDBType.float]
 alias Float64Val = DTypeValue[DuckDBType.double]
 
+
 @value
-struct FixedSizeValue[duckdb_type: DuckDBType, underlying: StringableCollectionElement](DuckDBValue):
+struct FixedSizeValue[
+    duckdb_type: DuckDBType, underlying: StringableCollectionElement
+](DuckDBValue):
     var value: underlying
 
     fn __str__(self) -> String:
@@ -95,6 +101,7 @@ alias DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
 alias DuckDBDate = FixedSizeValue[DuckDBType.date, Date]
 alias DuckDBTime = FixedSizeValue[DuckDBType.time, Time]
 alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
+
 
 @value
 struct DuckDBString(DuckDBValue):
@@ -155,35 +162,41 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
             # that way we can avoid calling the constructor for each element
 
             # validity mask can be null if there are no NULL values
-            if not validity_mask:  
+            if not validity_mask:
                 for idx in range(length):
                     self.value.append(Optional(data_ptr[idx + offset]))
-            else: # otherwise we have to check the validity mask for each element
+            else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    var is_valid = validity_mask[entry_idx] & (
+                        1 << idx_in_entry
+                    )
                     if is_valid:
                         self.value.append(Optional(data_ptr[idx + offset]))
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.varchar:
             # validity mask can be null if there are no NULL values
-            if not validity_mask:  
+            if not validity_mask:
                 for idx in range(length):
                     self.value.append(T(vector, length=1, offset=offset + idx))
-            else: # otherwise we have to check the validity mask for each element
+            else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    var is_valid = validity_mask[entry_idx] & (
+                        1 << idx_in_entry
+                    )
                     if is_valid:
-                        self.value.append(T(vector, length=1, offset=offset + idx))
+                        self.value.append(
+                            T(vector, length=1, offset=offset + idx)
+                        )
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.list:
             # if the subtype is a list itself, we need to call the constructor for each element recursively
-            
+
             # pointer to list metadata (length and offset) that allows us to get the
             # correct positions of the actual data in the child vector
             var data_ptr = data_ptr.bitcast[duckdb_list_entry]()
@@ -191,7 +204,7 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
             var child_vector = vector.list_get_child()
 
             # validity mask can be null if there are no NULL values
-            if not validity_mask:  
+            if not validity_mask:
                 for idx in range(length):
                     var list_entry = data_ptr[offset + idx]
                     self.value.append(
@@ -203,11 +216,13 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
                             )
                         )
                     )
-            else: # otherwise we have to check the validity mask for each element
+            else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+                    var is_valid = validity_mask[entry_idx] & (
+                        1 << idx_in_entry
+                    )
                     if is_valid:
                         var list_entry = data_ptr[offset + idx]
                         self.value.append(
@@ -229,6 +244,7 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
     @staticmethod
     fn type() -> DuckDBType:
         return DuckDBType.list
+
 
 @value
 struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):

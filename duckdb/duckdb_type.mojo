@@ -3,11 +3,12 @@ from duckdb._c_api.c_api import *
 from duckdb.vector import Vector
 from collections import Set
 
+
 @value
 @register_passable("trivial")
 struct DuckDBType(
     Stringable,
-    Formattable,
+    Writable,
     CollectionElement,
     EqualityComparable,
     KeyElement,
@@ -122,7 +123,7 @@ struct DuckDBType(
             DuckDBType.struct_t,
             DuckDBType.map,
             DuckDBType.array,
-            DuckDBType.union
+            DuckDBType.union,
         )
 
     @always_inline
@@ -143,78 +144,78 @@ struct DuckDBType(
 
     @always_inline("nodebug")
     fn __str__(self) -> String:
-        return String.format_sequence(self)
+        return String.write(self)
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         if self == DuckDBType.invalid:
-            return writer.write_str("invalid")
+            return writer.write("invalid")
         if self == DuckDBType.tinyint:
-            return writer.write_str("tinyint")
+            return writer.write("tinyint")
         if self == DuckDBType.boolean:
-            return writer.write_str("boolean")
+            return writer.write("boolean")
         if self == DuckDBType.smallint:
-            return writer.write_str("smallint")
+            return writer.write("smallint")
         if self == DuckDBType.integer:
-            return writer.write_str("integer")
+            return writer.write("integer")
         if self == DuckDBType.bigint:
-            return writer.write_str("bigint")
+            return writer.write("bigint")
         if self == DuckDBType.utinyint:
-            return writer.write_str("utinyint")
+            return writer.write("utinyint")
         if self == DuckDBType.usmallint:
-            return writer.write_str("usmallint")
+            return writer.write("usmallint")
         if self == DuckDBType.uinteger:
-            return writer.write_str("uinteger")
+            return writer.write("uinteger")
         if self == DuckDBType.ubigint:
-            return writer.write_str("ubigint")
+            return writer.write("ubigint")
         if self == DuckDBType.float:
-            return writer.write_str("float")
+            return writer.write("float")
         if self == DuckDBType.double:
-            return writer.write_str("double")
+            return writer.write("double")
         if self == DuckDBType.timestamp:
-            return writer.write_str("timestamp")
+            return writer.write("timestamp")
         if self == DuckDBType.date:
-            return writer.write_str("date")
+            return writer.write("date")
         if self == DuckDBType.time:
-            return writer.write_str("time")
+            return writer.write("time")
         if self == DuckDBType.interval:
-            return writer.write_str("interval")
+            return writer.write("interval")
         if self == DuckDBType.hugeint:
-            return writer.write_str("hugeint")
+            return writer.write("hugeint")
         if self == DuckDBType.uhugeint:
-            return writer.write_str("uhugeint")
+            return writer.write("uhugeint")
         if self == DuckDBType.varchar:
-            return writer.write_str("varchar")
+            return writer.write("varchar")
         if self == DuckDBType.blob:
-            return writer.write_str("blob")
+            return writer.write("blob")
         if self == DuckDBType.decimal:
-            return writer.write_str("decimal")
+            return writer.write("decimal")
         if self == DuckDBType.timestamp_s:
-            return writer.write_str("timestamp_s")
+            return writer.write("timestamp_s")
         if self == DuckDBType.timestamp_ms:
-            return writer.write_str("timestamp_ms")
+            return writer.write("timestamp_ms")
         if self == DuckDBType.timestamp_ns:
-            return writer.write_str("timestamp_ns")
+            return writer.write("timestamp_ns")
         if self == DuckDBType.enum:
-            return writer.write_str("enum")
+            return writer.write("enum")
         if self == DuckDBType.list:
-            return writer.write_str("list")
+            return writer.write("list")
         if self == DuckDBType.struct_t:
-            return writer.write_str("struct")
+            return writer.write("struct")
         if self == DuckDBType.map:
-            return writer.write_str("map")
+            return writer.write("map")
         if self == DuckDBType.array:
-            return writer.write_str("array")
+            return writer.write("array")
         if self == DuckDBType.uuid:
-            return writer.write_str("uuid")
+            return writer.write("uuid")
         if self == DuckDBType.union:
-            return writer.write_str("union")
+            return writer.write("union")
         if self == DuckDBType.bit:
-            return writer.write_str("bit")
+            return writer.write("bit")
         if self == DuckDBType.time_tz:
-            return writer.write_str("time_tz")
+            return writer.write("time_tz")
         if self == DuckDBType.timestamp_tz:
-            return writer.write_str("timestamp_tz")
-        return writer.write_str("<<unknown>>")
+            return writer.write("timestamp_tz")
+        return writer.write("<<unknown>>")
 
     fn __eq__(self, rhs: DuckDBType) -> Bool:
         return self.value == rhs.value
@@ -278,7 +279,7 @@ struct DuckDBType(
 
 
 @value
-struct Date(EqualityComparable, Formattable, Representable, Stringable):
+struct Date(EqualityComparable, Writable, Representable, Stringable):
     """Days are stored as days since 1970-01-01.
 
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
@@ -289,7 +290,7 @@ struct Date(EqualityComparable, Formattable, Representable, Stringable):
     # fn __init__(inout self, year: Int32, month: Int8, day: Int8):
     #     self = _impl().duckdb_to_date(duckdb_date_struct(year, month, day))
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         return writer.write(self.days)
         # return writer.write(self.year(), "-", self.month(), "-", self.day())
 
@@ -316,7 +317,7 @@ struct Date(EqualityComparable, Formattable, Representable, Stringable):
 
 
 @value
-struct Time(EqualityComparable, Formattable, Representable, Stringable):
+struct Time(EqualityComparable, Writable, Representable, Stringable):
     """Time is stored as microseconds since 00:00:00.
 
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
@@ -334,7 +335,7 @@ struct Time(EqualityComparable, Formattable, Representable, Stringable):
     fn __str__(self) -> String:
         return str(self.micros)
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         return writer.write(self.micros)
         # return writer.write(self.hour(), ":", self.minute(), ":", self.second())
 
@@ -361,7 +362,7 @@ struct Time(EqualityComparable, Formattable, Representable, Stringable):
 
 
 @value
-struct Timestamp(EqualityComparable, Formattable, Stringable, Representable):
+struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
     """Timestamps are stored as microseconds since 1970-01-01."""
 
     var micros: Int64
@@ -376,7 +377,7 @@ struct Timestamp(EqualityComparable, Formattable, Stringable, Representable):
     fn __str__(self) -> String:
         return str(self.micros)
 
-    fn format_to(self, inout writer: Formatter):
+    fn write_to[W: Writer](self, inout writer: W):
         return writer.write(self.micros)
         # return writer.write(self.date(), " ", self.time())
 
@@ -485,6 +486,3 @@ struct Decimal(Stringable, Representable):
             + str(self.value)
             + ")"
         )
-
-
-

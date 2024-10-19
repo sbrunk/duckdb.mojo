@@ -1,4 +1,4 @@
-from sys.ffi import external_call, DLHandle, C_char
+from sys.ffi import external_call, DLHandle, c_char
 from utils import StaticTuple
 from collections import InlineArray
 from duckdb.duckdb_type import *
@@ -228,14 +228,14 @@ struct duckdb_query_progress_type:
 @value
 struct duckdb_string_t_pointer:
     var length: UInt32
-    var prefix: InlineArray[C_char, 4]
-    var ptr: UnsafePointer[C_char]
+    var prefix: InlineArray[c_char, 4]
+    var ptr: UnsafePointer[c_char]
 
 
 @value
 struct duckdb_string_t_inlined:
     var length: UInt32
-    var inlined: InlineArray[C_char, 12]
+    var inlined: InlineArray[c_char, 12]
 
 
 #! The internal representation of a list metadata entry contains the list's offset in
@@ -252,14 +252,14 @@ struct duckdb_column:
     var __deprecated_data: UnsafePointer[NoneType]
     var __deprecated_nullmask: UnsafePointer[Bool]
     var __deprecated_type: Int32  # actually a duckdb_type enum
-    var __deprecated_name: UnsafePointer[C_char]
+    var __deprecated_name: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
     fn __init__(inout self):
         self.__deprecated_data = UnsafePointer[NoneType]()
         self.__deprecated_nullmask = UnsafePointer[Bool]()
         self.__deprecated_type = 0
-        self.__deprecated_name = UnsafePointer[C_char]()
+        self.__deprecated_name = UnsafePointer[c_char]()
         self.internal_data = UnsafePointer[NoneType]()
 
 
@@ -275,7 +275,7 @@ alias duckdb_vector = UnsafePointer[_duckdb_vector]
 
 
 struct duckdb_string:
-    var data: UnsafePointer[C_char]
+    var data: UnsafePointer[c_char]
     var size: idx_t
 
 
@@ -290,7 +290,7 @@ struct duckdb_result:
     var __deprecated_row_count: idx_t
     var __deprecated_rows_changed: idx_t
     var __deprecated_columns: UnsafePointer[duckdb_column]
-    var __deprecated_error_message: UnsafePointer[C_char]
+    var __deprecated_error_message: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
     fn __init__(inout self):
@@ -298,7 +298,7 @@ struct duckdb_result:
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
         self.__deprecated_columns = UnsafePointer[duckdb_column]()
-        self.__deprecated_error_message = UnsafePointer[C_char]()
+        self.__deprecated_error_message = UnsafePointer[c_char]()
         self.internal_data = UnsafePointer[NoneType]()
 
 
@@ -403,7 +403,7 @@ struct LibDuckDB:
 
     fn duckdb_open(
         self,
-        path: UnsafePointer[C_char],
+        path: UnsafePointer[c_char],
         out_database: UnsafePointer[duckdb_database],
     ) -> UInt32:
         """
@@ -470,7 +470,7 @@ struct LibDuckDB:
     fn duckdb_query(
         self,
         connection: duckdb_connection,
-        query: UnsafePointer[C_char],
+        query: UnsafePointer[c_char],
         out_result: UnsafePointer[duckdb_result],
     ) -> UInt32:
         """
@@ -489,7 +489,7 @@ struct LibDuckDB:
         return self.lib.get_function[
             fn (
                 duckdb_connection,
-                UnsafePointer[C_char],
+                UnsafePointer[c_char],
                 UnsafePointer[duckdb_result],
             ) -> UInt32
         ]("duckdb_query")(connection, query, out_result)
@@ -508,7 +508,7 @@ struct LibDuckDB:
 
     fn duckdb_column_name(
         self, result: UnsafePointer[duckdb_result], col: idx_t
-    ) -> UnsafePointer[C_char]:
+    ) -> UnsafePointer[c_char]:
         """
         Returns the column name of the specified column. The result should not need to be freed; the column names will
         automatically be destroyed when the result is destroyed.
@@ -520,7 +520,7 @@ struct LibDuckDB:
         * returns: The column name of the specified column.
         """
         return self.lib.get_function[
-            fn (UnsafePointer[duckdb_result], idx_t) -> UnsafePointer[C_char]
+            fn (UnsafePointer[duckdb_result], idx_t) -> UnsafePointer[c_char]
         ]("duckdb_column_name")(result, col)
 
     fn duckdb_column_type(
@@ -595,7 +595,7 @@ struct LibDuckDB:
 
     fn duckdb_result_error(
         self, result: UnsafePointer[duckdb_result]
-    ) -> UnsafePointer[C_char]:
+    ) -> UnsafePointer[c_char]:
         """
         Returns the error message contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
 
@@ -605,7 +605,7 @@ struct LibDuckDB:
         * returns: The error of the result.
         """
         return self.lib.get_function[
-            fn (UnsafePointer[duckdb_result]) -> UnsafePointer[C_char]
+            fn (UnsafePointer[duckdb_result]) -> UnsafePointer[c_char]
         ]("duckdb_result_error")(result)
 
     fn duckdb_row_count(self, result: UnsafePointer[duckdb_result]) -> idx_t:
@@ -932,7 +932,7 @@ struct LibDuckDB:
         )(vector)
 
     fn duckdb_vector_assign_string_element(
-        self, vector: duckdb_vector, index: idx_t, str: C_char
+        self, vector: duckdb_vector, index: idx_t, str: c_char
     ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location.
@@ -942,11 +942,11 @@ struct LibDuckDB:
         * str: The null-terminated string
         """
         return self.lib.get_function[
-            fn (duckdb_vector, idx_t, C_char) -> NoneType
+            fn (duckdb_vector, idx_t, c_char) -> NoneType
         ]("duckdb_vector_assign_string_element")(vector, index, str)
 
     fn duckdb_vector_assign_string_element_len(
-        self, vector: duckdb_vector, index: idx_t, str: C_char, str_len: idx_t
+        self, vector: duckdb_vector, index: idx_t, str: c_char, str_len: idx_t
     ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
@@ -957,7 +957,7 @@ struct LibDuckDB:
         * str_len: The length of the string (in bytes)
         """
         return self.lib.get_function[
-            fn (duckdb_vector, idx_t, C_char, idx_t) -> NoneType
+            fn (duckdb_vector, idx_t, c_char, idx_t) -> NoneType
         ]("duckdb_vector_assign_string_element_len")(
             vector, index, str, str_len
         )
@@ -1117,7 +1117,9 @@ struct LibDuckDB:
     # Logical Type Interface
     # ===--------------------------------------------------------------------===#
 
-    fn duckdb_create_logical_type(self, type_id: duckdb_type) -> duckdb_logical_type:
+    fn duckdb_create_logical_type(
+        self, type_id: duckdb_type
+    ) -> duckdb_logical_type:
         """Creates a `duckdb_logical_type` from a standard primitive type.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1132,7 +1134,9 @@ struct LibDuckDB:
 
     # fn duckdb_logical_type_get_alias TODO
 
-    fn duckdb_create_list_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_create_list_type(
+        self, type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Creates a list type from its child type.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1153,9 +1157,9 @@ struct LibDuckDB:
         * array_size: The number of elements in the array.
         * returns: The logical type.
         """
-        return self.lib.get_function[fn (duckdb_logical_type, idx_t) -> duckdb_logical_type](
-            "duckdb_create_array_type"
-        )(type, array_size)
+        return self.lib.get_function[
+            fn (duckdb_logical_type, idx_t) -> duckdb_logical_type
+        ]("duckdb_create_array_type")(type, array_size)
 
     fn duckdb_create_map_type(
         self, key_type: duckdb_logical_type, value_type: duckdb_logical_type
@@ -1166,15 +1170,16 @@ struct LibDuckDB:
         * type: The key type and value type of map type to create.
         * returns: The logical type.
         """
-        return self.lib.get_function[fn (duckdb_logical_type, duckdb_logical_type) -> duckdb_logical_type](
-            "duckdb_create_map_type"
-        )(key_type, value_type)
+        return self.lib.get_function[
+            fn (duckdb_logical_type, duckdb_logical_type) -> duckdb_logical_type
+        ]("duckdb_create_map_type")(key_type, value_type)
 
     fn duckdb_create_union_type(
         self,
         member_types: UnsafePointer[duckdb_logical_type],
-        member_names: UnsafePointer[UnsafePointer[C_char]],
-        member_count: idx_t) -> duckdb_logical_type:
+        member_names: UnsafePointer[UnsafePointer[c_char]],
+        member_count: idx_t,
+    ) -> duckdb_logical_type:
         """Creates a UNION type from the passed types array.
         The resulting type should be destroyed with `duckdb_destroy_logical_type`.
 
@@ -1182,14 +1187,18 @@ struct LibDuckDB:
         * type_amount: The size of the types array.
         * returns: The logical type.
         """
-        return self.lib.get_function[fn (UnsafePointer[duckdb_logical_type], UnsafePointer[UnsafePointer[C_char]], idx_t) -> duckdb_logical_type](
-            "duckdb_create_union_type"
-        )(member_types, member_names, member_count)
+        return self.lib.get_function[
+            fn (
+                UnsafePointer[duckdb_logical_type],
+                UnsafePointer[UnsafePointer[c_char]],
+                idx_t,
+            ) -> duckdb_logical_type
+        ]("duckdb_create_union_type")(member_types, member_names, member_count)
 
     fn duckdb_create_struct_type(
         self,
         member_types: UnsafePointer[duckdb_logical_type],
-        member_names: UnsafePointer[UnsafePointer[C_char]],
+        member_names: UnsafePointer[UnsafePointer[c_char]],
         member_count: idx_t,
     ) -> duckdb_logical_type:
         """Creates a STRUCT type from the passed member name and type arrays.
@@ -1200,9 +1209,13 @@ struct LibDuckDB:
         * member_count: The number of members that were specified for both arrays.
         * returns: The logical type.
         """
-        return self.lib.get_function[fn (UnsafePointer[duckdb_logical_type], UnsafePointer[UnsafePointer[C_char]], idx_t) -> duckdb_logical_type](
-            "duckdb_create_struct_type"
-        )(member_types, member_names, member_count)
+        return self.lib.get_function[
+            fn (
+                UnsafePointer[duckdb_logical_type],
+                UnsafePointer[UnsafePointer[c_char]],
+                idx_t,
+            ) -> duckdb_logical_type
+        ]("duckdb_create_struct_type")(member_types, member_names, member_count)
 
     # fn duckdb_create_enum_type TODO
     # fn duckdb_create_decimal_type TODO
@@ -1238,7 +1251,9 @@ struct LibDuckDB:
             fn (duckdb_logical_type) -> duckdb_logical_type
         ]("duckdb_list_type_child_type")(type)
 
-    fn duckdb_array_type_child_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_array_type_child_type(
+        self, type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Retrieves the child type of the given array type.
 
         The result must be freed with `duckdb_destroy_logical_type`.
@@ -1252,7 +1267,9 @@ struct LibDuckDB:
 
     # fn duckdb_array_type_array_size TODO
 
-    fn duckdb_map_type_key_type (self, type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_map_type_key_type(
+        self, type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Retrieves the key type of the given map type.
 
         The result must be freed with `duckdb_destroy_logical_type`.
@@ -1264,7 +1281,9 @@ struct LibDuckDB:
             fn (duckdb_logical_type) -> duckdb_logical_type
         ]("duckdb_map_type_key_type")(type)
 
-    fn duckdb_map_type_value_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
+    fn duckdb_map_type_value_type(
+        self, type: duckdb_logical_type
+    ) -> duckdb_logical_type:
         """Retrieves the value type of the given map type.
 
         The result must be freed with `duckdb_destroy_logical_type`.

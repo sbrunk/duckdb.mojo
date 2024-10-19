@@ -1,6 +1,7 @@
 from duckdb._c_api.c_api import *
 from duckdb._c_api.libduckdb import _impl
 
+
 # TODO separate opening and connecting but add convenient functions to keep it simple
 struct Connection:
     """A connection to a DuckDB database.

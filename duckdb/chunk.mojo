@@ -4,6 +4,7 @@ from duckdb.vector import Vector
 from duckdb.duckdb_type import *
 from collections import Optional
 
+
 struct Chunk(Movable):
     """Represents a DuckDB data chunk."""
 
@@ -68,14 +69,18 @@ struct Chunk(Movable):
         var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
         return not is_valid
 
-    fn get[T: CollectionElement, //](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
+    fn get[
+        T: CollectionElement, //
+    ](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
         self._check_bounds(col, row)
         if self.is_null(col=col, row=row):
             return NoneType()
         # TODO optimize single row access
         return self._get_vector(col).get(type)[row]
 
-    fn get[T: CollectionElement, //](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
+    fn get[
+        T: CollectionElement, //
+    ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         self._check_bounds(col)
         if self.is_null(col=col):
             return List[Optional[T]](NoneType())
@@ -84,12 +89,12 @@ struct Chunk(Movable):
     # TODO remaining types
 
 
-struct _ChunkIter[lifetime: ImmutableLifetime]:
-    var _result: Reference[Result, lifetime]
+struct _ChunkIter[lifetime: ImmutableOrigin]:
+    var _result: Pointer[Result, lifetime]
     var _next_chunk: duckdb_data_chunk
 
     fn __init__(inout self, ref [lifetime]result: Result) raises:
-        self._result = result
+        self._result = Pointer.address_of(result)
         self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
 
     fn __del__(owned self):
@@ -112,15 +117,13 @@ struct _ChunkIter[lifetime: ImmutableLifetime]:
         else:
             raise Error("No more elements")
 
-    # TODO this is not accurate as we don't know the length in advance but we currently
-    # need it for the for syntax to work. It's done the same way for iterating over Python
-    # objects in the Mojo stdlib currently:
-    # https://github.com/modularml/mojo/blob/8bd1dbdf26c70c634768bfd4c014537f6fdb0fb2/stdlib/src/python/object.mojo#L90
-    fn __len__(self) -> Int:
+    @always_inline
+    fn __hasmore__(self) -> Bool:
         if self._next_chunk:
             return 1
         else:
             return 0
+
 
 # struct ResultIterator:
 #     var result: Result
