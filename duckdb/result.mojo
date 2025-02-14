@@ -9,7 +9,7 @@ struct Column(Writable, Stringable):
     var name: String
     var type: LogicalType
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Column(", self.index, ", ", self.name, ": ", self.type, ")"
         )
@@ -22,7 +22,7 @@ struct Result(Writable, Stringable):
     var _result: duckdb_result
     var columns: List[Column]
 
-    fn __init__(inout self, result: duckdb_result):
+    fn __init__(mut self, result: duckdb_result):
         self._result = result
         self.columns = List[Column]()
         for i in range(self.column_count()):
@@ -37,9 +37,9 @@ struct Result(Writable, Stringable):
         )
 
     fn column_name(self, col: Int) -> String:
-        return _impl().duckdb_column_name(
+        return String(_impl().duckdb_column_name(
             UnsafePointer.address_of(self._result), col
-        )
+        ))
 
     fn column_types(self) -> List[LogicalType]:
         var types = List[LogicalType]()
@@ -54,7 +54,7 @@ struct Result(Writable, Stringable):
             )
         )
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         for col in self.columns:
             writer.write(col[], ", ")
 
@@ -76,7 +76,7 @@ struct Result(Writable, Stringable):
     fn __del__(owned self):
         _impl().duckdb_destroy_result(UnsafePointer.address_of(self._result))
 
-    fn __moveinit__(inout self, owned existing: Self):
+    fn __moveinit__(mut self, owned existing: Self):
         self._result = existing._result
         self.columns = existing.columns
 
@@ -88,7 +88,7 @@ struct MaterializedResult(Sized):
     var chunks: List[UnsafePointer[Chunk]]
     var size: UInt
 
-    fn __init__(inout self, owned result: Result) raises:
+    fn __init__(mut self, owned result: Result) raises:
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk]]()
         self.size = 0

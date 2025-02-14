@@ -17,7 +17,7 @@ struct Connection:
     var _db: duckdb_database
     var __conn: duckdb_connection
 
-    fn __init__(inout self, db_path: String) raises:
+    fn __init__(mut self, db_path: String) raises:
         self._db = UnsafePointer[duckdb_database.type]()
         var db_addr = UnsafePointer.address_of(self._db)
         if (

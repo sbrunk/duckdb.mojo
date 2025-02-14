@@ -12,7 +12,7 @@ struct Vector:
     var length: UInt64
 
     fn __init__(
-        inout self,
+        mut self,
         vector: duckdb_vector,
         length: UInt64,
     ):
@@ -20,7 +20,7 @@ struct Vector:
         self.length = length
 
     fn get_column_type(self) -> LogicalType:
-        return _impl().duckdb_vector_get_column_type(self._vector)
+        return LogicalType(_impl().duckdb_vector_get_column_type(self._vector))
 
     fn _get_data(self) -> UnsafePointer[NoneType]:
         return _impl().duckdb_vector_get_data(self._vector)

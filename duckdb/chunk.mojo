@@ -10,13 +10,13 @@ struct Chunk(Movable):
 
     var _chunk: duckdb_data_chunk
 
-    fn __init__(inout self, chunk: duckdb_data_chunk):
+    fn __init__(mut self, chunk: duckdb_data_chunk):
         self._chunk = chunk
 
     fn __del__(owned self):
         _impl().duckdb_destroy_data_chunk(UnsafePointer.address_of(self._chunk))
 
-    fn __moveinit__(inout self, owned existing: Self):
+    fn __moveinit__(mut self, owned existing: Self):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
@@ -93,7 +93,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
     var _result: Pointer[Result, lifetime]
     var _next_chunk: duckdb_data_chunk
 
-    fn __init__(inout self, ref [lifetime]result: Result) raises:
+    fn __init__(mut self, ref [lifetime]result: Result) raises:
         self._result = Pointer.address_of(result)
         self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
 
@@ -101,14 +101,14 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
         if self._next_chunk:
             _ = Chunk(self._next_chunk)
 
-    fn __moveinit__(inout self, owned existing: Self):
+    fn __moveinit__(mut self, owned existing: Self):
         self._result = existing._result
         self._next_chunk = existing._next_chunk
 
     fn __iter__(owned self) -> Self:
         return self^
 
-    fn __next__(inout self) raises -> Chunk:
+    fn __next__(mut self) raises -> Chunk:
         if self._next_chunk:
             var current = self._next_chunk
             var next = _impl().duckdb_fetch_chunk(self._result[]._result)
@@ -118,7 +118,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
             raise Error("No more elements")
 
     @always_inline
-    fn __hasmore__(self) -> Bool:
+    fn __has_next__(self) -> Bool:
         if self._next_chunk:
             return 1
         else:
@@ -129,7 +129,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 #     var result: Result
 #     var index: Int
 
-#     fn __init__(inout self, result: Result):
+#     fn __init__(mut self, result: Result):
 #         self.index = 0
 #         self.result = result
 
@@ -139,6 +139,6 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 #     # fn __len__(self) -> Int:
 #     #     return int(self.result.rows - self.index)  # TODO could overflow
 
-#     fn __next__(inout self) -> String:
+#     fn __next__(mut self) -> String:
 #         self.index += 1
 #         return str(self.index)

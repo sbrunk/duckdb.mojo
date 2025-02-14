@@ -11,10 +11,10 @@ struct Col[T: CollectionElement, Builder: DuckDBValue]:
     # as we can't create a LogicalType at compile time due to calling into duckdb
     var _type: Variant[LogicalType, DuckDBType]
 
-    fn __init__(inout self, duckdb_type: DuckDBType):
+    fn __init__(mut self, duckdb_type: DuckDBType):
         self._type = duckdb_type
 
-    fn __init__(inout self, logical_type: LogicalType):
+    fn __init__(mut self, logical_type: LogicalType):
         self._type = logical_type
 
     fn type(self) -> LogicalType:

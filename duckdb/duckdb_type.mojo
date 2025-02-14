@@ -86,7 +86,7 @@ struct DuckDBType(
     alias timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
     """duckdb_timestamp"""
 
-    # fn __init__(inout self, value: LogicalType):
+    # fn __init__(mut self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""
     #     self = value.get_type_id()
 
@@ -127,7 +127,7 @@ struct DuckDBType(
         )
 
     @always_inline
-    fn __init__(inout self, *, other: Self):
+    fn __init__(mut self, *, other: Self):
         """Copy this DuckDBType.
 
         Args:
@@ -146,7 +146,7 @@ struct DuckDBType(
     fn __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         if self == DuckDBType.invalid:
             return writer.write("invalid")
         if self == DuckDBType.tinyint:
@@ -287,10 +287,10 @@ struct Date(EqualityComparable, Writable, Representable, Stringable):
 
     var days: Int32
 
-    # fn __init__(inout self, year: Int32, month: Int8, day: Int8):
+    # fn __init__(mut self, year: Int32, month: Int8, day: Int8):
     #     self = _impl().duckdb_to_date(duckdb_date_struct(year, month, day))
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.days)
         # return writer.write(self.year(), "-", self.month(), "-", self.day())
 
@@ -326,7 +326,7 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
     var micros: Int64
 
     # fn __init__(
-    #     inout self, hour: Int8, minute: Int8, second: Int8, micros: Int32
+    #     mut self, hour: Int8, minute: Int8, second: Int8, micros: Int32
     # ):
     #     self = _impl().duckdb_to_time(
     #         duckdb_time_struct(hour, minute, second, micros)
@@ -335,7 +335,7 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
     fn __str__(self) -> String:
         return str(self.micros)
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.micros)
         # return writer.write(self.hour(), ":", self.minute(), ":", self.second())
 
@@ -367,7 +367,7 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
 
     var micros: Int64
 
-    # fn __init__(inout self, date: Date, time: Time):
+    # fn __init__(mut self, date: Date, time: Time):
     #     self = _impl().duckdb_to_timestamp(
     #         duckdb_timestamp_struct(
     #             _impl().duckdb_from_date(date), _impl().duckdb_from_time(time)
@@ -377,7 +377,7 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
     fn __str__(self) -> String:
         return str(self.micros)
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.micros)
         # return writer.write(self.date(), " ", self.time())
 
