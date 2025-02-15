@@ -100,5 +100,4 @@ struct Vector:
         var converted_result = UnsafePointer.address_of(result).bitcast[
             List[Optional[T]]
         ]()[]
-        _ = result
         return converted_result

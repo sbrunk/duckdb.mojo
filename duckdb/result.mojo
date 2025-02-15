@@ -37,9 +37,13 @@ struct Result(Writable, Stringable):
         )
 
     fn column_name(self, col: Int) -> String:
-        return String(_impl().duckdb_column_name(
-            UnsafePointer.address_of(self._result), col
-        ))
+        return String(
+            StaticString(
+                unsafe_from_utf8_cstr_ptr=_impl().duckdb_column_name(
+                    UnsafePointer.address_of(self._result), col
+                )
+            )
+        )
 
     fn column_types(self) -> List[LogicalType]:
         var types = List[LogicalType]()

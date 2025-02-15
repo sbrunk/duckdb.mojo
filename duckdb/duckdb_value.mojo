@@ -7,8 +7,7 @@ trait DuckDBValue(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
-    but implement a type speciifc __init__ method to convert from a DuckDB vector.
-
+    but implement a type specific __init__ method to convert from a DuckDB vector.
     """
 
     fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
