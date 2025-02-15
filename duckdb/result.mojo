@@ -15,7 +15,7 @@ struct Column(Writable, Stringable):
         )
 
     fn __str__(self) -> String:
-        return str(self.type)
+        return String(self.type)
 
 
 struct Result(Writable, Stringable):
@@ -32,7 +32,7 @@ struct Result(Writable, Stringable):
             self.columns.append(col)
 
     fn column_count(self) -> Int:
-        return int(
+        return Int(
             _impl().duckdb_column_count(UnsafePointer.address_of(self._result))
         )
 
@@ -120,7 +120,7 @@ struct MaterializedResult(Sized):
         T: CollectionElement, //
     ](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
         var result = List[Optional[T]](
-            capacity=len(self.chunks) * int(_impl().duckdb_vector_size())
+            capacity=len(self.chunks) * Int(_impl().duckdb_vector_size())
         )
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[][].get(type, col))
@@ -131,8 +131,8 @@ struct MaterializedResult(Sized):
     ](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
-        var chunk_idx = int(row // _impl().duckdb_vector_size())
-        var chunk_offset = int(row % _impl().duckdb_vector_size())
+        var chunk_idx = Int(row // _impl().duckdb_vector_size())
+        var chunk_offset = Int(row % _impl().duckdb_vector_size())
         return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
 
     fn __del__(owned self):

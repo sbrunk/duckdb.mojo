@@ -140,7 +140,7 @@ struct DuckDBType(
 
     @always_inline("nodebug")
     fn __repr__(self) -> String:
-        return "DuckDBType." + str(self)
+        return "DuckDBType." + String(self)
 
     @always_inline("nodebug")
     fn __str__(self) -> String:
@@ -295,10 +295,10 @@ struct Date(EqualityComparable, Writable, Representable, Stringable):
         # return writer.write(self.year(), "-", self.month(), "-", self.day())
 
     fn __str__(self) -> String:
-        return str(self.days)
+        return String(self.days)
 
     fn __repr__(self) -> String:
-        return "Date(" + str(self.days) + ")"
+        return "Date(" + String(self.days) + ")"
 
     fn __eq__(self, other: Date) -> Bool:
         return self.days == other.days
@@ -333,14 +333,14 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
     #     )
 
     fn __str__(self) -> String:
-        return str(self.micros)
+        return String(self.micros)
 
     fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.micros)
         # return writer.write(self.hour(), ":", self.minute(), ":", self.second())
 
     fn __repr__(self) -> String:
-        return "Time(" + str(self.micros) + ")"
+        return "Time(" + String(self.micros) + ")"
 
     fn __eq__(self, other: Time) -> Bool:
         return self.micros == other.micros
@@ -375,7 +375,7 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
     #     )
 
     fn __str__(self) -> String:
-        return str(self.micros)
+        return String(self.micros)
 
     fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.micros)
@@ -388,7 +388,7 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
         return not self == other
 
     fn __repr__(self) -> String:
-        return "Timestamp(" + str(self.micros) + ")"
+        return "Timestamp(" + String(self.micros) + ")"
 
     # fn date(self) -> Date:
     #     return _impl().duckdb_to_date(_impl().duckdb_from_timestamp(self).date)
@@ -406,21 +406,21 @@ struct Interval(Stringable, Representable):
     fn __str__(self) -> String:
         return (
             "months: "
-            + str(self.months)
+            + String(self.months)
             + ", days: "
-            + str(self.days)
+            + String(self.days)
             + ", micros: "
-            + str(self.micros)
+            + String(self.micros)
         )
 
     fn __repr__(self) -> String:
         return (
             "Interval("
-            + str(self.months)
+            + String(self.months)
             + ", "
-            + str(self.days)
+            + String(self.days)
             + ", "
-            + str(self.micros)
+            + String(self.micros)
             + ")"
         )
 
@@ -437,10 +437,10 @@ struct Int128(Stringable, Representable):
     var upper: Int64
 
     fn __str__(self) -> String:
-        return "lower: " + str(self.lower) + ", upper: " + str(self.upper)
+        return "lower: " + String(self.lower) + ", upper: " + String(self.upper)
 
     fn __repr__(self) -> String:
-        return "Int128(" + str(self.lower) + ", " + str(self.upper) + ")"
+        return "Int128(" + String(self.lower) + ", " + String(self.upper) + ")"
 
 
 @value
@@ -451,10 +451,10 @@ struct UInt128(Stringable, Representable):
     var upper: UInt64
 
     fn __str__(self) -> String:
-        return "lower: " + str(self.lower) + ", upper: " + str(self.upper)
+        return "lower: " + String(self.lower) + ", upper: " + String(self.upper)
 
     fn __repr__(self) -> String:
-        return "UInt128(" + str(self.lower) + ", " + str(self.upper) + ")"
+        return "UInt128(" + String(self.lower) + ", " + String(self.upper) + ")"
 
 
 @value
@@ -469,20 +469,20 @@ struct Decimal(Stringable, Representable):
     fn __str__(self) -> String:
         return (
             "width: "
-            + str(self.width)
+            + String(self.width)
             + ", scale: "
-            + str(self.scale)
+            + String(self.scale)
             + ", value: "
-            + str(self.value)
+            + String(self.value)
         )
 
     fn __repr__(self) -> String:
         return (
             "Decimal("
-            + str(self.width)
+            + String(self.width)
             + ", "
-            + str(self.scale)
+            + String(self.scale)
             + ", "
-            + str(self.value)
+            + String(self.value)
             + ")"
         )

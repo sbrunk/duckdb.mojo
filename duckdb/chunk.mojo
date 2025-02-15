@@ -20,7 +20,7 @@ struct Chunk(Movable):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
-        return int(_impl().duckdb_data_chunk_get_size(self._chunk))
+        return Int(_impl().duckdb_data_chunk_get_size(self._chunk))
 
     fn _get_vector(self, col: Int) -> Vector:
         return Vector(
@@ -137,8 +137,8 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 #     #     return self.index
 
 #     # fn __len__(self) -> Int:
-#     #     return int(self.result.rows - self.index)  # TODO could overflow
+#     #     return Int(self.result.rows - self.index)  # TODO could overflow
 
 #     fn __next__(mut self) -> String:
 #         self.index += 1
-#         return str(self.index)
+#         return String(self.index)

@@ -53,7 +53,7 @@ struct Vector:
         """Recursively check that the runtime type of the vector matches the expected type.
         """
         if self.get_column_type() != db_type:
-            raise "Expected type " + str(db_type) + " but got " + str(
+            raise "Expected type " + String(db_type) + " but got " + String(
                 self.get_column_type()
             )
 
@@ -87,7 +87,7 @@ struct Vector:
 
         # Columns are essentially lists so we can use the same logic for getting the values.
         var result = DuckDBList[expected_type.Builder](
-            self, length=int(self.length), offset=0
+            self, length=Int(self.length), offset=0
         ).value
         # The way we are building our Mojo representation of the data currently via the DuckDBValue
         # trait, with different __init__ implementations depending on the concrete type, means

@@ -80,17 +80,17 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
 
     fn __str__(self) -> String:
         if self.get_type_id() == DuckDBType.list:
-            return "list(" + str(self.list_type_child_type()) + ")"
+            return "list(" + String(self.list_type_child_type()) + ")"
         if self.get_type_id() == DuckDBType.map:
             return (
                 "map("
-                + str(self.map_type_key_type())
+                + String(self.map_type_key_type())
                 + ","
-                + str(self.map_type_value_type())
+                + String(self.map_type_value_type())
                 + ")"
             )
         # TODO remaining nested types
-        return str(self.get_type_id())
+        return String(self.get_type_id())
 
     fn write_to[W: Writer](self, mut writer: W):
-        writer.write(str(self))
+        writer.write(String(self))
