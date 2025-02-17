@@ -6,14 +6,14 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
 
     var _logical_type: duckdb_logical_type
 
-    fn __init__(inout self, type_id: DuckDBType):
+    fn __init__(mut self, type_id: DuckDBType):
         """Creates a `LogicalType` from a standard primitive type."""
         self._logical_type = _impl().duckdb_create_logical_type(type_id.value)
 
-    fn __init__(inout self, logical_type: duckdb_logical_type):
+    fn __init__(mut self, logical_type: duckdb_logical_type):
         self._logical_type = logical_type
 
-    fn __copyinit__(inout self, other: Self):
+    fn __copyinit__(mut self, other: Self):
         if other.get_type_id() == DuckDBType.list:
             var child = other.list_type_child_type()
             self = child.create_list_type()
@@ -22,7 +22,7 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
         else:
             self = Self(other.get_type_id())
 
-    fn __moveinit__(inout self, owned other: Self):
+    fn __moveinit__(mut self, owned other: Self):
         self._logical_type = other._logical_type
 
     fn __del__(owned self):
@@ -39,7 +39,7 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
         * type: The logical type object
         * returns: The type id
         """
-        return _impl().duckdb_get_type_id(self._logical_type)
+        return DuckDBType(_impl().duckdb_get_type_id(self._logical_type))
 
     fn list_type_child_type(self) -> Self:
         """Retrieves the child type of the given list type.
@@ -80,17 +80,17 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
 
     fn __str__(self) -> String:
         if self.get_type_id() == DuckDBType.list:
-            return "list(" + str(self.list_type_child_type()) + ")"
+            return "list(" + String(self.list_type_child_type()) + ")"
         if self.get_type_id() == DuckDBType.map:
             return (
                 "map("
-                + str(self.map_type_key_type())
+                + String(self.map_type_key_type())
                 + ","
-                + str(self.map_type_value_type())
+                + String(self.map_type_value_type())
                 + ")"
             )
         # TODO remaining nested types
-        return str(self.get_type_id())
+        return String(self.get_type_id())
 
-    fn write_to[W: Writer](self, inout writer: W):
-        writer.write(str(self))
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(String(self))

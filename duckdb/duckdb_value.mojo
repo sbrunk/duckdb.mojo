@@ -1,17 +1,16 @@
 from duckdb.vector import Vector
 from collections import Dict, Optional
-from utils import StringRef
+from collections.string import StringSlice, StaticString
 
 
 trait DuckDBValue(CollectionElement, Stringable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
-    but implement a type speciifc __init__ method to convert from a DuckDB vector.
-
+    but implement a type specific __init__ method to convert from a DuckDB vector.
     """
 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
         pass
 
     @staticmethod
@@ -40,9 +39,9 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement):
     fn __ne__(self, other: Self) -> Bool:
         return self.value != other.value
 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != duckdb_type:
-            raise "Expected type " + str(duckdb_type) + " but got " + str(
+            raise "Expected type " + String(duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
             )
 
@@ -68,12 +67,15 @@ alias Float64Val = DTypeValue[DuckDBType.double]
 
 @value
 struct FixedSizeValue[
-    duckdb_type: DuckDBType, underlying: StringableCollectionElement
+    duckdb_type: DuckDBType, underlying: WritableCollectionElement
 ](DuckDBValue):
     var value: underlying
 
+    fn write_to[W: Writer](self, mut writer: W):
+        self.value.write_to(writer)
+
     fn __str__(self) -> String:
-        return self.value.__str__()
+        return String.write(self)
 
     # fn __hash__(self) -> UInt:
     #     return self.value.__hash__()
@@ -84,9 +86,9 @@ struct FixedSizeValue[
     # fn __ne__(self, other: Self) -> Bool:
     #     return self.value != other.value
 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != duckdb_type:
-            raise "Expected type " + str(duckdb_type) + " but got " + str(
+            raise "Expected type " + String(duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
             )
 
@@ -107,24 +109,24 @@ alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 struct DuckDBString(DuckDBValue):
     var value: String
 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != DuckDBType.varchar:
-            raise "Expected type " + str(
+            raise "Expected type " + String(
                 DuckDBType.varchar
-            ) + " but got " + str(vector.get_column_type().get_type_id())
+            ) + " but got " + String(vector.get_column_type().get_type_id())
         var data_str_ptr = vector._get_data().bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
-        var string_length = int(data_str_ptr[offset].length)
+        var string_length = UInt(Int(data_str_ptr[offset].length))
         # TODO use duckdb_string_is_inlined helper instead
         if data_str_ptr[offset].length <= 12:
             var data_str_inlined = data_str_ptr.bitcast[
                 duckdb_string_t_inlined
             ]()
-            self.value = StringRef(
-                data_str_inlined[offset].inlined.unsafe_ptr(), string_length
-            )
+            self.value = String(StaticString(
+                ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8](), length=string_length
+            ))
         else:
-            self.value = StringRef(data_str_ptr[offset].ptr, string_length)
+            self.value = String(StaticString(ptr=data_str_ptr[offset].ptr.bitcast[UInt8](), length=string_length))
 
     fn __str__(self) -> String:
         return self.value
@@ -144,12 +146,12 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
     fn __str__(self) -> String:
         return "DuckDBList"  # TODO
 
-    fn __init__(inout self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()
         if runtime_element_type != Self.expected_element_type:
-            raise "Expected type " + str(
+            raise "Expected type " + String(
                 Self.expected_element_type
-            ) + " but got " + str(runtime_element_type)
+            ) + " but got " + String(runtime_element_type)
         self.value = List[Optional[T]](capacity=length)
 
         var data_ptr = vector._get_data().bitcast[T]()
@@ -211,8 +213,8 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
                         Optional(
                             T(
                                 child_vector,
-                                length=int(list_entry.length),
-                                offset=int(list_entry.offset),
+                                length=Int(list_entry.length),
+                                offset=Int(list_entry.offset),
                             )
                         )
                     )
@@ -229,8 +231,8 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
                             Optional(
                                 T(
                                     child_vector,
-                                    length=int(list_entry.length),
-                                    offset=int(list_entry.offset),
+                                    length=Int(list_entry.length),
+                                    offset=Int(list_entry.offset),
                                 )
                             )
                         )
@@ -238,7 +240,7 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
                         self.value.append(None)
         else:
             raise Error(
-                "Unsupported or invalid type: " + str(runtime_element_type)
+                "Unsupported or invalid type: " + String(runtime_element_type)
             )
 
     @staticmethod
@@ -254,7 +256,7 @@ struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
         return "DuckDBMap"  # TODO
 
     fn __init__(
-        inout self, vector: Vector, length: Int, offset: Int = 0
+        mut self, vector: Vector, length: Int, offset: Int = 0
     ) raises:
         self.value = Dict[K, V]()
         raise "Not implemented"

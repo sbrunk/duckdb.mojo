@@ -255,7 +255,7 @@ struct duckdb_column:
     var __deprecated_name: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
-    fn __init__(inout self):
+    fn __init__(mut self):
         self.__deprecated_data = UnsafePointer[NoneType]()
         self.__deprecated_nullmask = UnsafePointer[Bool]()
         self.__deprecated_type = 0
@@ -293,7 +293,7 @@ struct duckdb_result:
     var __deprecated_error_message: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
-    fn __init__(inout self):
+    fn __init__(mut self):
         self.__deprecated_column_count = 0
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
@@ -387,14 +387,14 @@ fn get_libname() -> StringLiteral:
 struct LibDuckDB:
     var lib: DLHandle
 
-    fn __init__(inout self, path: String = get_libname()):
+    fn __init__(mut self, path: String = get_libname()):
         self.lib = DLHandle(path)
 
     @staticmethod
-    fn destroy(inout existing):
+    fn destroy(mut existing):
         existing.lib.close()
 
-    fn __copyinit__(inout self, existing: Self):
+    fn __copyinit__(mut self, existing: Self):
         self.lib = existing.lib
 
     # ===--------------------------------------------------------------------===#

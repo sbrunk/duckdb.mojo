@@ -9,20 +9,20 @@ struct Column(Writable, Stringable):
     var name: String
     var type: LogicalType
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Column(", self.index, ", ", self.name, ": ", self.type, ")"
         )
 
     fn __str__(self) -> String:
-        return str(self.type)
+        return String(self.type)
 
 
 struct Result(Writable, Stringable):
     var _result: duckdb_result
     var columns: List[Column]
 
-    fn __init__(inout self, result: duckdb_result):
+    fn __init__(mut self, result: duckdb_result):
         self._result = result
         self.columns = List[Column]()
         for i in range(self.column_count()):
@@ -32,13 +32,17 @@ struct Result(Writable, Stringable):
             self.columns.append(col)
 
     fn column_count(self) -> Int:
-        return int(
+        return Int(
             _impl().duckdb_column_count(UnsafePointer.address_of(self._result))
         )
 
     fn column_name(self, col: Int) -> String:
-        return _impl().duckdb_column_name(
-            UnsafePointer.address_of(self._result), col
+        return String(
+            StaticString(
+                unsafe_from_utf8_cstr_ptr=_impl().duckdb_column_name(
+                    UnsafePointer.address_of(self._result), col
+                )
+            )
         )
 
     fn column_types(self) -> List[LogicalType]:
@@ -54,7 +58,7 @@ struct Result(Writable, Stringable):
             )
         )
 
-    fn write_to[W: Writer](self, inout writer: W):
+    fn write_to[W: Writer](self, mut writer: W):
         for col in self.columns:
             writer.write(col[], ", ")
 
@@ -76,7 +80,7 @@ struct Result(Writable, Stringable):
     fn __del__(owned self):
         _impl().duckdb_destroy_result(UnsafePointer.address_of(self._result))
 
-    fn __moveinit__(inout self, owned existing: Self):
+    fn __moveinit__(mut self, owned existing: Self):
         self._result = existing._result
         self.columns = existing.columns
 
@@ -88,7 +92,7 @@ struct MaterializedResult(Sized):
     var chunks: List[UnsafePointer[Chunk]]
     var size: UInt
 
-    fn __init__(inout self, owned result: Result) raises:
+    fn __init__(mut self, owned result: Result) raises:
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk]]()
         self.size = 0
@@ -120,7 +124,7 @@ struct MaterializedResult(Sized):
         T: CollectionElement, //
     ](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
         var result = List[Optional[T]](
-            capacity=len(self.chunks) * int(_impl().duckdb_vector_size())
+            capacity=len(self.chunks) * Int(_impl().duckdb_vector_size())
         )
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[][].get(type, col))
@@ -131,8 +135,8 @@ struct MaterializedResult(Sized):
     ](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
-        var chunk_idx = int(row // _impl().duckdb_vector_size())
-        var chunk_offset = int(row % _impl().duckdb_vector_size())
+        var chunk_idx = Int(row // _impl().duckdb_vector_size())
+        var chunk_offset = Int(row % _impl().duckdb_vector_size())
         return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
 
     fn __del__(owned self):

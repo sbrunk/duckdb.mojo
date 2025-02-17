@@ -1,6 +1,6 @@
 [project]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["conda-forge", "https://conda.modular.com/max-nightly/"]
+channels = ["conda-forge", "https://conda.modular.com/max/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64"]
@@ -12,4 +12,4 @@ test = "mojo test"
 
 [dependencies]
 libduckdb = ">=1.1.1,<2"
-max = ">=24.6.0.dev2024101905,<25"
+max = ">=25.1.0,<26"
