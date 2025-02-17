@@ -2,6 +2,12 @@
 
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
+## 10 minute presentation at the MAX & Mojo community meeting
+
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=6huytcgQgk8&t=788"><img src="https://img.youtube.com/vi/6huytcgQgk8/0.jpg" alt="10 minute DuckDB.mojo presentation at the MAX & Mojo community meeting"></a>
+</div>
+
 Status:
 - Work in progress, many parts of the API are still missing (PRs welcome).
 
