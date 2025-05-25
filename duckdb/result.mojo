@@ -22,7 +22,7 @@ struct Result(Writable, Stringable):
     var _result: duckdb_result
     var columns: List[Column]
 
-    fn __init__(mut self, result: duckdb_result):
+    fn __init__(out self, result: duckdb_result):
         self._result = result
         self.columns = List[Column]()
         for i in range(self.column_count()):
@@ -33,14 +33,14 @@ struct Result(Writable, Stringable):
 
     fn column_count(self) -> Int:
         return Int(
-            _impl().duckdb_column_count(UnsafePointer.address_of(self._result))
+            _impl().duckdb_column_count(UnsafePointer(to=self._result))
         )
 
     fn column_name(self, col: Int) -> String:
         return String(
             StaticString(
-                unsafe_from_utf8_cstr_ptr=_impl().duckdb_column_name(
-                    UnsafePointer.address_of(self._result), col
+                unsafe_from_utf8_ptr=_impl().duckdb_column_name(
+                    UnsafePointer(to=self._result), col
                 )
             )
         )
@@ -54,7 +54,7 @@ struct Result(Writable, Stringable):
     fn column_type(self, col: Int) -> LogicalType:
         return LogicalType(
             _impl().duckdb_column_logical_type(
-                UnsafePointer.address_of(self._result), col
+                UnsafePointer(to=self._result), col
             )
         )
 
@@ -78,9 +78,9 @@ struct Result(Writable, Stringable):
         return MaterializedResult(self^)
 
     fn __del__(owned self):
-        _impl().duckdb_destroy_result(UnsafePointer.address_of(self._result))
+        _impl().duckdb_destroy_result(UnsafePointer(to=self._result))
 
-    fn __moveinit__(mut self, owned existing: Self):
+    fn __moveinit__(out self, owned existing: Self):
         self._result = existing._result
         self.columns = existing.columns
 
@@ -92,7 +92,7 @@ struct MaterializedResult(Sized):
     var chunks: List[UnsafePointer[Chunk]]
     var size: UInt
 
-    fn __init__(mut self, owned result: Result) raises:
+    fn __init__(out self, owned result: Result) raises:
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk]]()
         self.size = 0

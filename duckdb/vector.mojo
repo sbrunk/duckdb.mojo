@@ -12,7 +12,7 @@ struct Vector:
     var length: UInt64
 
     fn __init__(
-        mut self,
+        out self,
         vector: duckdb_vector,
         length: UInt64,
     ):
@@ -97,7 +97,7 @@ struct Vector:
         # 1. We have ensured that the runtime type matches the expected type through _check_type
         # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
-        var converted_result = UnsafePointer.address_of(result).bitcast[
+        var converted_result = UnsafePointer(to=result).bitcast[
             List[Optional[T]]
         ]()[]
         return converted_result

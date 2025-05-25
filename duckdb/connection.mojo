@@ -17,11 +17,12 @@ struct Connection:
     var _db: duckdb_database
     var __conn: duckdb_connection
 
-    fn __init__(mut self, db_path: String) raises:
+    fn __init__(out self, db_path: String) raises:
         self._db = UnsafePointer[duckdb_database.type]()
-        var db_addr = UnsafePointer.address_of(self._db)
+        var db_addr = UnsafePointer(to=self._db)
+        var path = db_path.copy()
         if (
-            _impl().duckdb_open(db_path.unsafe_cstr_ptr(), db_addr)
+            _impl().duckdb_open(path.unsafe_cstr_ptr(), db_addr)
         ) == DuckDBError:
             raise Error(
                 "Could not open database"
@@ -29,21 +30,22 @@ struct Connection:
         self.__conn = UnsafePointer[duckdb_connection.type]()
         if (
             _impl().duckdb_connect(
-                self._db, UnsafePointer.address_of(self.__conn)
+                self._db, UnsafePointer(to=self.__conn)
             )
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
     fn __del__(owned self):
-        _impl().duckdb_disconnect(UnsafePointer.address_of(self.__conn))
-        _impl().duckdb_close(UnsafePointer.address_of(self._db))
+        _impl().duckdb_disconnect(UnsafePointer(to=self.__conn))
+        _impl().duckdb_close(UnsafePointer(to=self._db))
 
     fn execute(self, query: String) raises -> Result:
         var result = duckdb_result()
-        var result_ptr = UnsafePointer.address_of(result)
+        var result_ptr = UnsafePointer(to=result)
+        var _query = query.copy()
         if (
             _impl().duckdb_query(
-                self.__conn, query.unsafe_cstr_ptr(), result_ptr
+                self.__conn, _query.unsafe_cstr_ptr(), result_ptr
             )
             == DuckDBError
         ):

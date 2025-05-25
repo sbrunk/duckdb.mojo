@@ -3,6 +3,7 @@ from utils import StaticTuple
 from collections import InlineArray
 from duckdb.duckdb_type import *
 from sys import os_is_macos
+from os import abort
 
 """FFI definitions for the DuckDB C API ported to Mojo.
 
@@ -255,7 +256,7 @@ struct duckdb_column:
     var __deprecated_name: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
-    fn __init__(mut self):
+    fn __init__(out self):
         self.__deprecated_data = UnsafePointer[NoneType]()
         self.__deprecated_nullmask = UnsafePointer[Bool]()
         self.__deprecated_type = 0
@@ -293,7 +294,7 @@ struct duckdb_result:
     var __deprecated_error_message: UnsafePointer[c_char]
     var internal_data: UnsafePointer[NoneType]
 
-    fn __init__(mut self):
+    fn __init__(out self):
         self.__deprecated_column_count = 0
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
@@ -376,7 +377,7 @@ alias duckdb_value = UnsafePointer[_duckdb_value]
 # ===--------------------------------------------------------------------===#
 
 
-fn get_libname() -> StringLiteral:
+fn get_libname() -> StaticString:
     @parameter
     if os_is_macos():
         return "libduckdb.dylib"
@@ -387,14 +388,20 @@ fn get_libname() -> StringLiteral:
 struct LibDuckDB:
     var lib: DLHandle
 
-    fn __init__(mut self, path: String = get_libname()):
-        self.lib = DLHandle(path)
+    fn __init__(out self, path: String = get_libname()):
+
+        try:
+            self.lib = DLHandle(path)
+        except e:
+            self.lib = abort[DLHandle](
+                String("Failed to load libduckdb from", path, ":\n", e)
+            )
 
     @staticmethod
     fn destroy(mut existing):
         existing.lib.close()
 
-    fn __copyinit__(mut self, existing: Self):
+    fn __copyinit__(out self, existing: Self):
         self.lib = existing.lib
 
     # ===--------------------------------------------------------------------===#

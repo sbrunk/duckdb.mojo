@@ -6,14 +6,14 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
 
     var _logical_type: duckdb_logical_type
 
-    fn __init__(mut self, type_id: DuckDBType):
+    fn __init__(out self, type_id: DuckDBType):
         """Creates a `LogicalType` from a standard primitive type."""
         self._logical_type = _impl().duckdb_create_logical_type(type_id.value)
 
-    fn __init__(mut self, logical_type: duckdb_logical_type):
+    fn __init__(out self, logical_type: duckdb_logical_type):
         self._logical_type = logical_type
 
-    fn __copyinit__(mut self, other: Self):
+    fn __copyinit__(out self, other: Self):
         if other.get_type_id() == DuckDBType.list:
             var child = other.list_type_child_type()
             self = child.create_list_type()
@@ -22,12 +22,12 @@ struct LogicalType(EqualityComparable, CollectionElement, Writable, Stringable):
         else:
             self = Self(other.get_type_id())
 
-    fn __moveinit__(mut self, owned other: Self):
+    fn __moveinit__(out self, owned other: Self):
         self._logical_type = other._logical_type
 
     fn __del__(owned self):
         _impl().duckdb_destroy_logical_type(
-            UnsafePointer.address_of(self._logical_type)
+            UnsafePointer(to=self._logical_type)
         )
 
     fn create_list_type(self) -> Self:

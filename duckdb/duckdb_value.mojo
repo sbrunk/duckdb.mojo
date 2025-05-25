@@ -10,7 +10,7 @@ trait DuckDBValue(CollectionElement, Stringable):
     but implement a type specific __init__ method to convert from a DuckDB vector.
     """
 
-    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         pass
 
     @staticmethod
@@ -39,7 +39,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement):
     fn __ne__(self, other: Self) -> Bool:
         return self.value != other.value
 
-    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != duckdb_type:
             raise "Expected type " + String(duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
@@ -67,7 +67,7 @@ alias Float64Val = DTypeValue[DuckDBType.double]
 
 @value
 struct FixedSizeValue[
-    duckdb_type: DuckDBType, underlying: WritableCollectionElement
+    duckdb_type: DuckDBType, underlying: Writable & CollectionElement
 ](DuckDBValue):
     var value: underlying
 
@@ -86,7 +86,7 @@ struct FixedSizeValue[
     # fn __ne__(self, other: Self) -> Bool:
     #     return self.value != other.value
 
-    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != duckdb_type:
             raise "Expected type " + String(duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
@@ -109,7 +109,7 @@ alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 struct DuckDBString(DuckDBValue):
     var value: String
 
-    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != DuckDBType.varchar:
             raise "Expected type " + String(
                 DuckDBType.varchar
@@ -146,7 +146,7 @@ struct DuckDBList[T: DuckDBValue](DuckDBValue):
     fn __str__(self) -> String:
         return "DuckDBList"  # TODO
 
-    fn __init__(mut self, vector: Vector, length: Int, offset: Int) raises:
+    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()
         if runtime_element_type != Self.expected_element_type:
             raise "Expected type " + String(
@@ -256,7 +256,7 @@ struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
         return "DuckDBMap"  # TODO
 
     fn __init__(
-        mut self, vector: Vector, length: Int, offset: Int = 0
+        out self, vector: Vector, length: Int, offset: Int = 0
     ) raises:
         self.value = Dict[K, V]()
         raise "Not implemented"

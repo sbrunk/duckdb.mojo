@@ -24,10 +24,10 @@ fn _get_global_duckdb_itf() -> _DuckDBInterfaceImpl:
 struct _DuckDBInterfaceImpl:
     var _libDuckDB: UnsafePointer[LibDuckDB]
 
-    fn __init__(mut self, LibDuckDB: UnsafePointer[LibDuckDB]):
+    fn __init__(out self, LibDuckDB: UnsafePointer[LibDuckDB]):
         self._libDuckDB = LibDuckDB
 
-    fn __copyinit__(mut self, existing: Self):
+    fn __copyinit__(out self, existing: Self):
         self._libDuckDB = existing._libDuckDB
 
     fn libDuckDB(self) -> LibDuckDB:

@@ -86,7 +86,7 @@ struct DuckDBType(
     alias timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
     """duckdb_timestamp"""
 
-    # fn __init__(mut self, value: LogicalType):
+    # fn __init__(out self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""
     #     self = value.get_type_id()
 
@@ -127,7 +127,7 @@ struct DuckDBType(
         )
 
     @always_inline
-    fn __init__(mut self, *, other: Self):
+    fn __init__(out self, *, other: Self):
         """Copy this DuckDBType.
 
         Args:
@@ -287,7 +287,7 @@ struct Date(EqualityComparable, Writable, Representable, Stringable):
 
     var days: Int32
 
-    # fn __init__(mut self, year: Int32, month: Int8, day: Int8):
+    # fn __init__(out self, year: Int32, month: Int8, day: Int8):
     #     self = _impl().duckdb_to_date(duckdb_date_struct(year, month, day))
 
     fn write_to[W: Writer](self, mut writer: W):
@@ -326,7 +326,7 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
     var micros: Int64
 
     # fn __init__(
-    #     mut self, hour: Int8, minute: Int8, second: Int8, micros: Int32
+    #     out self, hour: Int8, minute: Int8, second: Int8, micros: Int32
     # ):
     #     self = _impl().duckdb_to_time(
     #         duckdb_time_struct(hour, minute, second, micros)
@@ -367,7 +367,7 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
 
     var micros: Int64
 
-    # fn __init__(mut self, date: Date, time: Time):
+    # fn __init__(out self, date: Date, time: Time):
     #     self = _impl().duckdb_to_timestamp(
     #         duckdb_timestamp_struct(
     #             _impl().duckdb_from_date(date), _impl().duckdb_from_time(time)
