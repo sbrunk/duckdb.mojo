@@ -1337,6 +1337,6 @@ struct LibDuckDB:
         * result: The result object to fetch the data chunk from.
         * returns: The resulting data chunk. Returns `NULL` if the result has an error.
         """
-        return self.lib.get_function[fn (duckdb_result) -> duckdb_data_chunk](
-            "duckdb_fetch_chunk"
-        )(result)
+        # It looks like due to C ABI conventions for larger structs we need to internally pass duckdb_result by pointer
+        # even though it's declared as by value.
+        return self.lib.call["duckdb_fetch_chunk", duckdb_data_chunk, UnsafePointer[duckdb_result]](UnsafePointer(to=result))
