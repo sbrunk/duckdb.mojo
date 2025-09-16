@@ -1,6 +1,5 @@
 from duckdb import *
 
-
 def main():
     var con = DuckDB.connect(":memory:")
 
@@ -25,8 +24,10 @@ def main():
     ).fetch_all()
 
     for col in result.columns():
-        print(col[])
+        print(col)
 
+    print()
+    print("Length: " + String(len(result)))
     print()
 
     for row in range(len(result)):

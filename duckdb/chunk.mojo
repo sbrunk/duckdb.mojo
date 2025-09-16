@@ -1,11 +1,10 @@
-from duckdb._c_api.c_api import *
-from duckdb._c_api.libduckdb import _impl
+from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
 from collections import Optional
 
 
-struct Chunk(Movable):
+struct Chunk(Movable & Sized):
     """Represents a DuckDB data chunk."""
 
     var _chunk: duckdb_data_chunk
@@ -14,23 +13,23 @@ struct Chunk(Movable):
         self._chunk = chunk
 
     fn __del__(owned self):
-        _impl().duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
+        duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
     fn __moveinit__(out self, owned existing: Self):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
-        return Int(_impl().duckdb_data_chunk_get_size(self._chunk))
+        return Int(duckdb_data_chunk_get_size(self._chunk))
 
     fn _get_vector(self, col: Int) -> Vector:
         return Vector(
-            _impl().duckdb_data_chunk_get_vector(self._chunk, col),
+            duckdb_data_chunk_get_vector(self._chunk, col),
             length=len(self),
         )
 
     @always_inline
     fn _check_bounds(self, col: Int) raises:
-        if UInt64(col) >= _impl().duckdb_data_chunk_get_column_count(
+        if UInt64(col) >= duckdb_data_chunk_get_column_count(
             self._chunk
         ):
             raise Error(String("Column {} out of bounds.").format(col))
@@ -70,7 +69,7 @@ struct Chunk(Movable):
         return not is_valid
 
     fn get[
-        T: CollectionElement, //
+        T: Copyable & Movable, //
     ](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
         self._check_bounds(col, row)
         if self.is_null(col=col, row=row):
@@ -79,7 +78,7 @@ struct Chunk(Movable):
         return self._get_vector(col).get(type)[row]
 
     fn get[
-        T: CollectionElement, //
+        T: Copyable & Movable, //
     ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         self._check_bounds(col)
         if self.is_null(col=col):
@@ -95,7 +94,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 
     fn __init__(out self, ref [lifetime]result: Result) raises:
         self._result = Pointer(to=result)
-        self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
+        self._next_chunk = duckdb_fetch_chunk(self._result[]._result)
 
     fn __del__(owned self):
         if self._next_chunk:
@@ -111,7 +110,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
     fn __next__(mut self) raises -> Chunk:
         if self._next_chunk:
             var current = self._next_chunk
-            var next = _impl().duckdb_fetch_chunk(self._result[]._result)
+            var next = duckdb_fetch_chunk(self._result[]._result)
             self._next_chunk = next
             return Chunk(current)
         else:

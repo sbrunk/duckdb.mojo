@@ -4,7 +4,7 @@ from duckdb.logical_type import LogicalType
 from duckdb.duckdb_value import *
 
 
-struct Col[T: CollectionElement, Builder: DuckDBValue]:
+struct Col[T: Copyable & Movable, Builder: DuckDBValue]:
     """Represents a typed column in a DuckDB result."""
 
     # using a variant here allows us to create aliases for simple types below
@@ -45,7 +45,7 @@ alias varchar = Col[String, DuckDBString](DuckDBType.varchar)
 
 
 fn list[
-    T: CollectionElement
+    T: Copyable & Movable
 ](c: Col[T]) -> Col[List[Optional[T]], DuckDBList[c.Builder]]:
     return Col[List[Optional[T]], DuckDBList[c.Builder]](
         c.type().create_list_type()
@@ -55,7 +55,7 @@ fn list[
 # TODO remaining types
 
 # fn map[
-#     K: KeyElement, V: CollectionElement
+#     K: KeyElement, V: Copyable & Movable
 # ](k: Col[K], v: Col[V]) -> Col[
 #     Dict[K, Optional[V]], DuckDBMap[k.Builder, v.Builder]
 # ]:

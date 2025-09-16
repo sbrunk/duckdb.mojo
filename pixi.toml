@@ -9,7 +9,10 @@ version = "0.1.0"
 [tasks]
 #test = { cmd = "mojo test -I $PIXI_PROJECT_ROOT", env = { DYLD_LIBRARY_PATH = "$CONDA_PREFIX/lib", LD_LIBRARY_PATH = "$CONDA_PREFIX/lib" }, cwd = "test" }
 test = "mojo test"
+# Build the helper C shim that wraps struct-by-value functions for Mojo.
+build-helpers-macos = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.dylib"
+build-helpers-linux = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.so"
 
 [dependencies]
-libduckdb = ">=1.1.3,<2"
-max = ">=25.3.0,<26"
+libduckdb = ">=1.3.2,<2"
+mojo = ">=25.5.0,<26"

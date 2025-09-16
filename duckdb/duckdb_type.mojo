@@ -1,15 +1,15 @@
-from duckdb._c_api.libduckdb import *
-from duckdb._c_api.c_api import *
+from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from collections import Set
+from hashlib.hasher import Hasher
 
 
-@value
+@fieldwise_init
 @register_passable("trivial")
 struct DuckDBType(
+    Hashable,
     Stringable,
     Writable,
-    CollectionElement,
     EqualityComparable,
     KeyElement,
 ):
@@ -135,8 +135,8 @@ struct DuckDBType(
         """
         self = other
 
-    fn __hash__(self) -> UInt:
-        return self.value.__hash__()
+    fn __hash__[H: Hasher](self, mut hasher: H):
+        hasher.update(self.value)
 
     @always_inline("nodebug")
     fn __repr__(self) -> String:
@@ -278,8 +278,8 @@ struct DuckDBType(
         return DType.invalid
 
 
-@value
-struct Date(EqualityComparable, Writable, Representable, Stringable):
+@fieldwise_init
+struct Date(Copyable & Movable & EqualityComparable & Writable & Representable & Stringable):
     """Days are stored as days since 1970-01-01.
 
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
@@ -288,7 +288,7 @@ struct Date(EqualityComparable, Writable, Representable, Stringable):
     var days: Int32
 
     # fn __init__(out self, year: Int32, month: Int8, day: Int8):
-    #     self = _impl().duckdb_to_date(duckdb_date_struct(year, month, day))
+    #     self = duckdb_to_date(duckdb_date_struct(year, month, day))
 
     fn write_to[W: Writer](self, mut writer: W):
         return writer.write(self.days)
@@ -307,17 +307,17 @@ struct Date(EqualityComparable, Writable, Representable, Stringable):
         return not self == other
 
     # fn year(self) -> Int32:
-    #     return _impl().duckdb_from_date(self).year
+    #     return duckdb_from_date(self).year
 
     # fn month(self) -> Int8:
-    #     return _impl().duckdb_from_date(self).month
+    #     return duckdb_from_date(self).month
 
     # fn day(self) -> Int8:
-    #     return _impl().duckdb_from_date(self).day
+    #     return duckdb_from_date(self).day
 
 
-@value
-struct Time(EqualityComparable, Writable, Representable, Stringable):
+@fieldwise_init
+struct Time(Copyable & Movable & EqualityComparable & Writable & Representable & Stringable):
     """Time is stored as microseconds since 00:00:00.
 
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
@@ -328,7 +328,7 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
     # fn __init__(
     #     out self, hour: Int8, minute: Int8, second: Int8, micros: Int32
     # ):
-    #     self = _impl().duckdb_to_time(
+    #     self = duckdb_to_time(
     #         duckdb_time_struct(hour, minute, second, micros)
     #     )
 
@@ -349,28 +349,28 @@ struct Time(EqualityComparable, Writable, Representable, Stringable):
         return not self == other
 
     # fn hour(self) -> Int8:
-    #     return _impl().duckdb_from_time(self).hour
+    #     return duckdb_from_time(self).hour
 
     # fn minute(self) -> Int8:
-    #     return _impl().duckdb_from_time(self).min
+    #     return duckdb_from_time(self).min
 
     # fn second(self) -> Int8:
-    #     return _impl().duckdb_from_time(self).sec
+    #     return duckdb_from_time(self).sec
 
     # fn micro(self) -> Int32:
-    #     return _impl().duckdb_from_time(self).micros
+    #     return duckdb_from_time(self).micros
 
 
-@value
-struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
+@fieldwise_init
+struct Timestamp(EqualityComparable & Writable & Copyable & Movable & Stringable & Representable):
     """Timestamps are stored as microseconds since 1970-01-01."""
 
     var micros: Int64
 
     # fn __init__(out self, date: Date, time: Time):
-    #     self = _impl().duckdb_to_timestamp(
+    #     self = duckdb_to_timestamp(
     #         duckdb_timestamp_struct(
-    #             _impl().duckdb_from_date(date), _impl().duckdb_from_time(time)
+    #             duckdb_from_date(date), duckdb_from_time(time)
     #         )
     #     )
 
@@ -391,14 +391,14 @@ struct Timestamp(EqualityComparable, Writable, Stringable, Representable):
         return "Timestamp(" + String(self.micros) + ")"
 
     # fn date(self) -> Date:
-    #     return _impl().duckdb_to_date(_impl().duckdb_from_timestamp(self).date)
+    #     return duckdb_to_date(duckdb_from_timestamp(self).date)
 
     # fn time(self) -> Time:
-    #     return _impl().duckdb_to_time(_impl().duckdb_from_timestamp(self).time)
+    #     return duckdb_to_time(duckdb_from_timestamp(self).time)
 
 
-@value
-struct Interval(Stringable, Representable):
+@fieldwise_init
+struct Interval(Copyable & Movable & Stringable & Representable):
     var months: Int32
     var days: Int32
     var micros: Int64
@@ -425,8 +425,8 @@ struct Interval(Stringable, Representable):
         )
 
 
-@value
-struct Int128(Stringable, Representable):
+@fieldwise_init
+struct Int128(Copyable & Movable & Stringable & Representable):
     """Hugeints are composed of a (lower, upper) component.
 
     The value of the hugeint is upper * 2^64 + lower
@@ -443,8 +443,8 @@ struct Int128(Stringable, Representable):
         return "Int128(" + String(self.lower) + ", " + String(self.upper) + ")"
 
 
-@value
-struct UInt128(Stringable, Representable):
+@fieldwise_init
+struct UInt128(Copyable & Movable & Stringable & Representable):
     """UHugeints are composed of a (lower, upper) component."""
 
     var lower: UInt64
@@ -457,8 +457,8 @@ struct UInt128(Stringable, Representable):
         return "UInt128(" + String(self.lower) + ", " + String(self.upper) + ")"
 
 
-@value
-struct Decimal(Stringable, Representable):
+@fieldwise_init
+struct Decimal(Copyable & Movable & Stringable & Representable):
     """Decimals are composed of a width and a scale, and are stored in a hugeint.
     """
 
