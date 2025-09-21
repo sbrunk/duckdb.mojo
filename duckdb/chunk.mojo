@@ -73,7 +73,7 @@ struct Chunk(Movable & Sized):
     ](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
         self._check_bounds(col, row)
         if self.is_null(col=col, row=row):
-            return NoneType()
+            return None
         # TODO optimize single row access
         return self._get_vector(col).get(type)[row]
 

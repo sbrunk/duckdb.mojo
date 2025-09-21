@@ -75,7 +75,7 @@ struct FixedSizeValue[
         self.value.write_to(writer)
 
     fn __str__(self) -> String:
-        return String(self.underlying)
+        return String(self.value)
 
     # fn __hash__(self) -> UInt:
     #     return self.value.__hash__()
@@ -110,7 +110,7 @@ alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 
 @fieldwise_init
 struct DuckDBString(DuckDBValue):
-    var value: StaticString
+    var value: String
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != DuckDBType.varchar:
@@ -127,10 +127,10 @@ struct DuckDBString(DuckDBValue):
             ]()
             var string_value = StaticString(
                 ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8](), length=string_length)
-            self.value = string_value.copy()
+            self.value = String(string_value.copy())
         else:
             var string_value = StaticString(ptr=data_str_ptr[offset].ptr.bitcast[UInt8](), length=string_length)
-            self.value = string_value.copy()
+            self.value = String(string_value.copy())
 
     fn __str__(self) -> String:
         return self.value
@@ -186,7 +186,7 @@ struct DuckDBList[T: DuckDBValue & Copyable & Movable](DuckDBValue & Copyable & 
             # validity mask can be null if there are no NULL values
             if not validity_mask:
                 for idx in range(length):
-                    self.value.append(T(vector, length=1, offset=offset + idx))
+                    self.value.append(Optional(T(vector, length=1, offset=offset + idx)))
             else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
@@ -195,9 +195,7 @@ struct DuckDBList[T: DuckDBValue & Copyable & Movable](DuckDBValue & Copyable & 
                         1 << idx_in_entry
                     )
                     if is_valid:
-                        self.value.append(
-                            T(vector, length=1, offset=offset + idx)
-                        )
+                        self.value.append(Optional(T(vector, length=1, offset=offset + idx)))
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.list:
