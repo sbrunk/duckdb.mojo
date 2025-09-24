@@ -21,8 +21,9 @@ struct Chunk(Movable & Sized):
     fn __len__(self) -> Int:
         return Int(duckdb_data_chunk_get_size(self._chunk))
 
-    fn _get_vector(self, col: Int) -> Vector:
+    fn _get_vector(self, col: Int) -> Vector[__origin_of(self)]:
         return Vector(
+            Pointer(to=self),
             duckdb_data_chunk_get_vector(self._chunk, col),
             length=len(self),
         )
@@ -46,8 +47,7 @@ struct Chunk(Movable & Sized):
 
     fn is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
-        var vector = self._get_vector(col)
-        var validity_mask = vector._get_validity_mask()
+        var validity_mask = self._get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -57,8 +57,7 @@ struct Chunk(Movable & Sized):
 
     fn is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""
-        var vector = self._get_vector(col)
-        var validity_mask = vector._get_validity_mask()
+        var validity_mask = self._get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values

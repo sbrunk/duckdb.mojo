@@ -1,6 +1,7 @@
 from duckdb.vector import Vector
 from collections import Dict, Optional
 from collections.string import StringSlice, StaticString
+from memory import memcpy
 
 
 trait DuckDBValue(Copyable & Movable & Stringable):
@@ -9,14 +10,10 @@ trait DuckDBValue(Copyable & Movable & Stringable):
     Implementations are thin wrappers around native Mojo types
     but implement a type specific __init__ method to convert from a DuckDB vector.
     """
+    alias Type: DuckDBType
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         pass
-
-    @staticmethod
-    fn type() -> DuckDBType:
-        pass
-
 
 trait DuckDBKeyElement(DuckDBValue, KeyElement):
     pass
@@ -25,7 +22,9 @@ trait DuckDBKeyElement(DuckDBValue, KeyElement):
 @fieldwise_init
 @register_passable("trivial")
 struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable):
-    var value: Scalar[duckdb_type.to_dtype()]
+    alias Type = duckdb_type
+
+    var value: Scalar[Self.Type.to_dtype()]
 
     fn __str__(self) -> String:
         return self.value.__str__()
@@ -47,11 +46,6 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable):
 
         self = vector._get_data().bitcast[Self]()[offset=offset]
 
-    @staticmethod
-    fn type() -> DuckDBType:
-        return duckdb_type
-
-
 alias BoolVal = DTypeValue[DuckDBType.boolean]
 alias Int8Val = DTypeValue[DuckDBType.tinyint]
 alias Int16Val = DTypeValue[DuckDBType.smallint]
@@ -69,6 +63,7 @@ alias Float64Val = DTypeValue[DuckDBType.double]
 struct FixedSizeValue[
     duckdb_type: DuckDBType, underlying: Stringable & Writable & Copyable & Movable
 ](DuckDBValue):
+    alias Type = duckdb_type
     var value: underlying
 
     fn write_to[W: Writer](self, mut writer: W):
@@ -97,11 +92,6 @@ struct FixedSizeValue[
     fn __copyinit__(out self, other: Self):
         self.value = other.value
 
-    @staticmethod
-    fn type() -> DuckDBType:
-        return duckdb_type
-
-
 alias DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
 alias DuckDBDate = FixedSizeValue[DuckDBType.date, Date]
 alias DuckDBTime = FixedSizeValue[DuckDBType.time, Time]
@@ -110,6 +100,7 @@ alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 
 @fieldwise_init
 struct DuckDBString(DuckDBValue):
+    alias Type = DuckDBType.varchar
     var value: String
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
@@ -125,26 +116,24 @@ struct DuckDBString(DuckDBValue):
             var data_str_inlined = data_str_ptr.bitcast[
                 duckdb_string_t_inlined
             ]()
-            var string_value = StaticString(
-                ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8](), length=string_length)
-            self.value = String(string_value.copy())
+            var ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+            self.value = String(unsafe_uninit_length=string_length)
+            memcpy(self.value.unsafe_ptr_mut(), ptr, string_length)
         else:
-            var string_value = StaticString(ptr=data_str_ptr[offset].ptr.bitcast[UInt8](), length=string_length)
-            self.value = String(string_value.copy())
+            ptr=data_str_ptr[offset].ptr.bitcast[UInt8]()
+            self.value = String(unsafe_uninit_length=string_length)
+            memcpy(self.value.unsafe_ptr_mut(), ptr, string_length)
 
     fn __str__(self) -> String:
         return self.value
 
-    @staticmethod
-    fn type() -> DuckDBType:
-        return DuckDBType.varchar
-
 
 @fieldwise_init
-struct DuckDBList[T: DuckDBValue & Copyable & Movable](DuckDBValue & Copyable & Movable):
+struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
     """A DuckDB list."""
+    alias Type = DuckDBType.list
 
-    alias expected_element_type = T.type()
+    alias expected_element_type = T.Type
     var value: List[Optional[T]]
 
     fn __str__(self) -> String:
@@ -245,30 +234,22 @@ struct DuckDBList[T: DuckDBValue & Copyable & Movable](DuckDBValue & Copyable & 
                 "Unsupported or invalid type: " + String(runtime_element_type)
             )
 
-    @staticmethod
-    fn type() -> DuckDBType:
-        return DuckDBType.list
+# @fieldwise_init
+# struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
+#     alias Type = DuckDBType.map
+#     var value: Dict[K, V]
 
+#     fn __str__(self) -> String:
+#         return "DuckDBMap"  # TODO
 
-@fieldwise_init
-struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
-    var value: Dict[K, V]
-
-    fn __str__(self) -> String:
-        return "DuckDBMap"  # TODO
-
-    fn __init__(
-        out self, vector: Vector, length: Int, offset: Int = 0
-    ) raises:
-        self.value = Dict[K, V]()
-        raise "Not implemented"
-        # Internally map vectors are stored as a LIST[STRUCT(key KEY_TYPE, value VALUE_TYPE)].
-        # Via https://duckdb.org/docs/internals/vector#map-vectors
-        # TODO fill dict
-        # for i in range(length):
-        #     self.key = K()
-        #     self.value = V()
-
-    @staticmethod
-    fn type() -> DuckDBType:
-        return DuckDBType.map
+#     fn __init__(
+#         out self, vector: Vector, length: Int, offset: Int = 0
+#     ) raises:
+#         self.value = Dict[K, V]()
+#         raise "Not implemented"
+#         # Internally map vectors are stored as a LIST[STRUCT(key KEY_TYPE, value VALUE_TYPE)].
+#         # Via https://duckdb.org/docs/internals/vector#map-vectors
+#         # TODO fill dict
+#         # for i in range(length):
+#         #     self.key = K()
+#         #     self.value = V()

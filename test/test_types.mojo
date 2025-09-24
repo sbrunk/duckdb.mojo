@@ -139,10 +139,11 @@ def test_list():
 
     print(string_lists[1].value()[0].value())
 
-    # assert_equal(
-    #     string_lists[1].value()[0].value(),
-    #     "cdefghijklmnopqrstuvwxyz",
-    # )
+
+    assert_equal(
+        string_lists[1].value()[0].value(),
+        "cdefghijklmnopqrstuvwxyz",
+    )
 
     ## TODO test remaining types
 
