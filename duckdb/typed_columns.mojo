@@ -4,7 +4,7 @@ from duckdb.logical_type import LogicalType
 from duckdb.duckdb_value import *
 
 
-struct Col[T: Copyable & Movable, Builder: DuckDBValue]:
+struct Col[T: Copyable & Movable, Builder: DuckDBValue](ImplicitlyCopyable & Movable):
     """Represents a typed column in a DuckDB result."""
 
     # using a variant here allows us to create aliases for simple types below

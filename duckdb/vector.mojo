@@ -22,13 +22,16 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         self._chunk = chunk
 
     fn get_column_type(self) -> LogicalType:
-        return LogicalType(duckdb_vector_get_column_type(self._vector))
+        ref libduckdb = DuckDB().libduckdb()
+        return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
 
     fn _get_data(self) -> UnsafePointer[NoneType]:
-        return duckdb_vector_get_data(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_get_data(self._vector)
 
     fn _get_validity_mask(self) -> UnsafePointer[UInt64]:
-        return duckdb_vector_get_validity(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_get_validity(self._vector)
 
     fn list_get_child(self) -> Vector[origin]:
         """Retrieves the child vector of a list vector.
@@ -38,10 +41,11 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         * vector: The vector
         * returns: The child vector
         """
+        ref libduckdb = DuckDB().libduckdb()
         return Vector(
             self._chunk,
-            duckdb_list_vector_get_child(self._vector),
-            duckdb_list_vector_get_size(self._vector),
+            libduckdb.duckdb_list_vector_get_child(self._vector),
+            libduckdb.duckdb_list_vector_get_size(self._vector),
         )
 
     fn list_get_size(self) -> idx_t:
@@ -50,7 +54,8 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         * vector: The vector
         * returns: The size of the child list
         """
-        return duckdb_list_vector_get_size(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_list_vector_get_size(self._vector)
 
     fn _check_type(self, db_type: LogicalType) raises:
         """Recursively check that the runtime type of the vector matches the expected type.

@@ -29,17 +29,19 @@ struct Result(Writable, Stringable):
             var col = Column(
                 index=i, name=self.column_name(i), type=self.column_type(i)
             )
-            self.columns.append(col)
+            self.columns.append(col^)
 
     fn column_count(self) -> Int:
+        ref libduckdb = DuckDB().libduckdb()
         return Int(
-            duckdb_column_count(UnsafePointer(to=self._result))
+            libduckdb.duckdb_column_count(UnsafePointer(to=self._result))
         )
 
     fn column_name(self, col: Int) -> String:
+        ref libduckdb = DuckDB().libduckdb()
         return String(
             StaticString(
-                unsafe_from_utf8_ptr=duckdb_column_name(
+                unsafe_from_utf8_ptr=libduckdb.duckdb_column_name(
                     UnsafePointer(to=self._result), col
                 )
             )
@@ -49,11 +51,12 @@ struct Result(Writable, Stringable):
         var types = List[LogicalType]()
         for i in range(self.column_count()):
             types.append(self.column_type(i))
-        return types
+        return types^
 
     fn column_type(self, col: Int) -> LogicalType:
+        ref libduckdb = DuckDB().libduckdb()
         return LogicalType(
-            duckdb_column_logical_type(
+            libduckdb.duckdb_column_logical_type(
                 UnsafePointer(to=self._result), col
             )
         )
@@ -69,20 +72,22 @@ struct Result(Writable, Stringable):
     #     return ResultIterator(self)
 
     fn fetch_chunk(self) raises -> Chunk:
-        return Chunk(duckdb_fetch_chunk(self._result))
+        ref libduckdb = DuckDB().libduckdb()
+        return Chunk(libduckdb.duckdb_fetch_chunk(self._result))
 
     fn chunk_iterator(self) raises -> _ChunkIter[__origin_of(self)]:
         return _ChunkIter(self)
 
-    fn fetch_all(owned self) raises -> MaterializedResult:
+    fn fetch_all(var self) raises -> MaterializedResult:
         return MaterializedResult(self^)
 
-    fn __del__(owned self):
-        duckdb_destroy_result(UnsafePointer(to=self._result))
+    fn __del__(deinit self):
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_result(UnsafePointer(to=self._result))
 
-    fn __moveinit__(out self, owned existing: Self):
-        self._result = existing._result
-        self.columns = existing.columns
+    fn __moveinit__(out self, deinit existing: Self):
+        self._result = existing._result^
+        self.columns = existing.columns^
 
 
 struct MaterializedResult(Sized):
@@ -92,7 +97,7 @@ struct MaterializedResult(Sized):
     var chunks: List[UnsafePointer[Chunk]]
     var size: UInt
 
-    fn __init__(out self, owned result: Result) raises:
+    fn __init__(out self, var result: Result) raises:
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk]]()
         self.size = 0
@@ -123,23 +128,25 @@ struct MaterializedResult(Sized):
     fn get[
         T: Copyable & Movable, //
     ](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
+        ref libduckdb = DuckDB().libduckdb()
         var result = List[Optional[T]](
-            capacity=len(self.chunks) * Int(duckdb_vector_size())
+            capacity=len(self.chunks) * Int(libduckdb.duckdb_vector_size())
         )
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[].get(type, col))
-        return result
+        return result^
 
     fn get[
         T: Copyable & Movable, //
     ](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
+        ref libduckdb = DuckDB().libduckdb()
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
-        var chunk_idx = Int(row // duckdb_vector_size())
-        var chunk_offset = Int(row % duckdb_vector_size())
+        var chunk_idx = Int(row // libduckdb.duckdb_vector_size())
+        var chunk_offset = Int(row % libduckdb.duckdb_vector_size())
         return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
 
-    fn __del__(owned self):
+    fn __del__(deinit self):
         for chunk_ptr in self.chunks:
             chunk_ptr.destroy_pointee()
             chunk_ptr.free()

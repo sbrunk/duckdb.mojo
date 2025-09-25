@@ -1,14 +1,15 @@
 from duckdb._libduckdb import *
 
 
-struct LogicalType(Copyable & Movable & EqualityComparable & Writable & Stringable):
+struct LogicalType(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Stringable):
     """Represents a potentially nested DuckDB type."""
 
     var _logical_type: duckdb_logical_type
 
     fn __init__(out self, type_id: DuckDBType):
         """Creates a `LogicalType` from a standard primitive type."""
-        self._logical_type = duckdb_create_logical_type(type_id.value)
+        ref libduckdb = DuckDB().libduckdb()
+        self._logical_type = libduckdb.duckdb_create_logical_type(type_id.value)
 
     fn __init__(out self, logical_type: duckdb_logical_type):
         self._logical_type = logical_type
@@ -22,16 +23,18 @@ struct LogicalType(Copyable & Movable & EqualityComparable & Writable & Stringab
         else:
             self = Self(other.get_type_id())
 
-    fn __moveinit__(out self, owned other: Self):
+    fn __moveinit__(out self, deinit other: Self):
         self._logical_type = other._logical_type
 
-    fn __del__(owned self):
-        duckdb_destroy_logical_type(
+    fn __del__(deinit self):
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_logical_type(
             UnsafePointer(to=self._logical_type)
         )
 
     fn create_list_type(self) -> Self:
-        return Self(duckdb_create_list_type(self._logical_type))
+        ref libduckdb = DuckDB().libduckdb()
+        return Self(libduckdb.duckdb_create_list_type(self._logical_type))
 
     fn get_type_id(self) -> DuckDBType:
         """Retrieves the enum type class of this `LogicalType`.
@@ -39,28 +42,32 @@ struct LogicalType(Copyable & Movable & EqualityComparable & Writable & Stringab
         * type: The logical type object
         * returns: The type id
         """
-        return DuckDBType(duckdb_get_type_id(self._logical_type))
+        ref libduckdb = DuckDB().libduckdb()
+        return DuckDBType(libduckdb.duckdb_get_type_id(self._logical_type))
 
     fn list_type_child_type(self) -> Self:
         """Retrieves the child type of the given list type.
 
         * type: The logical type object
         """
-        return Self(duckdb_list_type_child_type(self._logical_type))
+        ref libduckdb = DuckDB().libduckdb()
+        return Self(libduckdb.duckdb_list_type_child_type(self._logical_type))
 
     fn map_type_key_type(self) -> Self:
         """Retrieves the key type of the given map type.
 
         * type: The logical type object
         """
-        return Self(duckdb_map_type_key_type(self._logical_type))
+        ref libduckdb = DuckDB().libduckdb()
+        return Self(libduckdb.duckdb_map_type_key_type(self._logical_type))
 
     fn map_type_value_type(self) -> Self:
         """Retrieves the value type of the given map type.
 
         * type: The logical type object
         """
-        return Self(duckdb_map_type_value_type(self._logical_type))
+        ref libduckdb = DuckDB().libduckdb()
+        return Self(libduckdb.duckdb_map_type_value_type(self._logical_type))
 
     fn __eq__(self, other: Self) -> Bool:
         if self.get_type_id() != other.get_type_id():

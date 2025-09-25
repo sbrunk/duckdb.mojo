@@ -279,7 +279,7 @@ struct DuckDBType(
 
 
 @fieldwise_init
-struct Date(Copyable & Movable & EqualityComparable & Writable & Representable & Stringable):
+struct Date(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Representable & Stringable):
     """Days are stored as days since 1970-01-01.
 
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
@@ -317,7 +317,7 @@ struct Date(Copyable & Movable & EqualityComparable & Writable & Representable &
 
 
 @fieldwise_init
-struct Time(Copyable & Movable & EqualityComparable & Writable & Representable & Stringable):
+struct Time(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Representable & Stringable):
     """Time is stored as microseconds since 00:00:00.
 
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
@@ -362,7 +362,7 @@ struct Time(Copyable & Movable & EqualityComparable & Writable & Representable &
 
 
 @fieldwise_init
-struct Timestamp(EqualityComparable & Writable & Copyable & Movable & Stringable & Representable):
+struct Timestamp(EqualityComparable & Writable & ImplicitlyCopyable & Movable & Stringable & Representable):
     """Timestamps are stored as microseconds since 1970-01-01."""
 
     var micros: Int64
@@ -398,7 +398,7 @@ struct Timestamp(EqualityComparable & Writable & Copyable & Movable & Stringable
 
 
 @fieldwise_init
-struct Interval(Copyable & Movable & Stringable & Representable):
+struct Interval(ImplicitlyCopyable & Movable & Stringable & Representable):
     var months: Int32
     var days: Int32
     var micros: Int64
@@ -426,7 +426,7 @@ struct Interval(Copyable & Movable & Stringable & Representable):
 
 
 @fieldwise_init
-struct Int128(Copyable & Movable & Stringable & Representable):
+struct Int128(ImplicitlyCopyable & Movable & Stringable & Representable):
     """Hugeints are composed of a (lower, upper) component.
 
     The value of the hugeint is upper * 2^64 + lower
@@ -444,7 +444,7 @@ struct Int128(Copyable & Movable & Stringable & Representable):
 
 
 @fieldwise_init
-struct UInt128(Copyable & Movable & Stringable & Representable):
+struct UInt128(ImplicitlyCopyable & Movable & Stringable & Representable):
     """UHugeints are composed of a (lower, upper) component."""
 
     var lower: UInt64
@@ -458,7 +458,7 @@ struct UInt128(Copyable & Movable & Stringable & Representable):
 
 
 @fieldwise_init
-struct Decimal(Copyable & Movable & Stringable & Representable):
+struct Decimal(ImplicitlyCopyable & Movable & Stringable & Representable):
     """Decimals are composed of a width and a scale, and are stored in a hugeint.
     """
 

@@ -12,25 +12,29 @@ struct Chunk(Movable & Sized):
     fn __init__(out self, chunk: duckdb_data_chunk):
         self._chunk = chunk
 
-    fn __del__(owned self):
-        duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
+    fn __del__(deinit self):
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
-    fn __moveinit__(out self, owned existing: Self):
+    fn __moveinit__(out self, deinit existing: Self):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
-        return Int(duckdb_data_chunk_get_size(self._chunk))
+        ref libduckdb = DuckDB().libduckdb()
+        return Int(libduckdb.duckdb_data_chunk_get_size(self._chunk))
 
     fn _get_vector(self, col: Int) -> Vector[__origin_of(self)]:
+        ref libduckdb = DuckDB().libduckdb()
         return Vector(
             Pointer(to=self),
-            duckdb_data_chunk_get_vector(self._chunk, col),
+            libduckdb.duckdb_data_chunk_get_vector(self._chunk, col),
             length=len(self),
         )
 
     @always_inline
     fn _check_bounds(self, col: Int) raises:
-        if UInt64(col) >= duckdb_data_chunk_get_column_count(
+        ref libduckdb = DuckDB().libduckdb()
+        if UInt64(col) >= libduckdb.duckdb_data_chunk_get_column_count(
             self._chunk
         ):
             raise Error(String("Column {} out of bounds.").format(col))
@@ -92,24 +96,26 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
     var _next_chunk: duckdb_data_chunk
 
     fn __init__(out self, ref [lifetime]result: Result) raises:
+        ref libduckdb = DuckDB().libduckdb()
         self._result = Pointer(to=result)
-        self._next_chunk = duckdb_fetch_chunk(self._result[]._result)
+        self._next_chunk = libduckdb.duckdb_fetch_chunk(self._result[]._result)
 
-    fn __del__(owned self):
+    fn __del__(deinit self):
         if self._next_chunk:
             _ = Chunk(self._next_chunk)
 
-    fn __moveinit__(out self, owned existing: Self):
+    fn __moveinit__(out self, deinit existing: Self):
         self._result = existing._result
         self._next_chunk = existing._next_chunk
 
-    fn __iter__(owned self) -> Self:
+    fn __iter__(var self) -> Self:
         return self^
 
     fn __next__(mut self) raises -> Chunk:
         if self._next_chunk:
             var current = self._next_chunk
-            var next = duckdb_fetch_chunk(self._result[]._result)
+            ref libduckdb = DuckDB().libduckdb()
+            var next = libduckdb.duckdb_fetch_chunk(self._result[]._result)
             self._next_chunk = next
             return Chunk(current)
         else:

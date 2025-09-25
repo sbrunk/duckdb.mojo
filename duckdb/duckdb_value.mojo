@@ -61,8 +61,8 @@ alias Float64Val = DTypeValue[DuckDBType.double]
 
 @fieldwise_init
 struct FixedSizeValue[
-    duckdb_type: DuckDBType, underlying: Stringable & Writable & Copyable & Movable
-](DuckDBValue):
+    duckdb_type: DuckDBType, underlying: Stringable & Writable & ImplicitlyCopyable & Movable
+](DuckDBValue & ImplicitlyCopyable):
     alias Type = duckdb_type
     var value: underlying
 
@@ -159,7 +159,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
             # validity mask can be null if there are no NULL values
             if not validity_mask:
                 for idx in range(length):
-                    self.value.append(Optional(data_ptr[idx + offset]))
+                    self.value.append(Optional(data_ptr[idx + offset].copy()))
             else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
@@ -168,7 +168,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                         1 << idx_in_entry
                     )
                     if is_valid:
-                        self.value.append(Optional(data_ptr[idx + offset]))
+                        self.value.append(Optional(data_ptr[idx + offset].copy()))
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.varchar:
