@@ -120,7 +120,7 @@ struct MaterializedResult(Sized):
         return self.result.column_type(col)
 
     fn columns(self) -> List[Column]:
-        return self.result.columns
+        return self.result.columns.copy()
 
     fn __len__(self) -> Int:
         return self.size
