@@ -1,5 +1,4 @@
-from duckdb._c_api.libduckdb import _impl
-from duckdb._c_api.c_api import *
+from duckdb._libduckdb import *
 from duckdb.logical_type import *
 from duckdb.duckdb_value import *
 from collections import Optional
@@ -7,28 +6,34 @@ from collections import Optional
 from sys.intrinsics import _type_is_eq
 
 
-struct Vector:
+struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
+    var _chunk: Pointer[Chunk, origin] # keep a reference to the originating chunk to avoid premature destruction
     var _vector: duckdb_vector
     var length: UInt64
 
     fn __init__(
-        mut self,
+        out self,
+        chunk: Pointer[Chunk, origin],
         vector: duckdb_vector,
         length: UInt64,
     ):
         self._vector = vector
         self.length = length
+        self._chunk = chunk
 
     fn get_column_type(self) -> LogicalType:
-        return LogicalType(_impl().duckdb_vector_get_column_type(self._vector))
+        ref libduckdb = DuckDB().libduckdb()
+        return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
 
     fn _get_data(self) -> UnsafePointer[NoneType]:
-        return _impl().duckdb_vector_get_data(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_get_data(self._vector)
 
     fn _get_validity_mask(self) -> UnsafePointer[UInt64]:
-        return _impl().duckdb_vector_get_validity(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_get_validity(self._vector)
 
-    fn list_get_child(self) -> Vector:
+    fn list_get_child(self) -> Vector[origin]:
         """Retrieves the child vector of a list vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -36,9 +41,11 @@ struct Vector:
         * vector: The vector
         * returns: The child vector
         """
+        ref libduckdb = DuckDB().libduckdb()
         return Vector(
-            _impl().duckdb_list_vector_get_child(self._vector),
-            _impl().duckdb_list_vector_get_size(self._vector),
+            self._chunk,
+            libduckdb.duckdb_list_vector_get_child(self._vector),
+            libduckdb.duckdb_list_vector_get_size(self._vector),
         )
 
     fn list_get_size(self) -> idx_t:
@@ -47,7 +54,8 @@ struct Vector:
         * vector: The vector
         * returns: The size of the child list
         """
-        return _impl().duckdb_list_vector_get_size(self._vector)
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_list_vector_get_size(self._vector)
 
     fn _check_type(self, db_type: LogicalType) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
@@ -58,7 +66,7 @@ struct Vector:
             )
 
     fn get[
-        T: CollectionElement, //
+        T: Copyable & Movable, //
     ](self, expected_type: Col[T]) raises -> List[Optional[T]]:
         """Convert the data from this vector into native Mojo data structures.
         """
@@ -88,7 +96,7 @@ struct Vector:
         # Columns are essentially lists so we can use the same logic for getting the values.
         var result = DuckDBList[expected_type.Builder](
             self, length=Int(self.length), offset=0
-        ).value
+        )
         # The way we are building our Mojo representation of the data currently via the DuckDBValue
         # trait, with different __init__ implementations depending on the concrete type, means
         # that the types don't match.
@@ -97,7 +105,5 @@ struct Vector:
         # 1. We have ensured that the runtime type matches the expected type through _check_type
         # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
-        var converted_result = UnsafePointer.address_of(result).bitcast[
-            List[Optional[T]]
-        ]()[]
-        return converted_result
+        return rebind[List[Optional[T]]](result^)
+        

@@ -87,7 +87,7 @@ def test_list():
     assert_equal(len(lists), 2)
 
     for row_idx in range(2):
-        var l = lists[row_idx].value()
+        ref l = lists[row_idx].value()
         assert_equal(len(l), 3)
         for list_idx in range(3):
             var list_value = l[list_idx].value()
@@ -96,7 +96,7 @@ def test_list():
     # A list with nulls
     result = con.execute("SELECT [1, null, 3]")
     chunk = result.fetch_chunk()
-    list_with_nulls = chunk.get(list(integer), col=0)[0].value()
+    ref list_with_nulls = chunk.get(list(integer), col=0)[0].value()
     assert_equal(len(list_with_nulls), 3)
 
     assert_equal(list_with_nulls[0].value(), 1)
@@ -116,9 +116,9 @@ def test_list():
     assert_equal(len(nested_lists[1].value()[0].value()), 2)
 
     for row_idx in range(len(nested_lists)):
-        sublists = nested_lists[row_idx].value()
+        ref sublists = nested_lists[row_idx].value()
         for list_idx in range(len(sublists)):
-            sublist = sublists[list_idx].value()
+            ref sublist = sublists[list_idx].value()
             assert_equal(len(sublist), 2)
             for elem_idx in range(len(sublist)):
                 list_value = sublist[elem_idx].value()
@@ -137,6 +137,9 @@ def test_list():
     assert_equal(string_lists[0].value()[0].value(), "a")
     assert_equal(string_lists[0].value()[1].value(), "b")
 
+    print(string_lists[1].value()[0].value())
+
+
     assert_equal(
         string_lists[1].value()[0].value(),
         "cdefghijklmnopqrstuvwxyz",
@@ -154,7 +157,7 @@ def test_null():
     chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)
 
-    var first_row_as_list = chunk.get(list(integer), col=0)[0].value()
+    ref first_row_as_list = chunk.get(list(integer), col=0)[0].value()
     assert_true(first_row_as_list[0])
     assert_false(first_row_as_list[1])
     assert_true(first_row_as_list[2])

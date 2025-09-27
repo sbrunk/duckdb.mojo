@@ -1,36 +1,40 @@
-from duckdb._c_api.c_api import *
-from duckdb._c_api.libduckdb import _impl
+from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
 from collections import Optional
 
 
-struct Chunk(Movable):
+struct Chunk(Movable & Sized):
     """Represents a DuckDB data chunk."""
 
     var _chunk: duckdb_data_chunk
 
-    fn __init__(mut self, chunk: duckdb_data_chunk):
+    fn __init__(out self, chunk: duckdb_data_chunk):
         self._chunk = chunk
 
-    fn __del__(owned self):
-        _impl().duckdb_destroy_data_chunk(UnsafePointer.address_of(self._chunk))
+    fn __del__(deinit self):
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
-    fn __moveinit__(mut self, owned existing: Self):
+    fn __moveinit__(out self, deinit existing: Self):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
-        return Int(_impl().duckdb_data_chunk_get_size(self._chunk))
+        ref libduckdb = DuckDB().libduckdb()
+        return Int(libduckdb.duckdb_data_chunk_get_size(self._chunk))
 
-    fn _get_vector(self, col: Int) -> Vector:
+    fn _get_vector(self, col: Int) -> Vector[__origin_of(self)]:
+        ref libduckdb = DuckDB().libduckdb()
         return Vector(
-            _impl().duckdb_data_chunk_get_vector(self._chunk, col),
+            Pointer(to=self),
+            libduckdb.duckdb_data_chunk_get_vector(self._chunk, col),
             length=len(self),
         )
 
     @always_inline
     fn _check_bounds(self, col: Int) raises:
-        if UInt64(col) >= _impl().duckdb_data_chunk_get_column_count(
+        ref libduckdb = DuckDB().libduckdb()
+        if UInt64(col) >= libduckdb.duckdb_data_chunk_get_column_count(
             self._chunk
         ):
             raise Error(String("Column {} out of bounds.").format(col))
@@ -47,8 +51,7 @@ struct Chunk(Movable):
 
     fn is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
-        var vector = self._get_vector(col)
-        var validity_mask = vector._get_validity_mask()
+        var validity_mask = self._get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -58,8 +61,7 @@ struct Chunk(Movable):
 
     fn is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""
-        var vector = self._get_vector(col)
-        var validity_mask = vector._get_validity_mask()
+        var validity_mask = self._get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -70,16 +72,16 @@ struct Chunk(Movable):
         return not is_valid
 
     fn get[
-        T: CollectionElement, //
+        T: Copyable & Movable, //
     ](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
         self._check_bounds(col, row)
         if self.is_null(col=col, row=row):
-            return NoneType()
+            return None
         # TODO optimize single row access
         return self._get_vector(col).get(type)[row]
 
     fn get[
-        T: CollectionElement, //
+        T: Copyable & Movable, //
     ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         self._check_bounds(col)
         if self.is_null(col=col):
@@ -93,25 +95,27 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
     var _result: Pointer[Result, lifetime]
     var _next_chunk: duckdb_data_chunk
 
-    fn __init__(mut self, ref [lifetime]result: Result) raises:
-        self._result = Pointer.address_of(result)
-        self._next_chunk = _impl().duckdb_fetch_chunk(self._result[]._result)
+    fn __init__(out self, ref [lifetime]result: Result) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        self._result = Pointer(to=result)
+        self._next_chunk = libduckdb.duckdb_fetch_chunk(self._result[]._result)
 
-    fn __del__(owned self):
+    fn __del__(deinit self):
         if self._next_chunk:
             _ = Chunk(self._next_chunk)
 
-    fn __moveinit__(mut self, owned existing: Self):
+    fn __moveinit__(out self, deinit existing: Self):
         self._result = existing._result
         self._next_chunk = existing._next_chunk
 
-    fn __iter__(owned self) -> Self:
+    fn __iter__(var self) -> Self:
         return self^
 
     fn __next__(mut self) raises -> Chunk:
         if self._next_chunk:
             var current = self._next_chunk
-            var next = _impl().duckdb_fetch_chunk(self._result[]._result)
+            ref libduckdb = DuckDB().libduckdb()
+            var next = libduckdb.duckdb_fetch_chunk(self._result[]._result)
             self._next_chunk = next
             return Chunk(current)
         else:
@@ -129,7 +133,7 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 #     var result: Result
 #     var index: Int
 
-#     fn __init__(mut self, result: Result):
+#     fn __init__(out self, result: Result):
 #         self.index = 0
 #         self.result = result
 
@@ -139,6 +143,6 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
 #     # fn __len__(self) -> Int:
 #     #     return Int(self.result.rows - self.index)  # TODO could overflow
 
-#     fn __next__(mut self) -> String:
+#     fn __next__(out self) -> String:
 #         self.index += 1
 #         return String(self.index)
