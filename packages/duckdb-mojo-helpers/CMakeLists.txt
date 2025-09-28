@@ -42,9 +42,7 @@ set_target_properties(duckdb_mojo_helpers PROPERTIES
 install(TARGETS duckdb_mojo_helpers
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
 )
 install(TARGETS duckdb_mojo_helpers
     LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
 )
