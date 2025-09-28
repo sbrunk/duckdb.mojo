@@ -60,6 +60,10 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/tzdata-2025b-h78e105d_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/zeromq-4.3.5-h387f397_9.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhd8ed1ab_0.conda
+      - conda: .
+        subdir: linux-64
+      - conda: packages/duckdb-mojo-helpers
+        subdir: linux-64
       osx-arm64:
       - conda: https://prefix.dev/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_8.conda
@@ -106,6 +110,10 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/tzdata-2025b-h78e105d_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/zeromq-4.3.5-h888dc83_9.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhd8ed1ab_0.conda
+      - conda: .
+        subdir: osx-arm64
+      - conda: packages/duckdb-mojo-helpers
+        subdir: osx-arm64
 packages:
 - conda: https://prefix.dev/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
   sha256: fe51de6107f9edc7aa4f786a70f4a883943bc9d39b3bb7307c04c41410990726
@@ -183,6 +191,45 @@ packages:
   license: Python-2.0
   size: 48174
   timestamp: 1756909387263
+- conda: packages/duckdb-mojo-helpers
+  name: duckdb-mojo-helpers
+  version: 0.0.1
+  build: hbf21a9e_0
+  subdir: linux-64
+  depends:
+  - libstdcxx >=15
+  - libgcc >=15
+  - libduckdb >=1.3.2,<1.3.3.0a0
+  input:
+    hash: c48ae04baf317bdfe10570a6f31175d0527d6d4f36aa923a43f5630e75222c11
+    globs: []
+- conda: packages/duckdb-mojo-helpers
+  name: duckdb-mojo-helpers
+  version: 0.0.1
+  build: hbf21a9e_0
+  subdir: osx-arm64
+  depends:
+  - libcxx >=21
+  - libduckdb >=1.3.2,<1.3.3.0a0
+  input:
+    hash: c48ae04baf317bdfe10570a6f31175d0527d6d4f36aa923a43f5630e75222c11
+    globs: []
+- conda: .
+  name: duckdb.mojo
+  version: 0.0.1
+  build: hbf21a9e_0
+  subdir: linux-64
+  input:
+    hash: 7e65daceea3b785715766bf99aa83eca6850901ec4cc4d7ade14ce0fde36f666
+    globs: []
+- conda: .
+  name: duckdb.mojo
+  version: 0.0.1
+  build: hbf21a9e_0
+  subdir: osx-arm64
+  input:
+    hash: 7e65daceea3b785715766bf99aa83eca6850901ec4cc4d7ade14ce0fde36f666
+    globs: []
 - conda: https://prefix.dev/conda-forge/linux-64/icu-75.1-he02047a_0.conda
   sha256: 71e750d509f5fa3421087ba88ef9a7b9be11c53174af3aa4d06aff4c18b38e8e
   md5: 8b189310083baabfb622af68fd9d3ae3

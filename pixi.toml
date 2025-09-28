@@ -40,6 +40,9 @@ test = { cmd = "mojo test" }
 # [target.osx.tasks]
 # build-helpers = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.dylib"
 
+# for local development
 [dependencies]
 libduckdb = "=1.3"
 mojo = "=0.25.6"
+duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
+"duckdb.mojo" = { path = "." }
