@@ -38,9 +38,9 @@ LIMIT 3;
 ).fetch_all()
 
 for col in result.columns():
-    print(col[])
+    print(col)
 
-print()
+print("Length: " + String(len(result)))
 
 for row in range(len(result)):
     print(
