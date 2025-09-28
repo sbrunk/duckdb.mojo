@@ -3,7 +3,7 @@ authors = ["Sören Brunk <soeren@brunk.io>"]
 channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
-platforms = ["osx-arm64", "linux-64"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 preview = ["pixi-build"]
 
 [package]
@@ -13,10 +13,12 @@ version = "0.0.1"
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
 mojo-compiler = "=0.25.6"
-duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 
 [package.build-dependencies]
 mojo-compiler = "=0.25.6"
+
+[package.run-dependencies]
+duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 
 [package.build.backend]
 name = "pixi-build-mojo"
