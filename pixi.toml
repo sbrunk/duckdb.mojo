@@ -18,7 +18,6 @@ duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 [package.build-dependencies]
 mojo-compiler = "=0.25.6"
 
-[package.build]
 [package.build.backend]
 name = "pixi-build-mojo"
 version = "0.1.*"
@@ -31,14 +30,8 @@ channels = [
 name = "duckdb"
 
 [tasks]
-build = "pixi run mojo package duckdb -o duckdb.mojopkg"
+build = "pixi run mojo package src -o duckdb.mojopkg"
 test = { cmd = "mojo test" }
-
-# # Build the helper C shim that wraps struct-by-value functions for Mojo.
-# [target.linux.tasks]
-# build-helpers = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.so"
-# [target.osx.tasks]
-# build-helpers = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.dylib"
 
 # for local development
 [dependencies]
