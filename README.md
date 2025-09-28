@@ -38,9 +38,9 @@ LIMIT 3;
 ).fetch_all()
 
 for col in result.columns():
-    print(col[])
+    print(col)
 
-print()
+print("Length: " + String(len(result)))
 
 for row in range(len(result)):
     print(
@@ -54,13 +54,19 @@ for row in range(len(result)):
 
 Currently, you'll need to checkout the source. We'll publish a Conda package soon to make it easier to use from another Mojo project.
 
-1. [Install the Magic package manager for Mojo](https://docs.modular.com/mojo/manual/get-started#1-install-mojo).
+1. [Install Pixi](https://pixi.sh/latest/installation/).
 2. Checkout this repo
-3. Run `magic shell`
+3. Run `pixi shell`
 4. Run `mojo example.mojo`
 
 ### Run Tests
 
 ```shell
-magic run test
+pixi run test
+```
+
+### Build a conda package
+
+```shell
+pixi build
 ```
