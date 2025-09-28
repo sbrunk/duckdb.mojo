@@ -37,7 +37,7 @@ test = { cmd = "mojo test" }
 
 # for local development
 [dependencies]
-libduckdb = "=1.3"
+libduckdb-devel = "=1.3"
 mojo = "=0.25.6"
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 "duckdb.mojo" = { path = "." }
