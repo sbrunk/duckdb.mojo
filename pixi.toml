@@ -1,18 +1,45 @@
-[project]
+[workspace]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["conda-forge", "https://conda.modular.com/max/"]
+channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64"]
-version = "0.1.0"
+preview = ["pixi-build"]
+
+[package]
+name = "duckdb.mojo"
+version = "0.0.1"
+
+# see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
+[package.host-dependencies]
+mojo-compiler = "=0.25.6"
+duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
+
+[package.build-dependencies]
+mojo-compiler = "=0.25.6"
+
+[package.build]
+[package.build.backend]
+name = "pixi-build-mojo"
+version = "0.1.*"
+channels = [
+    "https://prefix.dev/pixi-build-backends",
+    "https://prefix.dev/conda-forge",
+]
+
+[package.build.config.pkg]
+name = "duckdb"
 
 [tasks]
-#test = { cmd = "mojo test -I $PIXI_PROJECT_ROOT", env = { DYLD_LIBRARY_PATH = "$CONDA_PREFIX/lib", LD_LIBRARY_PATH = "$CONDA_PREFIX/lib" }, cwd = "test" }
-test = "mojo test"
-# Build the helper C shim that wraps struct-by-value functions for Mojo.
-build-helpers-macos = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.dylib"
-build-helpers-linux = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.so"
+build = "pixi run mojo package duckdb -o duckdb.mojopkg"
+test = { cmd = "mojo test" }
+
+# # Build the helper C shim that wraps struct-by-value functions for Mojo.
+# [target.linux.tasks]
+# build-helpers = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.so"
+# [target.osx.tasks]
+# build-helpers = "cc -shared -fPIC duckdb_mojo_helpers.c -I$CONDA_PREFIX/include -L$CONDA_PREFIX/lib -lduckdb -o libduckdb_mojo_helpers.dylib"
 
 [dependencies]
-libduckdb = ">=1.3.2,<2"
-mojo = ">=0.25.6.0,<1.0.0"
+libduckdb = "=1.3"
+mojo = "=0.25.6"

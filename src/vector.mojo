@@ -105,5 +105,5 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         # 1. We have ensured that the runtime type matches the expected type through _check_type
         # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
-        return rebind[List[Optional[T]]](result^)
+        return rebind[List[Optional[T]]](result)
         
