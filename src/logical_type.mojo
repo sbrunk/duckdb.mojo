@@ -1,7 +1,7 @@
 from duckdb._libduckdb import *
 
 
-struct LogicalType(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Stringable):
+struct LogicalType(ImplicitlyCopyable & Movable & Equatable & Writable & Stringable):
     """Represents a potentially nested DuckDB type."""
 
     var _logical_type: duckdb_logical_type

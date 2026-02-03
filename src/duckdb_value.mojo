@@ -10,10 +10,10 @@ trait DuckDBValue(Copyable & Movable & Stringable):
     Implementations are thin wrappers around native Mojo types
     but implement a type specific __init__ method to convert from a DuckDB vector.
     """
-    alias Type: DuckDBType
+    comptime Type: DuckDBType
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
-        pass
+        ...
 
 trait DuckDBKeyElement(DuckDBValue, KeyElement):
     pass
@@ -22,7 +22,7 @@ trait DuckDBKeyElement(DuckDBValue, KeyElement):
 @fieldwise_init
 @register_passable("trivial")
 struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable):
-    alias Type = duckdb_type
+    comptime Type = Self.duckdb_type
 
     var value: Scalar[Self.Type.to_dtype()]
 
@@ -39,32 +39,32 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable):
         return self.value != other.value
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
-        if vector.get_column_type().get_type_id() != duckdb_type:
-            raise "Expected type " + String(duckdb_type) + " but got " + String(
+        if vector.get_column_type().get_type_id() != Self.duckdb_type:
+            raise "Expected type " + String(Self.duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
             )
 
         self = vector._get_data().bitcast[Self]()[offset=offset]
 
-alias BoolVal = DTypeValue[DuckDBType.boolean]
-alias Int8Val = DTypeValue[DuckDBType.tinyint]
-alias Int16Val = DTypeValue[DuckDBType.smallint]
-alias Int32Val = DTypeValue[DuckDBType.integer]
-alias Int64Val = DTypeValue[DuckDBType.bigint]
-alias UInt8Val = DTypeValue[DuckDBType.utinyint]
-alias UInt16Val = DTypeValue[DuckDBType.usmallint]
-alias UInt32Val = DTypeValue[DuckDBType.uinteger]
-alias UInt64Val = DTypeValue[DuckDBType.ubigint]
-alias Float32Val = DTypeValue[DuckDBType.float]
-alias Float64Val = DTypeValue[DuckDBType.double]
+comptime BoolVal = DTypeValue[DuckDBType.boolean]
+comptime Int8Val = DTypeValue[DuckDBType.tinyint]
+comptime Int16Val = DTypeValue[DuckDBType.smallint]
+comptime Int32Val = DTypeValue[DuckDBType.integer]
+comptime Int64Val = DTypeValue[DuckDBType.bigint]
+comptime UInt8Val = DTypeValue[DuckDBType.utinyint]
+comptime UInt16Val = DTypeValue[DuckDBType.usmallint]
+comptime UInt32Val = DTypeValue[DuckDBType.uinteger]
+comptime UInt64Val = DTypeValue[DuckDBType.ubigint]
+comptime Float32Val = DTypeValue[DuckDBType.float]
+comptime Float64Val = DTypeValue[DuckDBType.double]
 
 
 @fieldwise_init
 struct FixedSizeValue[
     duckdb_type: DuckDBType, underlying: Stringable & Writable & ImplicitlyCopyable & Movable
 ](DuckDBValue & ImplicitlyCopyable):
-    alias Type = duckdb_type
-    var value: underlying
+    comptime Type = Self.duckdb_type
+    var value: Self.underlying
 
     fn write_to[W: Writer](self, mut writer: W):
         self.value.write_to(writer)
@@ -82,8 +82,8 @@ struct FixedSizeValue[
     #     return self.value != other.value
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
-        if vector.get_column_type().get_type_id() != duckdb_type:
-            raise "Expected type " + String(duckdb_type) + " but got " + String(
+        if vector.get_column_type().get_type_id() != Self.duckdb_type:
+            raise "Expected type " + String(Self.duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
             )
 
@@ -92,15 +92,15 @@ struct FixedSizeValue[
     fn __copyinit__(out self, other: Self):
         self.value = other.value
 
-alias DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
-alias DuckDBDate = FixedSizeValue[DuckDBType.date, Date]
-alias DuckDBTime = FixedSizeValue[DuckDBType.time, Time]
-alias DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
+comptime DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
+comptime DuckDBDate = FixedSizeValue[DuckDBType.date, Date]
+comptime DuckDBTime = FixedSizeValue[DuckDBType.time, Time]
+comptime DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 
 
 @fieldwise_init
 struct DuckDBString(DuckDBValue):
-    alias Type = DuckDBType.varchar
+    comptime Type = DuckDBType.varchar
     var value: String
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
@@ -110,7 +110,7 @@ struct DuckDBString(DuckDBValue):
             ) + " but got " + String(vector.get_column_type().get_type_id())
         var data_str_ptr = vector._get_data().bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
-        var string_length = UInt(Int(data_str_ptr[offset].length))
+        var string_length = Int(data_str_ptr[offset].length)
         # TODO use duckdb_string_is_inlined helper instead
         if data_str_ptr[offset].length <= 12:
             var data_str_inlined = data_str_ptr.bitcast[
@@ -131,10 +131,10 @@ struct DuckDBString(DuckDBValue):
 @fieldwise_init
 struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
     """A DuckDB list."""
-    alias Type = DuckDBType.list
+    comptime Type = DuckDBType.list
 
-    alias expected_element_type = T.Type
-    var value: List[Optional[T]]
+    comptime expected_element_type = Self.T.Type
+    var value: List[Optional[Self.T]]
 
     fn __str__(self) -> String:
         return "DuckDBList"  # TODO
@@ -145,9 +145,9 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
             raise "Expected type " + String(
                 Self.expected_element_type
             ) + " but got " + String(runtime_element_type)
-        self.value = List[Optional[T]](capacity=length)
+        self.value = List[Optional[Self.T]](capacity=length)
 
-        var data_ptr = vector._get_data().bitcast[T]()
+        var data_ptr = vector._get_data().bitcast[Self.T]()
         var validity_mask = vector._get_validity_mask()
 
         # TODO factor out the validity mask check into a higher-order function to avoid repetition
@@ -175,7 +175,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
             # validity mask can be null if there are no NULL values
             if not validity_mask:
                 for idx in range(length):
-                    self.value.append(Optional(T(vector, length=1, offset=offset + idx)))
+                    self.value.append(Optional(Self.T(vector, length=1, offset=offset + idx)))
             else:  # otherwise we have to check the validity mask for each element
                 for idx in range(length):
                     var entry_idx = idx // 64
@@ -184,7 +184,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                         1 << idx_in_entry
                     )
                     if is_valid:
-                        self.value.append(Optional(T(vector, length=1, offset=offset + idx)))
+                        self.value.append(Optional(Self.T(vector, length=1, offset=offset + idx)))
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.list:
@@ -202,7 +202,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                     var list_entry = data_ptr[offset + idx]
                     self.value.append(
                         Optional(
-                            T(
+                            Self.T(
                                 child_vector,
                                 length=Int(list_entry.length),
                                 offset=Int(list_entry.offset),
@@ -220,7 +220,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                         var list_entry = data_ptr[offset + idx]
                         self.value.append(
                             Optional(
-                                T(
+                                Self.T(
                                     child_vector,
                                     length=Int(list_entry.length),
                                     offset=Int(list_entry.offset),
@@ -236,7 +236,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
 
 # @fieldwise_init
 # struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
-#     alias Type = DuckDBType.map
+#     comptime Type = DuckDBType.map
 #     var value: Dict[K, V]
 
 #     fn __str__(self) -> String:

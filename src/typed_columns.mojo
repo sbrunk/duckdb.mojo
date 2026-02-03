@@ -23,24 +23,24 @@ struct Col[T: Copyable & Movable, Builder: DuckDBValue](ImplicitlyCopyable & Mov
         return LogicalType(self._type[DuckDBType])
 
 
-alias boolean = Col[Bool, BoolVal](DuckDBType.boolean)
-alias tinyint = Col[Int8, Int8Val](DuckDBType.tinyint)
-alias smallint = Col[Int16, Int16Val](DuckDBType.smallint)
-alias integer = Col[Int32, Int32Val](DuckDBType.integer)
-alias bigint = Col[Int64, Int64Val](DuckDBType.bigint)
-alias utinyint = Col[UInt8, UInt8Val](DuckDBType.utinyint)
-alias usmallint = Col[UInt16, UInt16Val](DuckDBType.usmallint)
-alias uinteger = Col[UInt32, UInt32Val](DuckDBType.uinteger)
-alias ubigint = Col[UInt64, UInt64Val](DuckDBType.ubigint)
-alias float_ = Col[Float32, Float32Val](DuckDBType.float)
+comptime boolean = Col[Bool, BoolVal](DuckDBType.boolean)
+comptime tinyint = Col[Int8, Int8Val](DuckDBType.tinyint)
+comptime smallint = Col[Int16, Int16Val](DuckDBType.smallint)
+comptime integer = Col[Int32, Int32Val](DuckDBType.integer)
+comptime bigint = Col[Int64, Int64Val](DuckDBType.bigint)
+comptime utinyint = Col[UInt8, UInt8Val](DuckDBType.utinyint)
+comptime usmallint = Col[UInt16, UInt16Val](DuckDBType.usmallint)
+comptime uinteger = Col[UInt32, UInt32Val](DuckDBType.uinteger)
+comptime ubigint = Col[UInt64, UInt64Val](DuckDBType.ubigint)
+comptime float_ = Col[Float32, Float32Val](DuckDBType.float)
 """A float32 column."""
-alias double = Col[Float64, Float64Val](DuckDBType.double)
+comptime double = Col[Float64, Float64Val](DuckDBType.double)
 """A float64 column."""
-alias timestamp = Col[Timestamp, DuckDBTimestamp](DuckDBType.timestamp)
-alias date = Col[Date, DuckDBDate](DuckDBType.date)
-alias time = Col[Time, DuckDBTime](DuckDBType.time)
-alias interval = Col[Interval, DuckDBInterval](DuckDBType.interval)
-alias varchar = Col[String, DuckDBString](DuckDBType.varchar)
+comptime timestamp = Col[Timestamp, DuckDBTimestamp](DuckDBType.timestamp)
+comptime date = Col[Date, DuckDBDate](DuckDBType.date)
+comptime time = Col[Time, DuckDBTime](DuckDBType.time)
+comptime interval = Col[Interval, DuckDBInterval](DuckDBType.interval)
+comptime varchar = Col[String, DuckDBString](DuckDBType.varchar)
 """A String column."""
 
 
