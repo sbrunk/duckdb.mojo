@@ -8,14 +8,14 @@ def main():
     SET autoload_known_extensions=1;
 
     CREATE TABLE train_services AS
-    FROM 's3://duckdb-blobs/train_services.parquet';
+    FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
     """
     )
 
     var result = con.execute(
         """
     -- Get the top-3 busiest train stations
-    SELECT station_name, count(*) AS num_services
+    SELECT "Stop:Station name", count(*) AS num_services
     FROM train_services
     GROUP BY ALL
     ORDER BY num_services DESC
