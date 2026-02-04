@@ -1,5 +1,6 @@
 from duckdb import *
 from testing import assert_equal, assert_true
+from testing.suite import TestSuite
 
 
 def test_range():
@@ -23,3 +24,7 @@ def test_materialized_result():
     var obtained = result.get(bigint, col=0)
     for i in range(10):
         assert_equal(obtained[i].value(), i)
+
+
+def main():
+    TestSuite.discover_tests[__functions_in_module()]().run()

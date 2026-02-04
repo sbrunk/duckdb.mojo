@@ -1,5 +1,6 @@
 from duckdb import *
 from testing import assert_equal, assert_false, assert_raises, assert_true
+from testing.suite import TestSuite
 
 
 def test_types():
@@ -161,3 +162,7 @@ def test_null():
     assert_true(first_row_as_list[0])
     assert_false(first_row_as_list[1])
     assert_true(first_row_as_list[2])
+
+
+def main():
+    TestSuite.discover_tests[__functions_in_module()]().run()

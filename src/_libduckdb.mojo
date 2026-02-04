@@ -661,9 +661,6 @@ struct LibDuckDB(Movable):
             self._duckdb_fetch_chunk_ptr = _duckdb_fetch_chunk_ptr.load()
         except e:
             abort(String(e))
-            __mlir_op.`lit.ownership.mark_initialized`(
-                __get_mvalue_as_litref(self)
-            )
 
     fn __moveinit__(out self, deinit existing: Self):
         self._duckdb_open = existing._duckdb_open

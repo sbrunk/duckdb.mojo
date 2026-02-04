@@ -33,7 +33,7 @@ name = "duckdb"
 
 [tasks]
 build = "pixi run mojo package src -o duckdb.mojopkg"
-test = { cmd = "mojo test" }
+test = { cmd = "sh -c 'for f in test/test_*.mojo; do mojo run \"$f\" || exit 1; done'" }
 
 # for local development
 [dependencies]
