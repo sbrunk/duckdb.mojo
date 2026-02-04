@@ -1,13 +1,13 @@
-from sys.ffi import external_call, c_char
+from ffi import external_call, c_char
 from utils import StaticTuple
 from collections import InlineArray
 from duckdb.duckdb_type import *
 from sys.info import CompilationTarget
 from os import abort
 from pathlib import Path
-from sys.ffi import _find_dylib
-from sys.ffi import _get_dylib_function as _ffi_get_dylib_function
-from sys.ffi import _Global, OwnedDLHandle
+from ffi import _find_dylib
+from ffi import _get_dylib_function as _ffi_get_dylib_function
+from ffi import _Global, OwnedDLHandle
 
 # ===-----------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
@@ -333,6 +333,54 @@ comptime duckdb_scalar_function_t = fn (
     duckdb_function_info, duckdb_data_chunk, duckdb_vector
 ) -> NoneType
 
+# ===--------------------------------------------------------------------===#
+# Aggregate function types
+# ===--------------------------------------------------------------------===#
+
+#! An aggregate function. Must be destroyed with `duckdb_destroy_aggregate_function`.
+struct _duckdb_aggregate_function:
+    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+
+comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutAnyOrigin]
+
+#! A aggregate function set. Must be destroyed with `duckdb_destroy_aggregate_function_set`.
+struct _duckdb_aggregate_function_set:
+    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+
+comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutAnyOrigin]
+
+#! The state of an aggregate function.
+struct _duckdb_aggregate_state:
+    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+
+comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutAnyOrigin]
+
+#! A function to return the aggregate state's size.
+comptime duckdb_aggregate_state_size = fn (duckdb_function_info) -> idx_t
+
+#! A function to initialize an aggregate state.
+comptime duckdb_aggregate_init_t = fn (duckdb_function_info, duckdb_aggregate_state) -> NoneType
+
+#! An optional function to destroy an aggregate state.
+comptime duckdb_aggregate_destroy_t = fn (UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], idx_t) -> NoneType
+
+#! A function to update a set of aggregate states with new values.
+comptime duckdb_aggregate_update_t = fn (
+    duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin]
+) -> NoneType
+
+#! A function to combine aggregate states.
+comptime duckdb_aggregate_combine_t = fn (
+    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], 
+    UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], idx_t
+) -> NoneType
+
+#! A function to finalize aggregate states into a result vector.
+comptime duckdb_aggregate_finalize_t = fn (
+    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], 
+    duckdb_vector, idx_t, idx_t
+) -> NoneType
+
 
 @fieldwise_init
 struct duckdb_result(ImplicitlyCopyable & Movable):
@@ -557,6 +605,16 @@ struct LibDuckDB(Movable):
     var _duckdb_destroy_scalar_function_set: _duckdb_destroy_scalar_function_set.fn_type
     var _duckdb_add_scalar_function_to_set: _duckdb_add_scalar_function_to_set.fn_type
     var _duckdb_register_scalar_function_set: _duckdb_register_scalar_function_set.fn_type
+    var _duckdb_create_aggregate_function: _duckdb_create_aggregate_function.fn_type
+    var _duckdb_destroy_aggregate_function: _duckdb_destroy_aggregate_function.fn_type
+    var _duckdb_aggregate_function_set_name: _duckdb_aggregate_function_set_name.fn_type
+    var _duckdb_aggregate_function_add_parameter: _duckdb_aggregate_function_add_parameter.fn_type
+    var _duckdb_aggregate_function_set_return_type: _duckdb_aggregate_function_set_return_type.fn_type
+    var _duckdb_aggregate_function_set_functions: _duckdb_aggregate_function_set_functions.fn_type
+    var _duckdb_aggregate_function_set_destructor: _duckdb_aggregate_function_set_destructor.fn_type
+    var _duckdb_register_aggregate_function: _duckdb_register_aggregate_function.fn_type
+    var _duckdb_aggregate_function_get_extra_info: _duckdb_aggregate_function_get_extra_info.fn_type
+    var _duckdb_aggregate_function_set_error: _duckdb_aggregate_function_set_error.fn_type
     var _duckdb_create_logical_type: _duckdb_create_logical_type.fn_type
     var _duckdb_create_list_type: _duckdb_create_list_type.fn_type
     var _duckdb_create_array_type: _duckdb_create_array_type.fn_type
@@ -645,6 +703,16 @@ struct LibDuckDB(Movable):
             self._duckdb_destroy_scalar_function_set = _duckdb_destroy_scalar_function_set.load()
             self._duckdb_add_scalar_function_to_set = _duckdb_add_scalar_function_to_set.load()
             self._duckdb_register_scalar_function_set = _duckdb_register_scalar_function_set.load()
+            self._duckdb_create_aggregate_function = _duckdb_create_aggregate_function.load()
+            self._duckdb_destroy_aggregate_function = _duckdb_destroy_aggregate_function.load()
+            self._duckdb_aggregate_function_set_name = _duckdb_aggregate_function_set_name.load()
+            self._duckdb_aggregate_function_add_parameter = _duckdb_aggregate_function_add_parameter.load()
+            self._duckdb_aggregate_function_set_return_type = _duckdb_aggregate_function_set_return_type.load()
+            self._duckdb_aggregate_function_set_functions = _duckdb_aggregate_function_set_functions.load()
+            self._duckdb_aggregate_function_set_destructor = _duckdb_aggregate_function_set_destructor.load()
+            self._duckdb_register_aggregate_function = _duckdb_register_aggregate_function.load()
+            self._duckdb_aggregate_function_get_extra_info = _duckdb_aggregate_function_get_extra_info.load()
+            self._duckdb_aggregate_function_set_error = _duckdb_aggregate_function_set_error.load()
             self._duckdb_create_logical_type = _duckdb_create_logical_type.load()
             self._duckdb_create_list_type = _duckdb_create_list_type.load()
             self._duckdb_create_array_type = _duckdb_create_array_type.load()
@@ -732,6 +800,20 @@ struct LibDuckDB(Movable):
         self._duckdb_scalar_function_set_error = existing._duckdb_scalar_function_set_error
         self._duckdb_create_scalar_function_set = existing._duckdb_create_scalar_function_set
         self._duckdb_destroy_scalar_function_set = existing._duckdb_destroy_scalar_function_set
+        self._duckdb_add_scalar_function_to_set = existing._duckdb_add_scalar_function_to_set
+        self._duckdb_register_scalar_function_set = existing._duckdb_register_scalar_function_set
+        self._duckdb_create_aggregate_function = existing._duckdb_create_aggregate_function
+        self._duckdb_destroy_aggregate_function = existing._duckdb_destroy_aggregate_function
+        self._duckdb_aggregate_function_set_name = existing._duckdb_aggregate_function_set_name
+        self._duckdb_aggregate_function_add_parameter = existing._duckdb_aggregate_function_add_parameter
+        self._duckdb_aggregate_function_set_return_type = existing._duckdb_aggregate_function_set_return_type
+        self._duckdb_aggregate_function_set_functions = existing._duckdb_aggregate_function_set_functions
+        self._duckdb_aggregate_function_set_destructor = existing._duckdb_aggregate_function_set_destructor
+        self._duckdb_register_aggregate_function = existing._duckdb_register_aggregate_function
+        self._duckdb_aggregate_function_get_extra_info = existing._duckdb_aggregate_function_get_extra_info
+        self._duckdb_aggregate_function_set_error = existing._duckdb_aggregate_function_set_error
+        self._duckdb_create_logical_type = existing._duckdb_create_logical_type
+
         self._duckdb_add_scalar_function_to_set = existing._duckdb_add_scalar_function_to_set
         self._duckdb_register_scalar_function_set = existing._duckdb_register_scalar_function_set
         self._duckdb_create_logical_type = existing._duckdb_create_logical_type
@@ -1523,6 +1605,120 @@ struct LibDuckDB(Movable):
         return self._duckdb_register_scalar_function_set(con, set)
 
     # ===--------------------------------------------------------------------===#
+    # Aggregate Function Interface
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_create_aggregate_function(self) -> duckdb_aggregate_function:
+        """Creates a new empty aggregate function.
+        The return value should be destroyed with `duckdb_destroy_aggregate_function`.
+
+        * returns: The aggregate function object.
+        """
+        return self._duckdb_create_aggregate_function()
+
+    fn duckdb_destroy_aggregate_function(
+        self, aggregate_function: UnsafePointer[duckdb_aggregate_function, MutAnyOrigin]
+    ) -> NoneType:
+        """Destroys the given aggregate function object.
+
+        * aggregate_function: The aggregate function to destroy.
+        """
+        return self._duckdb_destroy_aggregate_function(aggregate_function)
+
+    fn duckdb_aggregate_function_set_name(
+        self, aggregate_function: duckdb_aggregate_function, name: UnsafePointer[c_char, ImmutAnyOrigin]
+    ) -> NoneType:
+        """Sets the name of the given aggregate function.
+
+        * aggregate_function: The aggregate function.
+        * name: The name of the aggregate function.
+        """
+        return self._duckdb_aggregate_function_set_name(aggregate_function, name)
+
+    fn duckdb_aggregate_function_add_parameter(
+        self, aggregate_function: duckdb_aggregate_function, type: duckdb_logical_type
+    ) -> NoneType:
+        """Adds a parameter to the aggregate function.
+
+        * aggregate_function: The aggregate function.
+        * type: The parameter type.
+        """
+        return self._duckdb_aggregate_function_add_parameter(aggregate_function, type)
+
+    fn duckdb_aggregate_function_set_return_type(
+        self, aggregate_function: duckdb_aggregate_function, type: duckdb_logical_type
+    ) -> NoneType:
+        """Sets the return type of the aggregate function.
+
+        * aggregate_function: The aggregate function.
+        * type: The return type.
+        """
+        return self._duckdb_aggregate_function_set_return_type(aggregate_function, type)
+
+    fn duckdb_aggregate_function_set_functions(
+        self, 
+        aggregate_function: duckdb_aggregate_function,
+        state_size: duckdb_aggregate_state_size,
+        state_init: duckdb_aggregate_init_t,
+        update: duckdb_aggregate_update_t,
+        combine: duckdb_aggregate_combine_t,
+        finalize: duckdb_aggregate_finalize_t
+    ) -> NoneType:
+        """Sets all callback functions for the aggregate function.
+
+        * aggregate_function: The aggregate function.
+        * state_size: Function returning size of state in bytes.
+        * state_init: State initialization function.
+        * update: Update function called for each row.
+        * combine: Combine function for parallel aggregation (optional, can be None).
+        * finalize: Finalize function to produce result.
+        """
+        return self._duckdb_aggregate_function_set_functions(
+            aggregate_function, state_size, state_init, update, combine, finalize
+        )
+
+    fn duckdb_aggregate_function_set_destructor(
+        self, aggregate_function: duckdb_aggregate_function, destroy: duckdb_aggregate_destroy_t
+    ) -> NoneType:
+        """Sets the state destructor callback of the aggregate function (optional).
+
+        * aggregate_function: The aggregate function.
+        * destroy: State destroy callback.
+        """
+        return self._duckdb_aggregate_function_set_destructor(aggregate_function, destroy)
+
+    fn duckdb_register_aggregate_function(
+        self, con: duckdb_connection, aggregate_function: duckdb_aggregate_function
+    ) -> duckdb_state:
+        """Register the aggregate function object within the given connection.
+
+        The function requires at minimum a name, a return type, and an update and finalize function.
+
+        * con: The connection to register it in.
+        * aggregate_function: The function to register.
+        * returns: Whether or not the registration was successful.
+        """
+        return self._duckdb_register_aggregate_function(con, aggregate_function)
+
+    fn duckdb_aggregate_function_get_extra_info(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+        """Retrieves the extra info of the function as set in `duckdb_aggregate_function_set_extra_info`.
+
+        * info: The info object.
+        * returns: The extra info.
+        """
+        return self._duckdb_aggregate_function_get_extra_info(info)
+
+    fn duckdb_aggregate_function_set_error(
+        self, info: duckdb_function_info, error: UnsafePointer[c_char, MutAnyOrigin]
+    ) -> NoneType:
+        """Report that an error has occurred while executing the aggregate function.
+
+        * info: The info object.
+        * error: The error message.
+        """
+        return self._duckdb_aggregate_function_set_error(info, error)
+
+    # ===--------------------------------------------------------------------===#
     # Logical Type Interface
     # ===--------------------------------------------------------------------===#
 
@@ -1983,6 +2179,57 @@ comptime _duckdb_add_scalar_function_to_set = _dylib_function["duckdb_add_scalar
 
 comptime _duckdb_register_scalar_function_set = _dylib_function["duckdb_register_scalar_function_set",
     fn (duckdb_connection, duckdb_scalar_function_set) -> duckdb_state
+]
+
+# ===--------------------------------------------------------------------===#
+# Aggregate Function Interface
+# ===--------------------------------------------------------------------===#
+
+comptime _duckdb_create_aggregate_function = _dylib_function["duckdb_create_aggregate_function",
+    fn () -> duckdb_aggregate_function
+]
+
+comptime _duckdb_destroy_aggregate_function = _dylib_function["duckdb_destroy_aggregate_function",
+    fn (UnsafePointer[duckdb_aggregate_function, MutAnyOrigin]) -> NoneType
+]
+
+comptime _duckdb_aggregate_function_set_name = _dylib_function["duckdb_aggregate_function_set_name",
+    fn (duckdb_aggregate_function, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+comptime _duckdb_aggregate_function_add_parameter = _dylib_function["duckdb_aggregate_function_add_parameter",
+    fn (duckdb_aggregate_function, duckdb_logical_type) -> NoneType
+]
+
+comptime _duckdb_aggregate_function_set_return_type = _dylib_function["duckdb_aggregate_function_set_return_type",
+    fn (duckdb_aggregate_function, duckdb_logical_type) -> NoneType
+]
+
+comptime _duckdb_aggregate_function_set_functions = _dylib_function["duckdb_aggregate_function_set_functions",
+    fn (
+        duckdb_aggregate_function,
+        duckdb_aggregate_state_size,
+        duckdb_aggregate_init_t,
+        duckdb_aggregate_update_t,
+        duckdb_aggregate_combine_t,
+        duckdb_aggregate_finalize_t
+    ) -> NoneType
+]
+
+comptime _duckdb_aggregate_function_set_destructor = _dylib_function["duckdb_aggregate_function_set_destructor",
+    fn (duckdb_aggregate_function, duckdb_aggregate_destroy_t) -> NoneType
+]
+
+comptime _duckdb_register_aggregate_function = _dylib_function["duckdb_register_aggregate_function",
+    fn (duckdb_connection, duckdb_aggregate_function) -> duckdb_state
+]
+
+comptime _duckdb_aggregate_function_get_extra_info = _dylib_function["duckdb_aggregate_function_get_extra_info",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]
+]
+
+comptime _duckdb_aggregate_function_set_error = _dylib_function["duckdb_aggregate_function_set_error",
+    fn (duckdb_function_info, UnsafePointer[c_char, MutAnyOrigin]) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#

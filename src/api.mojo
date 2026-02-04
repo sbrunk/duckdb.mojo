@@ -1,4 +1,4 @@
-from sys.ffi import _Global
+from ffi import _Global
 
 comptime _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
 
