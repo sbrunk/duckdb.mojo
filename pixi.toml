@@ -37,7 +37,7 @@ test = { cmd = "sh -c 'for f in test/test_*.mojo; do mojo run \"$f\" || exit 1; 
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.3"
+libduckdb-devel = "=1.4"
 mojo = "=0.26.2.0.dev2026020405"
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 "duckdb.mojo" = { path = "." }
