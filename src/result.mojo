@@ -98,7 +98,9 @@ struct MaterializedResult(Sized):
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk, MutAnyOrigin]]()
         self.size = 0
-        for chunk in self.result.chunk_iterator():
+        var iter = self.result.chunk_iterator()
+        while iter.__has_next__():
+            var chunk = iter.__next__()
             self.size += len(chunk)
             var chunk_ptr = alloc[Chunk](1)
             chunk_ptr.init_pointee_move(chunk^)
