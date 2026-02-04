@@ -39,13 +39,10 @@ struct Result(Writable, Stringable):
 
     fn column_name(self, col: Int) -> String:
         ref libduckdb = DuckDB().libduckdb()
-        return String(
-            StaticString(
-                unsafe_from_utf8_ptr=libduckdb.duckdb_column_name(
-                    UnsafePointer(to=self._result), col
-                )
-            )
+        var c_str = libduckdb.duckdb_column_name(
+            UnsafePointer(to=self._result), col
         )
+        return String(unsafe_from_utf8_ptr=c_str)
 
     fn column_types(self) -> List[LogicalType]:
         var types = List[LogicalType]()
@@ -75,7 +72,7 @@ struct Result(Writable, Stringable):
         ref libduckdb = DuckDB().libduckdb()
         return Chunk(libduckdb.duckdb_fetch_chunk(self._result))
 
-    fn chunk_iterator(self) raises -> _ChunkIter[__origin_of(self)]:
+    fn chunk_iterator(self) raises -> _ChunkIter[origin_of(self)]:
         return _ChunkIter(self)
 
     fn fetch_all(var self) raises -> MaterializedResult:
@@ -94,16 +91,18 @@ struct MaterializedResult(Sized):
     """A result with all rows fetched into memory."""
 
     var result: Result
-    var chunks: List[UnsafePointer[Chunk]]
-    var size: UInt
+    var chunks: List[UnsafePointer[Chunk, MutAnyOrigin]]
+    var size: Int
 
     fn __init__(out self, var result: Result) raises:
         self.result = result^
-        self.chunks = List[UnsafePointer[Chunk]]()
+        self.chunks = List[UnsafePointer[Chunk, MutAnyOrigin]]()
         self.size = 0
-        for chunk in self.result.chunk_iterator():
+        var iter = self.result.chunk_iterator()
+        while iter.__has_next__():
+            var chunk = iter.__next__()
             self.size += len(chunk)
-            var chunk_ptr = UnsafePointer[Chunk].alloc(1)
+            var chunk_ptr = alloc[Chunk](1)
             chunk_ptr.init_pointee_move(chunk^)
             self.chunks.append(chunk_ptr)
 
@@ -127,7 +126,7 @@ struct MaterializedResult(Sized):
 
     fn get[
         T: Copyable & Movable, //
-    ](self, type: Col[T], col: UInt) raises -> List[Optional[T]]:
+    ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         ref libduckdb = DuckDB().libduckdb()
         var result = List[Optional[T]](
             capacity=len(self.chunks) * Int(libduckdb.duckdb_vector_size())
@@ -138,7 +137,7 @@ struct MaterializedResult(Sized):
 
     fn get[
         T: Copyable & Movable, //
-    ](self, type: Col[T], col: UInt, row: UInt) raises -> Optional[T]:
+    ](self, type: Col[T], col: Int, row: Int) raises -> Optional[T]:
         ref libduckdb = DuckDB().libduckdb()
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")

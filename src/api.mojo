@@ -1,6 +1,6 @@
-from sys.ffi import _Global
+from ffi import _Global
 
-alias _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
+comptime _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
 
 fn _init_duckdb_global() -> _DuckDBGlobal:
     return _DuckDBGlobal()
@@ -20,8 +20,7 @@ fn _get_duckdb_interface() raises -> Pointer[LibDuckDB, StaticConstantOrigin]:
     """
 
     var ptr = _DUCKDB_GLOBAL.get_or_create_ptr()
-    var ptr2 = UnsafePointer(to=ptr[].libduckdb).origin_cast[
-        False, StaticConstantOrigin
+    var ptr2 = UnsafePointer(to=ptr[].libduckdb).as_immutable().unsafe_origin_cast[StaticConstantOrigin
     ]()
     return Pointer(to=ptr2[])
 
@@ -33,7 +32,7 @@ struct DuckDB(ImplicitlyCopyable):
         try:
             self._impl = _get_duckdb_interface()
         except e:
-            self._impl = abort[Pointer[LibDuckDB, StaticConstantOrigin]](String("Failed to load libduckdb", e))
+            abort(String("Failed to load libduckdb", e))
 
     @always_inline
     fn libduckdb(self) -> ref [StaticConstantOrigin] LibDuckDB:

@@ -7,7 +7,7 @@ name = "duckdb-mojo-helpers"
 version = "0.0.1"
 
 [dependencies] 
-libduckdb = "=1.3"
+libduckdb = "=1.4"
 
 [package] 
 name = "duckdb-mojo-helpers"
@@ -20,4 +20,4 @@ backend = { name = "pixi-build-cmake", version = "0.3.*" }
 extra-args = ["-DCMAKE_BUILD_TYPE=Release"] 
 
 [package.host-dependencies]
-libduckdb-devel = "=1.3"
+libduckdb-devel = "=1.4"

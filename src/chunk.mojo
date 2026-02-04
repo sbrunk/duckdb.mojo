@@ -23,7 +23,7 @@ struct Chunk(Movable & Sized):
         ref libduckdb = DuckDB().libduckdb()
         return Int(libduckdb.duckdb_data_chunk_get_size(self._chunk))
 
-    fn _get_vector(self, col: Int) -> Vector[__origin_of(self)]:
+    fn _get_vector(self, col: Int) -> Vector[origin_of(self)]:
         ref libduckdb = DuckDB().libduckdb()
         return Vector(
             Pointer(to=self),
@@ -85,17 +85,17 @@ struct Chunk(Movable & Sized):
     ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
         self._check_bounds(col)
         if self.is_null(col=col):
-            return List[Optional[T]](NoneType())
+            return [None]
         return self._get_vector(col).get(type)
 
     # TODO remaining types
 
 
-struct _ChunkIter[lifetime: ImmutableOrigin]:
-    var _result: Pointer[Result, lifetime]
+struct _ChunkIter[lifetime: ImmutOrigin]:
+    var _result: Pointer[Result, Self.lifetime]
     var _next_chunk: duckdb_data_chunk
 
-    fn __init__(out self, ref [lifetime]result: Result) raises:
+    fn __init__(out self, ref [Self.lifetime]result: Result) raises:
         ref libduckdb = DuckDB().libduckdb()
         self._result = Pointer(to=result)
         self._next_chunk = libduckdb.duckdb_fetch_chunk(self._result[]._result)
@@ -124,9 +124,9 @@ struct _ChunkIter[lifetime: ImmutableOrigin]:
     @always_inline
     fn __has_next__(self) -> Bool:
         if self._next_chunk:
-            return 1
+            return True
         else:
-            return 0
+            return False
 
 
 # struct ResultIterator:

@@ -10,80 +10,80 @@ struct DuckDBType(
     Hashable,
     Stringable,
     Writable,
-    EqualityComparable,
+    Equatable,
     KeyElement,
 ):
     """Represents DuckDB types."""
 
     var value: Int32
 
-    alias invalid = DuckDBType(DUCKDB_TYPE_INVALID)
+    comptime invalid = DuckDBType(DUCKDB_TYPE_INVALID)
     """invalid"""
-    alias boolean = DuckDBType(DUCKDB_TYPE_BOOLEAN)
+    comptime boolean = DuckDBType(DUCKDB_TYPE_BOOLEAN)
     """boolean"""
-    alias tinyint = DuckDBType(DUCKDB_TYPE_TINYINT)
+    comptime tinyint = DuckDBType(DUCKDB_TYPE_TINYINT)
     """int8"""
-    alias smallint = DuckDBType(DUCKDB_TYPE_SMALLINT)
+    comptime smallint = DuckDBType(DUCKDB_TYPE_SMALLINT)
     """int16"""
-    alias integer = DuckDBType(DUCKDB_TYPE_INTEGER)
+    comptime integer = DuckDBType(DUCKDB_TYPE_INTEGER)
     """int32"""
-    alias bigint = DuckDBType(DUCKDB_TYPE_BIGINT)
+    comptime bigint = DuckDBType(DUCKDB_TYPE_BIGINT)
     """int64"""
-    alias utinyint = DuckDBType(DUCKDB_TYPE_UTINYINT)
+    comptime utinyint = DuckDBType(DUCKDB_TYPE_UTINYINT)
     """uint8"""
-    alias usmallint = DuckDBType(DUCKDB_TYPE_USMALLINT)
+    comptime usmallint = DuckDBType(DUCKDB_TYPE_USMALLINT)
     """uint16"""
-    alias uinteger = DuckDBType(DUCKDB_TYPE_UINTEGER)
+    comptime uinteger = DuckDBType(DUCKDB_TYPE_UINTEGER)
     """uint32"""
-    alias ubigint = DuckDBType(DUCKDB_TYPE_UBIGINT)
+    comptime ubigint = DuckDBType(DUCKDB_TYPE_UBIGINT)
     """uint64"""
-    alias float = DuckDBType(DUCKDB_TYPE_FLOAT)
+    comptime float = DuckDBType(DUCKDB_TYPE_FLOAT)
     """float32"""
-    alias double = DuckDBType(DUCKDB_TYPE_DOUBLE)
+    comptime double = DuckDBType(DUCKDB_TYPE_DOUBLE)
     """float64"""
-    alias timestamp = DuckDBType(DUCKDB_TYPE_TIMESTAMP)
+    comptime timestamp = DuckDBType(DUCKDB_TYPE_TIMESTAMP)
     """duckdb_timestamp, in microseconds"""
-    alias date = DuckDBType(DUCKDB_TYPE_DATE)
+    comptime date = DuckDBType(DUCKDB_TYPE_DATE)
     """duckdb_date"""
-    alias time = DuckDBType(DUCKDB_TYPE_TIME)
+    comptime time = DuckDBType(DUCKDB_TYPE_TIME)
     """duckdb_time"""
-    alias interval = DuckDBType(DUCKDB_TYPE_INTERVAL)
+    comptime interval = DuckDBType(DUCKDB_TYPE_INTERVAL)
     """duckdb_interval"""
-    alias hugeint = DuckDBType(DUCKDB_TYPE_HUGEINT)
+    comptime hugeint = DuckDBType(DUCKDB_TYPE_HUGEINT)
     """duckdb_hugeint"""
-    alias uhugeint = DuckDBType(DUCKDB_TYPE_UHUGEINT)
+    comptime uhugeint = DuckDBType(DUCKDB_TYPE_UHUGEINT)
     """duckdb_uhugeint"""
-    alias varchar = DuckDBType(DUCKDB_TYPE_VARCHAR)
+    comptime varchar = DuckDBType(DUCKDB_TYPE_VARCHAR)
     """String"""
-    alias blob = DuckDBType(DUCKDB_TYPE_BLOB)
+    comptime blob = DuckDBType(DUCKDB_TYPE_BLOB)
     """duckdb_blob"""
-    alias decimal = DuckDBType(DUCKDB_TYPE_DECIMAL)
+    comptime decimal = DuckDBType(DUCKDB_TYPE_DECIMAL)
     """decimal"""
-    alias timestamp_s = DuckDBType(DUCKDB_TYPE_TIMESTAMP_S)
+    comptime timestamp_s = DuckDBType(DUCKDB_TYPE_TIMESTAMP_S)
     """duckdb_timestamp, in seconds"""
-    alias timestamp_ms = DuckDBType(DUCKDB_TYPE_TIMESTAMP_MS)
+    comptime timestamp_ms = DuckDBType(DUCKDB_TYPE_TIMESTAMP_MS)
     """duckdb_timestamp, in milliseconds"""
-    alias timestamp_ns = DuckDBType(DUCKDB_TYPE_TIMESTAMP_NS)
+    comptime timestamp_ns = DuckDBType(DUCKDB_TYPE_TIMESTAMP_NS)
     """duckdb_timestamp, in nanoseconds"""
-    alias enum = DuckDBType(DUCKDB_TYPE_ENUM)
+    comptime enum = DuckDBType(DUCKDB_TYPE_ENUM)
     """enum type, only useful as logical type"""
-    alias list = DuckDBType(DUCKDB_TYPE_LIST)
+    comptime list = DuckDBType(DUCKDB_TYPE_LIST)
     """list type, only useful as logical type"""
-    alias struct_t = DuckDBType(DUCKDB_TYPE_STRUCT)
+    comptime struct_t = DuckDBType(DUCKDB_TYPE_STRUCT)
     """struct type, only useful as logical type"""
-    alias map = DuckDBType(DUCKDB_TYPE_MAP)
+    comptime map = DuckDBType(DUCKDB_TYPE_MAP)
     """map type, only useful as logical type"""
-    alias array = DuckDBType(DUCKDB_TYPE_ARRAY)
+    comptime array = DuckDBType(DUCKDB_TYPE_ARRAY)
     """duckdb_array, only useful as logical type"""
-    alias uuid = DuckDBType(DUCKDB_TYPE_UUID)
+    comptime uuid = DuckDBType(DUCKDB_TYPE_UUID)
     """duckdb_hugeint"""
-    alias union = DuckDBType(DUCKDB_TYPE_UNION)
+    comptime union = DuckDBType(DUCKDB_TYPE_UNION)
     """union type, only useful as logical type"""
-    alias bit = DuckDBType(DUCKDB_TYPE_BIT)
+    comptime bit = DuckDBType(DUCKDB_TYPE_BIT)
     """duckdb_bit"""
-    alias time_tz = DuckDBType(DUCKDB_TYPE_TIME_TZ)
+    comptime time_tz = DuckDBType(DUCKDB_TYPE_TIME_TZ)
     """duckdb_time_tz"""
-    alias timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
+    comptime timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
     """duckdb_timestamp"""
 
     # fn __init__(out self, value: LogicalType):
@@ -279,7 +279,7 @@ struct DuckDBType(
 
 
 @fieldwise_init
-struct Date(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Representable & Stringable):
+struct Date(ImplicitlyCopyable & Movable & Equatable & Writable & Representable & Stringable):
     """Days are stored as days since 1970-01-01.
 
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
@@ -317,7 +317,7 @@ struct Date(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Repre
 
 
 @fieldwise_init
-struct Time(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Representable & Stringable):
+struct Time(ImplicitlyCopyable & Movable & Equatable & Writable & Representable & Stringable):
     """Time is stored as microseconds since 00:00:00.
 
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
@@ -362,7 +362,7 @@ struct Time(ImplicitlyCopyable & Movable & EqualityComparable & Writable & Repre
 
 
 @fieldwise_init
-struct Timestamp(EqualityComparable & Writable & ImplicitlyCopyable & Movable & Stringable & Representable):
+struct Timestamp(Equatable & Writable & ImplicitlyCopyable & Movable & Stringable & Representable):
     """Timestamps are stored as microseconds since 1970-01-01."""
 
     var micros: Int64

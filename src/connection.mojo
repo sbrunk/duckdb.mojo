@@ -2,7 +2,7 @@ from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
 
 # TODO separate opening and connecting but add convenient functions to keep it simple
-struct Connection:
+struct Connection(Movable):
     """A connection to a DuckDB database.
 
     Example:
@@ -17,16 +17,16 @@ struct Connection:
 
     fn __init__(out self, db_path: String) raises:
         ref libduckdb = DuckDB().libduckdb()
-        self._db = UnsafePointer[duckdb_database.type]()
+        self._db = UnsafePointer[duckdb_database.type, MutAnyOrigin]()
         var db_addr = UnsafePointer(to=self._db)
         var path = db_path.copy()
         if (
-            libduckdb.duckdb_open(path.unsafe_cstr_ptr(), db_addr)
+            libduckdb.duckdb_open(String.as_c_string_slice(path).unsafe_ptr(), db_addr)
         ) == DuckDBError:
             raise Error(
                 "Could not open database"
             )  ## TODO use duckdb_open_ext and return error message
-        self.__conn = UnsafePointer[duckdb_connection.type]()
+        self.__conn = UnsafePointer[duckdb_connection.type, MutAnyOrigin]()
         if (
             libduckdb.duckdb_connect(
                 self._db, UnsafePointer(to=self.__conn)
@@ -45,7 +45,7 @@ struct Connection:
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_query(self.__conn, _query.unsafe_cstr_ptr(), result_ptr) == DuckDBError
+            libduckdb.duckdb_query(self.__conn, String.as_c_string_slice(_query).unsafe_ptr(), result_ptr) == DuckDBError
         ):
             raise Error(libduckdb.duckdb_result_error(result_ptr))
         return Result(result)

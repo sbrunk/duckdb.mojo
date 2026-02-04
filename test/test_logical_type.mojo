@@ -1,5 +1,6 @@
 from duckdb import *
 from testing import *
+from testing.suite import TestSuite
 
 
 def test_logical_type():
@@ -10,3 +11,7 @@ def test_logical_type():
     assert_equal(bigint, child)
     assert_not_equal(bigint, list)
     assert_not_equal(child, list)
+
+
+def main():
+    TestSuite.discover_tests[__functions_in_module()]().run()

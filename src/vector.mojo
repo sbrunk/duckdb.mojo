@@ -6,14 +6,14 @@ from collections import Optional
 from sys.intrinsics import _type_is_eq
 
 
-struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
-    var _chunk: Pointer[Chunk, origin] # keep a reference to the originating chunk to avoid premature destruction
+struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
+    var _chunk: Pointer[Chunk, Self.origin] # keep a reference to the originating chunk to avoid premature destruction
     var _vector: duckdb_vector
     var length: UInt64
 
     fn __init__(
         out self,
-        chunk: Pointer[Chunk, origin],
+        chunk: Pointer[Chunk, Self.origin],
         vector: duckdb_vector,
         length: UInt64,
     ):
@@ -25,15 +25,15 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
 
-    fn _get_data(self) -> UnsafePointer[NoneType]:
+    fn _get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_data(self._vector)
 
-    fn _get_validity_mask(self) -> UnsafePointer[UInt64]:
+    fn _get_validity_mask(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_validity(self._vector)
 
-    fn list_get_child(self) -> Vector[origin]:
+    fn list_get_child(self) -> Vector[Self.origin]:
         """Retrieves the child vector of a list vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -105,5 +105,5 @@ struct Vector[is_mutable: Bool, //, origin: Origin[is_mutable]]:
         # 1. We have ensured that the runtime type matches the expected type through _check_type
         # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
-        return rebind[List[Optional[T]]](result)
+        return rebind[List[Optional[T]]](result).copy()
         
