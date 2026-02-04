@@ -20,8 +20,7 @@ trait DuckDBKeyElement(DuckDBValue, KeyElement):
 
 
 @fieldwise_init
-@register_passable("trivial")
-struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable):
+struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & TrivialRegisterType):
     comptime Type = Self.duckdb_type
 
     var value: Scalar[Self.Type.to_dtype()]
@@ -118,11 +117,11 @@ struct DuckDBString(DuckDBValue):
             ]()
             var ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
             self.value = String(unsafe_uninit_length=string_length)
-            memcpy(self.value.unsafe_ptr_mut(), ptr, string_length)
+            memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
         else:
             ptr=data_str_ptr[offset].ptr.bitcast[UInt8]()
             self.value = String(unsafe_uninit_length=string_length)
-            memcpy(self.value.unsafe_ptr_mut(), ptr, string_length)
+            memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
 
     fn __str__(self) -> String:
         return self.value

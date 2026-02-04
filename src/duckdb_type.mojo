@@ -5,8 +5,8 @@ from hashlib.hasher import Hasher
 
 
 @fieldwise_init
-@register_passable("trivial")
 struct DuckDBType(
+    TrivialRegisterType,
     Hashable,
     Stringable,
     Writable,
@@ -18,73 +18,73 @@ struct DuckDBType(
     var value: Int32
 
     comptime invalid = DuckDBType(DUCKDB_TYPE_INVALID)
-    """invalid"""
+    """DuckDB type: INVALID."""
     comptime boolean = DuckDBType(DUCKDB_TYPE_BOOLEAN)
-    """boolean"""
+    """DuckDB type: BOOLEAN."""
     comptime tinyint = DuckDBType(DUCKDB_TYPE_TINYINT)
-    """int8"""
+    """DuckDB type: TINYINT (int8)."""
     comptime smallint = DuckDBType(DUCKDB_TYPE_SMALLINT)
-    """int16"""
+    """DuckDB type: SMALLINT (int16)."""
     comptime integer = DuckDBType(DUCKDB_TYPE_INTEGER)
-    """int32"""
+    """DuckDB type: INTEGER (int32)."""
     comptime bigint = DuckDBType(DUCKDB_TYPE_BIGINT)
-    """int64"""
+    """DuckDB type: BIGINT (int64)."""
     comptime utinyint = DuckDBType(DUCKDB_TYPE_UTINYINT)
-    """uint8"""
+    """DuckDB type: UTINYINT (uint8)."""
     comptime usmallint = DuckDBType(DUCKDB_TYPE_USMALLINT)
-    """uint16"""
+    """DuckDB type: USMALLINT (uint16)."""
     comptime uinteger = DuckDBType(DUCKDB_TYPE_UINTEGER)
-    """uint32"""
+    """DuckDB type: UINTEGER (uint32)."""
     comptime ubigint = DuckDBType(DUCKDB_TYPE_UBIGINT)
-    """uint64"""
+    """DuckDB type: UBIGINT (uint64)."""
     comptime float = DuckDBType(DUCKDB_TYPE_FLOAT)
-    """float32"""
+    """DuckDB type: FLOAT (float32)."""
     comptime double = DuckDBType(DUCKDB_TYPE_DOUBLE)
-    """float64"""
+    """DuckDB type: DOUBLE (float64)."""
     comptime timestamp = DuckDBType(DUCKDB_TYPE_TIMESTAMP)
-    """duckdb_timestamp, in microseconds"""
+    """DuckDB type: TIMESTAMP, in microseconds."""
     comptime date = DuckDBType(DUCKDB_TYPE_DATE)
-    """duckdb_date"""
+    """DuckDB type: DATE."""
     comptime time = DuckDBType(DUCKDB_TYPE_TIME)
-    """duckdb_time"""
+    """DuckDB type: TIME."""
     comptime interval = DuckDBType(DUCKDB_TYPE_INTERVAL)
-    """duckdb_interval"""
+    """DuckDB type: INTERVAL."""
     comptime hugeint = DuckDBType(DUCKDB_TYPE_HUGEINT)
-    """duckdb_hugeint"""
+    """DuckDB type: HUGEINT."""
     comptime uhugeint = DuckDBType(DUCKDB_TYPE_UHUGEINT)
-    """duckdb_uhugeint"""
+    """DuckDB type: UHUGEINT."""
     comptime varchar = DuckDBType(DUCKDB_TYPE_VARCHAR)
-    """String"""
+    """DuckDB type: VARCHAR (String)."""
     comptime blob = DuckDBType(DUCKDB_TYPE_BLOB)
-    """duckdb_blob"""
+    """DuckDB type: BLOB."""
     comptime decimal = DuckDBType(DUCKDB_TYPE_DECIMAL)
-    """decimal"""
+    """DuckDB type: DECIMAL."""
     comptime timestamp_s = DuckDBType(DUCKDB_TYPE_TIMESTAMP_S)
-    """duckdb_timestamp, in seconds"""
+    """DuckDB type: TIMESTAMP_S, in seconds."""
     comptime timestamp_ms = DuckDBType(DUCKDB_TYPE_TIMESTAMP_MS)
-    """duckdb_timestamp, in milliseconds"""
+    """DuckDB type: TIMESTAMP_MS, in milliseconds."""
     comptime timestamp_ns = DuckDBType(DUCKDB_TYPE_TIMESTAMP_NS)
-    """duckdb_timestamp, in nanoseconds"""
+    """DuckDB type: TIMESTAMP_NS, in nanoseconds."""
     comptime enum = DuckDBType(DUCKDB_TYPE_ENUM)
-    """enum type, only useful as logical type"""
+    """DuckDB type: ENUM, only useful as logical type."""
     comptime list = DuckDBType(DUCKDB_TYPE_LIST)
-    """list type, only useful as logical type"""
+    """DuckDB type: LIST, only useful as logical type."""
     comptime struct_t = DuckDBType(DUCKDB_TYPE_STRUCT)
-    """struct type, only useful as logical type"""
+    """DuckDB type: STRUCT, only useful as logical type."""
     comptime map = DuckDBType(DUCKDB_TYPE_MAP)
-    """map type, only useful as logical type"""
+    """DuckDB type: MAP, only useful as logical type."""
     comptime array = DuckDBType(DUCKDB_TYPE_ARRAY)
-    """duckdb_array, only useful as logical type"""
+    """DuckDB type: ARRAY, only useful as logical type."""
     comptime uuid = DuckDBType(DUCKDB_TYPE_UUID)
-    """duckdb_hugeint"""
+    """DuckDB type: UUID."""
     comptime union = DuckDBType(DUCKDB_TYPE_UNION)
-    """union type, only useful as logical type"""
+    """DuckDB type: UNION, only useful as logical type."""
     comptime bit = DuckDBType(DUCKDB_TYPE_BIT)
-    """duckdb_bit"""
+    """DuckDB type: BIT."""
     comptime time_tz = DuckDBType(DUCKDB_TYPE_TIME_TZ)
-    """duckdb_time_tz"""
+    """DuckDB type: TIME_TZ."""
     comptime timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
-    """duckdb_timestamp"""
+    """DuckDB type: TIMESTAMP_TZ."""
 
     # fn __init__(out self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""

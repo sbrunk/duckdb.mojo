@@ -235,7 +235,7 @@ struct duckdb_query_progress_type(ImplicitlyCopyable, Movable):
 struct duckdb_string_t_pointer(Copyable, Movable):
     var length: UInt32
     var prefix: InlineArray[c_char, 4]
-    var ptr: UnsafePointer[c_char, MutAnyOrigin]
+    var ptr: UnsafePointer[c_char, MutExternalOrigin]
 
 
 @fieldwise_init
@@ -255,25 +255,25 @@ struct duckdb_list_entry(ImplicitlyCopyable, Movable):
 
 @fieldwise_init
 struct duckdb_column(Copyable, Movable):
-    var __deprecated_data: UnsafePointer[NoneType, MutAnyOrigin]
-    var __deprecated_nullmask: UnsafePointer[Bool, MutAnyOrigin]
+    var __deprecated_data: UnsafePointer[NoneType, MutExternalOrigin]
+    var __deprecated_nullmask: UnsafePointer[Bool, MutExternalOrigin]
     var __deprecated_type: Int32  # actually a duckdb_type enum
-    var __deprecated_name: UnsafePointer[c_char, MutAnyOrigin]
-    var internal_data: UnsafePointer[NoneType, MutAnyOrigin]
+    var __deprecated_name: UnsafePointer[c_char, ImmutExternalOrigin]
+    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]
 
     fn __init__(out self):
-        self.__deprecated_data = UnsafePointer[NoneType, MutAnyOrigin]()
-        self.__deprecated_nullmask = UnsafePointer[Bool, MutAnyOrigin]()
+        self.__deprecated_data = UnsafePointer[NoneType, MutExternalOrigin]()
+        self.__deprecated_nullmask = UnsafePointer[Bool, MutExternalOrigin]()
         self.__deprecated_type = 0
-        self.__deprecated_name = UnsafePointer[c_char, MutAnyOrigin]()
-        self.internal_data = UnsafePointer[NoneType, MutAnyOrigin]()
+        self.__deprecated_name = UnsafePointer[c_char, ImmutExternalOrigin]()
+        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin]()
 
 
 struct _duckdb_vector:
-    var __vctr: UnsafePointer[NoneType, MutAnyOrigin]
+    var __vctr: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutAnyOrigin]
+comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutExternalOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Types (explicit freeing/destroying)
@@ -281,12 +281,12 @@ comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutAnyOrigin]
 
 
 struct duckdb_string:
-    var data: UnsafePointer[c_char, MutAnyOrigin]
+    var data: UnsafePointer[c_char, MutExternalOrigin]
     var size: idx_t
 
 
 struct duckdb_blob:
-    var data: UnsafePointer[NoneType, MutAnyOrigin]
+    var data: UnsafePointer[NoneType, MutExternalOrigin]
     var size: idx_t
 
 
@@ -298,16 +298,16 @@ struct duckdb_blob:
 #! Additional function info.
 #! When setting this info, it is necessary to pass a destroy-callback function.
 struct _duckdb_function_info:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutAnyOrigin]
+comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutExternalOrigin]
 
 #! The bind info of a function.
 #! When setting this info, it is necessary to pass a destroy-callback function.
 struct _duckdb_bind_info:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutAnyOrigin]
+comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Scalar function types
@@ -315,15 +315,15 @@ comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutAnyOrigin]
 
 #! A scalar function. Must be destroyed with `duckdb_destroy_scalar_function`.
 struct _duckdb_scalar_function:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_scalar_function = UnsafePointer[_duckdb_scalar_function, MutAnyOrigin]
+comptime duckdb_scalar_function = UnsafePointer[_duckdb_scalar_function, MutExternalOrigin]
 
 #! A scalar function set. Must be destroyed with `duckdb_destroy_scalar_function_set`.
 struct _duckdb_scalar_function_set:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_scalar_function_set = UnsafePointer[_duckdb_scalar_function_set, MutAnyOrigin]
+comptime duckdb_scalar_function_set = UnsafePointer[_duckdb_scalar_function_set, MutExternalOrigin]
 
 #! The bind function of the scalar function.
 comptime duckdb_scalar_function_bind_t = fn (duckdb_bind_info) -> NoneType
@@ -339,21 +339,21 @@ comptime duckdb_scalar_function_t = fn (
 
 #! An aggregate function. Must be destroyed with `duckdb_destroy_aggregate_function`.
 struct _duckdb_aggregate_function:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutAnyOrigin]
+comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutExternalOrigin]
 
 #! A aggregate function set. Must be destroyed with `duckdb_destroy_aggregate_function_set`.
 struct _duckdb_aggregate_function_set:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutAnyOrigin]
+comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutExternalOrigin]
 
 #! The state of an aggregate function.
 struct _duckdb_aggregate_state:
-    var internal_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 
-comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutAnyOrigin]
+comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutExternalOrigin]
 
 #! A function to return the aggregate state's size.
 comptime duckdb_aggregate_state_size = fn (duckdb_function_info) -> idx_t
@@ -362,22 +362,22 @@ comptime duckdb_aggregate_state_size = fn (duckdb_function_info) -> idx_t
 comptime duckdb_aggregate_init_t = fn (duckdb_function_info, duckdb_aggregate_state) -> NoneType
 
 #! An optional function to destroy an aggregate state.
-comptime duckdb_aggregate_destroy_t = fn (UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], idx_t) -> NoneType
+comptime duckdb_aggregate_destroy_t = fn (UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) -> NoneType
 
 #! A function to update a set of aggregate states with new values.
 comptime duckdb_aggregate_update_t = fn (
-    duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin]
+    duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]
 ) -> NoneType
 
 #! A function to combine aggregate states.
 comptime duckdb_aggregate_combine_t = fn (
-    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], 
-    UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], idx_t
+    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], 
+    UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t
 ) -> NoneType
 
 #! A function to finalize aggregate states into a result vector.
 comptime duckdb_aggregate_finalize_t = fn (
-    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutAnyOrigin], 
+    duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], 
     duckdb_vector, idx_t, idx_t
 ) -> NoneType
 
@@ -387,87 +387,87 @@ struct duckdb_result(ImplicitlyCopyable & Movable):
     var __deprecated_column_count: idx_t
     var __deprecated_row_count: idx_t
     var __deprecated_rows_changed: idx_t
-    var __deprecated_columns: UnsafePointer[duckdb_column, MutAnyOrigin]
-    var __deprecated_error_message: UnsafePointer[c_char, MutAnyOrigin]
-    var internal_data: UnsafePointer[NoneType, MutAnyOrigin]
+    var __deprecated_columns: UnsafePointer[duckdb_column, MutExternalOrigin]
+    var __deprecated_error_message: UnsafePointer[c_char, ImmutExternalOrigin]
+    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]
 
     fn __init__(out self):
         self.__deprecated_column_count = 0
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
-        self.__deprecated_columns = UnsafePointer[duckdb_column, MutAnyOrigin]()
-        self.__deprecated_error_message = UnsafePointer[c_char, MutAnyOrigin]()
-        self.internal_data = UnsafePointer[NoneType, MutAnyOrigin]()
+        self.__deprecated_columns = UnsafePointer[duckdb_column, MutExternalOrigin]()
+        self.__deprecated_error_message = UnsafePointer[c_char, ImmutExternalOrigin]()
+        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin]()
 
 
 struct _duckdb_database:
-    var __db: UnsafePointer[NoneType, MutAnyOrigin]
+    var __db: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_database = UnsafePointer[_duckdb_database, MutAnyOrigin]
+comptime duckdb_database = UnsafePointer[_duckdb_database, MutExternalOrigin]
 
 
 struct _duckdb_connection:
-    var __conn: UnsafePointer[NoneType, MutAnyOrigin]
+    var __conn: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_connection = UnsafePointer[_duckdb_connection, ImmutAnyOrigin]
+comptime duckdb_connection = UnsafePointer[_duckdb_connection, ImmutExternalOrigin]
 
 
 struct _duckdb_prepared_statement:
-    var __prep: UnsafePointer[NoneType, MutAnyOrigin]
+    var __prep: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_prepared_statement = UnsafePointer[_duckdb_prepared_statement, MutAnyOrigin]
+comptime duckdb_prepared_statement = UnsafePointer[_duckdb_prepared_statement, MutExternalOrigin]
 
 
 struct _duckdb_extracted_statements:
-    var __extrac: UnsafePointer[NoneType, MutAnyOrigin]
+    var __extrac: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_extracted_statements = UnsafePointer[_duckdb_extracted_statements, MutAnyOrigin]
+comptime duckdb_extracted_statements = UnsafePointer[_duckdb_extracted_statements, MutExternalOrigin]
 
 
 struct _duckdb_pending_result:
-    var __pend: UnsafePointer[NoneType, MutAnyOrigin]
+    var __pend: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_pending_result = UnsafePointer[_duckdb_pending_result, MutAnyOrigin]
+comptime duckdb_pending_result = UnsafePointer[_duckdb_pending_result, MutExternalOrigin]
 
 
 struct _duckdb_appender:
-    var __appn: UnsafePointer[NoneType, MutAnyOrigin]
+    var __appn: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_appender = UnsafePointer[_duckdb_appender, MutAnyOrigin]
+comptime duckdb_appender = UnsafePointer[_duckdb_appender, MutExternalOrigin]
 
 
 struct _duckdb_config:
-    var __cnfg: UnsafePointer[NoneType, MutAnyOrigin]
+    var __cnfg: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_config = UnsafePointer[_duckdb_config, MutAnyOrigin]
+comptime duckdb_config = UnsafePointer[_duckdb_config, MutExternalOrigin]
 
 
 struct _duckdb_logical_type:
-    var __lglt: UnsafePointer[NoneType, MutAnyOrigin]
+    var __lglt: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_logical_type = UnsafePointer[_duckdb_logical_type, MutAnyOrigin]
+comptime duckdb_logical_type = UnsafePointer[_duckdb_logical_type, MutExternalOrigin]
 
 
 struct _duckdb_data_chunk:
-    var __dtck: UnsafePointer[NoneType, MutAnyOrigin]
+    var __dtck: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_data_chunk = UnsafePointer[_duckdb_data_chunk, MutAnyOrigin]
+comptime duckdb_data_chunk = UnsafePointer[_duckdb_data_chunk, MutExternalOrigin]
 
 
 struct _duckdb_value:
-    var __val: UnsafePointer[NoneType, MutAnyOrigin]
+    var __val: UnsafePointer[NoneType, MutExternalOrigin]
 
 
-comptime duckdb_value = UnsafePointer[_duckdb_value, MutAnyOrigin]
+comptime duckdb_value = UnsafePointer[_duckdb_value, MutExternalOrigin]
 
 
 # ===-----------------------------------------------------------------------===#
@@ -496,8 +496,7 @@ fn _get_dylib_function[
     ]()
 
 
-@register_passable("trivial")
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes]:
+struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterType):
     comptime fn_type = Self.type
 
     @staticmethod
@@ -524,8 +523,7 @@ fn _get_dylib_helpers_function[
         result_type,
     ]()
 
-@register_passable("trivial")
-struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes]:
+struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterType):
     comptime fn_type = Self.type
 
     @staticmethod
@@ -1001,7 +999,7 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_rows_changed(result)
 
-    fn duckdb_result_error(self, result: UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, MutAnyOrigin]:
+    fn duckdb_result_error(self, result: UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]:
         """
         Returns the error message contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
 
@@ -1046,7 +1044,7 @@ struct LibDuckDB(Movable):
     # ===--------------------------------------------------------------------===#
 
     fn duckdb_create_data_chunk(
-        self, types: UnsafePointer[duckdb_logical_type, MutAnyOrigin], column_count: idx_t
+        self, types: UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], column_count: idx_t
     ) -> duckdb_data_chunk:
         """
         Creates an empty DataChunk with the specified set of types.
@@ -1363,7 +1361,7 @@ struct LibDuckDB(Movable):
     # ===--------------------------------------------------------------------===
 
     fn duckdb_validity_row_is_valid(
-        self, validity: UnsafePointer[UInt64, MutAnyOrigin], row: idx_t
+        self, validity: UnsafePointer[UInt64, MutExternalOrigin], row: idx_t
     ) -> Bool:
         """
         Returns whether or not a row is valid (i.e. not NULL) in the given validity mask.
@@ -1375,7 +1373,7 @@ struct LibDuckDB(Movable):
         return self._duckdb_validity_row_is_valid(validity, row)
 
     fn duckdb_validity_set_row_validity(
-        self, validity: UnsafePointer[UInt64, MutAnyOrigin], row: idx_t, valid: Bool
+        self, validity: UnsafePointer[UInt64, MutExternalOrigin], row: idx_t, valid: Bool
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to either valid or invalid.
@@ -1390,7 +1388,7 @@ struct LibDuckDB(Movable):
         return self._duckdb_validity_set_row_validity(validity, row, valid)
 
     fn duckdb_validity_set_row_invalid(
-        self, validity: UnsafePointer[UInt64, MutAnyOrigin], row: idx_t
+        self, validity: UnsafePointer[UInt64, MutExternalOrigin], row: idx_t
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to invalid.
@@ -1403,7 +1401,7 @@ struct LibDuckDB(Movable):
         return self._duckdb_validity_set_row_invalid(validity, row)
 
     fn duckdb_validity_set_row_valid(
-        self, validity: UnsafePointer[UInt64, MutAnyOrigin], row: idx_t
+        self, validity: UnsafePointer[UInt64, MutExternalOrigin], row: idx_t
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to valid.
@@ -1430,6 +1428,7 @@ struct LibDuckDB(Movable):
     fn duckdb_destroy_scalar_function(self, scalar_function: UnsafePointer[duckdb_scalar_function, MutAnyOrigin]) -> NoneType:
         """
         Destroys the given scalar function object.
+
         * @param scalar_function The scalar function to destroy
         """
         return self._duckdb_destroy_scalar_function(scalar_function)
@@ -1437,6 +1436,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_set_name(self, scalar_function: duckdb_scalar_function, name: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
         """
         Sets the name of the given scalar function.
+
         * @param scalar_function The scalar function
         * @param name The name of the scalar function
         """
@@ -1486,6 +1486,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_set_extra_info(self, scalar_function: duckdb_scalar_function, extra_info: UnsafePointer[NoneType, MutAnyOrigin], destroy: duckdb_delete_callback_t) -> NoneType:
         """
         Assigns extra information to the scalar function that can be fetched during binding, etc.
+
         * @param scalar_function The scalar function
         * @param extra_info The extra information
         * @param destroy The callback that will be called to destroy the extra information (if any)
@@ -1495,6 +1496,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_set_bind(self, scalar_function: duckdb_scalar_function, bind: duckdb_scalar_function_bind_t) -> NoneType:
         """
         Sets the (optional) bind function of the scalar function.
+
         * @param scalar_function The scalar function
         * @param bind The bind function
         """
@@ -1513,6 +1515,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_bind_set_error(self, info: duckdb_bind_info, error: UnsafePointer[c_char, MutAnyOrigin]) -> NoneType:
         """
         Report that an error has occurred while calling bind on a scalar function.
+
         * @param info The bind info object
         * @param error The error message
         """
@@ -1521,6 +1524,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_set_function(self, scalar_function: duckdb_scalar_function, function: duckdb_scalar_function_t) -> NoneType:
         """
         Sets the main function of the scalar function.
+
         * @param scalar_function The scalar function
         * @param function The function
         """
@@ -1565,6 +1569,7 @@ struct LibDuckDB(Movable):
     fn duckdb_scalar_function_set_error(self, info: duckdb_function_info, error: UnsafePointer[c_char, MutAnyOrigin]) -> NoneType:
         """
         Report that an error has occurred while executing the scalar function.
+
         * @param info The info object.
         * @param error The error message
         """
@@ -1587,6 +1592,7 @@ struct LibDuckDB(Movable):
     fn duckdb_add_scalar_function_to_set(self, set: duckdb_scalar_function_set, function: duckdb_scalar_function) -> duckdb_state:
         """
         Adds the scalar function as a new overload to the scalar function set.
+
         Returns DuckDBError if the function could not be added, for example if the overload already exists.
         * @param set The scalar function set
         * @param function The function to add
@@ -1767,8 +1773,8 @@ struct LibDuckDB(Movable):
 
     fn duckdb_create_union_type(
         self,
-        member_types: UnsafePointer[duckdb_logical_type, MutAnyOrigin],
-        member_names: UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin],
+        member_types: UnsafePointer[duckdb_logical_type, ImmutAnyOrigin],
+        member_names: UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin],
         member_count: idx_t,
     ) -> duckdb_logical_type:
         """Creates a UNION type from the passed types array.
@@ -1782,8 +1788,8 @@ struct LibDuckDB(Movable):
 
     fn duckdb_create_struct_type(
         self,
-        member_types: UnsafePointer[duckdb_logical_type, MutAnyOrigin],
-        member_names: UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin],
+        member_types: UnsafePointer[duckdb_logical_type, ImmutAnyOrigin],
+        member_names: UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin],
         member_count: idx_t,
     ) -> duckdb_logical_type:
         """Creates a STRUCT type from the passed member name and type arrays.
@@ -1904,7 +1910,7 @@ comptime _duckdb_destroy_result = _dylib_function["duckdb_destroy_result",
 ]
 
 comptime _duckdb_column_name = _dylib_function["duckdb_column_name",
-    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) -> UnsafePointer[c_char, ImmutAnyOrigin]
+    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) -> UnsafePointer[c_char, ImmutExternalOrigin]
 ]
 
 comptime _duckdb_column_type = _dylib_function["duckdb_column_type",
@@ -1928,7 +1934,7 @@ comptime _duckdb_rows_changed = _dylib_function["duckdb_rows_changed",
 ]
 
 comptime _duckdb_result_error = _dylib_function["duckdb_result_error",
-    fn (UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, MutAnyOrigin]
+    fn (UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]
 ]
 
 comptime _duckdb_row_count = _dylib_function["duckdb_row_count",
@@ -1954,7 +1960,7 @@ comptime _duckdb_vector_size = _dylib_function["duckdb_vector_size", fn () -> id
 # ===--------------------------------------------------------------------===#
 
 comptime _duckdb_create_data_chunk = _dylib_function["duckdb_create_data_chunk",
-    fn (UnsafePointer[duckdb_logical_type, MutAnyOrigin], idx_t) -> duckdb_data_chunk
+    fn (UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], idx_t) -> duckdb_data_chunk
 ]
 
 comptime _duckdb_destroy_data_chunk = _dylib_function["duckdb_destroy_data_chunk",
@@ -2026,11 +2032,11 @@ comptime _duckdb_vector_get_column_type = _dylib_function["duckdb_vector_get_col
 ]
 
 comptime _duckdb_vector_get_data = _dylib_function["duckdb_vector_get_data",
-    fn (duckdb_vector) -> UnsafePointer[NoneType, MutAnyOrigin]
+    fn (duckdb_vector) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
 comptime _duckdb_vector_get_validity = _dylib_function["duckdb_vector_get_validity",
-    fn (duckdb_vector) -> UnsafePointer[UInt64, MutAnyOrigin]
+    fn (duckdb_vector) -> UnsafePointer[UInt64, MutExternalOrigin]
 ]
 
 comptime _duckdb_vector_ensure_validity_writable = _dylib_function["duckdb_vector_ensure_validity_writable",
@@ -2074,19 +2080,19 @@ comptime _duckdb_array_vector_get_child = _dylib_function["duckdb_array_vector_g
 # ===--------------------------------------------------------------------===
 
 comptime _duckdb_validity_row_is_valid = _dylib_function["duckdb_validity_row_is_valid",
-    fn (UnsafePointer[UInt64, MutAnyOrigin], idx_t) -> Bool
+    fn (UnsafePointer[UInt64, MutExternalOrigin], idx_t) -> Bool
 ]
 
 comptime _duckdb_validity_set_row_validity = _dylib_function["duckdb_validity_set_row_validity",
-    fn (UnsafePointer[UInt64, MutAnyOrigin], idx_t, Bool) -> NoneType
+    fn (UnsafePointer[UInt64, MutExternalOrigin], idx_t, Bool) -> NoneType
 ]
 
 comptime _duckdb_validity_set_row_invalid = _dylib_function["duckdb_validity_set_row_invalid",
-    fn (UnsafePointer[UInt64, MutAnyOrigin], idx_t) -> NoneType
+    fn (UnsafePointer[UInt64, MutExternalOrigin], idx_t) -> NoneType
 ]
 
 comptime _duckdb_validity_set_row_valid = _dylib_function["duckdb_validity_set_row_valid",
-    fn (UnsafePointer[UInt64, MutAnyOrigin], idx_t) -> NoneType
+    fn (UnsafePointer[UInt64, MutExternalOrigin], idx_t) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#
@@ -2150,11 +2156,11 @@ comptime _duckdb_register_scalar_function = _dylib_function["duckdb_register_sca
 ]
 
 comptime _duckdb_scalar_function_get_extra_info = _dylib_function["duckdb_scalar_function_get_extra_info",
-    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
 comptime _duckdb_scalar_function_get_bind_data = _dylib_function["duckdb_scalar_function_get_bind_data",
-    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
 comptime _duckdb_scalar_function_get_client_context = _dylib_function["duckdb_scalar_function_get_client_context",
@@ -2225,7 +2231,7 @@ comptime _duckdb_register_aggregate_function = _dylib_function["duckdb_register_
 ]
 
 comptime _duckdb_aggregate_function_get_extra_info = _dylib_function["duckdb_aggregate_function_get_extra_info",
-    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
 comptime _duckdb_aggregate_function_set_error = _dylib_function["duckdb_aggregate_function_set_error",
@@ -2253,11 +2259,11 @@ comptime _duckdb_create_map_type = _dylib_function["duckdb_create_map_type",
 ]
 
 comptime _duckdb_create_union_type = _dylib_function["duckdb_create_union_type",
-    fn (UnsafePointer[duckdb_logical_type, MutAnyOrigin], UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin], idx_t) -> duckdb_logical_type
+    fn (UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin], idx_t) -> duckdb_logical_type
 ]
 
 comptime _duckdb_create_struct_type = _dylib_function["duckdb_create_struct_type",
-    fn (UnsafePointer[duckdb_logical_type, MutAnyOrigin], UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin], idx_t) -> duckdb_logical_type
+    fn (UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin], idx_t) -> duckdb_logical_type
 ]
 
 # fn duckdb_create_enum_type TODO

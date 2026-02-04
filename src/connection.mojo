@@ -17,7 +17,7 @@ struct Connection(Movable):
 
     fn __init__(out self, db_path: String) raises:
         ref libduckdb = DuckDB().libduckdb()
-        self._db = UnsafePointer[duckdb_database.type, MutAnyOrigin]()
+        self._db = UnsafePointer[duckdb_database.type, MutExternalOrigin]()
         var db_addr = UnsafePointer(to=self._db)
         var path = db_path.copy()
         if (
@@ -26,7 +26,7 @@ struct Connection(Movable):
             raise Error(
                 "Could not open database"
             )  ## TODO use duckdb_open_ext and return error message
-        self.__conn = UnsafePointer[duckdb_connection.type, MutAnyOrigin]()
+        self.__conn = UnsafePointer[duckdb_connection.type, ImmutExternalOrigin]()
         if (
             libduckdb.duckdb_connect(
                 self._db, UnsafePointer(to=self.__conn)
