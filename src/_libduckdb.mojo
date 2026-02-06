@@ -533,9 +533,11 @@ struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](Tr
 struct LibDuckDB(Movable):
 
     var _duckdb_open: _duckdb_open.fn_type
+    var _duckdb_open_ext: _duckdb_open_ext.fn_type
     var _duckdb_close: _duckdb_close.fn_type
     var _duckdb_connect: _duckdb_connect.fn_type
     var _duckdb_disconnect: _duckdb_disconnect.fn_type
+    var _duckdb_free: _duckdb_free.fn_type
     var _duckdb_query: _duckdb_query.fn_type
     var _duckdb_destroy_result: _duckdb_destroy_result.fn_type
     var _duckdb_column_name: _duckdb_column_name.fn_type
@@ -631,9 +633,11 @@ struct LibDuckDB(Movable):
     fn __init__(out self):
         try:
             self._duckdb_open = _duckdb_open.load()
+            self._duckdb_open_ext = _duckdb_open_ext.load()
             self._duckdb_close = _duckdb_close.load()
             self._duckdb_connect = _duckdb_connect.load()
             self._duckdb_disconnect = _duckdb_disconnect.load()
+            self._duckdb_free = _duckdb_free.load()
             self._duckdb_query = _duckdb_query.load()
             self._duckdb_destroy_result = _duckdb_destroy_result.load()
             self._duckdb_column_name = _duckdb_column_name.load()
@@ -730,9 +734,11 @@ struct LibDuckDB(Movable):
 
     fn __moveinit__(out self, deinit existing: Self):
         self._duckdb_open = existing._duckdb_open
+        self._duckdb_open_ext = existing._duckdb_open_ext
         self._duckdb_close = existing._duckdb_close
         self._duckdb_connect = existing._duckdb_connect
         self._duckdb_disconnect = existing._duckdb_disconnect
+        self._duckdb_free = existing._duckdb_free
         self._duckdb_query = existing._duckdb_query
         self._duckdb_destroy_result = existing._duckdb_destroy_result
         self._duckdb_column_name = existing._duckdb_column_name
@@ -855,6 +861,26 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_open(path, out_database)
 
+    fn duckdb_open_ext(
+        self,
+        path: UnsafePointer[c_char, ImmutAnyOrigin],
+        out_database: UnsafePointer[duckdb_database, MutAnyOrigin],
+        config: duckdb_config,
+        out_error: UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin],
+    ) -> UInt32:
+        """
+        Extended version of duckdb_open. Creates a new database or opens an existing database file stored at the given path.
+        The database must be closed with 'duckdb_close'.
+
+        * path: Path to the database file on disk. Both `nullptr` and `:memory:` open an in-memory database.
+        * out_database: The result database object.
+        * config: (Optional) configuration used to start up the database.
+        * out_error: If set and the function returns `DuckDBError`, this contains the error message.
+                     Note that the error message must be freed using `duckdb_free`.
+        * returns: `DuckDBSuccess` on success or `DuckDBError` on failure.
+        """
+        return self._duckdb_open_ext(path, out_database, config, out_error)
+
     fn duckdb_close(self, database: UnsafePointer[duckdb_database, MutAnyOrigin]) -> NoneType:
         """
         Closes the specified database and de-allocates all memory allocated for that database.
@@ -892,6 +918,15 @@ struct LibDuckDB(Movable):
         * connection: The connection to close.
         """
         return self._duckdb_disconnect(connection)
+
+    fn duckdb_free(self, ptr: UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType:
+        """
+        Free a value returned from `duckdb_malloc`, `duckdb_value_varchar`, `duckdb_value_blob`, or
+        `duckdb_value_string`.
+
+        * ptr: The memory region to de-allocate.
+        """
+        return self._duckdb_free(ptr)
 
     # ===--------------------------------------------------------------------===#
     # Query Execution
@@ -1884,6 +1919,10 @@ comptime _duckdb_open = _dylib_function["duckdb_open",
     fn (UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_database, MutAnyOrigin]) -> UInt32
 ]
 
+comptime _duckdb_open_ext = _dylib_function["duckdb_open_ext",
+    fn (UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_database, MutAnyOrigin], duckdb_config, UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin]) -> UInt32
+]
+
 comptime _duckdb_close = _dylib_function["duckdb_close",
     fn (UnsafePointer[duckdb_database, MutAnyOrigin]) -> NoneType
 ]
@@ -1895,6 +1934,10 @@ comptime _duckdb_connect = _dylib_function[
 
 comptime _duckdb_disconnect = _dylib_function["duckdb_disconnect",
     fn (UnsafePointer[duckdb_connection, MutAnyOrigin]) -> NoneType
+]
+
+comptime _duckdb_free = _dylib_function["duckdb_free",
+    fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#

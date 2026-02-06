@@ -1,7 +1,7 @@
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
+from duckdb.database import Database
 
-# TODO separate opening and connecting but add convenient functions to keep it simple
 struct Connection(Movable):
     """A connection to a DuckDB database.
 
@@ -12,32 +12,23 @@ struct Connection(Movable):
     var result = con.execute("SELECT lst, lst || 'duckdb' FROM range(10) tbl(lst)")
     ```
     """
-    var _db: duckdb_database
-    var __conn: duckdb_connection
+    var database: Database
+    var _conn: duckdb_connection
 
-    fn __init__(out self, db_path: String) raises:
+    fn __init__(out self, path: String) raises:
         ref libduckdb = DuckDB().libduckdb()
-        self._db = UnsafePointer[duckdb_database.type, MutExternalOrigin]()
-        var db_addr = UnsafePointer(to=self._db)
-        var path = db_path.copy()
-        if (
-            libduckdb.duckdb_open(String.as_c_string_slice(path).unsafe_ptr(), db_addr)
-        ) == DuckDBError:
-            raise Error(
-                "Could not open database"
-            )  ## TODO use duckdb_open_ext and return error message
-        self.__conn = UnsafePointer[duckdb_connection.type, ImmutExternalOrigin]()
+        self.database = Database(path)
+        self._conn = UnsafePointer[duckdb_connection.type, ImmutExternalOrigin]()
         if (
             libduckdb.duckdb_connect(
-                self._db, UnsafePointer(to=self.__conn)
+                self.database._db, UnsafePointer(to=self._conn)
             )
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
     fn __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_disconnect(UnsafePointer(to=self.__conn))
-        libduckdb.duckdb_close(UnsafePointer(to=self._db))
+        libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
 
     fn execute(self, query: String) raises -> Result:
         var result = duckdb_result()
@@ -45,7 +36,7 @@ struct Connection(Movable):
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_query(self.__conn, String.as_c_string_slice(_query).unsafe_ptr(), result_ptr) == DuckDBError
+            libduckdb.duckdb_query(self._conn, String.as_c_string_slice(_query).unsafe_ptr(), result_ptr) == DuckDBError
         ):
             raise Error(libduckdb.duckdb_result_error(result_ptr))
         return Result(result)
