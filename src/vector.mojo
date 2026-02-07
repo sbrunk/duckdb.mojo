@@ -180,12 +180,13 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         """
         ref libduckdb = DuckDB().libduckdb()
         var child_vector = libduckdb.duckdb_array_vector_get_child(self._vector)
-        # TODO: Calculate actual child size (parent size * array size)
-        # For now, pass through the length as-is
+        # Calculate actual child size (parent size * array size)
+        var array_type = self.get_column_type()
+        var array_size = array_type.array_type_array_size()
         return Vector(
             self._chunk.value(),
             child_vector,
-            self.length,
+            self.length * array_size,
         )
 
     fn slice(self, sel: duckdb_selection_vector, len: idx_t) -> NoneType:

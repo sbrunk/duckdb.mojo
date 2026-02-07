@@ -69,6 +69,14 @@ struct LogicalType(ImplicitlyCopyable & Movable & Equatable & Writable & Stringa
         ref libduckdb = DuckDB().libduckdb()
         return Self(libduckdb.duckdb_map_type_value_type(self._logical_type))
 
+    fn array_type_array_size(self) -> idx_t:
+        """Retrieves the array size of the given array type.
+
+        * returns: The fixed number of elements the values of this array type can store.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_array_type_array_size(self._logical_type)
+
     fn __eq__(self, other: Self) -> Bool:
         if self.get_type_id() != other.get_type_id():
             return False

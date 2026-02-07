@@ -639,6 +639,7 @@ struct LibDuckDB(Movable):
     var _duckdb_get_type_id: _duckdb_get_type_id.fn_type
     var _duckdb_list_type_child_type: _duckdb_list_type_child_type.fn_type
     var _duckdb_array_type_child_type: _duckdb_array_type_child_type.fn_type
+    var _duckdb_array_type_array_size: _duckdb_array_type_array_size.fn_type
     var _duckdb_map_type_key_type: _duckdb_map_type_key_type.fn_type
     var _duckdb_map_type_value_type: _duckdb_map_type_value_type.fn_type
     var _duckdb_destroy_logical_type: _duckdb_destroy_logical_type.fn_type
@@ -745,6 +746,7 @@ struct LibDuckDB(Movable):
             self._duckdb_get_type_id = _duckdb_get_type_id.load()
             self._duckdb_list_type_child_type = _duckdb_list_type_child_type.load()
             self._duckdb_array_type_child_type = _duckdb_array_type_child_type.load()
+            self._duckdb_array_type_array_size = _duckdb_array_type_array_size.load()
             self._duckdb_map_type_key_type = _duckdb_map_type_key_type.load()
             self._duckdb_map_type_value_type = _duckdb_map_type_value_type.load()
             self._duckdb_destroy_logical_type = _duckdb_destroy_logical_type.load()
@@ -856,6 +858,7 @@ struct LibDuckDB(Movable):
         self._duckdb_get_type_id = existing._duckdb_get_type_id
         self._duckdb_list_type_child_type = existing._duckdb_list_type_child_type
         self._duckdb_array_type_child_type = existing._duckdb_array_type_child_type
+        self._duckdb_array_type_array_size = existing._duckdb_array_type_array_size
         self._duckdb_map_type_key_type = existing._duckdb_map_type_key_type
         self._duckdb_map_type_value_type = existing._duckdb_map_type_value_type
         self._duckdb_destroy_logical_type = existing._duckdb_destroy_logical_type
@@ -1966,6 +1969,14 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_array_type_child_type(type)
 
+    fn duckdb_array_type_array_size(self, type: duckdb_logical_type) -> idx_t:
+        """Retrieves the array size of the given array type.
+
+        * type: The logical type object
+        * returns: The fixed number of elements the values of this array type can store.
+        """
+        return self._duckdb_array_type_array_size(type)
+
     fn duckdb_map_type_key_type(self, type: duckdb_logical_type) -> duckdb_logical_type:
         """Retrieves the key type of the given map type.
 
@@ -2444,6 +2455,10 @@ comptime _duckdb_list_type_child_type = _dylib_function["duckdb_list_type_child_
 
 comptime _duckdb_array_type_child_type = _dylib_function["duckdb_array_type_child_type",
     fn (duckdb_logical_type) -> duckdb_logical_type
+]
+
+comptime _duckdb_array_type_array_size = _dylib_function["duckdb_array_type_array_size",
+    fn (duckdb_logical_type) -> idx_t
 ]
 
 comptime _duckdb_map_type_key_type = _dylib_function["duckdb_map_type_key_type",
