@@ -11,7 +11,7 @@ def test_connection():
 
 def test_failure():
     con = DuckDB.connect(":memory:")
-    with assert_raises():
+    with assert_raises(contains="Parser Error"):
         _ = con.execute("invalid statement")
 
 

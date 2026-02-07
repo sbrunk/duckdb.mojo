@@ -1,15 +1,45 @@
 from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
+from duckdb.logical_type import LogicalType
 from collections import Optional
+from memory import UnsafePointer
+from memory.unsafe_pointer import alloc
 
 
 struct Chunk(Movable & Sized):
-    """Represents a DuckDB data chunk."""
+    """Represents a DuckDB data chunk.
+    
+    Data chunks represent a horizontal slice of a table. They hold a number of vectors,
+    that can each hold up to the VECTOR_SIZE rows (usually 2048).
+    """
 
     var _chunk: duckdb_data_chunk
 
     fn __init__(out self, chunk: duckdb_data_chunk):
+        """Creates a Chunk from a duckdb_data_chunk pointer.
+        
+        Args:
+            chunk: The underlying duckdb_data_chunk pointer.
+        """
+        self._chunk = chunk
+
+    fn __init__(out self, types: List[LogicalType]):
+        """Creates an empty data chunk with the specified column types.
+        
+        Args:
+            types: A list of logical types for each column.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        
+        # Create array of duckdb_logical_type pointers
+        var type_ptrs = alloc[duckdb_logical_type](len(types))
+        for i in range(len(types)):
+            type_ptrs[i] = types[i]._logical_type
+        
+        var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, len(types))
+        type_ptrs.free()
+        
         self._chunk = chunk
 
     fn __del__(deinit self):
@@ -20,10 +50,53 @@ struct Chunk(Movable & Sized):
         self._chunk = existing._chunk
 
     fn __len__(self) -> Int:
+        """Returns the current number of tuples (rows) in the data chunk.
+        
+        Returns:
+            The number of tuples in the data chunk.
+        """
         ref libduckdb = DuckDB().libduckdb()
         return Int(libduckdb.duckdb_data_chunk_get_size(self._chunk))
 
-    fn _get_vector(self, col: Int) -> Vector[origin_of(self)]:
+    fn column_count(self) -> Int:
+        """Returns the number of columns in the data chunk.
+        
+        Returns:
+            The number of columns in the data chunk.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return Int(libduckdb.duckdb_data_chunk_get_column_count(self._chunk))
+
+    fn set_size(mut self, size: Int):
+        """Sets the current number of tuples in the data chunk.
+        
+        Args:
+            size: The number of tuples in the data chunk.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_data_chunk_set_size(self._chunk, size)
+
+    fn reset(mut self):
+        """Resets the data chunk, clearing the validity masks and setting the cardinality to 0.
+        
+        After calling this method, you must call duckdb_vector_get_validity and 
+        duckdb_vector_get_data to obtain current data and validity pointers.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_data_chunk_reset(self._chunk)
+
+    fn get_vector(self, col: Int) -> Vector[origin_of(self)]:
+        """Retrieves the vector at the specified column index in the data chunk.
+        
+        The pointer to the vector is valid for as long as the chunk is alive.
+        It does NOT need to be destroyed.
+        
+        Args:
+            col: The column index.
+        
+        Returns:
+            The vector at the specified column.
+        """
         ref libduckdb = DuckDB().libduckdb()
         return Vector(
             Pointer(to=self),
@@ -47,11 +120,19 @@ struct Chunk(Movable & Sized):
 
     @always_inline
     fn type(self, col: Int) -> DuckDBType:
-        return self._get_vector(col).get_column_type().get_type_id()
+        """Returns the type of the specified column.
+        
+        Args:
+            col: The column index.
+        
+        Returns:
+            The DuckDBType of the column.
+        """
+        return self.get_vector(col).get_column_type().get_type_id()
 
     fn is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
-        var validity_mask = self._get_vector(col)._get_validity_mask()
+        var validity_mask = self.get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -61,7 +142,7 @@ struct Chunk(Movable & Sized):
 
     fn is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""
-        var validity_mask = self._get_vector(col)._get_validity_mask()
+        var validity_mask = self.get_vector(col)._get_validity_mask()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -78,7 +159,7 @@ struct Chunk(Movable & Sized):
         if self.is_null(col=col, row=row):
             return None
         # TODO optimize single row access
-        return self._get_vector(col).get(type)[row]
+        return self.get_vector(col).get(type)[row]
 
     fn get[
         T: Copyable & Movable, //
@@ -86,7 +167,7 @@ struct Chunk(Movable & Sized):
         self._check_bounds(col)
         if self.is_null(col=col):
             return [None]
-        return self._get_vector(col).get(type)
+        return self.get_vector(col).get(type)
 
     # TODO remaining types
 

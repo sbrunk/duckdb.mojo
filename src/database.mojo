@@ -15,7 +15,7 @@ struct Database(Movable):
             libduckdb.duckdb_open_ext(path_ptr, db_addr, config=duckdb_config(), out_error=out_error)
         ) == DuckDBError:
             var error_ptr = out_error[]
-            var error_msg = String(error_ptr)
+            var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
             # the String constructor copies the data so this is safe
             libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
             raise Error(error_msg)
