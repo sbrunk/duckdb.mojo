@@ -16,6 +16,10 @@ def test_vector_get_column_type():
     assert_equal(vec_int.get_column_type().get_type_id(), DuckDBType.integer)
     assert_equal(vec_str.get_column_type().get_type_id(), DuckDBType.varchar)
     assert_equal(vec_dbl.get_column_type().get_type_id(), DuckDBType.decimal)
+    
+    # Validate actual values
+    var int_data = vec_int.get_data().bitcast[Int32]()
+    assert_equal(int_data[0], 42)
 
 
 def test_vector_create_standalone():
@@ -70,19 +74,31 @@ def test_vector_get_data():
 
     var data_ptr = vec.get_data()
     assert_not_equal(data_ptr, UnsafePointer[NoneType, MutAnyOrigin]())
+    
+    # Validate actual values
+    var int_data = data_ptr.bitcast[Int32]()
+    assert_equal(int_data[0], 1)
 
 
 def test_vector_get_validity():
     """Test getting the validity mask from a vector."""
     con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 1, NULL, 3")
+    result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
 
     var chunk = result.fetch_chunk()
     var vec = chunk.get_vector(0)
 
-    # Get validity mask - might be NULL if all values are valid
-    _ = vec.get_validity()
-    # Just verify we can call it without error
+    # Get validity mask and verify it's present for this case with NULLs
+    var validity = vec.get_validity()
+    assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
+    
+    # Validate the actual data and validity
+    var data_ptr = vec.get_data().bitcast[Int32]()
+    assert_true(Bool((validity[0] >> 0) & 1))  # Row 0: valid
+    assert_equal(data_ptr[0], 1)
+    assert_false(Bool((validity[0] >> 1) & 1))  # Row 1: NULL
+    assert_true(Bool((validity[0] >> 2) & 1))  # Row 2: valid
+    assert_equal(data_ptr[2], 3)
 
 
 def test_vector_ensure_validity_writable():
@@ -116,6 +132,12 @@ def test_vector_list_operations():
     # Get list size
     var size = list_vec.list_get_size()
     assert_equal(size, 3)
+    
+    # Validate actual values in child
+    var int_data = child_vec.get_data().bitcast[Int32]()
+    assert_equal(int_data[0], 1)
+    assert_equal(int_data[1], 2)
+    assert_equal(int_data[2], 3)
 
 
 def test_vector_list_nested():
@@ -131,6 +153,7 @@ def test_vector_list_nested():
     # Check it's a list type
     assert_equal(outer_list.get_column_type().get_type_id(), DuckDBType.list)
 
+    assert_equal(outer_list.list_get_size(), 2)  # 2 inner lists: [1,2] and [3,4,5]
     # Get the list_entry data to see how many inner lists there are
     var outer_data = outer_list.get_data().bitcast[duckdb_list_entry]()
     var outer_entry = outer_data[0]  # First (and only) row
@@ -173,6 +196,10 @@ def test_vector_struct_operations():
 
     assert_equal(field0.get_column_type().get_type_id(), DuckDBType.integer)
     assert_equal(field1.get_column_type().get_type_id(), DuckDBType.varchar)
+    
+    # Validate actual values
+    var int_data = field0.get_data().bitcast[Int32]()
+    assert_equal(int_data[0], 1)
 
 
 def test_vector_array_operations():
@@ -236,6 +263,10 @@ def test_vector_types_boolean():
     var vec = chunk.get_vector(0)
 
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.boolean)
+    
+    # Validate actual boolean values
+    var bool_data = vec.get_data().bitcast[Bool]()
+    assert_true(bool_data[0])
 
 
 def test_vector_types_integers():
@@ -257,6 +288,16 @@ def test_vector_types_integers():
     assert_equal(vec_si.get_column_type().get_type_id(), DuckDBType.smallint)
     assert_equal(vec_i.get_column_type().get_type_id(), DuckDBType.integer)
     assert_equal(vec_bi.get_column_type().get_type_id(), DuckDBType.bigint)
+    
+    # Validate actual values
+    var ti_data = vec_ti.get_data().bitcast[Int8]()
+    var si_data = vec_si.get_data().bitcast[Int16]()
+    var i_data = vec_i.get_data().bitcast[Int32]()
+    var bi_data = vec_bi.get_data().bitcast[Int64]()
+    assert_equal(ti_data[0], 1)
+    assert_equal(si_data[0], 2)
+    assert_equal(i_data[0], 3)
+    assert_equal(bi_data[0], 4)
 
 
 def test_vector_types_unsigned_integers():
@@ -278,6 +319,16 @@ def test_vector_types_unsigned_integers():
     assert_equal(vec_usi.get_column_type().get_type_id(), DuckDBType.usmallint)
     assert_equal(vec_ui.get_column_type().get_type_id(), DuckDBType.uinteger)
     assert_equal(vec_ubi.get_column_type().get_type_id(), DuckDBType.ubigint)
+    
+    # Validate actual values
+    var uti_data = vec_uti.get_data().bitcast[UInt8]()
+    var usi_data = vec_usi.get_data().bitcast[UInt16]()
+    var ui_data = vec_ui.get_data().bitcast[UInt32]()
+    var ubi_data = vec_ubi.get_data().bitcast[UInt64]()
+    assert_equal(uti_data[0], 1)
+    assert_equal(usi_data[0], 2)
+    assert_equal(ui_data[0], 3)
+    assert_equal(ubi_data[0], 4)
 
 
 def test_vector_types_floats():
@@ -292,6 +343,12 @@ def test_vector_types_floats():
 
     assert_equal(vec_f.get_column_type().get_type_id(), DuckDBType.float)
     assert_equal(vec_d.get_column_type().get_type_id(), DuckDBType.double)
+    
+    # Validate actual values
+    var f_data = vec_f.get_data().bitcast[Float32]()
+    var d_data = vec_d.get_data().bitcast[Float64]()
+    assert_equal(f_data[0], 1.5)
+    assert_equal(d_data[0], 2.5)
 
 
 def test_vector_types_temporal():
@@ -369,6 +426,10 @@ def test_vector_empty_list():
 
     var size = list_vec.list_get_size()
     assert_equal(size, 0)
+    
+    # Verify list entry shows empty list
+    var list_data = list_vec.get_data().bitcast[duckdb_list_entry]()
+    assert_equal(list_data[0].length, 0)
 
 
 def test_vector_map_type():

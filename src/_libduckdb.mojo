@@ -244,15 +244,19 @@ struct duckdb_string_t_inlined(Copyable, Movable):
     var inlined: InlineArray[c_char, 12]
 
 
-#! The internal representation of a list metadata entry contains the list's offset in
-#! the child vector, and its length. The parent vector holds these metadata entries,
-#! whereas the child vector holds the data
+#! DuckDB's LISTs are composed of a 'parent' vector holding metadata of each list,
+#! and a child vector holding the entries of the lists.
+#! The `duckdb_list_entry` struct contains the internal representation of a LIST metadata entry.
+#! A metadata entry contains the length of the list, and its offset in the child vector.
 @fieldwise_init
 struct duckdb_list_entry(ImplicitlyCopyable, Movable):
     var offset: UInt64
     var length: UInt64
 
 
+#! A column consists of a pointer to its internal data. Don't operate on this type directly.
+#! Instead, use functions such as `duckdb_column_data`, `duckdb_nullmask_data`,
+#! `duckdb_column_type`, and `duckdb_column_name`.
 @fieldwise_init
 struct duckdb_column(Copyable, Movable):
     var __deprecated_data: UnsafePointer[NoneType, MutExternalOrigin]
@@ -269,10 +273,10 @@ struct duckdb_column(Copyable, Movable):
         self.internal_data = UnsafePointer[NoneType, MutExternalOrigin]()
 
 
+#! 1. A standalone vector that must be destroyed, or
+#! 2. A vector to a column in a data chunk that lives as long as the data chunk lives.
 struct _duckdb_vector:
     var __vctr: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutExternalOrigin]
 
 #! A selection vector is a vector of indices, which usually refer to values in a vector.
@@ -280,42 +284,34 @@ comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutExternalOrigin]
 #! Standalone selection vectors must be destroyed.
 struct _duckdb_selection_vector:
     var __sel: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_selection_vector = UnsafePointer[_duckdb_selection_vector, MutExternalOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Types (explicit freeing/destroying)
 # ===--------------------------------------------------------------------===#
 
-
 struct duckdb_string:
     var data: UnsafePointer[c_char, MutExternalOrigin]
     var size: idx_t
-
 
 struct duckdb_blob:
     var data: UnsafePointer[NoneType, MutExternalOrigin]
     var size: idx_t
 
-
 # ===--------------------------------------------------------------------===#
 # Function types
 # ===--------------------------------------------------------------------===#
-
 
 #! Additional function info.
 #! When setting this info, it is necessary to pass a destroy-callback function.
 struct _duckdb_function_info:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutExternalOrigin]
 
 #! The bind info of a function.
 #! When setting this info, it is necessary to pass a destroy-callback function.
 struct _duckdb_bind_info:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
 
 # ===--------------------------------------------------------------------===#
@@ -325,13 +321,11 @@ comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
 #! A scalar function. Must be destroyed with `duckdb_destroy_scalar_function`.
 struct _duckdb_scalar_function:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_scalar_function = UnsafePointer[_duckdb_scalar_function, MutExternalOrigin]
 
 #! A scalar function set. Must be destroyed with `duckdb_destroy_scalar_function_set`.
 struct _duckdb_scalar_function_set:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_scalar_function_set = UnsafePointer[_duckdb_scalar_function_set, MutExternalOrigin]
 
 #! The bind function of the scalar function.
@@ -349,19 +343,16 @@ comptime duckdb_scalar_function_t = fn (
 #! An aggregate function. Must be destroyed with `duckdb_destroy_aggregate_function`.
 struct _duckdb_aggregate_function:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutExternalOrigin]
 
 #! A aggregate function set. Must be destroyed with `duckdb_destroy_aggregate_function_set`.
 struct _duckdb_aggregate_function_set:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutExternalOrigin]
 
 #! The state of an aggregate function.
 struct _duckdb_aggregate_state:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-
 comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutExternalOrigin]
 
 #! A function to return the aggregate state's size.
