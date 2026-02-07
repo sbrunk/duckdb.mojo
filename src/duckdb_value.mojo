@@ -43,7 +43,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & Trivial
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector._get_data().bitcast[Self]()[offset=offset]
+        self = vector.get_data().bitcast[Self]()[offset=offset]
 
 comptime BoolVal = DTypeValue[DuckDBType.boolean]
 comptime Int8Val = DTypeValue[DuckDBType.tinyint]
@@ -86,7 +86,7 @@ struct FixedSizeValue[
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector._get_data().bitcast[Self]()[offset=offset]
+        self = vector.get_data().bitcast[Self]()[offset=offset]
 
     fn __copyinit__(out self, other: Self):
         self.value = other.value
@@ -107,7 +107,7 @@ struct DuckDBString(DuckDBValue):
             raise "Expected type " + String(
                 DuckDBType.varchar
             ) + " but got " + String(vector.get_column_type().get_type_id())
-        var data_str_ptr = vector._get_data().bitcast[duckdb_string_t_pointer]()
+        var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
         var string_length = Int(data_str_ptr[offset].length)
         # TODO use duckdb_string_is_inlined helper instead
@@ -146,8 +146,8 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
             ) + " but got " + String(runtime_element_type)
         self.value = List[Optional[Self.T]](capacity=length)
 
-        var data_ptr = vector._get_data().bitcast[Self.T]()
-        var validity_mask = vector._get_validity_mask()
+        var data_ptr = vector.get_data().bitcast[Self.T]()
+        var validity_mask = vector.get_validity()
 
         # TODO factor out the validity mask check into a higher-order function to avoid repetition
 

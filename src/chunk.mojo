@@ -132,7 +132,7 @@ struct Chunk(Movable & Sized):
 
     fn is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
-        var validity_mask = self.get_vector(col)._get_validity_mask()
+        var validity_mask = self.get_vector(col).get_validity()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values
@@ -142,7 +142,7 @@ struct Chunk(Movable & Sized):
 
     fn is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""
-        var validity_mask = self.get_vector(col)._get_validity_mask()
+        var validity_mask = self.get_vector(col).get_validity()
         if (
             not validity_mask
         ):  # validity mask can be null if there are no NULL values

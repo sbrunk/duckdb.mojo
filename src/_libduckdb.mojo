@@ -275,6 +275,15 @@ struct _duckdb_vector:
 
 comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutExternalOrigin]
 
+#! A selection vector is a vector of indices, which usually refer to values in a vector.
+#! Can be used to slice vectors, changing their length and the order of their entries.
+#! Standalone selection vectors must be destroyed.
+struct _duckdb_selection_vector:
+    var __sel: UnsafePointer[NoneType, MutExternalOrigin]
+
+
+comptime duckdb_selection_vector = UnsafePointer[_duckdb_selection_vector, MutExternalOrigin]
+
 # ===--------------------------------------------------------------------===#
 # Types (explicit freeing/destroying)
 # ===--------------------------------------------------------------------===#
@@ -567,6 +576,8 @@ struct LibDuckDB(Movable):
     var _duckdb_to_timestamp: _duckdb_to_timestamp.fn_type
     var _duckdb_from_timestamp: _duckdb_from_timestamp.fn_type
     var _duckdb_is_finite_timestamp: _duckdb_is_finite_timestamp.fn_type
+    var _duckdb_create_vector: _duckdb_create_vector.fn_type
+    var _duckdb_destroy_vector: _duckdb_destroy_vector.fn_type
     var _duckdb_vector_get_column_type: _duckdb_vector_get_column_type.fn_type
     var _duckdb_vector_get_data: _duckdb_vector_get_data.fn_type
     var _duckdb_vector_get_validity: _duckdb_vector_get_validity.fn_type
@@ -579,6 +590,10 @@ struct LibDuckDB(Movable):
     var _duckdb_list_vector_reserve: _duckdb_list_vector_reserve.fn_type
     var _duckdb_struct_vector_get_child: _duckdb_struct_vector_get_child.fn_type
     var _duckdb_array_vector_get_child: _duckdb_array_vector_get_child.fn_type
+    var _duckdb_slice_vector: _duckdb_slice_vector.fn_type
+    var _duckdb_vector_copy_sel: _duckdb_vector_copy_sel.fn_type
+    var _duckdb_vector_reference_value: _duckdb_vector_reference_value.fn_type
+    var _duckdb_vector_reference_vector: _duckdb_vector_reference_vector.fn_type
     var _duckdb_validity_row_is_valid: _duckdb_validity_row_is_valid.fn_type
     var _duckdb_validity_set_row_validity: _duckdb_validity_set_row_validity.fn_type
     var _duckdb_validity_set_row_invalid: _duckdb_validity_set_row_invalid.fn_type
@@ -667,6 +682,8 @@ struct LibDuckDB(Movable):
             self._duckdb_to_timestamp = _duckdb_to_timestamp.load()
             self._duckdb_from_timestamp = _duckdb_from_timestamp.load()
             self._duckdb_is_finite_timestamp = _duckdb_is_finite_timestamp.load()
+            self._duckdb_create_vector = _duckdb_create_vector.load()
+            self._duckdb_destroy_vector = _duckdb_destroy_vector.load()
             self._duckdb_vector_get_column_type = _duckdb_vector_get_column_type.load()
             self._duckdb_vector_get_data = _duckdb_vector_get_data.load()
             self._duckdb_vector_get_validity = _duckdb_vector_get_validity.load()
@@ -679,6 +696,10 @@ struct LibDuckDB(Movable):
             self._duckdb_list_vector_reserve = _duckdb_list_vector_reserve.load()
             self._duckdb_struct_vector_get_child = _duckdb_struct_vector_get_child.load()
             self._duckdb_array_vector_get_child = _duckdb_array_vector_get_child.load()
+            self._duckdb_slice_vector = _duckdb_slice_vector.load()
+            self._duckdb_vector_copy_sel = _duckdb_vector_copy_sel.load()
+            self._duckdb_vector_reference_value = _duckdb_vector_reference_value.load()
+            self._duckdb_vector_reference_vector = _duckdb_vector_reference_vector.load()
             self._duckdb_validity_row_is_valid = _duckdb_validity_row_is_valid.load()
             self._duckdb_validity_set_row_validity = _duckdb_validity_set_row_validity.load()
             self._duckdb_validity_set_row_invalid = _duckdb_validity_set_row_invalid.load()
@@ -768,6 +789,8 @@ struct LibDuckDB(Movable):
         self._duckdb_to_timestamp = existing._duckdb_to_timestamp
         self._duckdb_from_timestamp = existing._duckdb_from_timestamp
         self._duckdb_is_finite_timestamp = existing._duckdb_is_finite_timestamp
+        self._duckdb_create_vector = existing._duckdb_create_vector
+        self._duckdb_destroy_vector = existing._duckdb_destroy_vector
         self._duckdb_vector_get_column_type = existing._duckdb_vector_get_column_type
         self._duckdb_vector_get_data = existing._duckdb_vector_get_data
         self._duckdb_vector_get_validity = existing._duckdb_vector_get_validity
@@ -780,6 +803,10 @@ struct LibDuckDB(Movable):
         self._duckdb_list_vector_reserve = existing._duckdb_list_vector_reserve
         self._duckdb_struct_vector_get_child = existing._duckdb_struct_vector_get_child
         self._duckdb_array_vector_get_child = existing._duckdb_array_vector_get_child
+        self._duckdb_slice_vector = existing._duckdb_slice_vector
+        self._duckdb_vector_copy_sel = existing._duckdb_vector_copy_sel
+        self._duckdb_vector_reference_value = existing._duckdb_vector_reference_value
+        self._duckdb_vector_reference_vector = existing._duckdb_vector_reference_vector
         self._duckdb_validity_row_is_valid = existing._duckdb_validity_row_is_valid
         self._duckdb_validity_set_row_validity = existing._duckdb_validity_set_row_validity
         self._duckdb_validity_set_row_invalid = existing._duckdb_validity_set_row_invalid
@@ -1239,6 +1266,24 @@ struct LibDuckDB(Movable):
     #  Vector Interface
     # ===--------------------------------------------------------------------===#
 
+    fn duckdb_create_vector(self, type: duckdb_logical_type, capacity: idx_t) -> duckdb_vector:
+        """
+        Creates a flat vector. Must be destroyed with `duckdb_destroy_vector`.
+
+        * type: The logical type of the vector.
+        * capacity: The capacity of the vector.
+        * returns: The vector.
+        """
+        return self._duckdb_create_vector(type, capacity)
+
+    fn duckdb_destroy_vector(self, vector: UnsafePointer[duckdb_vector, MutAnyOrigin]) -> NoneType:
+        """
+        Destroys the vector and de-allocates its memory.
+
+        * vector: A pointer to the vector.
+        """
+        return self._duckdb_destroy_vector(vector)
+
     fn duckdb_vector_get_column_type(self, vector: duckdb_vector) -> duckdb_logical_type:
         """
         Retrieves the column type of the specified vector.
@@ -1297,7 +1342,7 @@ struct LibDuckDB(Movable):
         return self._duckdb_vector_ensure_validity_writable(vector)
 
     fn duckdb_vector_assign_string_element(
-        self, vector: duckdb_vector, index: idx_t, str: c_char
+        self, vector: duckdb_vector, index: idx_t, str: UnsafePointer[c_char, ImmutAnyOrigin]
     ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location.
@@ -1309,7 +1354,7 @@ struct LibDuckDB(Movable):
         return self._duckdb_vector_assign_string_element(vector, index, str)
 
     fn duckdb_vector_assign_string_element_len(
-        self, vector: duckdb_vector, index: idx_t, str: c_char, str_len: idx_t
+        self, vector: duckdb_vector, index: idx_t, str: UnsafePointer[c_char, ImmutAnyOrigin], str_len: idx_t
     ) -> NoneType:
         """
         Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
@@ -1390,6 +1435,59 @@ struct LibDuckDB(Movable):
         * returns: The child vector
         """
         return self._duckdb_array_vector_get_child(vector)
+
+    fn duckdb_slice_vector(self, vector: duckdb_vector, sel: duckdb_selection_vector, len: idx_t) -> NoneType:
+        """
+        Slice a vector with a selection vector.
+        The length of the selection vector must be less than or equal to the length of the vector.
+        Turns the vector into a dictionary vector.
+
+        * vector: The vector to slice.
+        * sel: The selection vector.
+        * len: The length of the selection vector.
+        """
+        return self._duckdb_slice_vector(vector, sel, len)
+
+    fn duckdb_vector_copy_sel(
+        self,
+        src: duckdb_vector,
+        dst: duckdb_vector,
+        sel: duckdb_selection_vector,
+        src_count: idx_t,
+        src_offset: idx_t,
+        dst_offset: idx_t,
+    ) -> NoneType:
+        """
+        Copy the src vector to the dst with a selection vector that identifies which indices to copy.
+
+        * src: The vector to copy from.
+        * dst: The vector to copy to.
+        * sel: The selection vector. The length of the selection vector should not be more than the length of the src vector
+        * src_count: The number of entries from selection vector to copy. Think of this as the effective length of the
+        selection vector starting from index 0
+        * src_offset: The offset in the selection vector to copy from (important: actual number of items copied =
+        src_count - src_offset).
+        * dst_offset: The offset in the dst vector to start copying to.
+        """
+        return self._duckdb_vector_copy_sel(src, dst, sel, src_count, src_offset, dst_offset)
+
+    fn duckdb_vector_reference_value(self, vector: duckdb_vector, value: duckdb_value) -> NoneType:
+        """
+        Copies the value from `value` to `vector`.
+
+        * vector: The receiving vector.
+        * value: The value to copy into the vector.
+        """
+        return self._duckdb_vector_reference_value(vector, value)
+
+    fn duckdb_vector_reference_vector(self, to_vector: duckdb_vector, from_vector: duckdb_vector) -> NoneType:
+        """
+        Changes `to_vector` to reference `from_vector`. After, the vectors share ownership of the data.
+
+        * to_vector: The receiving vector.
+        * from_vector: The vector to reference.
+        """
+        return self._duckdb_vector_reference_vector(to_vector, from_vector)
 
     # ===--------------------------------------------------------------------===
     # Validity Mask Functions
@@ -2070,6 +2168,14 @@ comptime _duckdb_is_finite_timestamp = _dylib_function["duckdb_is_finite_timesta
     fn (duckdb_timestamp) -> Bool
 ]
 
+comptime _duckdb_create_vector = _dylib_function["duckdb_create_vector",
+    fn (duckdb_logical_type, idx_t) -> duckdb_vector
+]
+
+comptime _duckdb_destroy_vector = _dylib_function["duckdb_destroy_vector",
+    fn (UnsafePointer[duckdb_vector, MutAnyOrigin]) -> NoneType
+]
+
 comptime _duckdb_vector_get_column_type = _dylib_function["duckdb_vector_get_column_type",
     fn (duckdb_vector) -> duckdb_logical_type
 ]
@@ -2087,11 +2193,11 @@ comptime _duckdb_vector_ensure_validity_writable = _dylib_function["duckdb_vecto
 ]
 
 comptime _duckdb_vector_assign_string_element = _dylib_function["duckdb_vector_assign_string_element",
-    fn (duckdb_vector, idx_t, c_char) -> NoneType
+    fn (duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
 ]
 
 comptime _duckdb_vector_assign_string_element_len = _dylib_function["duckdb_vector_assign_string_element_len",
-    fn (duckdb_vector, idx_t, c_char, idx_t) -> NoneType
+    fn (duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> NoneType
 ]
 
 comptime _duckdb_list_vector_get_child = _dylib_function["duckdb_list_vector_get_child",
@@ -2116,6 +2222,22 @@ comptime _duckdb_struct_vector_get_child = _dylib_function["duckdb_struct_vector
 
 comptime _duckdb_array_vector_get_child = _dylib_function["duckdb_array_vector_get_child",
     fn (duckdb_vector) -> duckdb_vector
+]
+
+comptime _duckdb_slice_vector = _dylib_function["duckdb_slice_vector",
+    fn (duckdb_vector, duckdb_selection_vector, idx_t) -> NoneType
+]
+
+comptime _duckdb_vector_copy_sel = _dylib_function["duckdb_vector_copy_sel",
+    fn (duckdb_vector, duckdb_vector, duckdb_selection_vector, idx_t, idx_t, idx_t) -> NoneType
+]
+
+comptime _duckdb_vector_reference_value = _dylib_function["duckdb_vector_reference_value",
+    fn (duckdb_vector, duckdb_value) -> NoneType
+]
+
+comptime _duckdb_vector_reference_vector = _dylib_function["duckdb_vector_reference_vector",
+    fn (duckdb_vector, duckdb_vector) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===

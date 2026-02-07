@@ -7,9 +7,10 @@ from sys.intrinsics import _type_is_eq
 
 
 struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
-    var _chunk: Pointer[Chunk, Self.origin] # keep a reference to the originating chunk to avoid premature destruction
+    var _chunk: Optional[Pointer[Chunk, Self.origin]] # keep a reference to the originating chunk to avoid premature destruction
     var _vector: duckdb_vector
     var length: UInt64
+    var _is_standalone: Bool  # tracks if this is a standalone vector that needs explicit destruction
 
     fn __init__(
         out self,
@@ -20,18 +21,98 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         self._vector = vector
         self.length = length
         self._chunk = chunk
+        self._is_standalone = False
+
+    fn __init__(out self, type: LogicalType, capacity: idx_t):
+        """Creates a standalone flat vector. Must be destroyed explicitly.
+
+        * type: The logical type of the vector.
+        * capacity: The capacity of the vector.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
+        self.length = capacity
+        self._chunk = None  # No chunk for standalone vectors
+        self._is_standalone = True
+
+    fn __del__(deinit self):
+        """Destroys standalone vectors created with __init__(type, capacity)."""
+        if self._is_standalone:
+            ref libduckdb = DuckDB().libduckdb()
+            libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
     fn get_column_type(self) -> LogicalType:
+        """Retrieves the column type of the specified vector.
+
+        The result must be destroyed with `duckdb_destroy_logical_type`.
+
+        * returns: The type of the vector
+        """
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
 
-    fn _get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    fn get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+        """Retrieves the data pointer of the vector.
+
+        The data pointer can be used to read or write values from the vector.
+        How to read or write values depends on the type of the vector.
+
+        * returns: The data pointer
+        """
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_data(self._vector)
 
-    fn _get_validity_mask(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
+    fn get_validity(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
+        """Retrieves the validity mask pointer of the specified vector.
+
+        If all values are valid, this function MIGHT return NULL!
+
+        The validity mask is a bitset that signifies null-ness within the data chunk.
+        It is a series of UInt64 values, where each UInt64 value contains validity for 64 tuples.
+        The bit is set to 1 if the value is valid (i.e. not NULL) or 0 if the value is invalid (i.e. NULL).
+
+        Validity of a specific value can be obtained like this:
+
+        idx_t entry_idx = row_idx / 64;
+        idx_t idx_in_entry = row_idx % 64;
+        Bool is_valid = validity_mask[entry_idx] & (1 << idx_in_entry);
+
+        Alternatively, the (slower) duckdb_validity_row_is_valid function can be used.
+
+        * returns: The pointer to the validity mask, or NULL if no validity mask is present
+        """
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_validity(self._vector)
+
+    fn ensure_validity_writable(self) -> NoneType:
+        """Ensures the validity mask is writable by allocating it.
+
+        After this function is called, `get_validity` will ALWAYS return non-NULL.
+        This allows null values to be written to the vector, regardless of whether a validity mask was present before.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_ensure_validity_writable(self._vector)
+
+    fn assign_string_element(self, index: idx_t, str: String) -> NoneType:
+        """Assigns a string element in the vector at the specified location.
+
+        * index: The row position in the vector to assign the string to
+        * str: The null-terminated string
+        """
+        var _str = str.copy()
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_assign_string_element(self._vector, index, _str.as_c_string_slice().unsafe_ptr())
+
+    fn assign_string_element_len(self, index: idx_t, str: String, str_len: idx_t) -> NoneType:
+        """Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
+
+        * index: The row position in the vector to assign the string to
+        * str: The string
+        * str_len: The length of the string (in bytes)
+        """
+        var _str = str.copy()
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_assign_string_element_len(self._vector, index, _str.as_c_string_slice().unsafe_ptr(), str_len)
 
     fn list_get_child(self) -> Vector[Self.origin]:
         """Retrieves the child vector of a list vector.
@@ -43,7 +124,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         """
         ref libduckdb = DuckDB().libduckdb()
         return Vector(
-            self._chunk,
+            self._chunk.value(),
             libduckdb.duckdb_list_vector_get_child(self._vector),
             libduckdb.duckdb_list_vector_get_size(self._vector),
         )
@@ -51,11 +132,110 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
     fn list_get_size(self) -> idx_t:
         """Returns the size of the child vector of the list.
 
-        * vector: The vector
         * returns: The size of the child list
         """
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_list_vector_get_size(self._vector)
+
+    fn list_set_size(self, size: idx_t) -> duckdb_state:
+        """Sets the total size of the underlying child-vector of a list vector.
+
+        * size: The size of the child list.
+        * returns: The duckdb state. Returns DuckDBError if the vector is nullptr.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_list_vector_set_size(self._vector, size)
+
+    fn list_reserve(self, required_capacity: idx_t) -> duckdb_state:
+        """Sets the total capacity of the underlying child-vector of a list.
+
+        * required_capacity: the total capacity to reserve.
+        * returns: The duckdb state. Returns DuckDBError if the vector is nullptr.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_list_vector_reserve(self._vector, required_capacity)
+
+    fn struct_get_child(self, index: idx_t) -> Vector[Self.origin]:
+        """Retrieves the child vector of a struct vector.
+
+        The resulting vector is valid as long as the parent vector is valid.
+
+        * index: The child index
+        * returns: The child vector
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return Vector(
+            self._chunk.value(),
+            libduckdb.duckdb_struct_vector_get_child(self._vector, index),
+            self.length,
+        )
+
+    fn array_get_child(self) -> Vector[Self.origin]:
+        """Retrieves the child vector of an array vector.
+
+        The resulting vector is valid as long as the parent vector is valid.
+        The resulting vector has the size of the parent vector multiplied by the array size.
+
+        * returns: The child vector
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        var child_vector = libduckdb.duckdb_array_vector_get_child(self._vector)
+        # TODO: Calculate actual child size (parent size * array size)
+        # For now, pass through the length as-is
+        return Vector(
+            self._chunk.value(),
+            child_vector,
+            self.length,
+        )
+
+    fn slice(self, sel: duckdb_selection_vector, len: idx_t) -> NoneType:
+        """Slice a vector with a selection vector.
+        
+        The length of the selection vector must be less than or equal to the length of the vector.
+        Turns the vector into a dictionary vector.
+
+        * sel: The selection vector.
+        * len: The length of the selection vector.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_slice_vector(self._vector, sel, len)
+
+    fn copy_sel(
+        self,
+        dst: Vector[Self.origin],
+        sel: duckdb_selection_vector,
+        src_count: idx_t,
+        src_offset: idx_t,
+        dst_offset: idx_t,
+    ) -> NoneType:
+        """Copy this vector to the dst with a selection vector that identifies which indices to copy.
+
+        * dst: The vector to copy to.
+        * sel: The selection vector. The length of the selection vector should not be more than the length of the src vector
+        * src_count: The number of entries from selection vector to copy. Think of this as the effective length of the
+        selection vector starting from index 0
+        * src_offset: The offset in the selection vector to copy from (important: actual number of items copied =
+        src_count - src_offset).
+        * dst_offset: The offset in the dst vector to start copying to.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_copy_sel(self._vector, dst._vector, sel, src_count, src_offset, dst_offset)
+
+    fn reference_value(self, value: duckdb_value) -> NoneType:
+        """Copies the value from `value` to this vector.
+
+        * value: The value to copy into the vector.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_reference_value(self._vector, value)
+
+    fn reference_vector(self, from_vector: Vector[Self.origin]) -> NoneType:
+        """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
+
+        * from_vector: The vector to reference.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 
     fn _check_type(self, db_type: LogicalType) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
