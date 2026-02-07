@@ -101,7 +101,6 @@ struct Chunk(Movable & Sized):
         return Vector(
             Pointer(to=self),
             libduckdb.duckdb_data_chunk_get_vector(self._chunk, col),
-            length=len(self),
         )
 
     @always_inline
@@ -159,7 +158,7 @@ struct Chunk(Movable & Sized):
         if self.is_null(col=col, row=row):
             return None
         # TODO optimize single row access
-        return self.get_vector(col).get(type)[row]
+        return self.get_vector(col).get(type, len(self))[row]
 
     fn get[
         T: Copyable & Movable, //
@@ -167,7 +166,7 @@ struct Chunk(Movable & Sized):
         self._check_bounds(col)
         if self.is_null(col=col):
             return [None]
-        return self.get_vector(col).get(type)
+        return self.get_vector(col).get(type, len(self))
 
     # TODO remaining types
 

@@ -2021,7 +2021,6 @@ struct LibDuckDB(Movable):
         NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI. We therefore call a helper
         wrapper that accepts a pointer to duckdb_result instead of passing it by value directly.
         """
-        var x = UnsafePointer(to=result)
         return self._duckdb_fetch_chunk_ptr(UnsafePointer(to=result))
 
 comptime _duckdb_open = _dylib_function["duckdb_open", 

@@ -9,19 +9,14 @@ from sys.intrinsics import _type_is_eq
 struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
     var _chunk: Optional[Pointer[Chunk, Self.origin]] # keep a reference to the originating chunk to avoid premature destruction
     var _vector: duckdb_vector
-    var length: UInt64
-    var _is_standalone: Bool  # tracks if this is a standalone vector that needs explicit destruction
 
     fn __init__(
         out self,
         chunk: Pointer[Chunk, Self.origin],
         vector: duckdb_vector,
-        length: UInt64,
     ):
         self._vector = vector
-        self.length = length
         self._chunk = chunk
-        self._is_standalone = False
 
     fn __init__(out self, type: LogicalType, capacity: idx_t):
         """Creates a standalone flat vector. Must be destroyed explicitly.
@@ -31,13 +26,11 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         """
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
-        self.length = capacity
         self._chunk = None  # No chunk for standalone vectors
-        self._is_standalone = True
 
     fn __del__(deinit self):
         """Destroys standalone vectors created with __init__(type, capacity)."""
-        if self._is_standalone:
+        if not self._chunk:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
@@ -126,7 +119,6 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         return Vector(
             self._chunk.value(),
             libduckdb.duckdb_list_vector_get_child(self._vector),
-            libduckdb.duckdb_list_vector_get_size(self._vector),
         )
 
     fn list_get_size(self) -> idx_t:
@@ -167,7 +159,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         return Vector(
             self._chunk.value(),
             libduckdb.duckdb_struct_vector_get_child(self._vector, index),
-            self.length,
+            # self.length,
         )
 
     fn array_get_child(self) -> Vector[Self.origin]:
@@ -180,13 +172,9 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         """
         ref libduckdb = DuckDB().libduckdb()
         var child_vector = libduckdb.duckdb_array_vector_get_child(self._vector)
-        # Calculate actual child size (parent size * array size)
-        var array_type = self.get_column_type()
-        var array_size = array_type.array_type_array_size()
         return Vector(
             self._chunk.value(),
             child_vector,
-            self.length * array_size,
         )
 
     fn slice(self, sel: duckdb_selection_vector, len: idx_t) -> NoneType:
@@ -248,7 +236,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
 
     fn get[
         T: Copyable & Movable, //
-    ](self, expected_type: Col[T]) raises -> List[Optional[T]]:
+    ](self, expected_type: Col[T], length: Int) raises -> List[Optional[T]]:
         """Convert the data from this vector into native Mojo data structures.
         """
 
@@ -276,7 +264,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
 
         # Columns are essentially lists so we can use the same logic for getting the values.
         var result = DuckDBList[expected_type.Builder](
-            self, length=Int(self.length), offset=0
+            self, length=length, offset=0
         )
         # The way we are building our Mojo representation of the data currently via the DuckDBValue
         # trait, with different __init__ implementations depending on the concrete type, means
