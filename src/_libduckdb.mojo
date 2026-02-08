@@ -144,6 +144,52 @@ comptime DUCKDB_STATEMENT_TYPE_ATTACH = 25
 comptime DUCKDB_STATEMENT_TYPE_DETACH = 26
 comptime DUCKDB_STATEMENT_TYPE_MULTI = 27
 
+#! An enum over DuckDB's different error types.
+comptime duckdb_error_type = Int32
+comptime DUCKDB_ERROR_INVALID = 0
+comptime DUCKDB_ERROR_OUT_OF_RANGE = 1
+comptime DUCKDB_ERROR_CONVERSION = 2
+comptime DUCKDB_ERROR_UNKNOWN_TYPE = 3
+comptime DUCKDB_ERROR_DECIMAL = 4
+comptime DUCKDB_ERROR_MISMATCH_TYPE = 5
+comptime DUCKDB_ERROR_DIVIDE_BY_ZERO = 6
+comptime DUCKDB_ERROR_OBJECT_SIZE = 7
+comptime DUCKDB_ERROR_INVALID_TYPE = 8
+comptime DUCKDB_ERROR_SERIALIZATION = 9
+comptime DUCKDB_ERROR_TRANSACTION = 10
+comptime DUCKDB_ERROR_NOT_IMPLEMENTED = 11
+comptime DUCKDB_ERROR_EXPRESSION = 12
+comptime DUCKDB_ERROR_CATALOG = 13
+comptime DUCKDB_ERROR_PARSER = 14
+comptime DUCKDB_ERROR_PLANNER = 15
+comptime DUCKDB_ERROR_SCHEDULER = 16
+comptime DUCKDB_ERROR_EXECUTOR = 17
+comptime DUCKDB_ERROR_CONSTRAINT = 18
+comptime DUCKDB_ERROR_INDEX = 19
+comptime DUCKDB_ERROR_STAT = 20
+comptime DUCKDB_ERROR_CONNECTION = 21
+comptime DUCKDB_ERROR_SYNTAX = 22
+comptime DUCKDB_ERROR_SETTINGS = 23
+comptime DUCKDB_ERROR_BINDER = 24
+comptime DUCKDB_ERROR_NETWORK = 25
+comptime DUCKDB_ERROR_OPTIMIZER = 26
+comptime DUCKDB_ERROR_NULL_POINTER = 27
+comptime DUCKDB_ERROR_IO = 28
+comptime DUCKDB_ERROR_INTERRUPT = 29
+comptime DUCKDB_ERROR_FATAL = 30
+comptime DUCKDB_ERROR_INTERNAL = 31
+comptime DUCKDB_ERROR_INVALID_INPUT = 32
+comptime DUCKDB_ERROR_OUT_OF_MEMORY = 33
+comptime DUCKDB_ERROR_PERMISSION = 34
+comptime DUCKDB_ERROR_PARAMETER_NOT_RESOLVED = 35
+comptime DUCKDB_ERROR_PARAMETER_NOT_ALLOWED = 36
+comptime DUCKDB_ERROR_DEPENDENCY = 37
+comptime DUCKDB_ERROR_HTTP = 38
+comptime DUCKDB_ERROR_MISSING_EXTENSION = 39
+comptime DUCKDB_ERROR_AUTOLOAD = 40
+comptime DUCKDB_ERROR_SEQUENCE = 41
+comptime DUCKDB_INVALID_CONFIGURATION = 42
+
 
 # ===--------------------------------------------------------------------===#
 # General type definitions
@@ -542,11 +588,12 @@ struct LibDuckDB(Movable):
     var _duckdb_destroy_result: _duckdb_destroy_result.fn_type
     var _duckdb_column_name: _duckdb_column_name.fn_type
     var _duckdb_column_type: _duckdb_column_type.fn_type
-    var _duckdb_result_statement_type: _duckdb_result_statement_type.fn_type
+    var _duckdb_result_statement_type_ptr: _duckdb_result_statement_type_ptr.fn_type
     var _duckdb_column_logical_type: _duckdb_column_logical_type.fn_type
     var _duckdb_column_count: _duckdb_column_count.fn_type
     var _duckdb_rows_changed: _duckdb_rows_changed.fn_type
     var _duckdb_result_error: _duckdb_result_error.fn_type
+    var _duckdb_result_error_type: _duckdb_result_error_type.fn_type
     var _duckdb_row_count: _duckdb_row_count.fn_type
     var _duckdb_result_return_type: _duckdb_result_return_type.fn_type
     var _duckdb_vector_size: _duckdb_vector_size.fn_type
@@ -649,11 +696,12 @@ struct LibDuckDB(Movable):
             self._duckdb_destroy_result = _duckdb_destroy_result.load()
             self._duckdb_column_name = _duckdb_column_name.load()
             self._duckdb_column_type = _duckdb_column_type.load()
-            self._duckdb_result_statement_type = _duckdb_result_statement_type.load()
+            self._duckdb_result_statement_type_ptr = _duckdb_result_statement_type_ptr.load()
             self._duckdb_column_logical_type = _duckdb_column_logical_type.load()
             self._duckdb_column_count = _duckdb_column_count.load()
             self._duckdb_rows_changed = _duckdb_rows_changed.load()
             self._duckdb_result_error = _duckdb_result_error.load()
+            self._duckdb_result_error_type = _duckdb_result_error_type.load()
             self._duckdb_row_count = _duckdb_row_count.load()
             self._duckdb_result_return_type = _duckdb_result_return_type.load()
             self._duckdb_vector_size = _duckdb_vector_size.load()
@@ -757,11 +805,12 @@ struct LibDuckDB(Movable):
         self._duckdb_destroy_result = existing._duckdb_destroy_result
         self._duckdb_column_name = existing._duckdb_column_name
         self._duckdb_column_type = existing._duckdb_column_type
-        self._duckdb_result_statement_type = existing._duckdb_result_statement_type
+        self._duckdb_result_statement_type_ptr = existing._duckdb_result_statement_type_ptr
         self._duckdb_column_logical_type = existing._duckdb_column_logical_type
         self._duckdb_column_count = existing._duckdb_column_count
         self._duckdb_rows_changed = existing._duckdb_rows_changed
         self._duckdb_result_error = existing._duckdb_result_error
+        self._duckdb_result_error_type = existing._duckdb_result_error_type
         self._duckdb_row_count = existing._duckdb_row_count
         self._duckdb_result_return_type = existing._duckdb_result_return_type
         self._duckdb_vector_size = existing._duckdb_vector_size
@@ -1017,8 +1066,11 @@ struct LibDuckDB(Movable):
 
         * result: The result object to fetch the statement type from.
         * returns: duckdb_statement_type value or DUCKDB_STATEMENT_TYPE_INVALID
+
+        NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI. We therefore call a helper
+        wrapper that accepts a pointer to duckdb_result instead of passing it by value directly.
         """
-        return self._duckdb_result_statement_type(result)
+        return self._duckdb_result_statement_type_ptr(UnsafePointer(to=result))
 
     fn duckdb_column_logical_type(
         self, result: UnsafePointer[duckdb_result, ImmutAnyOrigin], col: idx_t
@@ -1045,7 +1097,7 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_column_count(result)
 
-    fn duckdb_rows_changed(self, result: UnsafePointer[duckdb_result, MutAnyOrigin]) -> idx_t:
+    fn duckdb_rows_changed(self, result: UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> idx_t:
         """
         Returns the number of rows changed by the query stored in the result. This is relevant only for INSERT/UPDATE/DELETE
         queries. For other queries the rows_changed will be 0.
@@ -1055,7 +1107,7 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_rows_changed(result)
 
-    fn duckdb_result_error(self, result: UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]:
+    fn duckdb_result_error(self, result: UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]:
         """
         Returns the error message contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
 
@@ -1065,6 +1117,15 @@ struct LibDuckDB(Movable):
         * returns: The error of the result.
         """
         return self._duckdb_result_error(result)
+
+    fn duckdb_result_error_type(self, result: UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> duckdb_error_type:
+        """
+        Returns the result error type contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
+
+        * result: The result object to fetch the error from.
+        * returns: The error type of the result.
+        """
+        return self._duckdb_result_error_type(result)
 
     fn duckdb_row_count(self, result: UnsafePointer[duckdb_result, MutAnyOrigin]) -> idx_t:
         """Deprecated."""
@@ -2059,8 +2120,8 @@ comptime _duckdb_column_type = _dylib_function["duckdb_column_type",
     fn (UnsafePointer[duckdb_result, MutAnyOrigin], idx_t) -> duckdb_type
 ]
 
-comptime _duckdb_result_statement_type = _dylib_function["duckdb_result_statement_type",
-    fn (duckdb_result) -> duckdb_statement_type
+comptime _duckdb_result_statement_type_ptr = _dylib_helpers_function["duckdb_result_statement_type_ptr",
+    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> duckdb_statement_type
 ]
 
 comptime _duckdb_column_logical_type = _dylib_function["duckdb_column_logical_type",
@@ -2072,11 +2133,15 @@ comptime _duckdb_column_count = _dylib_function["duckdb_column_count",
 ]
 
 comptime _duckdb_rows_changed = _dylib_function["duckdb_rows_changed",
-    fn (UnsafePointer[duckdb_result, MutAnyOrigin]) -> idx_t
+    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> idx_t
 ]
 
 comptime _duckdb_result_error = _dylib_function["duckdb_result_error",
-    fn (UnsafePointer[duckdb_result, MutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]
+    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> UnsafePointer[c_char, ImmutExternalOrigin]
+]
+
+comptime _duckdb_result_error_type = _dylib_function["duckdb_result_error_type",
+    fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> duckdb_error_type
 ]
 
 comptime _duckdb_row_count = _dylib_function["duckdb_row_count",

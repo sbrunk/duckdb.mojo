@@ -10,3 +10,11 @@ duckdb_data_chunk duckdb_fetch_chunk_ptr(duckdb_result *result) {
     }
     return duckdb_fetch_chunk(*result);
 }
+
+// Helper wrapper for duckdb_result_statement_type - same issue with passing by value
+duckdb_statement_type duckdb_result_statement_type_ptr(duckdb_result *result) {
+    if (!result) {
+        return DUCKDB_STATEMENT_TYPE_INVALID;
+    }
+    return duckdb_result_statement_type(*result);
+}

@@ -58,6 +58,48 @@ struct Result(Writable, Stringable):
             )
         )
 
+    fn result_statement_type(self) -> duckdb_statement_type:
+        """Returns the statement type of the statement that was executed.
+        
+        * returns: duckdb_statement_type value or DUCKDB_STATEMENT_TYPE_INVALID
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_result_statement_type(self._result)
+
+    fn rows_changed(self) -> Int:
+        """Returns the number of rows changed by the query stored in the result.
+        
+        This is relevant only for INSERT/UPDATE/DELETE queries. For other queries the rows_changed will be 0.
+        
+        * returns: The number of rows changed.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return Int(libduckdb.duckdb_rows_changed(UnsafePointer(to=self._result)))
+
+    fn result_error(self) -> String:
+        """Returns the error message contained within the result.
+        
+        The error is only set if `duckdb_query` returns `DuckDBError`.
+        The result must not be freed; it will be cleaned up when the result is destroyed.
+        
+        * returns: The error message of the result, or empty string if no error.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        var c_str = libduckdb.duckdb_result_error(UnsafePointer(to=self._result))
+        if c_str:
+            return String(unsafe_from_utf8_ptr=c_str)
+        return ""
+
+    fn result_error_type(self) -> duckdb_error_type:
+        """Returns the result error type contained within the result.
+        
+        The error is only set if `duckdb_query` returns `DuckDBError`.
+        
+        * returns: The error type of the result.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_result_error_type(UnsafePointer(to=self._result))
+
     fn write_to[W: Writer](self, mut writer: W):
         for col in self.columns:
             writer.write(col, ", ")
