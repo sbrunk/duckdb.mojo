@@ -448,71 +448,51 @@ struct duckdb_result(ImplicitlyCopyable & Movable):
 
 struct _duckdb_database:
     var __db: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_database = UnsafePointer[_duckdb_database, MutExternalOrigin]
 
 
 struct _duckdb_connection:
     var __conn: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_connection = UnsafePointer[_duckdb_connection, ImmutExternalOrigin]
 
 
 struct _duckdb_prepared_statement:
     var __prep: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_prepared_statement = UnsafePointer[_duckdb_prepared_statement, MutExternalOrigin]
 
 
 struct _duckdb_extracted_statements:
     var __extrac: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_extracted_statements = UnsafePointer[_duckdb_extracted_statements, MutExternalOrigin]
 
 
 struct _duckdb_pending_result:
     var __pend: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_pending_result = UnsafePointer[_duckdb_pending_result, MutExternalOrigin]
 
 
 struct _duckdb_appender:
     var __appn: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_appender = UnsafePointer[_duckdb_appender, MutExternalOrigin]
 
 
 struct _duckdb_config:
     var __cnfg: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_config = UnsafePointer[_duckdb_config, MutExternalOrigin]
 
 
 struct _duckdb_logical_type:
     var __lglt: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_logical_type = UnsafePointer[_duckdb_logical_type, MutExternalOrigin]
 
 
 struct _duckdb_data_chunk:
     var __dtck: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_data_chunk = UnsafePointer[_duckdb_data_chunk, MutExternalOrigin]
 
 
 struct _duckdb_value:
     var __val: UnsafePointer[NoneType, MutExternalOrigin]
-
-
 comptime duckdb_value = UnsafePointer[_duckdb_value, MutExternalOrigin]
 
 
