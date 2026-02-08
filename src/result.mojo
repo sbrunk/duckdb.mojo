@@ -763,7 +763,7 @@ struct ResultError(Stringable, Writable):
         """
         return String("ResultError('", self.message, "', error=", self.type, ")")
 
-struct MaterializedResult(Sized):
+struct MaterializedResult(Sized, Movable):
     """A result with all rows fetched into memory."""
 
     var result: Result

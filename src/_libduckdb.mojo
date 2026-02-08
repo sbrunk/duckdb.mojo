@@ -594,6 +594,7 @@ struct LibDuckDB(Movable):
     var _duckdb_rows_changed: _duckdb_rows_changed.fn_type
     var _duckdb_result_error: _duckdb_result_error.fn_type
     var _duckdb_result_error_type: _duckdb_result_error_type.fn_type
+    var _duckdb_prepare_error: _duckdb_prepare_error.fn_type
     var _duckdb_row_count: _duckdb_row_count.fn_type
     var _duckdb_result_return_type: _duckdb_result_return_type.fn_type
     var _duckdb_vector_size: _duckdb_vector_size.fn_type
@@ -702,6 +703,7 @@ struct LibDuckDB(Movable):
             self._duckdb_rows_changed = _duckdb_rows_changed.load()
             self._duckdb_result_error = _duckdb_result_error.load()
             self._duckdb_result_error_type = _duckdb_result_error_type.load()
+            self._duckdb_prepare_error = _duckdb_prepare_error.load()
             self._duckdb_row_count = _duckdb_row_count.load()
             self._duckdb_result_return_type = _duckdb_result_return_type.load()
             self._duckdb_vector_size = _duckdb_vector_size.load()
@@ -811,6 +813,7 @@ struct LibDuckDB(Movable):
         self._duckdb_rows_changed = existing._duckdb_rows_changed
         self._duckdb_result_error = existing._duckdb_result_error
         self._duckdb_result_error_type = existing._duckdb_result_error_type
+        self._duckdb_prepare_error = existing._duckdb_prepare_error
         self._duckdb_row_count = existing._duckdb_row_count
         self._duckdb_result_return_type = existing._duckdb_result_return_type
         self._duckdb_vector_size = existing._duckdb_vector_size
@@ -1143,6 +1146,22 @@ struct LibDuckDB(Movable):
         * returns: The return_type
         """
         return self._duckdb_result_return_type(result)
+
+    #===--------------------------------------------------------------------===#
+    # Prepared Statements
+    #===--------------------------------------------------------------------===#
+
+    fn duckdb_prepare_error(self, prepared_statement: duckdb_prepared_statement) -> UnsafePointer[c_char, ImmutExternalOrigin]:
+        """
+        Returns the error message associated with the given prepared statement.
+        If the prepared statement has no error message, this returns `nullptr` instead.
+
+        The error message should not be freed. It will be de-allocated when `duckdb_destroy_prepare` is called.
+
+        * prepared_statement: The prepared statement to obtain the error from.
+        * returns: The error message, or `nullptr` if there is none.
+        """
+        return self._duckdb_prepare_error(prepared_statement)
 
     # ===--------------------------------------------------------------------===#
     # Helpers
@@ -2142,6 +2161,10 @@ comptime _duckdb_result_error = _dylib_function["duckdb_result_error",
 
 comptime _duckdb_result_error_type = _dylib_function["duckdb_result_error_type",
     fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> duckdb_error_type
+]
+
+comptime _duckdb_prepare_error = _dylib_function["duckdb_prepare_error",
+    fn (duckdb_prepared_statement) -> UnsafePointer[c_char, ImmutExternalOrigin]
 ]
 
 comptime _duckdb_row_count = _dylib_function["duckdb_row_count",
