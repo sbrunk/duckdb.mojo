@@ -20,7 +20,7 @@ trait DuckDBKeyElement(DuckDBValue, KeyElement):
 
 
 @fieldwise_init
-struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & TrivialRegisterType):
+struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & TrivialRegisterPassable):
     comptime Type = Self.duckdb_type
 
     var value: Scalar[Self.Type.to_dtype()]

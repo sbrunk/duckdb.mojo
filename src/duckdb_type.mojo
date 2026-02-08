@@ -6,7 +6,7 @@ from hashlib.hasher import Hasher
 
 @fieldwise_init
 struct DuckDBType(
-    TrivialRegisterType,
+    TrivialRegisterPassable,
     Hashable,
     Stringable,
     Writable,

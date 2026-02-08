@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=0.26.2.0.dev2026020616"
+mojo-compiler = "=0.26.2.0.dev2026020805"
 
 [package.build-dependencies]
-mojo-compiler = "=0.26.2.0.dev2026020616"
+mojo-compiler = "=0.26.2.0.dev2026020805"
 
 [package.run-dependencies]
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
@@ -39,6 +39,6 @@ test = { cmd = "sh -c 'for f in test/test_*.mojo; do mojo run \"$f\" || exit 1; 
 [dependencies]
 libduckdb-devel = "=1.4"
 duckdb-cli = "=1.4"
-mojo = "=0.26.2.0.dev2026020616"
+mojo = "=0.26.2.0.dev2026020805"
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 "duckdb.mojo" = { path = "." }

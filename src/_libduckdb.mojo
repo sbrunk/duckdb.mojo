@@ -542,7 +542,7 @@ fn _get_dylib_function[
     ]()
 
 
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterType):
+struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
@@ -569,7 +569,7 @@ fn _get_dylib_helpers_function[
         result_type,
     ]()
 
-struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterType):
+struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
