@@ -13,6 +13,10 @@ def test_failure():
     con = DuckDB.connect(":memory:")
     with assert_raises(contains="Parser Error"):
         _ = con.execute("invalid statement")
+    try:
+        _ = con.execute("invalid statement")
+    except e:
+        assert_equal(e.type, ErrorType.PARSER)
 
 
 def main():

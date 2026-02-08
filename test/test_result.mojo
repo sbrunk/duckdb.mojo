@@ -149,23 +149,6 @@ def test_rows_changed_create():
     var result = conn.execute("CREATE TABLE test (id INT)")
     assert_equal(result.rows_changed(), 0)
 
-
-def test_result_error_success():
-    """Test result_error returns empty string for successful query."""
-    var conn = DuckDB.connect(":memory:")
-    var result = conn.execute("SELECT 42")
-    var error = result.result_error()
-    assert_equal(len(error), 0)
-
-
-def test_result_error_type_success():
-    """Test result_error_type returns 0 for successful query."""
-    var conn = DuckDB.connect(":memory:")
-    var result = conn.execute("SELECT 42")
-    # DUCKDB_ERROR_INVALID = 0 (no error)
-    assert_equal(result.result_error_type(), 0)
-
-
 def test_result_materialized_length():
     """Test len() on materialized result returns correct number of rows."""
     var conn = DuckDB.connect(":memory:")
