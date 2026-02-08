@@ -380,6 +380,176 @@ struct ErrorType(
 
 
 @fieldwise_init
+struct StatementType(
+    Comparable,
+    ImplicitlyCopyable,
+    Stringable,
+    Writable,
+):
+    """Represents DuckDB statement types.
+    
+    Defines the available statement types that indicate what kind of SQL
+    statement was executed.
+    """
+
+    var _value: Int32
+
+    comptime INVALID = Self(DUCKDB_STATEMENT_TYPE_INVALID)
+    """Invalid statement type."""
+
+    comptime SELECT = Self(DUCKDB_STATEMENT_TYPE_SELECT)
+    """SELECT statement."""
+
+    comptime INSERT = Self(DUCKDB_STATEMENT_TYPE_INSERT)
+    """INSERT statement."""
+
+    comptime UPDATE = Self(DUCKDB_STATEMENT_TYPE_UPDATE)
+    """UPDATE statement."""
+
+    comptime EXPLAIN = Self(DUCKDB_STATEMENT_TYPE_EXPLAIN)
+    """EXPLAIN statement."""
+
+    comptime DELETE = Self(DUCKDB_STATEMENT_TYPE_DELETE)
+    """DELETE statement."""
+
+    comptime PREPARE = Self(DUCKDB_STATEMENT_TYPE_PREPARE)
+    """PREPARE statement."""
+
+    comptime CREATE = Self(DUCKDB_STATEMENT_TYPE_CREATE)
+    """CREATE statement."""
+
+    comptime EXECUTE = Self(DUCKDB_STATEMENT_TYPE_EXECUTE)
+    """EXECUTE statement."""
+
+    comptime ALTER = Self(DUCKDB_STATEMENT_TYPE_ALTER)
+    """ALTER statement."""
+
+    comptime TRANSACTION = Self(DUCKDB_STATEMENT_TYPE_TRANSACTION)
+    """Transaction statement (BEGIN/COMMIT/ROLLBACK)."""
+
+    comptime COPY = Self(DUCKDB_STATEMENT_TYPE_COPY)
+    """COPY statement."""
+
+    comptime ANALYZE = Self(DUCKDB_STATEMENT_TYPE_ANALYZE)
+    """ANALYZE statement."""
+
+    comptime VARIABLE_SET = Self(DUCKDB_STATEMENT_TYPE_VARIABLE_SET)
+    """Variable SET statement."""
+
+    comptime CREATE_FUNC = Self(DUCKDB_STATEMENT_TYPE_CREATE_FUNC)
+    """CREATE FUNCTION statement."""
+
+    comptime DROP = Self(DUCKDB_STATEMENT_TYPE_DROP)
+    """DROP statement."""
+
+    comptime EXPORT = Self(DUCKDB_STATEMENT_TYPE_EXPORT)
+    """EXPORT statement."""
+
+    comptime PRAGMA = Self(DUCKDB_STATEMENT_TYPE_PRAGMA)
+    """PRAGMA statement."""
+
+    comptime VACUUM = Self(DUCKDB_STATEMENT_TYPE_VACUUM)
+    """VACUUM statement."""
+
+    comptime CALL = Self(DUCKDB_STATEMENT_TYPE_CALL)
+    """CALL statement."""
+
+    @always_inline
+    fn __eq__(self, other: Self) -> Bool:
+        """Returns True if this statement type equals the other statement type.
+
+        Args:
+            other: The statement type to compare with.
+
+        Returns:
+            Bool: True if the statement types are equal, False otherwise.
+        """
+        return self._value == other._value
+
+    fn __lt__(self, other: Self) -> Bool:
+        """Returns True if this statement type is less than the other statement type.
+
+        Args:
+            other: The statement type to compare with.
+
+        Returns:
+            Bool: True if this statement type is less than the other statement type,
+                False otherwise.
+        """
+        return self._value < other._value
+
+    fn write_to[W: Writer](self, mut writer: W):
+        """Writes the string representation of this statement type to a writer.
+
+        Parameters:
+            W: The writer type.
+
+        Args:
+            writer: The writer to write to.
+        """
+        if self == Self.INVALID:
+            writer.write("INVALID")
+        elif self == Self.SELECT:
+            writer.write("SELECT")
+        elif self == Self.INSERT:
+            writer.write("INSERT")
+        elif self == Self.UPDATE:
+            writer.write("UPDATE")
+        elif self == Self.EXPLAIN:
+            writer.write("EXPLAIN")
+        elif self == Self.DELETE:
+            writer.write("DELETE")
+        elif self == Self.PREPARE:
+            writer.write("PREPARE")
+        elif self == Self.CREATE:
+            writer.write("CREATE")
+        elif self == Self.EXECUTE:
+            writer.write("EXECUTE")
+        elif self == Self.ALTER:
+            writer.write("ALTER")
+        elif self == Self.TRANSACTION:
+            writer.write("TRANSACTION")
+        elif self == Self.COPY:
+            writer.write("COPY")
+        elif self == Self.ANALYZE:
+            writer.write("ANALYZE")
+        elif self == Self.VARIABLE_SET:
+            writer.write("VARIABLE_SET")
+        elif self == Self.CREATE_FUNC:
+            writer.write("CREATE_FUNC")
+        elif self == Self.DROP:
+            writer.write("DROP")
+        elif self == Self.EXPORT:
+            writer.write("EXPORT")
+        elif self == Self.PRAGMA:
+            writer.write("PRAGMA")
+        elif self == Self.VACUUM:
+            writer.write("VACUUM")
+        elif self == Self.CALL:
+            writer.write("CALL")
+
+    @no_inline
+    fn __str__(self) -> String:
+        """Returns the string representation of this statement type.
+
+        Returns:
+            String: A human-readable string representation of the statement type
+                (e.g., "SELECT", "INSERT").
+        """
+        return String.write(self)
+
+    @no_inline
+    fn __repr__(self) -> String:
+        """Returns the detailed string representation of this statement type.
+
+        Returns:
+            String: A string representation including the type name and value
+                (e.g., "StatementType.SELECT").
+        """
+        return String("StatementType.", self)
+
+
+@fieldwise_init
 struct Column(Movable & Copyable & Stringable & Writable):
     var index: Int
     var name: String
@@ -435,13 +605,14 @@ struct Result(Writable, Stringable):
             )
         )
 
-    fn result_statement_type(self) -> duckdb_statement_type:
+    fn statement_type(self) -> StatementType:
         """Returns the statement type of the statement that was executed.
         
-        * returns: duckdb_statement_type value or DUCKDB_STATEMENT_TYPE_INVALID
+        Returns:
+            StatementType: The type of statement that was executed.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_result_statement_type(self._result)
+        return StatementType(libduckdb.duckdb_result_statement_type(self._result))
 
     fn rows_changed(self) -> Int:
         """Returns the number of rows changed by the query stored in the result.

@@ -4,66 +4,59 @@ from testing.suite import TestSuite
 
 
 def test_result_statement_type_select():
-    """Test result_statement_type returns 1 for SELECT statements."""
+    """Test statement_type returns SELECT for SELECT statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1")
-    # DUCKDB_STATEMENT_TYPE_SELECT = 1 (not 0)
-    assert_equal(result.result_statement_type(), 1)
+    assert_equal(result.statement_type(), StatementType.SELECT)
 
 
 def test_result_statement_type_insert():
-    """Test result_statement_type returns 2 for INSERT statements."""
+    """Test statement_type returns INSERT for INSERT statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
     var result = conn.execute("INSERT INTO test VALUES (1)")
-    # DUCKDB_STATEMENT_TYPE_INSERT = 2
-    assert_equal(result.result_statement_type(), 2)
+    assert_equal(result.statement_type(), StatementType.INSERT)
 
 
 def test_result_statement_type_update():
-    """Test result_statement_type returns 3 for UPDATE statements."""
+    """Test statement_type returns UPDATE for UPDATE statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
     _ = conn.execute("INSERT INTO test VALUES (1)")
     var result = conn.execute("UPDATE test SET id = 2")
-    # DUCKDB_STATEMENT_TYPE_UPDATE = 3
-    assert_equal(result.result_statement_type(), 3)
+    assert_equal(result.statement_type(), StatementType.UPDATE)
 
 
 def test_result_statement_type_delete():
-    """Test result_statement_type returns 5 for DELETE statements."""
+    """Test statement_type returns DELETE for DELETE statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
     _ = conn.execute("INSERT INTO test VALUES (1)")
-    var result = conn.execute("DELETE FROM test WHERE id = 1")
-    # DUCKDB_STATEMENT_TYPE_DELETE = 5 (not 3, because 4 is not used)
-    assert_equal(result.result_statement_type(), 5)
+    var result = conn.execute("DELETE FROM test")
+    assert_equal(result.statement_type(), StatementType.DELETE)
 
 
 def test_result_statement_type_create():
-    """Test result_statement_type for CREATE statements."""
+    """Test statement_type returns CREATE for CREATE statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("CREATE TABLE test (id INT)")
-    # DUCKDB_STATEMENT_TYPE_CREATE = 7
-    assert_equal(result.result_statement_type(), 7)
+    assert_equal(result.statement_type(), StatementType.CREATE)
 
 
 def test_result_statement_type_drop():
-    """Test result_statement_type for DROP statements."""
+    """Test statement_type returns DROP for DROP statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
     var result = conn.execute("DROP TABLE test")
-    # DUCKDB_STATEMENT_TYPE_DROP = 15
-    assert_equal(result.result_statement_type(), 15)
+    assert_equal(result.statement_type(), StatementType.DROP)
 
 
 def test_result_statement_type_alter():
-    """Test result_statement_type for ALTER statements."""
+    """Test statement_type returns ALTER for ALTER statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
     var result = conn.execute("ALTER TABLE test ADD COLUMN name VARCHAR")
-    # DUCKDB_STATEMENT_TYPE_ALTER = 9
-    assert_equal(result.result_statement_type(), 9)
+    assert_equal(result.statement_type(), StatementType.ALTER)
 
 
 def test_rows_changed_insert_single():
