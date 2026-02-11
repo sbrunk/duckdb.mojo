@@ -211,7 +211,7 @@ def test_result_fetch_all():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(10))").fetch_all()
     for i in range(10):
-        assert_equal(result.get(bigint, col=0, row=i).value(), i)
+        assert_equal(result.get(bigint, col=0, row=i).value(), Int64(i))
 
 
 def test_result_iteration():
@@ -223,7 +223,7 @@ def test_result_iteration():
     while iter.__has_next__():
         var chunk = iter.__next__()
         for i in range(len(chunk)):
-            assert_equal(chunk.get(bigint, col=0, row=i).value(), count)
+            assert_equal(chunk.get(bigint, col=0, row=i).value(), Int64(count))
             count += 1
     assert_equal(count, 5)
 

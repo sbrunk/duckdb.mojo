@@ -163,9 +163,9 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (
+                    var is_valid = validity_mask[entry_idx] & UInt64((
                         1 << idx_in_entry
-                    )
+                    ))
                     if is_valid:
                         self.value.append(Optional(data_ptr[idx + offset].copy()))
                     else:
@@ -179,9 +179,9 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (
+                    var is_valid = validity_mask[entry_idx] & UInt64((
                         1 << idx_in_entry
-                    )
+                    ))
                     if is_valid:
                         self.value.append(Optional(Self.T(vector, length=1, offset=offset + idx)))
                     else:
@@ -212,9 +212,9 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & (
+                    var is_valid = validity_mask[entry_idx] & UInt64((
                         1 << idx_in_entry
-                    )
+                    ))
                     if is_valid:
                         var list_entry = data_ptr[offset + idx]
                         self.value.append(

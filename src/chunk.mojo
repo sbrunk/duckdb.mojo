@@ -37,7 +37,7 @@ struct Chunk(Movable & Sized):
         for i in range(len(types)):
             type_ptrs[i] = types[i]._logical_type
         
-        var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, len(types))
+        var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, UInt64(len(types)))
         type_ptrs.free()
         
         self._chunk = chunk
@@ -74,7 +74,7 @@ struct Chunk(Movable & Sized):
             size: The number of tuples in the data chunk.
         """
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_data_chunk_set_size(self._chunk, size)
+        libduckdb.duckdb_data_chunk_set_size(self._chunk, UInt64(size))
 
     fn reset(mut self):
         """Resets the data chunk, clearing the validity masks and setting the cardinality to 0.
@@ -100,7 +100,7 @@ struct Chunk(Movable & Sized):
         ref libduckdb = DuckDB().libduckdb()
         return Vector(
             Pointer(to=self),
-            libduckdb.duckdb_data_chunk_get_vector(self._chunk, col),
+            libduckdb.duckdb_data_chunk_get_vector(self._chunk, UInt64(col)),
         )
 
     @always_inline
@@ -148,7 +148,7 @@ struct Chunk(Movable & Sized):
             return False
         var entry_idx = row // 64
         var idx_in_entry = row % 64
-        var is_valid = validity_mask[entry_idx] & (1 << idx_in_entry)
+        var is_valid = validity_mask[entry_idx] & UInt64((1 << idx_in_entry))
         return not is_valid
 
     fn get[

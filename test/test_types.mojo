@@ -92,7 +92,7 @@ def test_list():
         assert_equal(len(l), 3)
         for list_idx in range(3):
             var list_value = l[list_idx].value()
-            assert_equal(list_value, row_idx * 3 + list_idx + 1)
+            assert_equal(list_value, Int32(row_idx * 3 + list_idx + 1))
 
     # A list with nulls
     result = con.execute("SELECT [1, null, 3]")
@@ -124,7 +124,7 @@ def test_list():
             for elem_idx in range(len(sublist)):
                 list_value = sublist[elem_idx].value()
                 assert_equal(
-                    list_value, row_idx * 4 + list_idx * 2 + elem_idx + 1
+                    list_value, Int32(row_idx * 4 + list_idx * 2 + elem_idx + 1)
                 )
 
     # A list of strings

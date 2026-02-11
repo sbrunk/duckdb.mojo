@@ -587,7 +587,7 @@ struct Result(Writable, Stringable):
     fn column_name(self, col: Int) -> String:
         ref libduckdb = DuckDB().libduckdb()
         var c_str = libduckdb.duckdb_column_name(
-            UnsafePointer(to=self._result), col
+            UnsafePointer(to=self._result), UInt64(col)
         )
         return String(unsafe_from_utf8_ptr=c_str)
 
@@ -601,7 +601,7 @@ struct Result(Writable, Stringable):
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType(
             libduckdb.duckdb_column_logical_type(
-                UnsafePointer(to=self._result), col
+                UnsafePointer(to=self._result), UInt64(col)
             )
         )
 
@@ -817,8 +817,8 @@ struct MaterializedResult(Sized, Movable):
         ref libduckdb = DuckDB().libduckdb()
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
-        var chunk_idx = Int(row // libduckdb.duckdb_vector_size())
-        var chunk_offset = Int(row % libduckdb.duckdb_vector_size())
+        var chunk_idx = Int(UInt64(row) // libduckdb.duckdb_vector_size())
+        var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
         return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
 
     fn __del__(deinit self):
