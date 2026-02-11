@@ -1,0 +1,22 @@
+[workspace]
+name = "duckdb-operator-replacement-test"
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+cmake = ">=3.20"
+ninja = "*"
+clang_osx-arm64 = "*"
+cxx-compiler = "*"
+git = "*"
+libduckdb-devel = "==1.4.4"
+
+[tasks]
+# Compile the operator replacement extension using libduckdb from conda-forge
+build-extension = "clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement.cpp -o duckdb_operator_replacement.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement_wrapper.cpp -o duckdb_operator_replacement_wrapper.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c test_functions.cpp -o test_functions.o && clang -std=c11 -O2 -I $CONDA_PREFIX/include duckdb_operator_replacement.o duckdb_operator_replacement_wrapper.o test_functions.o test_operator_replacement.c -L $CONDA_PREFIX/lib -lduckdb -lstdc++ -Wl,-rpath,$CONDA_PREFIX/lib -o test_operator_replacement"
+
+# Run the tests
+test = { cmd = "./test_operator_replacement", depends-on = ["build-extension"] }
+
+# Clean build artifacts  
+clean = "rm -f *.o test_operator_replacement"
