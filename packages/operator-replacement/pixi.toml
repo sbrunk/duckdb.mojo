@@ -1,13 +1,35 @@
 [workspace]
-name = "duckdb-operator-replacement-test"
-channels = ["conda-forge"]
-platforms = ["osx-arm64"]
+authors = ["Sören Brunk <soeren@brunk.io>"]
+channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max-nightly/"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+preview = ["pixi-build"]
+name = "duckdb-operator-replacement"
+version = "0.0.1"
 
-[dependencies]
-clang_osx-arm64 = "*"
-cxx-compiler = "*"
+[dependencies] 
+libduckdb = "=1.4"
+mojo = "=0.26.2.0.dev2026021105"
+
+[package] 
+name = "duckdb-operator-replacement"
+version = "0.0.1"
+
+[package.build]
+backend = { name = "pixi-build-cmake", version = "0.3.*" }
+
+[package.build.config]
+extra-args = ["-DCMAKE_BUILD_TYPE=Release"] 
+
+[package.host-dependencies]
 libduckdb-devel = "=1.4"
+mojo-compiler = "=0.26.2.0.dev2026021105"
 
+[package.build-dependencies]
+mojo-compiler = "=0.26.2.0.dev2026021105"
+
+[package.run-dependencies]
+
+# Legacy tasks for testing outside of package build
 [tasks]
 # Compile extension using libduckdb from conda-forge
 build-extension = "clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement.cpp -o duckdb_operator_replacement.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement_wrapper.cpp -o duckdb_operator_replacement_wrapper.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c test_functions.cpp -o test_functions.o && clang -std=c11 -O2 -I $CONDA_PREFIX/include duckdb_operator_replacement.o duckdb_operator_replacement_wrapper.o test_functions.o test_operator_replacement.c -L $CONDA_PREFIX/lib -lduckdb -lstdc++ -Wl,-rpath,$CONDA_PREFIX/lib -o test_operator_replacement"
