@@ -4,19 +4,33 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
 [dependencies]
-cmake = ">=3.20"
-ninja = "*"
 clang_osx-arm64 = "*"
 cxx-compiler = "*"
-git = "*"
-libduckdb-devel = "==1.4.4"
+libduckdb-devel = "=1.4"
 
 [tasks]
-# Compile the operator replacement extension using libduckdb from conda-forge
+# Compile extension using libduckdb from conda-forge
 build-extension = "clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement.cpp -o duckdb_operator_replacement.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c duckdb_operator_replacement_wrapper.cpp -o duckdb_operator_replacement_wrapper.o && clang++ -std=c++17 -fPIC -O2 -I $CONDA_PREFIX/include -c test_functions.cpp -o test_functions.o && clang -std=c11 -O2 -I $CONDA_PREFIX/include duckdb_operator_replacement.o duckdb_operator_replacement_wrapper.o test_functions.o test_operator_replacement.c -L $CONDA_PREFIX/lib -lduckdb -lstdc++ -Wl,-rpath,$CONDA_PREFIX/lib -o test_operator_replacement"
 
-# Run the tests
 test = { cmd = "./test_operator_replacement", depends-on = ["build-extension"] }
-
-# Clean build artifacts  
 clean = "rm -f *.o test_operator_replacement"
+
+# Feature: Build DuckDB from source instead of using conda package
+[feature.source-build.dependencies]
+cmake = ">=3.20"
+ninja = "*"
+git = "*"
+
+[feature.source-build.tasks]
+clone-duckdb = "git clone --depth 1 --branch v1.4.4 https://github.com/duckdb/duckdb.git || echo 'DuckDB already cloned'"
+
+build-duckdb = { cmd = "mkdir -p duckdb/build/release && cd duckdb/build/release && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ../.. && ninja", depends-on = ["clone-duckdb"] }
+
+# Compile extension using source-built DuckDB
+build-extension = { cmd = "clang++ -std=c++17 -fPIC -O2 -I duckdb/src/include -c duckdb_operator_replacement.cpp -o duckdb_operator_replacement.o && clang++ -std=c++17 -fPIC -O2 -I duckdb/src/include -c duckdb_operator_replacement_wrapper.cpp -o duckdb_operator_replacement_wrapper.o && clang++ -std=c++17 -fPIC -O2 -I duckdb/src/include -c test_functions.cpp -o test_functions.o && clang -std=c11 -O2 -I duckdb/src/include duckdb_operator_replacement.o duckdb_operator_replacement_wrapper.o test_functions.o test_operator_replacement.c -L duckdb/build/release/src -lduckdb -lstdc++ -Wl,-rpath,@loader_path/duckdb/build/release/src -o test_operator_replacement", depends-on = ["build-duckdb"] }
+
+test = { cmd = "./test_operator_replacement", depends-on = ["build-extension"] }
+clean = "rm -rf duckdb; rm -f *.o test_operator_replacement"
+
+[environments]
+source-build = ["source-build"]

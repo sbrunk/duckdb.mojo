@@ -19,12 +19,18 @@ curl -fsSL https://pixi.sh/install.sh | bash
 
 ### Build and Test
 
+**Default (fastest - uses conda libduckdb):**
 ```bash
 pixi install          # Install libduckdb-devel from conda-forge
-pixi run test         # Compile extension and run tests (~10 seconds)
+pixi run test         # Compile extension and run tests
 ```
 
-The extension builds against conda-forge's `libduckdb-devel` v1.4.4 package.
+**Alternative: Build from source:**
+```bash
+pixi run -e source-build test  # Build DuckDB from source and test
+```
+
+The default environment builds against conda-forge's `libduckdb-devel` v1.4.4 package (recommended). The `source-build` environment clones and builds DuckDB from source for testing custom builds or development versions.
 
 ## API Usage
 
@@ -139,11 +145,27 @@ test_pixi/
 
 ## Pixi Commands
 
+**Default environment (conda libduckdb):**
 ```bash
 pixi install          # Install libduckdb-devel from conda
 pixi run test         # Build and test extension
 pixi run clean        # Remove build artifacts
 ```
+
+**Source-build environment (build DuckDB from source):**
+```bash
+pixi run -e source-build test   # Clone, build DuckDB, compile extension, test
+pixi run -e source-build clean  # Remove all build artifacts including duckdb/
+```
+
+## Environments
+
+Two environments are available:
+
+- **default**: Uses `libduckdb-devel==1.4.4` from conda-forge (fast, recommended)
+- **source-build**: Builds DuckDB v1.4.4 from source (for testing custom builds/dev versions)
+
+Use `-e source-build` flag to run commands in the source-build environment.
 
 ## Platform Support
 
