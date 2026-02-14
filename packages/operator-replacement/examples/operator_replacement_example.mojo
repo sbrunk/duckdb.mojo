@@ -25,11 +25,11 @@ fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
     var b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16  # Process 16 Float64s at once
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -48,9 +48,9 @@ fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
     var b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
     comptime simd_width = 16
     var num_simd = Int(size) // simd_width
@@ -71,9 +71,9 @@ fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
     var b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
     comptime simd_width = 16
     var num_simd = Int(size) // simd_width
@@ -94,9 +94,9 @@ fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duc
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
     var b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
     comptime simd_width = 16
     var num_simd = Int(size) // simd_width
@@ -116,8 +116,8 @@ fn mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckd
     var size = lib.duckdb_data_chunk_get_size(input)
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
     comptime simd_width = 16
     var num_simd = Int(size) // simd_width
@@ -136,8 +136,8 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var size = lib.duckdb_data_chunk_get_size(input)
     
     var a = lib.duckdb_data_chunk_get_vector(input, 0)
-    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
-    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
     comptime simd_width = 16
     var num_simd = Int(size) // simd_width
@@ -156,13 +156,13 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
 # ===--------------------------------------------------------------------===#
 
 fn register_binary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
-    """Register a binary operator function (DOUBLE, DOUBLE -> DOUBLE)."""
+    """Register a binary operator function (FLOAT, FLOAT -> FLOAT)."""
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
     lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
     
-    var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_DOUBLE)
+    var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_FLOAT)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_set_return_type(function, type)
@@ -177,13 +177,13 @@ fn register_binary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_v
     lib.duckdb_destroy_scalar_function(UnsafePointer(to=function))
 
 fn register_unary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
-    """Register a unary operator function (DOUBLE -> DOUBLE)."""
+    """Register a unary operator function (FLOAT -> FLOAT)."""
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
     lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
     
-    var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_DOUBLE)
+    var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_FLOAT)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_set_return_type(function, type)
     lib.duckdb_destroy_logical_type(UnsafePointer(to=type))
@@ -205,7 +205,7 @@ fn main() raises:
     print("=== DuckDB Operator Replacement with Mojo ===\n")
     
     # Benchmark configuration
-    var max_iters = 100
+    var max_iters = 200
     
     var db = DuckDB()
     var conn = db.connect(":memory:")
@@ -213,7 +213,7 @@ fn main() raises:
     # IMPORTANT: Create test table BEFORE activating operator replacement
     # This ensures table creation uses standard DuckDB operators
     print("Creating test table with 100M rows...")
-    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::DOUBLE AS x, (random() * 100)::DOUBLE AS y FROM range(100_000_000)")
+    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::FLOAT AS x, (random() * 100)::FLOAT AS y FROM range(100_000_000)")
     print("✓ Table created\n")
     
     # Define benchmarks that can be used both before and after replacement
