@@ -18,6 +18,9 @@ import benchmark
 # SIMD-accelerated operator implementations
 # ===--------------------------------------------------------------------===#
 
+# NOTE: SIMD width can be tuned - benchmarks show optimal width varies by operation
+comptime simd_width = 1
+
 fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD addition."""
     ref lib = DuckDB().libduckdb()
@@ -29,7 +32,6 @@ fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -52,7 +54,6 @@ fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -75,7 +76,6 @@ fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -98,7 +98,6 @@ fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duc
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -119,7 +118,6 @@ fn mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckd
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -139,7 +137,6 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -159,7 +156,6 @@ fn mojo_cos(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -179,7 +175,6 @@ fn mojo_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -199,7 +194,6 @@ fn mojo_cos_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: du
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
     
-    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -264,7 +258,11 @@ fn register_unary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_ve
 # ===--------------------------------------------------------------------===#
 
 fn main() raises:
-    print("=== DuckDB Operator Replacement with Mojo ===\n")
+    print("\n" + "=" * 70)
+    print("=== DuckDB Operator Replacement with Mojo ===")
+    print("=" * 70)
+    print("SIMD WIDTH: " + String(simd_width))
+    print("=" * 70 + "\n")
     
     # Benchmark configuration
     var max_iters = 200
@@ -346,14 +344,14 @@ fn main() raises:
     print()
     
     # =========================================================================
-    # PHASE 2: Set up and activate Mojo operator replacement
+    # PHASE 2: Register Mojo functions and benchmark explicit calls (NO operator replacement)
     # =========================================================================
     print("=" * 70)
-    print("PHASE 2: Setting up Mojo operator replacement")
+    print("PHASE 2: Benchmarking Mojo functions (explicit calls, no replacement)")
     print("=" * 70)
     
-    # Step 1: Register custom Mojo implementations
-    print("\nStep 1: Registering Mojo operator implementations...")
+    # Register custom Mojo implementations
+    print("\nRegistering Mojo functions (NOT activating operator replacement yet)...")
     register_binary_op[mojo_add]("mojo_add", conn._conn)
     register_binary_op[mojo_subtract]("mojo_subtract", conn._conn)
     register_binary_op[mojo_multiply]("mojo_multiply", conn._conn)
@@ -365,8 +363,75 @@ fn main() raises:
     register_unary_op[mojo_cos_sin]("mojo_cos_sin", conn._conn)
     print("✓ Registered 9 custom functions\n")
     
-    # Step 2: Map operators to Mojo implementations
-    print("Step 2: Mapping operators to Mojo implementations...")
+    # Define benchmarks that explicitly call Mojo functions by name
+    fn bench_mojo_add_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_add(x, y)) FROM numbers")
+    
+    fn bench_mojo_multiply_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_multiply(x, y)) FROM numbers")
+    
+    fn bench_mojo_sqrt_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_sqrt(x)) FROM numbers")
+    
+    fn bench_mojo_log_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_log(x + 1.0)) FROM numbers")
+    
+    fn bench_mojo_cos_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_cos(x)) FROM numbers")
+    
+    fn bench_mojo_sin_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_sin(x)) FROM numbers")
+    
+    fn bench_mojo_cos_sin_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_add(mojo_cos(x), mojo_sin(x))) FROM numbers")
+    
+    fn bench_mojo_cos_sin_fused_explicit() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_cos_sin(x)) FROM numbers")
+    
+    print("[Mojo Functions - Explicit Calls]")
+    print("  mojo_add(x, y):      ", end="")
+    var explicit_add = benchmark.run[bench_mojo_add_explicit](max_iters=max_iters)
+    explicit_add.print(unit="ms")
+    
+    print("  mojo_multiply(x, y): ", end="")
+    var explicit_mul = benchmark.run[bench_mojo_multiply_explicit](max_iters=max_iters)
+    explicit_mul.print(unit="ms")
+    
+    print("  mojo_sqrt(x):        ", end="")
+    var explicit_sqrt = benchmark.run[bench_mojo_sqrt_explicit](max_iters=max_iters)
+    explicit_sqrt.print(unit="ms")
+    
+    print("  mojo_log(x+1):       ", end="")
+    var explicit_log = benchmark.run[bench_mojo_log_explicit](max_iters=max_iters)
+    explicit_log.print(unit="ms")
+    
+    print("  mojo_cos(x):         ", end="")
+    var explicit_cos = benchmark.run[bench_mojo_cos_explicit](max_iters=max_iters)
+    explicit_cos.print(unit="ms")
+    
+    print("  mojo_sin(x):         ", end="")
+    var explicit_sin = benchmark.run[bench_mojo_sin_explicit](max_iters=max_iters)
+    explicit_sin.print(unit="ms")
+    
+    print("  mojo_add(cos, sin):  ", end="")
+    var explicit_cos_sin = benchmark.run[bench_mojo_cos_sin_explicit](max_iters=max_iters)
+    explicit_cos_sin.print(unit="ms")
+    
+    print("  mojo_cos_sin(x):     ", end="")
+    var explicit_fused = benchmark.run[bench_mojo_cos_sin_fused_explicit](max_iters=max_iters)
+    explicit_fused.print(unit="ms")
+    
+    print()
+    
+    # =========================================================================
+    # PHASE 3: Activate operator replacement
+    # =========================================================================
+    print("=" * 70)
+    print("PHASE 3: Activating operator replacement")
+    print("=" * 70)
+    
+    # Map operators to Mojo implementations
+    print("\nMapping operators to Mojo implementations...")
     var oplib = OperatorReplacementLib()
     oplib.register_function_replacement("+", "mojo_add")
     oplib.register_function_replacement("-", "mojo_subtract")
@@ -378,20 +443,20 @@ fn main() raises:
     oplib.register_function_replacement("sin", "mojo_sin")
     print("✓ Registered 8 operator replacements\n")
     
-    # Step 3: Activate operator replacement
-    print("Step 3: Activating optimizer extension...")
+    # Activate operator replacement
+    print("Activating optimizer extension...")
     oplib.register_operator_replacement(conn._conn[].__conn)
     print("✓ Optimizer extension activated\n")
     
-    # Define fused benchmark (only available after registration)
+    # Define fused benchmark (uses replacement)
     fn bench_cos_sin_fused() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_cos_sin(x)) FROM numbers")
     
     # =========================================================================
-    # PHASE 3: Benchmark with Mojo-replaced operators
+    # PHASE 4: Benchmark with operator replacement active
     # =========================================================================
     print("=" * 70)
-    print("PHASE 3: Benchmarking Mojo SIMD operators")
+    print("PHASE 4: Benchmarking with operator replacement active")
     print("=" * 70)
     
     print("\n[Mojo SIMD Operators]")
@@ -432,48 +497,65 @@ fn main() raises:
     mojo_cos_sin_fused_time.print(unit="ms")
     
     # =========================================================================
-    # PHASE 4: Performance comparison
+    # PHASE 5: Performance comparison and overhead analysis
     # =========================================================================
     print("\n" + "=" * 70)
-    print("PERFORMANCE COMPARISON")
+    print("PERFORMANCE COMPARISON & OPERATOR REPLACEMENT OVERHEAD ANALYSIS")
     print("=" * 70)
     print()
     
-    fn show_speedup(name: String, std_time: benchmark.Report, mojo_time: benchmark.Report):
-        # Get times in milliseconds by passing "ms" unit to mean()
+    fn show_speedup_with_overhead(name: String, std_time: benchmark.Report, explicit_time: benchmark.Report, replacement_time: benchmark.Report):
         var std_ms = std_time.mean("ms")
-        var mojo_ms = mojo_time.mean("ms")
-        var speedup = std_ms / mojo_ms
-        var improvement = (1.0 - mojo_ms / std_ms) * 100
+        var explicit_ms = explicit_time.mean("ms")
+        var replacement_ms = replacement_time.mean("ms")
+        var explicit_speedup = std_ms / explicit_ms
+        var replacement_speedup = std_ms / replacement_ms
+        var overhead = ((replacement_ms - explicit_ms) / explicit_ms) * 100
+        
         print("  " + name)
-        print("    Standard: " + String(std_ms) + " ms | Mojo: " + String(mojo_ms) + " ms")
-        print("    Speedup: " + String(speedup) + "x | Improvement: " + String(improvement) + "%")
+        print("    DuckDB Standard:      " + String(std_ms) + " ms")
+        print("    Mojo Explicit:        " + String(explicit_ms) + " ms (" + String(explicit_speedup) + "x vs std)")
+        print("    Mojo w/ Replacement:  " + String(replacement_ms) + " ms (" + String(replacement_speedup) + "x vs std)")
+        print("    Replacement Overhead: " + String(overhead) + "%")
         print()
     
-    show_speedup("Addition (x + y):", std_add, mojo_add_time)
-    show_speedup("Multiplication (x * y):", std_mul, mojo_mul_time)
-    show_speedup("Complex (x*y + x - y/2):", std_complex, mojo_complex_time)
-    show_speedup("Square root sqrt(x):", std_sqrt, mojo_sqrt_time)
-    show_speedup("Natural log ln(x+1):", std_log, mojo_log_time)
-    show_speedup("Cosine cos(x):", std_cos, mojo_cos_time)
-    show_speedup("Sine sin(x):", std_sin, mojo_sin_time)
-    show_speedup("Separated cos(x)+sin(x):", std_cos_sin, mojo_cos_sin_time)
-    show_speedup("Fused mojo_cos_sin(x):", std_cos_sin, mojo_cos_sin_fused_time)
+    show_speedup_with_overhead("Addition (x + y):", std_add, explicit_add, mojo_add_time)
+    show_speedup_with_overhead("Multiplication (x * y):", std_mul, explicit_mul, mojo_mul_time)
+    show_speedup_with_overhead("Square root sqrt(x):", std_sqrt, explicit_sqrt, mojo_sqrt_time)
+    show_speedup_with_overhead("Natural log ln(x+1):", std_log, explicit_log, mojo_log_time)
+    show_speedup_with_overhead("Cosine cos(x):", std_cos, explicit_cos, mojo_cos_time)
+    show_speedup_with_overhead("Sine sin(x):", std_sin, explicit_sin, mojo_sin_time)
+    
+    print("  Separated cos(x)+sin(x):")
+    print("    DuckDB Standard:      " + String(std_cos_sin.mean("ms")) + " ms")
+    print("    Mojo Explicit:        " + String(explicit_cos_sin.mean("ms")) + " ms")
+    print("    Mojo w/ Replacement:  " + String(mojo_cos_sin_time.mean("ms")) + " ms")
+    var sep_overhead = ((mojo_cos_sin_time.mean("ms") - explicit_cos_sin.mean("ms")) / explicit_cos_sin.mean("ms")) * 100
+    print("    Replacement Overhead: " + String(sep_overhead) + "%")
+    print()
+    
+    print("  Fused mojo_cos_sin(x):")
+    print("    DuckDB Standard:      " + String(std_cos_sin.mean("ms")) + " ms")
+    print("    Mojo Explicit:        " + String(explicit_fused.mean("ms")) + " ms (" + String(std_cos_sin.mean("ms") / explicit_fused.mean("ms")) + "x vs std)")
+    print("    Mojo w/ Replacement:  " + String(mojo_cos_sin_fused_time.mean("ms")) + " ms (" + String(std_cos_sin.mean("ms") / mojo_cos_sin_fused_time.mean("ms")) + "x vs std)")
+    var fused_overhead = ((mojo_cos_sin_fused_time.mean("ms") - explicit_fused.mean("ms")) / explicit_fused.mean("ms")) * 100
+    print("    Replacement Overhead: " + String(fused_overhead) + "%")
+    print()
     
     print("=" * 70)
-    print("\nFUSED vs SEPARATED COMPARISON")
+    print("FUSED vs SEPARATED COMPARISON")
     print("=" * 70)
     var separated_ms = mojo_cos_sin_time.mean("ms")
     var fused_ms = mojo_cos_sin_fused_time.mean("ms")
-    var fused_speedup = separated_ms / fused_ms
-    var fused_improvement = (1.0 - fused_ms / separated_ms) * 100
-    print("  Mojo cos+sin (separated via replacement): " + String(separated_ms) + " ms")
-    print("  Mojo cos+sin (fused function):            " + String(fused_ms) + " ms")
-    print("  Fused speedup: " + String(fused_speedup) + "x")
-    print("  Fused improvement: " + String(fused_improvement) + "%")
+    var separated_explicit_ms = explicit_cos_sin.mean("ms")
+    var fused_explicit_ms = explicit_fused.mean("ms")
     
-    print("\n" + "=" * 70)
-    print("\n✓ All operators successfully replaced with Mojo implementations")
-    print("✓ Benchmark comparison complete")
-    print("\nNote: Operator replacement works on column expressions.")
-    print("Constants like '3 * 4' are folded before optimization.")
+    print("  Explicit Calls (no replacement overhead):")
+    print("    Separated mojo_add(cos, sin): " + String(separated_explicit_ms) + " ms")
+    print("    Fused mojo_cos_sin:           " + String(fused_explicit_ms) + " ms")
+    print("    Fused speedup:                " + String(separated_explicit_ms / fused_explicit_ms) + "x")
+    print()
+    print("  With Operator Replacement:")
+    print("    Separated via replacement:    " + String(separated_ms) + " ms")
+    print("    Fused function call:          " + String(fused_ms) + " ms")
+    print("    Fused speedup:                " + String(separated_ms / fused_ms) + "x")
