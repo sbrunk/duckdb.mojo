@@ -207,6 +207,12 @@ fn main() raises:
     var db = DuckDB()
     var conn = db.connect(":memory:")
     
+    # IMPORTANT: Create test table BEFORE activating operator replacement
+    # This ensures table creation uses standard DuckDB operators
+    print("Creating test table with 10M rows...")
+    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::DOUBLE AS x, (random() * 100)::DOUBLE AS y FROM range(10000000)")
+    print("✓ Table created\n")
+    
     # Step 1: Register custom Mojo implementations
     print("Step 1: Registering Mojo operator implementations...")
     register_binary_op[mojo_add]("mojo_add", conn._conn)
@@ -233,48 +239,44 @@ fn main() raises:
     oplib.register_operator_replacement(conn._conn[].__conn)
     print("✓ Optimizer extension activated\n")
     
-    # Create test data
-    print("Creating test table with 10M rows...")
-    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::DOUBLE AS x, (random() * 100)::DOUBLE AS y FROM range(10_000_000)")
-    print("✓ Table created\n")
-    
     # Benchmark: Standard operators
     print("=" * 60)
-    print("BENCHMARKING: Standard vs Mojo-replaced operators")
+    print("BENCHMARKING: Mojo-replaced operators")
     print("=" * 60)
     
-    fn bench_standard_add() capturing raises:
+    fn bench_add() capturing raises:
         _ = conn.execute("SELECT SUM(x + y) FROM numbers")
     
-    fn bench_standard_multiply() capturing raises:
+    fn bench_multiply() capturing raises:
         _ = conn.execute("SELECT SUM(x * y) FROM numbers")
     
-    fn bench_standard_complex() capturing raises:
+    fn bench_complex() capturing raises:
         _ = conn.execute("SELECT SUM(x * y + x - y / 2.0) FROM numbers")
     
-    fn bench_standard_sqrt() capturing raises:
+    fn bench_sqrt() capturing raises:
         _ = conn.execute("SELECT SUM(sqrt(x)) FROM numbers")
     
-    fn bench_standard_log() capturing raises:
+    fn bench_log() capturing raises:
         _ = conn.execute("SELECT SUM(ln(x + 1.0)) FROM numbers")
     
-    print("\n[Standard DuckDB]")
+    print("\n[Mojo SIMD Operators]")
     print("  Addition (x + y):    ", end="")
-    benchmark.run[bench_standard_add](max_iters=5).print(unit="ms")
+    benchmark.run[bench_add](max_iters=5).print(unit="ms")
     
     print("  Multiplication:      ", end="")
-    benchmark.run[bench_standard_multiply](max_iters=5).print(unit="ms")
+    benchmark.run[bench_multiply](max_iters=5).print(unit="ms")
     
     print("  Complex expr:        ", end="")
-    benchmark.run[bench_standard_complex](max_iters=5).print(unit="ms")
+    benchmark.run[bench_complex](max_iters=5).print(unit="ms")
     
     print("  sqrt(x):             ", end="")
-    benchmark.run[bench_standard_sqrt](max_iters=5).print(unit="ms")
+    benchmark.run[bench_sqrt](max_iters=5).print(unit="ms")
     
     print("  ln(x+1):             ", end="")
-    benchmark.run[bench_standard_log](max_iters=5).print(unit="ms")
+    benchmark.run[bench_log](max_iters=5).print(unit="ms")
     
     print("\n" + "=" * 60)
     print("\n✓ All operators successfully replaced with Mojo implementations")
     print("✓ Benchmarks complete")
-    print("\nNote: Performance gains depend on query complexity and data access patterns.")
+    print("\nNote: Operator replacement works on column expressions.")
+    print("Constants like '3 * 4' are folded before optimization.")

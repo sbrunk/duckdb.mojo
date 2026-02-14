@@ -1,0 +1,113 @@
+package:
+  name: duckdb-operator-replacement
+  version: 0.0.1
+
+source:
+  - path: .
+    use_gitignore: true
+    target_directory: operator-replacement-src
+  - git: https://github.com/duckdb/duckdb.git
+    tag: v1.4.4
+    target_directory: duckdb-src
+
+build:
+  number: 0
+  script: |
+    set -ex
+    
+    # Build DuckDB from source
+    cd $SRC_DIR/duckdb-src
+    mkdir -p build/release
+    cd build/release
+    
+    cmake $CMAKE_ARGS \
+      -GNinja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      ../..
+    
+    ninja
+    DUCKDB_BUILD_DIR=$(pwd)
+    DUCKDB_SRC_DIR=$SRC_DIR/duckdb-src
+    
+    # Build operator replacement extension
+    cd $SRC_DIR/operator-replacement-src
+    
+    mkdir -p build
+    cd build
+    
+    # Compile C++ sources
+    $CXX -std=c++17 -fPIC -O2 \
+      -I${DUCKDB_SRC_DIR}/src/include \
+      -c ../duckdb_operator_replacement.cpp \
+      -o duckdb_operator_replacement.o
+    
+    $CXX -std=c++17 -fPIC -O2 \
+      -I${DUCKDB_SRC_DIR}/src/include \
+      -c ../duckdb_operator_replacement_wrapper.cpp \
+      -o duckdb_operator_replacement_wrapper.o
+    
+    $CXX -std=c++17 -fPIC -O2 \
+      -I${DUCKDB_SRC_DIR}/src/include \
+      -c ../test_functions.cpp \
+      -o test_functions.o
+    
+    # Build shared library
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      $CXX -shared -fPIC \
+        duckdb_operator_replacement.o \
+        duckdb_operator_replacement_wrapper.o \
+        test_functions.o \
+        -L${DUCKDB_BUILD_DIR}/src \
+        -lduckdb \
+        -o libduckdb_operator_replacement.dylib \
+        -Wl,-rpath,@loader_path
+    else
+      $CXX -shared -fPIC \
+        duckdb_operator_replacement.o \
+        duckdb_operator_replacement_wrapper.o \
+        test_functions.o \
+        -L${DUCKDB_BUILD_DIR}/src \
+        -lduckdb \
+        -o libduckdb_operator_replacement.so \
+        -Wl,-rpath,'$ORIGIN'
+    fi
+    
+    # Build test executable
+    $CC -std=c11 -O2 \
+      -I${DUCKDB_SRC_DIR}/src/include \
+      ../test_operator_replacement.c \
+      duckdb_operator_replacement.o \
+      duckdb_operator_replacement_wrapper.o \
+      test_functions.o \
+      -L${DUCKDB_BUILD_DIR}/src \
+      -lduckdb \
+      -lstdc++ \
+      -o test_operator_replacement
+    
+    # Install shared library
+    mkdir -p $PREFIX/lib
+    cp libduckdb_operator_replacement.* $PREFIX/lib/
+    
+    # Install DuckDB library (needed at runtime)
+    cp ${DUCKDB_BUILD_DIR}/src/libduckdb.* $PREFIX/lib/
+    
+    # Install Mojo bindings
+    mkdir -p $PREFIX/lib/mojo
+    cp -r ../src $PREFIX/lib/mojo/operator_replacement
+    
+    # Install examples
+    mkdir -p $PREFIX/share/operator_replacement
+    cp -r ../examples $PREFIX/share/operator_replacement/
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ compiler('cxx') }}
+    - cmake
+    - ninja
+    - git
+
+  host: []
+
+  run: []

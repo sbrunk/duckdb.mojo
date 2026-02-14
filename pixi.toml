@@ -41,5 +41,13 @@ libduckdb-devel = "=1.4"
 duckdb-cli = "=1.4"
 mojo = "=0.26.2.0.dev2026021105"
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
-duckdb-operator-replacement = { path = "packages/operator-replacement" }
 "duckdb.mojo" = { path = "." }
+
+# Feature: operator-replacement (requires building DuckDB from source)
+[feature.operator-replacement.dependencies]
+duckdb-operator-replacement = { path = "packages/operator-replacement" }
+
+# Environments
+[environments]
+default = { solve-group = "default" }
+full = { features = ["operator-replacement"], solve-group = "default" }
