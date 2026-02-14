@@ -150,6 +150,68 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = math.log(a_data[i])
 
+fn mojo_cos(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+    """Fast SIMD cosine."""
+    ref lib = DuckDB().libduckdb()
+    var size = lib.duckdb_data_chunk_get_size(input)
+    
+    var a = lib.duckdb_data_chunk_get_vector(input, 0)
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
+    
+    comptime simd_width = 16
+    var num_simd = Int(size) // simd_width
+    
+    for i in range(num_simd):
+        var idx = i * simd_width
+        var a_vec = (a_data + idx).load[width=simd_width]()
+        result_data.store(idx, math.cos(a_vec))
+    
+    for i in range(num_simd * simd_width, Int(size)):
+        result_data[i] = math.cos(a_data[i])
+
+fn mojo_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+    """Fast SIMD sine."""
+    ref lib = DuckDB().libduckdb()
+    var size = lib.duckdb_data_chunk_get_size(input)
+    
+    var a = lib.duckdb_data_chunk_get_vector(input, 0)
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
+    
+    comptime simd_width = 16
+    var num_simd = Int(size) // simd_width
+    
+    for i in range(num_simd):
+        var idx = i * simd_width
+        var a_vec = (a_data + idx).load[width=simd_width]()
+        result_data.store(idx, math.sin(a_vec))
+    
+    for i in range(num_simd * simd_width, Int(size)):
+        result_data[i] = math.sin(a_data[i])
+
+fn mojo_cos_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+    """Fast SIMD fused cosine + sine (computes cos(x) + sin(x))."""
+    ref lib = DuckDB().libduckdb()
+    var size = lib.duckdb_data_chunk_get_size(input)
+    
+    var a = lib.duckdb_data_chunk_get_vector(input, 0)
+    var a_data = lib.duckdb_vector_get_data(a).bitcast[Float32]()
+    var result_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
+    
+    comptime simd_width = 16
+    var num_simd = Int(size) // simd_width
+    
+    for i in range(num_simd):
+        var idx = i * simd_width
+        var a_vec = (a_data + idx).load[width=simd_width]()
+        var cos_vec = math.cos(a_vec)
+        var sin_vec = math.sin(a_vec)
+        result_data.store(idx, cos_vec + sin_vec)
+    
+    for i in range(num_simd * simd_width, Int(size)):
+        result_data[i] = math.cos(a_data[i]) + math.sin(a_data[i])
+
 
 # ===--------------------------------------------------------------------===#
 # Registration helpers
@@ -232,6 +294,15 @@ fn main() raises:
     fn bench_log() capturing raises:
         _ = conn.execute("SELECT SUM(ln(x + 1.0)) FROM numbers")
     
+    fn bench_cos() capturing raises:
+        _ = conn.execute("SELECT SUM(cos(x)) FROM numbers")
+    
+    fn bench_sin() capturing raises:
+        _ = conn.execute("SELECT SUM(sin(x)) FROM numbers")
+    
+    fn bench_cos_sin() capturing raises:
+        _ = conn.execute("SELECT SUM(cos(x) + sin(x)) FROM numbers")
+    
     # =========================================================================
     # PHASE 1: Benchmark standard DuckDB operators (baseline)
     # =========================================================================
@@ -260,6 +331,18 @@ fn main() raises:
     var std_log = benchmark.run[bench_log](max_iters=max_iters)
     std_log.print(unit="ms")
     
+    print("  cos(x):              ", end="")
+    var std_cos = benchmark.run[bench_cos](max_iters=max_iters)
+    std_cos.print(unit="ms")
+    
+    print("  sin(x):              ", end="")
+    var std_sin = benchmark.run[bench_sin](max_iters=max_iters)
+    std_sin.print(unit="ms")
+    
+    print("  cos(x)+sin(x):       ", end="")
+    var std_cos_sin = benchmark.run[bench_cos_sin](max_iters=max_iters)
+    std_cos_sin.print(unit="ms")
+    
     print()
     
     # =========================================================================
@@ -277,7 +360,10 @@ fn main() raises:
     register_binary_op[mojo_divide]("mojo_divide", conn._conn)
     register_unary_op[mojo_sqrt]("mojo_sqrt", conn._conn)
     register_unary_op[mojo_log]("mojo_log", conn._conn)
-    print("✓ Registered 6 custom functions\n")
+    register_unary_op[mojo_cos]("mojo_cos", conn._conn)
+    register_unary_op[mojo_sin]("mojo_sin", conn._conn)
+    register_unary_op[mojo_cos_sin]("mojo_cos_sin", conn._conn)
+    print("✓ Registered 9 custom functions\n")
     
     # Step 2: Map operators to Mojo implementations
     print("Step 2: Mapping operators to Mojo implementations...")
@@ -288,7 +374,9 @@ fn main() raises:
     oplib.register_function_replacement("/", "mojo_divide")
     oplib.register_function_replacement("sqrt", "mojo_sqrt")
     oplib.register_function_replacement("ln", "mojo_log")
-    print("✓ Registered 6 operator replacements\n")
+    oplib.register_function_replacement("cos", "mojo_cos")
+    oplib.register_function_replacement("sin", "mojo_sin")
+    print("✓ Registered 8 operator replacements\n")
     
     # Step 3: Activate operator replacement
     print("Step 3: Activating optimizer extension...")
@@ -323,6 +411,18 @@ fn main() raises:
     var mojo_log_time = benchmark.run[bench_log](max_iters=max_iters)
     mojo_log_time.print(unit="ms")
     
+    print("  cos(x):              ", end="")
+    var mojo_cos_time = benchmark.run[bench_cos](max_iters=max_iters)
+    mojo_cos_time.print(unit="ms")
+    
+    print("  sin(x):              ", end="")
+    var mojo_sin_time = benchmark.run[bench_sin](max_iters=max_iters)
+    mojo_sin_time.print(unit="ms")
+    
+    print("  cos(x)+sin(x):       ", end="")
+    var mojo_cos_sin_time = benchmark.run[bench_cos_sin](max_iters=max_iters)
+    mojo_cos_sin_time.print(unit="ms")
+    
     # =========================================================================
     # PHASE 4: Performance comparison
     # =========================================================================
@@ -347,6 +447,9 @@ fn main() raises:
     show_speedup("Complex (x*y + x - y/2):", std_complex, mojo_complex_time)
     show_speedup("Square root sqrt(x):", std_sqrt, mojo_sqrt_time)
     show_speedup("Natural log ln(x+1):", std_log, mojo_log_time)
+    show_speedup("Cosine cos(x):", std_cos, mojo_cos_time)
+    show_speedup("Sine sin(x):", std_sin, mojo_sin_time)
+    show_speedup("Fused cos(x)+sin(x):", std_cos_sin, mojo_cos_sin_time)
     
     print("=" * 70)
     print("\n✓ All operators successfully replaced with Mojo implementations")
