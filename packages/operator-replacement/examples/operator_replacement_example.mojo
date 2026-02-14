@@ -29,7 +29,7 @@ fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8  # Process 8 Float64s at once
+    comptime simd_width = 16  # Process 16 Float64s at once
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -52,7 +52,7 @@ fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -75,7 +75,7 @@ fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -98,7 +98,7 @@ fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duc
     var b_data = lib.duckdb_vector_get_data(b).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -119,7 +119,7 @@ fn mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckd
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -139,7 +139,7 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     var a_data = lib.duckdb_vector_get_data(a).bitcast[Float64]()
     var result_data = lib.duckdb_vector_get_data(output).bitcast[Float64]()
     
-    comptime simd_width = 8
+    comptime simd_width = 16
     var num_simd = Int(size) // simd_width
     
     for i in range(num_simd):
@@ -204,17 +204,73 @@ fn register_unary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_ve
 fn main() raises:
     print("=== DuckDB Operator Replacement with Mojo ===\n")
     
+    # Benchmark configuration
+    var max_iters = 100
+    
     var db = DuckDB()
     var conn = db.connect(":memory:")
     
     # IMPORTANT: Create test table BEFORE activating operator replacement
     # This ensures table creation uses standard DuckDB operators
-    print("Creating test table with 10M rows...")
-    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::DOUBLE AS x, (random() * 100)::DOUBLE AS y FROM range(10000000)")
+    print("Creating test table with 100M rows...")
+    _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::DOUBLE AS x, (random() * 100)::DOUBLE AS y FROM range(100_000_000)")
     print("✓ Table created\n")
     
+    # Define benchmarks that can be used both before and after replacement
+    fn bench_add() capturing raises:
+        _ = conn.execute("SELECT SUM(x + y) FROM numbers")
+    
+    fn bench_multiply() capturing raises:
+        _ = conn.execute("SELECT SUM(x * y) FROM numbers")
+    
+    fn bench_complex() capturing raises:
+        _ = conn.execute("SELECT SUM(x * y + x - y / 2.0) FROM numbers")
+    
+    fn bench_sqrt() capturing raises:
+        _ = conn.execute("SELECT SUM(sqrt(x)) FROM numbers")
+    
+    fn bench_log() capturing raises:
+        _ = conn.execute("SELECT SUM(ln(x + 1.0)) FROM numbers")
+    
+    # =========================================================================
+    # PHASE 1: Benchmark standard DuckDB operators (baseline)
+    # =========================================================================
+    print("=" * 70)
+    print("PHASE 1: Benchmarking standard DuckDB operators (baseline)")
+    print("=" * 70)
+    
+    print("\n[Standard DuckDB Operators]")
+    print("  Addition (x + y):    ", end="")
+    var std_add = benchmark.run[bench_add](max_iters=max_iters)
+    std_add.print(unit="ms")
+    
+    print("  Multiplication:      ", end="")
+    var std_mul = benchmark.run[bench_multiply](max_iters=max_iters)
+    std_mul.print(unit="ms")
+    
+    print("  Complex expr:        ", end="")
+    var std_complex = benchmark.run[bench_complex](max_iters=max_iters)
+    std_complex.print(unit="ms")
+    
+    print("  sqrt(x):             ", end="")
+    var std_sqrt = benchmark.run[bench_sqrt](max_iters=max_iters)
+    std_sqrt.print(unit="ms")
+    
+    print("  ln(x+1):             ", end="")
+    var std_log = benchmark.run[bench_log](max_iters=max_iters)
+    std_log.print(unit="ms")
+    
+    print()
+    
+    # =========================================================================
+    # PHASE 2: Set up and activate Mojo operator replacement
+    # =========================================================================
+    print("=" * 70)
+    print("PHASE 2: Setting up Mojo operator replacement")
+    print("=" * 70)
+    
     # Step 1: Register custom Mojo implementations
-    print("Step 1: Registering Mojo operator implementations...")
+    print("\nStep 1: Registering Mojo operator implementations...")
     register_binary_op[mojo_add]("mojo_add", conn._conn)
     register_binary_op[mojo_subtract]("mojo_subtract", conn._conn)
     register_binary_op[mojo_multiply]("mojo_multiply", conn._conn)
@@ -239,44 +295,61 @@ fn main() raises:
     oplib.register_operator_replacement(conn._conn[].__conn)
     print("✓ Optimizer extension activated\n")
     
-    # Benchmark: Standard operators
-    print("=" * 60)
-    print("BENCHMARKING: Mojo-replaced operators")
-    print("=" * 60)
-    
-    fn bench_add() capturing raises:
-        _ = conn.execute("SELECT SUM(x + y) FROM numbers")
-    
-    fn bench_multiply() capturing raises:
-        _ = conn.execute("SELECT SUM(x * y) FROM numbers")
-    
-    fn bench_complex() capturing raises:
-        _ = conn.execute("SELECT SUM(x * y + x - y / 2.0) FROM numbers")
-    
-    fn bench_sqrt() capturing raises:
-        _ = conn.execute("SELECT SUM(sqrt(x)) FROM numbers")
-    
-    fn bench_log() capturing raises:
-        _ = conn.execute("SELECT SUM(ln(x + 1.0)) FROM numbers")
+    # =========================================================================
+    # PHASE 3: Benchmark with Mojo-replaced operators
+    # =========================================================================
+    print("=" * 70)
+    print("PHASE 3: Benchmarking Mojo SIMD operators")
+    print("=" * 70)
     
     print("\n[Mojo SIMD Operators]")
     print("  Addition (x + y):    ", end="")
-    benchmark.run[bench_add](max_iters=5).print(unit="ms")
+    var mojo_add_time = benchmark.run[bench_add](max_iters=max_iters)
+    mojo_add_time.print(unit="ms")
     
     print("  Multiplication:      ", end="")
-    benchmark.run[bench_multiply](max_iters=5).print(unit="ms")
+    var mojo_mul_time = benchmark.run[bench_multiply](max_iters=max_iters)
+    mojo_mul_time.print(unit="ms")
     
     print("  Complex expr:        ", end="")
-    benchmark.run[bench_complex](max_iters=5).print(unit="ms")
+    var mojo_complex_time = benchmark.run[bench_complex](max_iters=max_iters)
+    mojo_complex_time.print(unit="ms")
     
     print("  sqrt(x):             ", end="")
-    benchmark.run[bench_sqrt](max_iters=5).print(unit="ms")
+    var mojo_sqrt_time = benchmark.run[bench_sqrt](max_iters=max_iters)
+    mojo_sqrt_time.print(unit="ms")
     
     print("  ln(x+1):             ", end="")
-    benchmark.run[bench_log](max_iters=5).print(unit="ms")
+    var mojo_log_time = benchmark.run[bench_log](max_iters=max_iters)
+    mojo_log_time.print(unit="ms")
     
-    print("\n" + "=" * 60)
+    # =========================================================================
+    # PHASE 4: Performance comparison
+    # =========================================================================
+    print("\n" + "=" * 70)
+    print("PERFORMANCE COMPARISON")
+    print("=" * 70)
+    print()
+    
+    fn show_speedup(name: String, std_time: benchmark.Report, mojo_time: benchmark.Report):
+        # Get times in milliseconds by passing "ms" unit to mean()
+        var std_ms = std_time.mean("ms")
+        var mojo_ms = mojo_time.mean("ms")
+        var speedup = std_ms / mojo_ms
+        var improvement = (1.0 - mojo_ms / std_ms) * 100
+        print("  " + name)
+        print("    Standard: " + String(std_ms) + " ms | Mojo: " + String(mojo_ms) + " ms")
+        print("    Speedup: " + String(speedup) + "x | Improvement: " + String(improvement) + "%")
+        print()
+    
+    show_speedup("Addition (x + y):", std_add, mojo_add_time)
+    show_speedup("Multiplication (x * y):", std_mul, mojo_mul_time)
+    show_speedup("Complex (x*y + x - y/2):", std_complex, mojo_complex_time)
+    show_speedup("Square root sqrt(x):", std_sqrt, mojo_sqrt_time)
+    show_speedup("Natural log ln(x+1):", std_log, mojo_log_time)
+    
+    print("=" * 70)
     print("\n✓ All operators successfully replaced with Mojo implementations")
-    print("✓ Benchmarks complete")
+    print("✓ Benchmark comparison complete")
     print("\nNote: Operator replacement works on column expressions.")
     print("Constants like '3 * 4' are folded before optimization.")

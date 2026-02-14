@@ -12,7 +12,7 @@ std::unordered_map<string, string> OperatorReplacementExtension::replacement_reg
 
 void OperatorReplacementExtension::RegisterReplacement(const string &original_name, const string &replacement_name) {
     replacement_registry[original_name] = replacement_name;
-    printf("[DEBUG] Registered replacement: '%s' -> '%s'\n", original_name.c_str(), replacement_name.c_str());
+    // printf("[DEBUG] Registered replacement: '%s' -> '%s'\n", original_name.c_str(), replacement_name.c_str());
 }
 
 void OperatorReplacementExtension::ClearReplacements() {
@@ -28,9 +28,9 @@ void OperatorReplacementExtension::Optimize(OptimizerExtensionInput &input, uniq
         // No replacements registered, skip optimization
         return;
     }
-    printf("[DEBUG] Optimize called with %zu registered replacements\n", replacement_registry.size());
+    // printf("[DEBUG] Optimize called with %zu registered replacements\n", replacement_registry.size());
     ReplaceOperators(input.context, plan);
-    printf("[DEBUG] Optimize done!\n");
+    // printf("[DEBUG] Optimize done!\n");
 }
 
 void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, unique_ptr<LogicalOperator> &op) {
