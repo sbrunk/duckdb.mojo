@@ -1,0 +1,13 @@
+[workspace]
+authors = ["Sören Brunk <soeren@brunk.io>"]
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+preview = ["pixi-build"]
+name = "duckdb-from-source"
+
+[package] 
+name = "duckdb-from-source"
+version = "1.4.4"
+
+[package.build]
+backend = { name = "pixi-build-rattler-build", version = "0.3.*" }

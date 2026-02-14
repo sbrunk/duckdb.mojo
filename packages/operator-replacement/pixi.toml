@@ -12,6 +12,10 @@ version = "0.0.1"
 [package.build]
 backend = { name = "pixi-build-rattler-build", version = "0.3.*" }
 
+# Source dependencies - duckdb-from-source provides both library and headers
+[package.host-dependencies]
+duckdb-from-source = { path = "../duckdb-from-source" }
+
 # Testing dependencies
 [dependencies] 
 mojo = "=0.26.2.0.dev2026021105"

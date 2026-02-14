@@ -45,9 +45,26 @@ duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
+duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
+duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
+"duckdb.mojo" = { path = "." }
+mojo = "=0.26.2.0.dev2026021105"
 
 # Environments
+# 
+# default: Standard development environment using precompiled libduckdb from conda-forge.
+#          Fast to set up, suitable for most development tasks.
+#          solve-group = "default" allows sharing dependencies with other default environments.
+#
+# full:    Extended environment with operator-replacement feature enabled.
+#          Uses source-built DuckDB (duckdb-from-source) which provides internal APIs needed
+#          for operator replacement. This environment takes longer to build initially
+#          but subsequent builds are cached.
+#          solve-group = "full" isolates this environment from 'default' to prevent conflicts
+#          between conda-forge's libduckdb and duckdb-from-source.
+#          no-default-feature = true prevents including default dependencies, ensuring only
+#          duckdb-from-source is used (avoiding binary incompatibility issues).
 [environments]
 default = { solve-group = "default" }
-full = { features = ["operator-replacement"], solve-group = "default" }
+full = { features = ["operator-replacement"], solve-group = "full", no-default-feature = true }

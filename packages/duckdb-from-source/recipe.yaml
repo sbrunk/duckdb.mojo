@@ -1,0 +1,49 @@
+package:
+  name: duckdb-from-source
+  version: 1.4.4
+
+source:
+  - git: https://github.com/duckdb/duckdb.git
+    tag: v1.4.4
+    target_directory: duckdb-src
+
+build:
+  number: 0
+  script: |
+    set -ex
+    
+    # Build DuckDB from source
+    cd $SRC_DIR/duckdb-src
+    mkdir -p build/release
+    cd build/release
+    
+    cmake $CMAKE_ARGS \
+      -GNinja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      ../..
+    
+    ninja
+    
+    # Install DuckDB library and headers
+    mkdir -p $PREFIX/lib
+    mkdir -p $PREFIX/include
+    
+    # Copy library
+    cp src/libduckdb.* $PREFIX/lib/
+    
+    # Copy all headers (needed for operator replacement)
+    cd $SRC_DIR/duckdb-src
+    cp -r src/include/* $PREFIX/include/
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ compiler('cxx') }}
+    - cmake
+    - ninja
+    - git
+
+  host: []
+
+  run: []
