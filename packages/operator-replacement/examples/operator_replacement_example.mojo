@@ -383,6 +383,10 @@ fn main() raises:
     oplib.register_operator_replacement(conn._conn[].__conn)
     print("✓ Optimizer extension activated\n")
     
+    # Define fused benchmark (only available after registration)
+    fn bench_cos_sin_fused() capturing raises:
+        _ = conn.execute("SELECT SUM(mojo_cos_sin(x)) FROM numbers")
+    
     # =========================================================================
     # PHASE 3: Benchmark with Mojo-replaced operators
     # =========================================================================
@@ -423,6 +427,10 @@ fn main() raises:
     var mojo_cos_sin_time = benchmark.run[bench_cos_sin](max_iters=max_iters)
     mojo_cos_sin_time.print(unit="ms")
     
+    print("  mojo_cos_sin(x):     ", end="")
+    var mojo_cos_sin_fused_time = benchmark.run[bench_cos_sin_fused](max_iters=max_iters)
+    mojo_cos_sin_fused_time.print(unit="ms")
+    
     # =========================================================================
     # PHASE 4: Performance comparison
     # =========================================================================
@@ -449,9 +457,22 @@ fn main() raises:
     show_speedup("Natural log ln(x+1):", std_log, mojo_log_time)
     show_speedup("Cosine cos(x):", std_cos, mojo_cos_time)
     show_speedup("Sine sin(x):", std_sin, mojo_sin_time)
-    show_speedup("Fused cos(x)+sin(x):", std_cos_sin, mojo_cos_sin_time)
+    show_speedup("Separated cos(x)+sin(x):", std_cos_sin, mojo_cos_sin_time)
+    show_speedup("Fused mojo_cos_sin(x):", std_cos_sin, mojo_cos_sin_fused_time)
     
     print("=" * 70)
+    print("\nFUSED vs SEPARATED COMPARISON")
+    print("=" * 70)
+    var separated_ms = mojo_cos_sin_time.mean("ms")
+    var fused_ms = mojo_cos_sin_fused_time.mean("ms")
+    var fused_speedup = separated_ms / fused_ms
+    var fused_improvement = (1.0 - fused_ms / separated_ms) * 100
+    print("  Mojo cos+sin (separated via replacement): " + String(separated_ms) + " ms")
+    print("  Mojo cos+sin (fused function):            " + String(fused_ms) + " ms")
+    print("  Fused speedup: " + String(fused_speedup) + "x")
+    print("  Fused improvement: " + String(fused_improvement) + "%")
+    
+    print("\n" + "=" * 70)
     print("\n✓ All operators successfully replaced with Mojo implementations")
     print("✓ Benchmark comparison complete")
     print("\nNote: Operator replacement works on column expressions.")
