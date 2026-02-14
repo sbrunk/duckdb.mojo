@@ -55,7 +55,6 @@ mojo = "=0.26.2.0.dev2026021105"
 # 
 # default: Standard development environment using precompiled libduckdb from conda-forge.
 #          Fast to set up, suitable for most development tasks.
-#          solve-group = "default" allows sharing dependencies with other default environments.
 #
 # full:    Extended environment with operator-replacement feature enabled.
 #          Uses source-built DuckDB (duckdb-from-source) which provides internal APIs needed
@@ -66,5 +65,4 @@ mojo = "=0.26.2.0.dev2026021105"
 #          no-default-feature = true prevents including default dependencies, ensuring only
 #          duckdb-from-source is used (avoiding binary incompatibility issues).
 [environments]
-default = { solve-group = "default" }
 full = { features = ["operator-replacement"], solve-group = "full", no-default-feature = true }
