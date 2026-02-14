@@ -6,7 +6,4 @@ which allows replacing any scalar function or operator at query optimization tim
 Warning: This uses internal DuckDB APIs and is not part of the stable C API.
 """
 
-from ._liboperator_replacement import (
-    register_function_replacement,
-    register_operator_replacement,
-)
+from .operator_replacement import OperatorReplacementLib

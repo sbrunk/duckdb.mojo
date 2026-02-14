@@ -68,6 +68,8 @@ environments:
         build: hb0f4dca_0
       - conda: packages/duckdb-mojo-helpers
         build: hb0f4dca_0
+      - conda: packages/operator-replacement
+        build: hb0f4dca_0
       linux-aarch64:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/_openmp_mutex-4.5-2_gnu.tar.bz2
       - conda: https://prefix.dev/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -128,6 +130,8 @@ environments:
         build: he8cfe8b_0
       - conda: packages/duckdb-mojo-helpers
         build: he8cfe8b_0
+      - conda: packages/operator-replacement
+        build: he8cfe8b_0
       osx-arm64:
       - conda: https://prefix.dev/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_8.conda
@@ -179,6 +183,8 @@ environments:
       - conda: .
         build: h60d57d3_0
       - conda: packages/duckdb-mojo-helpers
+        build: h60d57d3_0
+      - conda: packages/operator-replacement
         build: h60d57d3_0
 packages:
 - conda: https://prefix.dev/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -336,6 +342,38 @@ packages:
   - libduckdb >=1.4.4,<1.4.5.0a0
 - conda: packages/duckdb-mojo-helpers
   name: duckdb-mojo-helpers
+  version: 0.0.1
+  build: he8cfe8b_0
+  subdir: linux-aarch64
+  variants:
+    target_platform: linux-aarch64
+  depends:
+  - libstdcxx >=15
+  - libgcc >=15
+  - libduckdb >=1.4.4,<1.4.5.0a0
+- conda: packages/operator-replacement
+  name: duckdb-operator-replacement
+  version: 0.0.1
+  build: h60d57d3_0
+  subdir: osx-arm64
+  variants:
+    target_platform: osx-arm64
+  depends:
+  - libcxx >=21
+  - libduckdb >=1.4.4,<1.4.5.0a0
+- conda: packages/operator-replacement
+  name: duckdb-operator-replacement
+  version: 0.0.1
+  build: hb0f4dca_0
+  subdir: linux-64
+  variants:
+    target_platform: linux-64
+  depends:
+  - libstdcxx >=15
+  - libgcc >=15
+  - libduckdb >=1.4.4,<1.4.5.0a0
+- conda: packages/operator-replacement
+  name: duckdb-operator-replacement
   version: 0.0.1
   build: he8cfe8b_0
   subdir: linux-aarch64

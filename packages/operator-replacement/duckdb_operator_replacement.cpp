@@ -72,18 +72,9 @@ void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, uniq
                     // Get the matching function overload
                     auto replacement_func = scalar_func.functions.GetFunctionByArguments(context, arg_types);
                     
-                    // Replace the function with custom version
-                    vector<unique_ptr<Expression>> children;
-                    for (auto &child : func_expr.children) {
-                        children.push_back(std::move(child));
-                    }
-                    
-                    *expr_ptr = make_uniq<BoundFunctionExpression>(
-                        expr.return_type,
-                        replacement_func,
-                        std::move(children),
-                        nullptr
-                    );
+                    // Replace the function pointer in place while preserving bind_info
+                    // This ensures C API registered functions keep their required metadata
+                    func_expr.function = replacement_func;
                 }
             }
         }

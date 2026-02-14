@@ -6,6 +6,7 @@ __pycache__/
 # C extensions
 *.so
 *.o
+*.dylib
 
 # Distribution / packaging
 .Python
@@ -169,5 +170,6 @@ cython_debug/
 .magic/
 
 .vscode/
-# magic environments
-.magic
+
+# Mojo
+*.mojopkg
