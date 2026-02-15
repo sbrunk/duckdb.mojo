@@ -1,10 +1,10 @@
 from collections import Optional
 from utils import Variant
 from duckdb.logical_type import LogicalType
-from duckdb.duckdb_value import *
+from duckdb.duckdb_wrapper import *
 
 
-struct Col[T: Copyable & Movable, Builder: DuckDBValue](ImplicitlyCopyable & Movable):
+struct Col[T: Copyable & Movable, Builder: DuckDBWrapper](ImplicitlyCopyable & Movable):
     """Represents a typed column in a DuckDB result."""
 
     # using a variant here allows us to create aliases for simple types below

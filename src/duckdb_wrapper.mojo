@@ -4,7 +4,7 @@ from collections.string import StringSlice, StaticString
 from memory import memcpy
 
 
-trait DuckDBValue(Copyable & Movable & Stringable):
+trait DuckDBWrapper(Copyable & Movable & Stringable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
@@ -15,7 +15,7 @@ trait DuckDBValue(Copyable & Movable & Stringable):
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         ...
 
-trait DuckDBKeyElement(DuckDBValue, KeyElement):
+trait DuckDBKeyElement(DuckDBWrapper, KeyElement):
     pass
 
 
@@ -61,7 +61,7 @@ comptime Float64Val = DTypeValue[DuckDBType.double]
 @fieldwise_init
 struct FixedSizeValue[
     duckdb_type: DuckDBType, underlying: Stringable & Writable & ImplicitlyCopyable & Movable
-](DuckDBValue & ImplicitlyCopyable):
+](DuckDBWrapper & ImplicitlyCopyable):
     comptime Type = Self.duckdb_type
     var value: Self.underlying
 
@@ -98,7 +98,7 @@ comptime DuckDBInterval = FixedSizeValue[DuckDBType.interval, Time]
 
 
 @fieldwise_init
-struct DuckDBString(DuckDBValue):
+struct DuckDBString(DuckDBWrapper):
     comptime Type = DuckDBType.varchar
     var value: String
 
@@ -128,7 +128,7 @@ struct DuckDBString(DuckDBValue):
 
 
 @fieldwise_init
-struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
+struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable):
     """A DuckDB list."""
     comptime Type = DuckDBType.list
 
@@ -234,7 +234,7 @@ struct DuckDBList[T: DuckDBValue & Movable](DuckDBValue & Copyable & Movable):
             )
 
 # @fieldwise_init
-# struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBValue](DuckDBValue):
+# struct DuckDBMap[K: DuckDBKeyElement, V: DuckDBWrapper](DuckDBWrapper):
 #     comptime Type = DuckDBType.map
 #     var value: Dict[K, V]
 

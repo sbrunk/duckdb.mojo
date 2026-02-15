@@ -1,6 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.logical_type import *
-from duckdb.duckdb_value import *
+from duckdb.duckdb_wrapper import *
 from collections import Optional
 
 from sys.intrinsics import _type_is_eq
@@ -281,13 +281,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         var result = DuckDBList[expected_type.Builder](
             self, length=length, offset=0
         )
-        # The way we are building our Mojo representation of the data currently via the DuckDBValue
+        # The way we are building our Mojo representation of the data currently via the DuckDBWrapper
         # trait, with different __init__ implementations depending on the concrete type, means
         # that the types don't match.
         #
         # We can cast the result to the expected type though because
         # 1. We have ensured that the runtime type matches the expected type through _check_type
-        # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
+        # 2. The DuckDBWrapper implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
         return rebind[List[Optional[T]]](result).copy()
         
