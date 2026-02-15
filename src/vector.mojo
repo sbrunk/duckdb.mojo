@@ -9,6 +9,7 @@ from sys.intrinsics import _type_is_eq
 struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
     var _chunk: Optional[Pointer[Chunk, Self.origin]] # keep a reference to the originating chunk to avoid premature destruction
     var _vector: duckdb_vector
+    var _owned: Bool  # True if this Vector owns the duckdb_vector and must destroy it
 
     fn __init__(
         out self,
@@ -17,6 +18,20 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
     ):
         self._vector = vector
         self._chunk = chunk
+        self._owned = False  # Vectors from chunks are not owned
+
+    fn __init__(out self, vector: duckdb_vector):
+        """Creates a non-owning mutable Vector from a duckdb_vector pointer.
+        
+        This is useful for wrapping vectors managed by DuckDB (e.g., output vectors
+        in scalar function callbacks) where lifetime tracking isn't needed.
+        Use with explicit origin: Vector[origin=MutAnyOrigin](raw_vector)
+        
+        * vector: The duckdb_vector pointer to wrap (not owned).
+        """
+        self._vector = vector
+        self._chunk = None  # No chunk reference needed
+        self._owned = False  # Not owned by this wrapper
 
     fn __init__(out self, type: LogicalType, capacity: idx_t):
         """Creates a standalone flat vector. Must be destroyed explicitly.
@@ -27,10 +42,11 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
         self._chunk = None  # No chunk for standalone vectors
+        self._owned = True  # This vector is owned and must be destroyed
 
     fn __del__(deinit self):
         """Destroys standalone vectors created with __init__(type, capacity)."""
-        if not self._chunk:
+        if self._owned:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 

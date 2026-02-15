@@ -4,30 +4,120 @@ from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 
 
+struct FunctionInfo:
+    """Provides access to function information during scalar function execution.
+    
+    This struct wraps the `duckdb_function_info` pointer passed to scalar function callbacks.
+    It's a non-owning wrapper - the underlying pointer is managed by DuckDB.
+    
+    Example:
+    ```mojo
+    from duckdb import Connection, DuckDBType, Chunk
+    from duckdb.scalar_function import ScalarFunction, FunctionInfo
+    from duckdb.logical_type import LogicalType
+    from duckdb.vector import Vector
+    
+    fn my_function(info: FunctionInfo, input: Chunk, output: Vector):
+        # Access extra info
+        var extra = info.get_extra_info()
+        
+        # Access bind data
+        var bind_data = info.get_bind_data()
+        
+        # Report errors if something goes wrong
+        if len(input) == 0:
+            info.set_error("Input chunk is empty")
+            return
+        
+        # Process data...
+        var size = len(input)
+        # ... your processing logic here
+    ```
+    """
+    
+    var _info: duckdb_function_info
+    
+    fn __init__(out self, info: duckdb_function_info):
+        """Creates a FunctionInfo from a duckdb_function_info pointer.
+        
+        This is a non-owning wrapper - the pointer is managed by DuckDB.
+        
+        Args:
+            info: The duckdb_function_info pointer from the callback.
+        """
+        self._info = info
+    
+    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+        """Retrieves the extra info set via `ScalarFunction.set_extra_info()`.
+        
+        Returns:
+            Pointer to the extra info data.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_scalar_function_get_extra_info(self._info)
+    
+    fn get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+        """Gets the bind data set during the bind phase.
+        
+        Note that the bind data is read-only during execution.
+        
+        Returns:
+            Pointer to the bind data.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_scalar_function_get_bind_data(self._info)
+    
+    fn set_error(self, error: String):
+        """Reports an error during function execution.
+        
+        This should be called when the function encounters an error.
+        After calling this, the function should return without setting output values.
+        
+        Args:
+            error: The error message to report.
+        """
+        var error_copy = error.copy()
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_scalar_function_set_error(
+            self._info,
+            error_copy.as_c_string_slice().unsafe_ptr()
+        )
+
+
 struct ScalarFunction(Movable):
     """A scalar function that can be registered in DuckDB.
 
     Wraps the `duckdb_scalar_function` C API for safer, more idiomatic Mojo usage.
     
+    Functions are written using high-level Mojo types (FunctionInfo, Chunk, Vector)
+    which provide better ergonomics and type safety. The API automatically handles
+    conversion from low-level FFI types.
+    
     Example:
     ```mojo
-    from duckdb import Connection
-    from duckdb.scalar_function import ScalarFunction
+    from duckdb import Connection, DuckDBType
+    from duckdb.scalar_function import ScalarFunction, FunctionInfo
     from duckdb.logical_type import LogicalType
-    from duckdb._libduckdb import *
+    from duckdb import Chunk
+    from duckdb.vector import Vector
     
-    fn my_function(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
-        # Implementation
-        ...
+    fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
+        # Write your function using fully high-level types!
+        var size = len(input)
+        var in_vec = input.get_vector(0)
+        var in_data = in_vec.get_data().bitcast[Int32]()
+        var out_data = output.get_data().bitcast[Int32]()
+        
+        for i in range(size):
+            out_data[i] = in_data[i] + 1
         
     var conn = Connection(":memory:")
     var func = ScalarFunction()
-    func.set_name("my_func")
-    from duckdb.api import DuckDB
-    var float_type = LogicalType(DuckDBType.float)
-    func.add_parameter(float_type)
-    func.set_return_type(float_type)
-    func.set_function(my_function)
+    func.set_name("add_one")
+    var int_type = LogicalType(DuckDBType.integer)
+    func.add_parameter(int_type)
+    func.set_return_type(int_type)
+    func.set_function[add_one]()  # Pass function as compile-time parameter
     func.register(conn)
     ```
     """
@@ -155,15 +245,49 @@ struct ScalarFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
-    fn set_function(self, function: duckdb_scalar_function_t):
-        """Sets the main execution function of the scalar function.
+    fn set_function[
+        func: fn(FunctionInfo, mut Chunk, Vector) -> None
+    ](self):
+        """Sets the main execution function using high-level Mojo types.
         
-        This is the function that will be called for each data chunk during query execution.
-
-        * function: The main function callback.
+        Automatically creates a wrapper that converts all low-level FFI types
+        to high-level Mojo types (FunctionInfo, Chunk, Vector) before calling your function.
+        
+        Example:
+        ```mojo
+        from duckdb import Chunk, Vector
+        from duckdb.scalar_function import FunctionInfo, ScalarFunction
+        fn my_add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_vec = input.get_vector(0)
+            var in_data = in_vec.get_data().bitcast[Int32]()
+            var out_data = output.get_data().bitcast[Int32]()
+            
+            for i in range(size):
+                out_data[i] = in_data[i] + 1
+        
+        var func = ScalarFunction()
+        func.set_function[my_add_one]()  # Pass function as compile-time parameter
+        ```
+        
+        * func: Your function with signature fn(FunctionInfo, mut Chunk, Vector). Pass it in square brackets.
         """
+        # Create a wrapper function that converts FFI types to high-level types
+        fn wrapper(raw_info: duckdb_function_info, 
+                   raw_input: duckdb_data_chunk, 
+                   raw_output: duckdb_vector):
+            # Wrap FFI types in high-level non-owning wrappers
+            var info = FunctionInfo(raw_info)
+            var input_chunk = Chunk(raw_input, take_ownership=False)
+            # Output vector doesn't need chunk reference - DuckDB manages its lifetime
+            var output_vec = Vector[origin=MutAnyOrigin](raw_output)
+            
+            # Call the user's high-level function
+            func(info, input_chunk, output_vec)
+        
+        # Register the wrapper with DuckDB
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_scalar_function_set_function(self._function, function)
+        libduckdb.duckdb_scalar_function_set_function(self._function, wrapper)
 
     fn register(mut self, conn: Connection) raises:
         """Registers the scalar function within the given connection.

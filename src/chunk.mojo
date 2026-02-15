@@ -12,20 +12,29 @@ struct Chunk(Movable & Sized):
     
     Data chunks represent a horizontal slice of a table. They hold a number of vectors,
     that can each hold up to the VECTOR_SIZE rows (usually 2048).
+    
+    The Chunk can be either owning or non-owning (borrowed). When borrowed from DuckDB
+    (e.g., in scalar function callbacks), the chunk will not be destroyed when it goes
+    out of scope.
     """
 
     var _chunk: duckdb_data_chunk
+    var _owned: Bool  # Tracks if this struct owns the underlying pointer
 
-    fn __init__(out self, chunk: duckdb_data_chunk):
+    fn __init__(out self, chunk: duckdb_data_chunk, take_ownership: Bool = False):
         """Creates a Chunk from a duckdb_data_chunk pointer.
         
         Args:
             chunk: The underlying duckdb_data_chunk pointer.
+            take_ownership: Whether this Chunk owns the pointer (default: False for borrowed refs).
         """
         self._chunk = chunk
+        self._owned = take_ownership
 
     fn __init__(out self, types: List[LogicalType]):
         """Creates an empty data chunk with the specified column types.
+        
+        This creates an owned chunk that will be destroyed when it goes out of scope.
         
         Args:
             types: A list of logical types for each column.
@@ -41,13 +50,23 @@ struct Chunk(Movable & Sized):
         type_ptrs.free()
         
         self._chunk = chunk
+        self._owned = True  # This chunk is owned
 
     fn __del__(deinit self):
-        ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
+        """Destroys the chunk if it's owned by this instance."""
+        if self._owned:
+            ref libduckdb = DuckDB().libduckdb()
+            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
     fn __moveinit__(out self, deinit existing: Self):
+        """Move constructor that transfers ownership."""
         self._chunk = existing._chunk
+        self._owned = existing._owned
+
+    fn __copyinit__(out self, existing: Self):
+        """Copy constructor - creates a non-owning reference."""
+        self._chunk = existing._chunk
+        self._owned = False  # Copy doesn't own the resource
 
     fn __len__(self) -> Int:
         """Returns the current number of tuples (rows) in the data chunk.

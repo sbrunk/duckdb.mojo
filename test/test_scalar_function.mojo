@@ -6,62 +6,54 @@ from testing.suite import TestSuite
 
 
 # ===--------------------------------------------------------------------===#
-# Helper UDF implementations
+# Helper UDF implementations (using high-level API)
 # ===--------------------------------------------------------------------===#
 
-fn simple_add_one(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
-    """Simple UDF that adds 1 to the input."""
-    ref lib = DuckDB().libduckdb()
-    var size = lib.duckdb_data_chunk_get_size(input)
+fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
+    """UDF that adds 1 to the input."""
+    var size = len(input)
+    var in_vec = input.get_vector(0)
+    var in_data = in_vec.get_data().bitcast[Int32]()
+    var out_data = output.get_data().bitcast[Int32]()
     
-    var in_vec = lib.duckdb_data_chunk_get_vector(input, 0)
-    var in_data = lib.duckdb_vector_get_data(in_vec).bitcast[Int32]()
-    var out_data = lib.duckdb_vector_get_data(output).bitcast[Int32]()
-    
-    for i in range(Int(size)):
+    for i in range(size):
         out_data[i] = in_data[i] + 1
 
 
-fn simple_multiply_two(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
-    """Simple UDF that multiplies input by 2."""
-    ref lib = DuckDB().libduckdb()
-    var size = lib.duckdb_data_chunk_get_size(input)
+fn multiply_two(info: FunctionInfo, input: Chunk, output: Vector):
+    """UDF that multiplies input by 2."""
+    var size = len(input)
+    var in_vec = input.get_vector(0)
+    var in_data = in_vec.get_data().bitcast[Float32]()
+    var out_data = output.get_data().bitcast[Float32]()
     
-    var in_vec = lib.duckdb_data_chunk_get_vector(input, 0)
-    var in_data = lib.duckdb_vector_get_data(in_vec).bitcast[Float32]()
-    var out_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
-    
-    for i in range(Int(size)):
+    for i in range(size):
         out_data[i] = in_data[i] * 2.0
 
 
-fn binary_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+fn binary_add(info: FunctionInfo, input: Chunk, output: Vector):
     """UDF that adds two integers."""
-    ref lib = DuckDB().libduckdb()
-    var size = lib.duckdb_data_chunk_get_size(input)
+    var size = len(input)
+    var vec_a = input.get_vector(0)
+    var vec_b = input.get_vector(1)
+    var a_data = vec_a.get_data().bitcast[Int32]()
+    var b_data = vec_b.get_data().bitcast[Int32]()
+    var out_data = output.get_data().bitcast[Int32]()
     
-    var vec_a = lib.duckdb_data_chunk_get_vector(input, 0)
-    var vec_b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(vec_a).bitcast[Int32]()
-    var b_data = lib.duckdb_vector_get_data(vec_b).bitcast[Int32]()
-    var out_data = lib.duckdb_vector_get_data(output).bitcast[Int32]()
-    
-    for i in range(Int(size)):
+    for i in range(size):
         out_data[i] = a_data[i] + b_data[i]
 
 
-fn binary_add_float(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+fn binary_add_float(info: FunctionInfo, input: Chunk, output: Vector):
     """UDF that adds two floats."""
-    ref lib = DuckDB().libduckdb()
-    var size = lib.duckdb_data_chunk_get_size(input)
+    var size = len(input)
+    var vec_a = input.get_vector(0)
+    var vec_b = input.get_vector(1)
+    var a_data = vec_a.get_data().bitcast[Float32]()
+    var b_data = vec_b.get_data().bitcast[Float32]()
+    var out_data = output.get_data().bitcast[Float32]()
     
-    var vec_a = lib.duckdb_data_chunk_get_vector(input, 0)
-    var vec_b = lib.duckdb_data_chunk_get_vector(input, 1)
-    var a_data = lib.duckdb_vector_get_data(vec_a).bitcast[Float32]()
-    var b_data = lib.duckdb_vector_get_data(vec_b).bitcast[Float32]()
-    var out_data = lib.duckdb_vector_get_data(output).bitcast[Float32]()
-    
-    for i in range(Int(size)):
+    for i in range(size):
         out_data[i] = a_data[i] + b_data[i]
 
 
@@ -130,7 +122,7 @@ def test_scalar_function_register_simple():
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(simple_add_one)
+    func.set_function[add_one]()
     
     func.register(conn)  # Consumes func
 
@@ -144,7 +136,7 @@ def test_scalar_function_execute_simple():
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(simple_add_one)
+    func.set_function[add_one]()
     
     func.register(conn)
     
@@ -152,6 +144,97 @@ def test_scalar_function_execute_simple():
     var result = conn.execute("SELECT add_one(41) as answer")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_scalar_function_highlevel_types():
+    """Test executing a scalar function using high-level Chunk and Vector types."""
+    var conn = DuckDB.connect(":memory:")
+    
+    var func = ScalarFunction()
+    func.set_name("highlevel_add_one")
+    var int_type = LogicalType(DuckDBType.integer)
+    func.add_parameter(int_type)
+    func.set_return_type(int_type)
+    func.set_function[add_one]()
+    
+    func.register(conn)
+    
+    # Test with a single value
+    var result1 = conn.execute("SELECT highlevel_add_one(99) as answer")
+    var chunk1 = result1.fetch_chunk()
+    assert_equal(chunk1.get(integer, col=0, row=0).value(), 100)
+    
+    # Test with a table
+    _ = conn.execute("CREATE TABLE nums (x INTEGER)")
+    _ = conn.execute("INSERT INTO nums VALUES (1), (2), (3), (4), (5)")
+    
+    var result2 = conn.execute("SELECT highlevel_add_one(x) as y FROM nums ORDER BY x")
+    var chunk2 = result2.fetch_chunk()
+    assert_equal(chunk2.get(integer, col=0, row=0).value(), 2)
+    assert_equal(chunk2.get(integer, col=0, row=1).value(), 3)
+    assert_equal(chunk2.get(integer, col=0, row=2).value(), 4)
+    assert_equal(chunk2.get(integer, col=0, row=3).value(), 5)
+    assert_equal(chunk2.get(integer, col=0, row=4).value(), 6)
+
+
+def test_scalar_function_auto_wrapped():
+    """Test executing a scalar function with automatic high-level wrapping."""
+    var conn = DuckDB.connect(":memory:")
+    
+    var func = ScalarFunction()
+    func.set_name("auto_add_one")
+    var int_type = LogicalType(DuckDBType.integer)
+    func.add_parameter(int_type)
+    func.set_return_type(int_type)
+    # Pass high-level function as compile-time parameter
+    func.set_function[add_one]()
+    
+    func.register(conn)
+    
+    # Test with a single value
+    var result1 = conn.execute("SELECT auto_add_one(99) as answer")
+    var chunk1 = result1.fetch_chunk()
+    assert_equal(chunk1.get(integer, col=0, row=0).value(), 100)
+    
+    # Test with a table
+    _ = conn.execute("CREATE TABLE nums2 (x INTEGER)")
+    _ = conn.execute("INSERT INTO nums2 VALUES (10), (20), (30)")
+    
+    var result2 = conn.execute("SELECT auto_add_one(x) as y FROM nums2 ORDER BY x")
+    var chunk2 = result2.fetch_chunk()
+    assert_equal(chunk2.get(integer, col=0, row=0).value(), 11)
+    assert_equal(chunk2.get(integer, col=0, row=1).value(), 21)
+    assert_equal(chunk2.get(integer, col=0, row=2).value(), 31)
+
+
+def test_scalar_function_fully_highlevel():
+    """Test executing a scalar function with fully high-level types."""
+    var conn = DuckDB.connect(":memory:")
+    
+    var func = ScalarFunction()
+    func.set_name("fully_hl_add_one")
+    var int_type = LogicalType(DuckDBType.integer)
+    func.add_parameter(int_type)
+    func.set_return_type(int_type)
+    # Pass high-level function - automatically wrapped
+    func.set_function[add_one]()
+    
+    func.register(conn)
+    
+    # Test with a single value
+    var result1 = conn.execute("SELECT fully_hl_add_one(42) as answer")
+    var chunk1 = result1.fetch_chunk()
+    assert_equal(chunk1.get(integer, col=0, row=0).value(), 43)
+    
+    # Test with a table
+    _ = conn.execute("CREATE TABLE test_nums (x INTEGER)")
+    _ = conn.execute("INSERT INTO test_nums VALUES (100), (200), (300)")
+    
+    var result2 = conn.execute("SELECT fully_hl_add_one(x) as y FROM test_nums ORDER BY x")
+    var chunk2 = result2.fetch_chunk()
+    assert_equal(chunk2.get(integer, col=0, row=0).value(), 101)
+    assert_equal(chunk2.get(integer, col=0, row=1).value(), 201)
+    assert_equal(chunk2.get(integer, col=0, row=2).value(), 301)
 
 
 def test_scalar_function_execute_from_table():
@@ -168,7 +251,7 @@ def test_scalar_function_execute_from_table():
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(simple_add_one)
+    func.set_function[add_one]()
     
     func.register(conn)
     
@@ -192,7 +275,7 @@ def test_scalar_function_binary_operator():
     func.add_parameter(int_type)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(binary_add)
+    func.set_function[binary_add]()
     
     func.register(conn)
     
@@ -211,7 +294,7 @@ def test_scalar_function_float_type():
     var float_type = LogicalType(DuckDBType.float)
     func.add_parameter(float_type)
     func.set_return_type(float_type)
-    func.set_function(simple_multiply_two)
+    func.set_function[multiply_two]()
     
     func.register(conn)
     
@@ -243,7 +326,7 @@ def test_scalar_function_register_error():
 
 def test_scalar_function_set_create():
     """Test creating a scalar function set."""
-    var func_set = ScalarFunctionSet("test_set")
+    var _ = ScalarFunctionSet("test_set")
 
 
 def test_scalar_function_set_add_function():
@@ -256,7 +339,7 @@ def test_scalar_function_set_add_function():
     func1.add_parameter(int_type)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(binary_add)
+    func1.set_function[binary_add]()
     
     func_set.add_function(func1)
 
@@ -273,7 +356,7 @@ def test_scalar_function_set_register():
     func1.add_parameter(int_type)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(binary_add)
+    func1.set_function[binary_add]()
     
     func_set.add_function(func1)
     func_set.register(conn)
@@ -291,7 +374,7 @@ def test_scalar_function_set_execute():
     func1.add_parameter(int_type)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(binary_add)
+    func1.set_function[binary_add]()
     
     func_set.add_function(func1)
     func_set.register(conn)
@@ -316,7 +399,7 @@ def test_scalar_function_set_multiple_overloads():
     func1.add_parameter(int_type)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(binary_add)
+    func1.set_function[binary_add]()
     func_set.add_function(func1)
     
     # Add float overload
@@ -326,7 +409,7 @@ def test_scalar_function_set_multiple_overloads():
     func2.add_parameter(float_type)
     func2.add_parameter(float_type)
     func2.set_return_type(float_type)
-    func2.set_function(binary_add_float)
+    func2.set_function[binary_add_float]()
     func_set.add_function(func2)
     
     func_set.register(conn)
@@ -356,7 +439,7 @@ def test_scalar_function_set_duplicate_overload():
     func1.add_parameter(int_type)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(binary_add)
+    func1.set_function[binary_add]()
     func_set.add_function(func1)
     
     # Try to add duplicate (same signature)
@@ -364,7 +447,7 @@ def test_scalar_function_set_duplicate_overload():
     func2.add_parameter(int_type)
     func2.add_parameter(int_type)
     func2.set_return_type(int_type)
-    func2.set_function(binary_add)
+    func2.set_function[binary_add]()
     
     # DuckDB might accept duplicates or might raise - for now just test it doesn't crash
     try:
@@ -404,7 +487,7 @@ def test_volatile_function_not_optimized():
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(simple_add_one)
+    func.set_function[add_one]()
     
     func.register(conn)
     
@@ -423,7 +506,7 @@ def test_multiple_functions_same_connection():
     var int_type = LogicalType(DuckDBType.integer)
     func1.add_parameter(int_type)
     func1.set_return_type(int_type)
-    func1.set_function(simple_add_one)
+    func1.set_function[add_one]()
     func1.register(conn)
     
     # Register second function
@@ -432,7 +515,7 @@ def test_multiple_functions_same_connection():
     var float_type = LogicalType(DuckDBType.float)
     func2.add_parameter(float_type)
     func2.set_return_type(float_type)
-    func2.set_function(simple_multiply_two)
+    func2.set_function[multiply_two]()
     func2.register(conn)
     
     # Use both functions in one query
@@ -441,7 +524,7 @@ def test_multiple_functions_same_connection():
     
     assert_equal(chunk.get(integer, col=0, row=0).value(), 41)
     var b_val = chunk.get(float_, col=1, row=0).value()
-    assert_true(abs(b_val - 42.0) < 0.001)
+    assert_almost_equal(b_val, 42.0)
 
 
 def test_function_reuse_across_queries():
@@ -453,7 +536,7 @@ def test_function_reuse_across_queries():
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
     func.set_return_type(int_type)
-    func.set_function(simple_add_one)
+    func.set_function[add_one]()
     func.register(conn)
     
     # Execute multiple queries using the same function
