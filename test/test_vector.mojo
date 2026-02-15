@@ -25,7 +25,7 @@ def test_vector_get_column_type():
 def test_vector_create_standalone():
     """Test creating a standalone vector."""
     var int_type = LogicalType(DuckDBType.integer)
-    var vec = Vector[origin=MutAnyOrigin](int_type, 10)
+    var vec = Vector(int_type, 10)
 
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.integer)
 
@@ -33,7 +33,7 @@ def test_vector_create_standalone():
 def test_vector_create_varchar_standalone():
     """Test creating a standalone VARCHAR vector."""
     var varchar_type = LogicalType(DuckDBType.varchar)
-    var vec = Vector[origin=MutAnyOrigin](varchar_type, 5)
+    var vec = Vector(varchar_type, 5)
 
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
@@ -41,7 +41,7 @@ def test_vector_create_varchar_standalone():
 def test_vector_assign_string_element():
     """Test assigning string elements to a vector."""
     var varchar_type = LogicalType(DuckDBType.varchar)
-    var vec = Vector[origin=MutAnyOrigin](varchar_type, 3)
+    var vec = Vector(varchar_type, 3)
 
     # Assign strings to the vector
     vec.assign_string_element(0, "hello")
@@ -55,7 +55,7 @@ def test_vector_assign_string_element():
 def test_vector_assign_string_element_len():
     """Test assigning string elements with explicit length."""
     var varchar_type = LogicalType(DuckDBType.varchar)
-    var vec = Vector[origin=MutAnyOrigin](varchar_type, 2)
+    var vec = Vector(varchar_type, 2)
 
     # Assign strings with explicit length
     vec.assign_string_element_len(0, "hello", 5)
@@ -104,7 +104,7 @@ def test_vector_get_validity():
 def test_vector_ensure_validity_writable():
     """Test ensuring validity mask is writable."""
     var int_type = LogicalType(DuckDBType.integer)
-    var vec = Vector[origin=MutAnyOrigin](int_type, 5)
+    var vec = Vector(int_type, 5)
 
     # Ensure validity is writable
     vec.ensure_validity_writable()
@@ -505,6 +505,15 @@ def test_vector_varchar_strings():
 
     var vec = chunk.get_vector(0)
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
+
+def test_vector_lifetime():
+    con = DuckDB.connect(":memory:")
+    result = con.execute("SELECT 1, 2, 3")
+
+    var chunk = result.fetch_chunk()
+    var vec = chunk.get_vector(0)
+    var value = vec.get(integer, 1)[0].value()
+    assert_equal(value, 1)
 
 
 def main():

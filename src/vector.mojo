@@ -6,54 +6,57 @@ from collections import Optional
 from sys.intrinsics import _type_is_eq
 
 
-struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
-    var _chunk: Optional[Pointer[Chunk, Self.origin]] # keep a reference to the originating chunk to avoid premature destruction
+struct Vector[is_owned: Bool, origin: ImmutOrigin]:
+    """A wrapper around a DuckDB vector.
+    
+    Vectors can be borrowed from a Chunk or owned standalone. Ownership is tracked
+    at compile-time via the `is_owned` parameter:
+    - `Vector[False, ...]` : Borrowed from a Chunk or DuckDB, will not be destroyed
+    - `Vector[True, ...]`: Owned standalone vector, will be destroyed when it goes out of scope
+    
+    The origin parameter tracks the lifetime dependency:
+    - For standalone vectors: ImmutExternalOrigin (no dependency)
+    - For vectors from chunks: origin_of(chunk) (extends chunk's lifetime)
+    
+    Parameters:
+        is_owned: Whether this Vector owns its pointer and should destroy it.
+        origin: The origin tracking lifetime dependencies.
+    """
     var _vector: duckdb_vector
-    var _owned: Bool  # True if this Vector owns the duckdb_vector and must destroy it
 
-    fn __init__(
-        out self,
-        chunk: Pointer[Chunk, Self.origin],
-        vector: duckdb_vector,
-    ):
-        self._vector = vector
-        self._chunk = chunk
-        self._owned = False  # Vectors from chunks are not owned
-
-    fn __init__(out self, vector: duckdb_vector):
-        """Creates a non-owning mutable Vector from a duckdb_vector pointer.
+    fn __init__(out self: Vector[is_owned=False, origin=Self.origin], vector: duckdb_vector):
+        """Creates a borrowed Vector (not owned).
         
-        This is useful for wrapping vectors managed by DuckDB (e.g., output vectors
-        in scalar function callbacks) where lifetime tracking isn't needed.
-        Use with explicit origin: Vector[origin=MutAnyOrigin](raw_vector)
+        This creates a `Vector` that does not own the vector and will not
+        destroy it when it goes out of scope. Used for vectors from chunks or managed by DuckDB.
         
-        * vector: The duckdb_vector pointer to wrap (not owned).
+        Args:
+            vector: The duckdb_vector pointer.
         """
         self._vector = vector
-        self._chunk = None  # No chunk reference needed
-        self._owned = False  # Not owned by this wrapper
 
-    fn __init__(out self, type: LogicalType, capacity: idx_t):
-        """Creates a standalone flat vector. Must be destroyed explicitly.
+    fn __init__(out self: Vector[is_owned=True, origin=MutExternalOrigin], type: LogicalType, capacity: idx_t):
+        """Creates a standalone owned vector.
+        
+        This creates a `Vector` that owns the underlying duckdb_vector
+        and will destroy it when it goes out of scope.
 
-        * type: The logical type of the vector.
-        * capacity: The capacity of the vector.
+        Args:
+            type: The logical type of the vector.
+            capacity: The capacity of the vector.
         """
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
-        self._chunk = None  # No chunk for standalone vectors
-        self._owned = True  # This vector is owned and must be destroyed
 
     fn __del__(deinit self):
-        """Destroys standalone vectors created with __init__(type, capacity)."""
-        if self._owned:
+        """Destroys standalone owned vectors."""
+        @parameter
+        if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
     fn get_column_type(self) -> LogicalType:
         """Retrieves the column type of the specified vector.
-
-        The result must be destroyed with `duckdb_destroy_logical_type`.
 
         * returns: The type of the vector
         """
@@ -123,17 +126,16 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_assign_string_element_len(self._vector, index, _str.as_c_string_slice().unsafe_ptr(), str_len)
 
-    fn list_get_child(self) -> Vector[Self.origin]:
+    fn list_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of a list vector.
 
         The resulting vector is valid as long as the parent vector is valid.
 
         * vector: The vector
-        * returns: The child vector
+        * returns: The child vector (borrowed, not owned)
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Vector(
-            self._chunk.value(),
+        return Vector[is_owned=False, origin=origin_of(self)](
             libduckdb.duckdb_list_vector_get_child(self._vector),
         )
 
@@ -163,33 +165,30 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_list_vector_reserve(self._vector, required_capacity)
 
-    fn struct_get_child(self, index: idx_t) -> Vector[Self.origin]:
+    fn struct_get_child(self, index: idx_t) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of a struct vector.
 
         The resulting vector is valid as long as the parent vector is valid.
 
         * index: The child index
-        * returns: The child vector
+        * returns: The child vector (borrowed, not owned)
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Vector(
-            self._chunk.value(),
+        return Vector[False, origin_of(self)](
             libduckdb.duckdb_struct_vector_get_child(self._vector, index),
-            # self.length,
         )
 
-    fn array_get_child(self) -> Vector[Self.origin]:
+    fn array_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of an array vector.
 
         The resulting vector is valid as long as the parent vector is valid.
         The resulting vector has the size of the parent vector multiplied by the array size.
 
-        * returns: The child vector
+        * returns: The child vector (borrowed, not owned)
         """
         ref libduckdb = DuckDB().libduckdb()
         var child_vector = libduckdb.duckdb_array_vector_get_child(self._vector)
-        return Vector(
-            self._chunk.value(),
+        return Vector[False, origin_of(self)](
             child_vector,
         )
 
@@ -207,7 +206,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
 
     fn copy_sel(
         self,
-        dst: Vector[Self.origin],
+        dst: Vector[_],
         sel: duckdb_selection_vector,
         src_count: idx_t,
         src_offset: idx_t,
@@ -234,7 +233,7 @@ struct Vector[mut: Bool, //, origin: Origin[mut=mut]]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_value(self._vector, value)
 
-    fn reference_vector(self, from_vector: Vector[Self.origin]) -> NoneType:
+    fn reference_vector(self, from_vector: Vector[_]) -> NoneType:
         """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
 
         * from_vector: The vector to reference.

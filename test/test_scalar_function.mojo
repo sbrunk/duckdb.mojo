@@ -9,7 +9,7 @@ from testing.suite import TestSuite
 # Helper UDF implementations (using high-level API)
 # ===--------------------------------------------------------------------===#
 
-fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
+fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds 1 to the input."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -20,7 +20,7 @@ fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
         out_data[i] = in_data[i] + 1
 
 
-fn multiply_two(info: FunctionInfo, input: Chunk, output: Vector):
+fn multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that multiplies input by 2."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -31,7 +31,7 @@ fn multiply_two(info: FunctionInfo, input: Chunk, output: Vector):
         out_data[i] = in_data[i] * 2.0
 
 
-fn binary_add(info: FunctionInfo, input: Chunk, output: Vector):
+fn binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds two integers."""
     var size = len(input)
     var vec_a = input.get_vector(0)
@@ -44,7 +44,7 @@ fn binary_add(info: FunctionInfo, input: Chunk, output: Vector):
         out_data[i] = a_data[i] + b_data[i]
 
 
-fn binary_add_float(info: FunctionInfo, input: Chunk, output: Vector):
+fn binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds two floats."""
     var size = len(input)
     var vec_a = input.get_vector(0)

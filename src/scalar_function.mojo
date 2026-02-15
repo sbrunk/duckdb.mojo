@@ -87,8 +87,6 @@ struct FunctionInfo:
 struct ScalarFunction(Movable):
     """A scalar function that can be registered in DuckDB.
 
-    Wraps the `duckdb_scalar_function` C API for safer, more idiomatic Mojo usage.
-    
     Functions are written using high-level Mojo types (FunctionInfo, Chunk, Vector)
     which provide better ergonomics and type safety. The API automatically handles
     conversion from low-level FFI types.
@@ -102,7 +100,6 @@ struct ScalarFunction(Movable):
     from duckdb.vector import Vector
     
     fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
-        # Write your function using fully high-level types!
         var size = len(input)
         var in_vec = input.get_vector(0)
         var in_data = in_vec.get_data().bitcast[Int32]()
@@ -270,7 +267,7 @@ struct ScalarFunction(Movable):
         func.set_function[my_add_one]()  # Pass function as compile-time parameter
         ```
         
-        * func: Your function with signature fn(FunctionInfo, mut Chunk, Vector). Pass it in square brackets.
+        * func: Your function with signature fn(FunctionInfo, mut Chunk, Vector)..
         """
         # Create a wrapper function that converts FFI types to high-level types
         fn wrapper(raw_info: duckdb_function_info, 
@@ -278,9 +275,9 @@ struct ScalarFunction(Movable):
                    raw_output: duckdb_vector):
             # Wrap FFI types in high-level non-owning wrappers
             var info = FunctionInfo(raw_info)
-            var input_chunk = Chunk(raw_input, take_ownership=False)
+            var input_chunk = Chunk[is_owned=False](raw_input)
             # Output vector doesn't need chunk reference - DuckDB manages its lifetime
-            var output_vec = Vector[origin=MutAnyOrigin](raw_output)
+            var output_vec = Vector[False, MutExternalOrigin](raw_output)
             
             # Call the user's high-level function
             func(info, input_chunk, output_vec)

@@ -7,34 +7,52 @@ from memory import UnsafePointer
 from memory.unsafe_pointer import alloc
 
 
-struct Chunk(Movable & Sized):
+struct Chunk[is_owned: Bool](Movable, Sized):
     """Represents a DuckDB data chunk.
     
     Data chunks represent a horizontal slice of a table. They hold a number of vectors,
     that can each hold up to the VECTOR_SIZE rows (usually 2048).
     
-    The Chunk can be either owning or non-owning (borrowed). When borrowed from DuckDB
-    (e.g., in scalar function callbacks), the chunk will not be destroyed when it goes
-    out of scope.
+    The Chunk can be either owning or non-owning (borrowed). Ownership is tracked
+    at compile-time via the `is_owned` parameter:
+    - `Chunk[is_owned=False]`: Borrowed from DuckDB, will not be destroyed
+    - `Chunk[is_owned=True]`: Owned by us, will be destroyed when it goes out of scope
+    
+    Parameters:
+        is_owned: Whether this Chunk owns its pointer and should destroy it (required).
     """
 
     var _chunk: duckdb_data_chunk
-    var _owned: Bool  # Tracks if this struct owns the underlying pointer
 
-    fn __init__(out self, chunk: duckdb_data_chunk, take_ownership: Bool = False):
-        """Creates a Chunk from a duckdb_data_chunk pointer.
+    fn __init__(out self: Chunk[is_owned=False], chunk: duckdb_data_chunk):
+        """Creates a borrowed (non-owning) Chunk from a duckdb_data_chunk pointer.
+        
+        This constructor creates a `Chunk[False]` which will not destroy the underlying
+        pointer when it goes out of scope. Use this for chunks obtained from DuckDB
+        (e.g., in result sets or scalar function callbacks).
         
         Args:
             chunk: The underlying duckdb_data_chunk pointer.
-            take_ownership: Whether this Chunk owns the pointer (default: False for borrowed refs).
         """
         self._chunk = chunk
-        self._owned = take_ownership
 
-    fn __init__(out self, types: List[LogicalType]):
+    fn __init__(out self: Chunk[is_owned=True], var chunk: duckdb_data_chunk):
+        """Takes ownership of an existing duckdb_data_chunk.
+        
+        This constructor creates a `Chunk[is_owned=True]` that takes ownership of a chunk
+        returned by DuckDB (e.g., from duckdb_fetch_chunk). The chunk will be
+        destroyed when this object goes out of scope.
+        
+        Args:
+            chunk: The duckdb_data_chunk to take ownership of.
+        """
+        self._chunk = chunk
+
+    fn __init__(out self: Chunk[is_owned=True], types: List[LogicalType]):
         """Creates an empty data chunk with the specified column types.
         
-        This creates an owned chunk that will be destroyed when it goes out of scope.
+        This creates an owned `Chunk[True]` that will be destroyed when it goes out of scope.
+        Use this when you need to create a new chunk that you own.
         
         Args:
             types: A list of logical types for each column.
@@ -50,23 +68,19 @@ struct Chunk(Movable & Sized):
         type_ptrs.free()
         
         self._chunk = chunk
-        self._owned = True  # This chunk is owned
 
     fn __del__(deinit self):
-        """Destroys the chunk if it's owned by this instance."""
-        if self._owned:
+        """Destroys the chunk if owned.
+        
+        This uses compile-time conditional logic to only destroy owned chunks.
+        """
+        @parameter
+        if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
     fn __moveinit__(out self, deinit existing: Self):
-        """Move constructor that transfers ownership."""
         self._chunk = existing._chunk
-        self._owned = existing._owned
-
-    fn __copyinit__(out self, existing: Self):
-        """Copy constructor - creates a non-owning reference."""
-        self._chunk = existing._chunk
-        self._owned = False  # Copy doesn't own the resource
 
     fn __len__(self) -> Int:
         """Returns the current number of tuples (rows) in the data chunk.
@@ -104,21 +118,20 @@ struct Chunk(Movable & Sized):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_data_chunk_reset(self._chunk)
 
-    fn get_vector(self, col: Int) -> Vector[origin_of(self)]:
-        """Retrieves the vector at the specified column index in the data chunk.
+    fn get_vector(self, col: Int) -> Vector[is_owned=False, origin=origin_of(self)]:
+        """Retrieves a mutable vector at the specified column index in the data chunk.
         
         The pointer to the vector is valid for as long as the chunk is alive.
-        It does NOT need to be destroyed.
+        It does NOT need to be destroyed. The returned vector extends the chunk's lifetime.
         
         Args:
             col: The column index.
         
         Returns:
-            The vector at the specified column.
+            A borrowed mutable vector (not owned) at the specified column.  
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Vector(
-            Pointer(to=self),
+        return Vector[False, origin_of(self)](
             libduckdb.duckdb_data_chunk_get_vector(self._chunk, UInt64(col)),
         )
 
@@ -200,8 +213,10 @@ struct _ChunkIter[lifetime: ImmutOrigin]:
         self._next_chunk = libduckdb.duckdb_fetch_chunk(self._result[]._result)
 
     fn __del__(deinit self):
+        """Destroys the pending chunk if one exists."""
         if self._next_chunk:
-            _ = Chunk(self._next_chunk)
+            # Create an owned Chunk to properly destroy it
+            _ = Chunk[is_owned=True](self._next_chunk)
 
     fn __moveinit__(out self, deinit existing: Self):
         self._result = existing._result
@@ -210,13 +225,18 @@ struct _ChunkIter[lifetime: ImmutOrigin]:
     fn __iter__(var self) -> Self:
         return self^
 
-    fn __next__(mut self) raises -> Chunk:
+    fn __next__(mut self) raises -> Chunk[is_owned=True]:
+        """Returns the next owned chunk from the result set.
+        
+        The returned chunk must be destroyed (automatically via __del__).
+        Per DuckDB C API: chunks from duckdb_fetch_chunk must be destroyed.
+        """
         if self._next_chunk:
             var current = self._next_chunk
             ref libduckdb = DuckDB().libduckdb()
             var next = libduckdb.duckdb_fetch_chunk(self._result[]._result)
             self._next_chunk = next
-            return Chunk(current)
+            return Chunk[is_owned=True](current)
         else:
             raise Error("No more elements")
 

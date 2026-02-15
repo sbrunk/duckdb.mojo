@@ -634,9 +634,17 @@ struct Result(Writable, Stringable):
     # fn __iter__(self) -> ResultIterator:
     #     return ResultIterator(self)
 
-    fn fetch_chunk(self) raises -> Chunk:
+    fn fetch_chunk(self) raises -> Chunk[is_owned=True]:
+        """Fetches a data chunk from the result.
+        
+        The returned chunk is owned and will be automatically destroyed when it goes out of scope.
+        Per DuckDB C API: "The result must be destroyed with duckdb_destroy_data_chunk."
+        
+        Returns:
+            An owned Chunk that will be automatically destroyed.
+        """
         ref libduckdb = DuckDB().libduckdb()
-        return Chunk(libduckdb.duckdb_fetch_chunk(self._result))
+        return Chunk[is_owned=True](libduckdb.duckdb_fetch_chunk(self._result))
 
     fn chunk_iterator(self) raises -> _ChunkIter[origin_of(self)]:
         return _ChunkIter(self)
@@ -764,21 +772,24 @@ struct ResultError(Stringable, Writable):
         return String("ResultError('", self.message, "', error=", self.type, ")")
 
 struct MaterializedResult(Sized, Movable):
-    """A result with all rows fetched into memory."""
+    """A result with all rows fetched into memory.
+    
+    Stores owned chunks that are automatically destroyed when MaterializedResult is destroyed.
+    """
 
     var result: Result
-    var chunks: List[UnsafePointer[Chunk, MutAnyOrigin]]
+    var chunks: List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]
     var size: Int
 
     fn __init__(out self, var result: Result) raises:
         self.result = result^
-        self.chunks = List[UnsafePointer[Chunk, MutAnyOrigin]]()
+        self.chunks = List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]()
         self.size = 0
         var iter = self.result.chunk_iterator()
         while iter.__has_next__():
             var chunk = iter.__next__()
             self.size += len(chunk)
-            var chunk_ptr = alloc[Chunk](1)
+            var chunk_ptr = alloc[Chunk[is_owned=True]](1)
             chunk_ptr.init_pointee_move(chunk^)
             self.chunks.append(chunk_ptr)
 
