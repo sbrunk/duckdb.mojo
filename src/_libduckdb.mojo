@@ -202,6 +202,9 @@ comptime idx_t = UInt64
 #! bind data (if any), init data (if any), extra data for replacement scans (if any)
 comptime duckdb_delete_callback_t = fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
 
+#! The callback that will be called to copy bind data.
+comptime duckdb_copy_callback_t = fn (UnsafePointer[NoneType, MutAnyOrigin]) -> UnsafePointer[NoneType, MutAnyOrigin]
+
 # ===--------------------------------------------------------------------===#
 # Types (no explicit freeing)
 # ===--------------------------------------------------------------------===#
@@ -359,6 +362,11 @@ comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutExternal
 struct _duckdb_bind_info:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
+
+#! An expression.
+struct _duckdb_expression:
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
+comptime duckdb_expression = UnsafePointer[_duckdb_expression, MutExternalOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Scalar function types
@@ -628,10 +636,12 @@ struct LibDuckDB(Movable):
     var _duckdb_scalar_function_set_extra_info: _duckdb_scalar_function_set_extra_info.fn_type
     var _duckdb_scalar_function_set_bind: _duckdb_scalar_function_set_bind.fn_type
     var _duckdb_scalar_function_set_bind_data: _duckdb_scalar_function_set_bind_data.fn_type
+    var _duckdb_scalar_function_set_bind_data_copy: _duckdb_scalar_function_set_bind_data_copy.fn_type
     var _duckdb_scalar_function_bind_set_error: _duckdb_scalar_function_bind_set_error.fn_type
     var _duckdb_scalar_function_set_function: _duckdb_scalar_function_set_function.fn_type
     var _duckdb_register_scalar_function: _duckdb_register_scalar_function.fn_type
     var _duckdb_scalar_function_get_extra_info: _duckdb_scalar_function_get_extra_info.fn_type
+    var _duckdb_scalar_function_bind_get_extra_info: _duckdb_scalar_function_bind_get_extra_info.fn_type
     var _duckdb_scalar_function_get_bind_data: _duckdb_scalar_function_get_bind_data.fn_type
     var _duckdb_scalar_function_get_client_context: _duckdb_scalar_function_get_client_context.fn_type
     var _duckdb_scalar_function_set_error: _duckdb_scalar_function_set_error.fn_type
@@ -639,6 +649,8 @@ struct LibDuckDB(Movable):
     var _duckdb_destroy_scalar_function_set: _duckdb_destroy_scalar_function_set.fn_type
     var _duckdb_add_scalar_function_to_set: _duckdb_add_scalar_function_to_set.fn_type
     var _duckdb_register_scalar_function_set: _duckdb_register_scalar_function_set.fn_type
+    var _duckdb_scalar_function_bind_get_argument_count: _duckdb_scalar_function_bind_get_argument_count.fn_type
+    var _duckdb_scalar_function_bind_get_argument: _duckdb_scalar_function_bind_get_argument.fn_type
     var _duckdb_create_aggregate_function: _duckdb_create_aggregate_function.fn_type
     var _duckdb_destroy_aggregate_function: _duckdb_destroy_aggregate_function.fn_type
     var _duckdb_aggregate_function_set_name: _duckdb_aggregate_function_set_name.fn_type
@@ -737,15 +749,21 @@ struct LibDuckDB(Movable):
             self._duckdb_scalar_function_set_extra_info = _duckdb_scalar_function_set_extra_info.load()
             self._duckdb_scalar_function_set_bind = _duckdb_scalar_function_set_bind.load()
             self._duckdb_scalar_function_set_bind_data = _duckdb_scalar_function_set_bind_data.load()
+            self._duckdb_scalar_function_set_bind_data_copy = _duckdb_scalar_function_set_bind_data_copy.load()
             self._duckdb_scalar_function_bind_set_error = _duckdb_scalar_function_bind_set_error.load()
             self._duckdb_scalar_function_set_function = _duckdb_scalar_function_set_function.load()
             self._duckdb_register_scalar_function = _duckdb_register_scalar_function.load()
             self._duckdb_scalar_function_get_extra_info = _duckdb_scalar_function_get_extra_info.load()
+            self._duckdb_scalar_function_bind_get_extra_info = _duckdb_scalar_function_bind_get_extra_info.load()
             self._duckdb_scalar_function_get_bind_data = _duckdb_scalar_function_get_bind_data.load()
             self._duckdb_scalar_function_get_client_context = _duckdb_scalar_function_get_client_context.load()
             self._duckdb_scalar_function_set_error = _duckdb_scalar_function_set_error.load()
             self._duckdb_create_scalar_function_set = _duckdb_create_scalar_function_set.load()
             self._duckdb_destroy_scalar_function_set = _duckdb_destroy_scalar_function_set.load()
+            self._duckdb_add_scalar_function_to_set = _duckdb_add_scalar_function_to_set.load()
+            self._duckdb_register_scalar_function_set = _duckdb_register_scalar_function_set.load()
+            self._duckdb_scalar_function_bind_get_argument_count = _duckdb_scalar_function_bind_get_argument_count.load()
+            self._duckdb_scalar_function_bind_get_argument = _duckdb_scalar_function_bind_get_argument.load()
             self._duckdb_add_scalar_function_to_set = _duckdb_add_scalar_function_to_set.load()
             self._duckdb_register_scalar_function_set = _duckdb_register_scalar_function_set.load()
             self._duckdb_create_aggregate_function = _duckdb_create_aggregate_function.load()
@@ -847,10 +865,12 @@ struct LibDuckDB(Movable):
         self._duckdb_scalar_function_set_extra_info = existing._duckdb_scalar_function_set_extra_info
         self._duckdb_scalar_function_set_bind = existing._duckdb_scalar_function_set_bind
         self._duckdb_scalar_function_set_bind_data = existing._duckdb_scalar_function_set_bind_data
+        self._duckdb_scalar_function_set_bind_data_copy = existing._duckdb_scalar_function_set_bind_data_copy
         self._duckdb_scalar_function_bind_set_error = existing._duckdb_scalar_function_bind_set_error
         self._duckdb_scalar_function_set_function = existing._duckdb_scalar_function_set_function
         self._duckdb_register_scalar_function = existing._duckdb_register_scalar_function
         self._duckdb_scalar_function_get_extra_info = existing._duckdb_scalar_function_get_extra_info
+        self._duckdb_scalar_function_bind_get_extra_info = existing._duckdb_scalar_function_bind_get_extra_info
         self._duckdb_scalar_function_get_bind_data = existing._duckdb_scalar_function_get_bind_data
         self._duckdb_scalar_function_get_client_context = existing._duckdb_scalar_function_get_client_context
         self._duckdb_scalar_function_set_error = existing._duckdb_scalar_function_set_error
@@ -858,6 +878,8 @@ struct LibDuckDB(Movable):
         self._duckdb_destroy_scalar_function_set = existing._duckdb_destroy_scalar_function_set
         self._duckdb_add_scalar_function_to_set = existing._duckdb_add_scalar_function_to_set
         self._duckdb_register_scalar_function_set = existing._duckdb_register_scalar_function_set
+        self._duckdb_scalar_function_bind_get_argument_count = existing._duckdb_scalar_function_bind_get_argument_count
+        self._duckdb_scalar_function_bind_get_argument = existing._duckdb_scalar_function_bind_get_argument
         self._duckdb_create_aggregate_function = existing._duckdb_create_aggregate_function
         self._duckdb_destroy_aggregate_function = existing._duckdb_destroy_aggregate_function
         self._duckdb_aggregate_function_set_name = existing._duckdb_aggregate_function_set_name
@@ -1699,7 +1721,16 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_scalar_function_set_bind_data(info, bind_data, destroy)
 
-    fn duckdb_scalar_function_bind_set_error(self, info: duckdb_bind_info, error: UnsafePointer[c_char, MutAnyOrigin]) -> NoneType:
+    fn duckdb_scalar_function_set_bind_data_copy(self, info: duckdb_bind_info, copy: duckdb_copy_callback_t) -> NoneType:
+        """
+        Sets the bind data copy function for the scalar function.
+        This function is called to copy the bind data when needed.
+        * @param info The bind info of the scalar function.
+        * @param copy The callback to copy the bind data.
+        """
+        return self._duckdb_scalar_function_set_bind_data_copy(info, copy)
+
+    fn duckdb_scalar_function_bind_set_error(self, info: duckdb_bind_info, error: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
         """
         Report that an error has occurred while calling bind on a scalar function.
 
@@ -1736,6 +1767,14 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_scalar_function_get_extra_info(info)
 
+    fn duckdb_scalar_function_bind_get_extra_info(self, info: duckdb_bind_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+        """
+        Retrieves the extra info of the function as set in `duckdb_scalar_function_set_extra_info` during bind.
+        * @param info The bind info object.
+        * @return The extra info.
+        """
+        return self._duckdb_scalar_function_bind_get_extra_info(info)
+
     fn duckdb_scalar_function_get_bind_data(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """
         Gets the scalar function's bind data set by `duckdb_scalar_function_set_bind_data`.
@@ -1753,7 +1792,7 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_scalar_function_get_client_context(info, out_context)
 
-    fn duckdb_scalar_function_set_error(self, info: duckdb_function_info, error: UnsafePointer[c_char, MutAnyOrigin]) -> NoneType:
+    fn duckdb_scalar_function_set_error(self, info: duckdb_function_info, error: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
         """
         Report that an error has occurred while executing the scalar function.
 
@@ -1762,7 +1801,7 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_scalar_function_set_error(info, error)
 
-    fn duckdb_create_scalar_function_set(self, name: UnsafePointer[c_char, MutAnyOrigin]) -> duckdb_scalar_function_set:
+    fn duckdb_create_scalar_function_set(self, name: UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_scalar_function_set:
         """
         Creates a new empty scalar function set.
         The return value must be destroyed with `duckdb_destroy_scalar_function_set`.
@@ -1796,6 +1835,23 @@ struct LibDuckDB(Movable):
         * @return Whether or not the registration was successful.
         """
         return self._duckdb_register_scalar_function_set(con, set)
+
+    fn duckdb_scalar_function_bind_get_argument_count(self, info: duckdb_bind_info) -> idx_t:
+        """
+        Gets the number of arguments passed to the scalar function during binding.
+        * @param info The bind info object.
+        * @return The number of arguments.
+        """
+        return self._duckdb_scalar_function_bind_get_argument_count(info)
+
+    fn duckdb_scalar_function_bind_get_argument(self, info: duckdb_bind_info, index: idx_t) -> duckdb_expression:
+        """
+        Gets the argument expression at the specified index during binding.
+        * @param info The bind info object.
+        * @param index The index of the argument.
+        * @return The expression at the specified index.
+        """
+        return self._duckdb_scalar_function_bind_get_argument(info, index)
 
     # ===--------------------------------------------------------------------===#
     # Aggregate Function Interface
@@ -2377,8 +2433,12 @@ comptime _duckdb_scalar_function_set_bind_data = _dylib_function["duckdb_scalar_
     fn (duckdb_bind_info, UnsafePointer[NoneType, MutAnyOrigin], duckdb_delete_callback_t) -> NoneType
 ]
 
+comptime _duckdb_scalar_function_set_bind_data_copy = _dylib_function["duckdb_scalar_function_set_bind_data_copy",
+    fn (duckdb_bind_info, duckdb_copy_callback_t) -> NoneType
+]
+
 comptime _duckdb_scalar_function_bind_set_error = _dylib_function["duckdb_scalar_function_bind_set_error",
-    fn (duckdb_bind_info, UnsafePointer[c_char, MutAnyOrigin]) -> NoneType
+    fn (duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
 ]
 
 comptime _duckdb_scalar_function_set_function = _dylib_function["duckdb_scalar_function_set_function",
@@ -2393,6 +2453,10 @@ comptime _duckdb_scalar_function_get_extra_info = _dylib_function["duckdb_scalar
     fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
+comptime _duckdb_scalar_function_bind_get_extra_info = _dylib_function["duckdb_scalar_function_bind_get_extra_info",
+    fn (duckdb_bind_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
 comptime _duckdb_scalar_function_get_bind_data = _dylib_function["duckdb_scalar_function_get_bind_data",
     fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
@@ -2402,11 +2466,11 @@ comptime _duckdb_scalar_function_get_client_context = _dylib_function["duckdb_sc
 ]
 
 comptime _duckdb_scalar_function_set_error = _dylib_function["duckdb_scalar_function_set_error",
-    fn (duckdb_function_info, UnsafePointer[c_char, MutAnyOrigin]) -> NoneType
+    fn (duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
 ]
 
 comptime _duckdb_create_scalar_function_set = _dylib_function["duckdb_create_scalar_function_set",
-    fn (UnsafePointer[c_char, MutAnyOrigin]) -> duckdb_scalar_function_set
+    fn (UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_scalar_function_set
 ]
 
 comptime _duckdb_destroy_scalar_function_set = _dylib_function["duckdb_destroy_scalar_function_set",
@@ -2419,6 +2483,14 @@ comptime _duckdb_add_scalar_function_to_set = _dylib_function["duckdb_add_scalar
 
 comptime _duckdb_register_scalar_function_set = _dylib_function["duckdb_register_scalar_function_set",
     fn (duckdb_connection, duckdb_scalar_function_set) -> duckdb_state
+]
+
+comptime _duckdb_scalar_function_bind_get_argument_count = _dylib_function["duckdb_scalar_function_bind_get_argument_count",
+    fn (duckdb_bind_info) -> idx_t
+]
+
+comptime _duckdb_scalar_function_bind_get_argument = _dylib_function["duckdb_scalar_function_bind_get_argument",
+    fn (duckdb_bind_info, idx_t) -> duckdb_expression
 ]
 
 # ===--------------------------------------------------------------------===#
