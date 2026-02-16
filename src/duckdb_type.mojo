@@ -398,7 +398,7 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
 
 @fieldwise_init
-struct Interval(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct Interval(TrivialRegisterPassable, Equatable, Stringable, Representable):
     var months: Int32
     var days: Int32
     var micros: Int64

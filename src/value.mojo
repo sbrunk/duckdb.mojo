@@ -245,7 +245,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_timestamp(value))
 
     @staticmethod
-    fn from_interval(value: duckdb_interval) -> Self:
+    fn from_interval(value: Interval) -> Self:
         """Creates a value from an interval.
 
         Args:
@@ -255,7 +255,7 @@ struct DuckDBValue(Movable):
             A new DuckDBValue containing the interval.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_create_interval(value))
+        return Self(libduckdb.duckdb_create_interval(UnsafePointer(to=value).bitcast[duckdb_interval]()[]))
 
     @staticmethod
     fn from_blob(data: Span[UInt8, ImmutAnyOrigin]) -> Self:
@@ -412,14 +412,14 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_timestamp(self._value)
 
-    fn as_interval(self) -> duckdb_interval:
+    fn as_interval(self) -> Interval:
         """Extracts the interval value.
 
         Returns:
             The interval value, or MinValue if the value cannot be converted.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_get_interval(self._value)
+        return UnsafePointer(to=libduckdb.duckdb_get_interval(self._value)).bitcast[Interval]()[]
 
     fn as_string(self) -> String:
         """Gets the string representation of the value.

@@ -252,11 +252,16 @@ struct duckdb_timestamp_struct(TrivialRegisterPassable, ImplicitlyCopyable, Mova
     var date: duckdb_date_struct
     var time: duckdb_time_struct
 
+# TODO hack to pass struct by value until https://github.com/modular/modular/issues/3144 is fixed
+# Currently it only works with <= 2 struct values
+struct duckdb_interval(TrivialRegisterPassable):
+    var months_days: Int64
+    var micros: Int64
+# comptime duckdb_interval = Interval
 
 #! Hugeints are composed of a (lower, upper) component
 #! The value of the hugeint is upper * 2^64 + lower
 #! For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
-comptime duckdb_interval = Interval
 comptime duckdb_hugeint = Int128
 comptime duckdb_uhugeint = UInt128
 #! Decimals are composed of a width and a scale, and are stored in a hugeint

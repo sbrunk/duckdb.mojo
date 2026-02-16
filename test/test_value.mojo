@@ -201,20 +201,18 @@ fn test_timestamp_values() raises:
 
     var result = val_ts.as_timestamp()
 
-    # For now, just check it's not null - there seems to be an ABI issue
     assert_false(val_ts.is_null(), "Timestamp value should not be null")
-    assert_equal(result.micros, ts.micros)
+    assert_equal(result, ts)
 
 
 fn test_interval_values() raises:
-    var interval = duckdb_interval(
+    var interval = Interval(
         months=1, days=2, micros=3000000
     )  # 1 month, 2 days, 3 seconds
     var val_interval = DuckDBValue.from_interval(interval)
     var result = val_interval.as_interval()
 
-    # For now, just check it's not null - verify the struct values manually
-    assert_false(val_interval.is_null(), "Interval value should not be null")
+    assert_equal(result, interval)
 
 
 fn test_blob_values() raises:
