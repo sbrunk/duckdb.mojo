@@ -7,3 +7,4 @@ from duckdb.result import Column, Result, MaterializedResult, ResultType, ErrorT
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo, FunctionInfo
 from duckdb.value import DuckDBValue
 
+from duckdb.logical_type import LogicalType, decimal_type, enum_type

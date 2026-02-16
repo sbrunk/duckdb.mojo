@@ -1,4 +1,6 @@
 from duckdb._libduckdb import *
+from collections import List
+
 
 
 struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Movable & Equatable & Writable & Stringable):
@@ -14,6 +16,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         origin: The origin tracking lifetime dependencies.
     """
     var _logical_type: duckdb_logical_type
+
 
     fn __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], type_id: DuckDBType):
         """Creates an owned LogicalType from a standard primitive type."""
@@ -73,6 +76,9 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
     fn create_list_type(self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=True, origin=MutExternalOrigin](libduckdb.duckdb_create_list_type(self._logical_type))
+
+    fn internal_ptr(self) -> duckdb_logical_type:
+        return self._logical_type
 
     fn get_type_id(self) -> DuckDBType:
         """Retrieves the enum type class of this `LogicalType`.
@@ -155,3 +161,47 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(String(self))
+
+fn decimal_type(width: UInt8, scale: UInt8) -> LogicalType[True, MutExternalOrigin]:
+    """Creates a decimal type.
+
+    Args:
+        width: The width of the decimal type.
+        scale: The scale of the decimal type.
+
+    Returns:
+        A new LogicalType representing the decimal type.
+    """
+    ref libduckdb = DuckDB().libduckdb()
+    return LogicalType[True, MutExternalOrigin](
+        libduckdb.duckdb_create_decimal_type(width, scale)
+    )
+
+fn enum_type(mut names: List[String]) -> LogicalType[True, MutExternalOrigin]:
+    """Creates an enum type.
+
+    Args:
+        names: The list of names for the enum.
+
+    Returns:
+        A new LogicalType representing the enum type.
+    """
+    ref libduckdb = DuckDB().libduckdb()
+    var count = len(names)
+    
+    # Use List to manage array of pointers
+    var c_names_list = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+    c_names_list.reserve(count)
+    
+    # Use UnsafePointer to iterate without copying strings
+    var base_ptr = names.unsafe_ptr()
+    
+    for i in range(count):
+        var s = (base_ptr + i)[].as_c_string_slice()
+        c_names_list.append(s.unsafe_ptr())
+        
+    # Get pointer to the array of pointers
+    return LogicalType[True, MutExternalOrigin](
+        libduckdb.duckdb_create_enum_type(c_names_list.unsafe_ptr(), UInt64(count))
+    )
+

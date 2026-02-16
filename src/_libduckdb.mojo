@@ -8,8 +8,9 @@ from pathlib import Path
 from ffi import _find_dylib
 from ffi import _get_dylib_function as _ffi_get_dylib_function
 from ffi import _Global, OwnedDLHandle
+from memory import UnsafePointer
 
-# ===-----------------------------------------------------------------------===#
+# ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
 # 
 # Derived from
@@ -442,6 +443,12 @@ comptime duckdb_aggregate_finalize_t = fn (
 
 
 @fieldwise_init
+struct duckdb_bit(TrivialRegisterPassable, ImplicitlyCopyable, Movable):
+    var data: UnsafePointer[UInt8, MutExternalOrigin]
+    var size: idx_t
+
+
+@fieldwise_init
 struct duckdb_result(ImplicitlyCopyable & Movable):
     var __deprecated_column_count: idx_t
     var __deprecated_row_count: idx_t
@@ -672,6 +679,8 @@ struct LibDuckDB(Movable):
     var _duckdb_create_map_type: _duckdb_create_map_type.fn_type
     var _duckdb_create_union_type: _duckdb_create_union_type.fn_type
     var _duckdb_create_struct_type: _duckdb_create_struct_type.fn_type
+    var _duckdb_create_enum_type: _duckdb_create_enum_type.fn_type
+    var _duckdb_create_decimal_type: _duckdb_create_decimal_type.fn_type
     var _duckdb_get_type_id: _duckdb_get_type_id.fn_type
     var _duckdb_list_type_child_type: _duckdb_list_type_child_type.fn_type
     var _duckdb_array_type_child_type: _duckdb_array_type_child_type.fn_type
@@ -692,15 +701,26 @@ struct LibDuckDB(Movable):
     var _duckdb_create_int32: _duckdb_create_int32.fn_type
     var _duckdb_create_uint32: _duckdb_create_uint32.fn_type
     var _duckdb_create_int64: _duckdb_create_int64.fn_type
+    var _duckdb_create_hugeint: _duckdb_create_hugeint.fn_type
     var _duckdb_create_uint64: _duckdb_create_uint64.fn_type
+    var _duckdb_create_uhugeint: _duckdb_create_uhugeint.fn_type
     var _duckdb_create_float: _duckdb_create_float.fn_type
     var _duckdb_create_double: _duckdb_create_double.fn_type
     var _duckdb_create_date: _duckdb_create_date.fn_type
+    var _duckdb_create_time: _duckdb_create_time.fn_type
     var _duckdb_create_timestamp: _duckdb_create_timestamp.fn_type
     var _duckdb_create_interval: _duckdb_create_interval.fn_type
     var _duckdb_create_blob: _duckdb_create_blob.fn_type
+    var _duckdb_create_bit: _duckdb_create_bit.fn_type
+    var _duckdb_create_uuid: _duckdb_create_uuid.fn_type
     var _duckdb_create_null_value: _duckdb_create_null_value.fn_type
+    var _duckdb_create_decimal: _duckdb_create_decimal.fn_type
+    var _duckdb_create_enum_value: _duckdb_create_enum_value.fn_type
     var _duckdb_get_bool: _duckdb_get_bool.fn_type
+    var _duckdb_get_decimal: _duckdb_get_decimal.fn_type
+    var _duckdb_mojo_get_decimal: _duckdb_mojo_get_decimal.fn_type
+    var _duckdb_mojo_create_decimal: _duckdb_mojo_create_decimal.fn_type
+    var _duckdb_get_enum_value: _duckdb_get_enum_value.fn_type
     var _duckdb_get_int8: _duckdb_get_int8.fn_type
     var _duckdb_get_uint8: _duckdb_get_uint8.fn_type
     var _duckdb_get_int16: _duckdb_get_int16.fn_type
@@ -708,14 +728,20 @@ struct LibDuckDB(Movable):
     var _duckdb_get_int32: _duckdb_get_int32.fn_type
     var _duckdb_get_uint32: _duckdb_get_uint32.fn_type
     var _duckdb_get_int64: _duckdb_get_int64.fn_type
+    var _duckdb_get_hugeint: _duckdb_get_hugeint.fn_type
     var _duckdb_get_uint64: _duckdb_get_uint64.fn_type
+    var _duckdb_get_uhugeint: _duckdb_get_uhugeint.fn_type
     var _duckdb_get_float: _duckdb_get_float.fn_type
     var _duckdb_get_double: _duckdb_get_double.fn_type
     var _duckdb_get_date: _duckdb_get_date.fn_type
+    var _duckdb_get_time: _duckdb_get_time.fn_type
     var _duckdb_get_timestamp: _duckdb_get_timestamp.fn_type
     var _duckdb_get_interval: _duckdb_get_interval.fn_type
     var _duckdb_get_varchar: _duckdb_get_varchar.fn_type
     var _duckdb_get_value_type: _duckdb_get_value_type.fn_type
+    var _duckdb_get_blob: _duckdb_get_blob.fn_type
+    var _duckdb_get_bit: _duckdb_get_bit.fn_type
+    var _duckdb_get_uuid: _duckdb_get_uuid.fn_type
     var _duckdb_is_null_value: _duckdb_is_null_value.fn_type
     var _duckdb_value_to_string: _duckdb_value_to_string.fn_type
 
@@ -824,6 +850,8 @@ struct LibDuckDB(Movable):
             self._duckdb_create_map_type = _duckdb_create_map_type.load()
             self._duckdb_create_union_type = _duckdb_create_union_type.load()
             self._duckdb_create_struct_type = _duckdb_create_struct_type.load()
+            self._duckdb_create_enum_type = _duckdb_create_enum_type.load()
+            self._duckdb_create_decimal_type = _duckdb_create_decimal_type.load()
             self._duckdb_get_type_id = _duckdb_get_type_id.load()
             self._duckdb_list_type_child_type = _duckdb_list_type_child_type.load()
             self._duckdb_array_type_child_type = _duckdb_array_type_child_type.load()
@@ -844,15 +872,26 @@ struct LibDuckDB(Movable):
             self._duckdb_create_int32 = _duckdb_create_int32.load()
             self._duckdb_create_uint32 = _duckdb_create_uint32.load()
             self._duckdb_create_int64 = _duckdb_create_int64.load()
+            self._duckdb_create_hugeint = _duckdb_create_hugeint.load()
             self._duckdb_create_uint64 = _duckdb_create_uint64.load()
+            self._duckdb_create_uhugeint = _duckdb_create_uhugeint.load()
             self._duckdb_create_float = _duckdb_create_float.load()
             self._duckdb_create_double = _duckdb_create_double.load()
             self._duckdb_create_date = _duckdb_create_date.load()
+            self._duckdb_create_time = _duckdb_create_time.load()
             self._duckdb_create_timestamp = _duckdb_create_timestamp.load()
             self._duckdb_create_interval = _duckdb_create_interval.load()
             self._duckdb_create_blob = _duckdb_create_blob.load()
+            self._duckdb_create_bit = _duckdb_create_bit.load()
+            self._duckdb_create_uuid = _duckdb_create_uuid.load()
             self._duckdb_create_null_value = _duckdb_create_null_value.load()
+            self._duckdb_create_decimal = _duckdb_create_decimal.load()
+            self._duckdb_create_enum_value = _duckdb_create_enum_value.load()
+            self._duckdb_get_enum_value = _duckdb_get_enum_value.load()
             self._duckdb_get_bool = _duckdb_get_bool.load()
+            self._duckdb_get_decimal = _duckdb_get_decimal.load()
+            self._duckdb_mojo_get_decimal = _duckdb_mojo_get_decimal.load()
+            self._duckdb_mojo_create_decimal = _duckdb_mojo_create_decimal.load()
             self._duckdb_get_int8 = _duckdb_get_int8.load()
             self._duckdb_get_uint8 = _duckdb_get_uint8.load()
             self._duckdb_get_int16 = _duckdb_get_int16.load()
@@ -860,14 +899,20 @@ struct LibDuckDB(Movable):
             self._duckdb_get_int32 = _duckdb_get_int32.load()
             self._duckdb_get_uint32 = _duckdb_get_uint32.load()
             self._duckdb_get_int64 = _duckdb_get_int64.load()
+            self._duckdb_get_hugeint = _duckdb_get_hugeint.load()
             self._duckdb_get_uint64 = _duckdb_get_uint64.load()
+            self._duckdb_get_uhugeint = _duckdb_get_uhugeint.load()
             self._duckdb_get_float = _duckdb_get_float.load()
             self._duckdb_get_double = _duckdb_get_double.load()
             self._duckdb_get_date = _duckdb_get_date.load()
+            self._duckdb_get_time = _duckdb_get_time.load()
             self._duckdb_get_timestamp = _duckdb_get_timestamp.load()
             self._duckdb_get_interval = _duckdb_get_interval.load()
             self._duckdb_get_varchar = _duckdb_get_varchar.load()
             self._duckdb_get_value_type = _duckdb_get_value_type.load()
+            self._duckdb_get_blob = _duckdb_get_blob.load()
+            self._duckdb_get_bit = _duckdb_get_bit.load()
+            self._duckdb_get_uuid = _duckdb_get_uuid.load()
             self._duckdb_is_null_value = _duckdb_is_null_value.load()
             self._duckdb_value_to_string = _duckdb_value_to_string.load()
         except e:
@@ -979,6 +1024,8 @@ struct LibDuckDB(Movable):
         self._duckdb_create_map_type = existing._duckdb_create_map_type
         self._duckdb_create_union_type = existing._duckdb_create_union_type
         self._duckdb_create_struct_type = existing._duckdb_create_struct_type
+        self._duckdb_create_enum_type = existing._duckdb_create_enum_type
+        self._duckdb_create_decimal_type = existing._duckdb_create_decimal_type
         self._duckdb_get_type_id = existing._duckdb_get_type_id
         self._duckdb_list_type_child_type = existing._duckdb_list_type_child_type
         self._duckdb_array_type_child_type = existing._duckdb_array_type_child_type
@@ -999,15 +1046,26 @@ struct LibDuckDB(Movable):
         self._duckdb_create_int32 = existing._duckdb_create_int32
         self._duckdb_create_uint32 = existing._duckdb_create_uint32
         self._duckdb_create_int64 = existing._duckdb_create_int64
+        self._duckdb_create_hugeint = existing._duckdb_create_hugeint
         self._duckdb_create_uint64 = existing._duckdb_create_uint64
+        self._duckdb_create_uhugeint = existing._duckdb_create_uhugeint
         self._duckdb_create_float = existing._duckdb_create_float
         self._duckdb_create_double = existing._duckdb_create_double
         self._duckdb_create_date = existing._duckdb_create_date
+        self._duckdb_create_time = existing._duckdb_create_time
         self._duckdb_create_timestamp = existing._duckdb_create_timestamp
         self._duckdb_create_interval = existing._duckdb_create_interval
         self._duckdb_create_blob = existing._duckdb_create_blob
+        self._duckdb_create_bit = existing._duckdb_create_bit
+        self._duckdb_create_uuid = existing._duckdb_create_uuid
         self._duckdb_create_null_value = existing._duckdb_create_null_value
+        self._duckdb_create_decimal = existing._duckdb_create_decimal
+        self._duckdb_create_enum_value = existing._duckdb_create_enum_value
         self._duckdb_get_bool = existing._duckdb_get_bool
+        self._duckdb_get_decimal = existing._duckdb_get_decimal
+        self._duckdb_mojo_get_decimal = existing._duckdb_mojo_get_decimal
+        self._duckdb_mojo_create_decimal = existing._duckdb_mojo_create_decimal
+        self._duckdb_get_enum_value = existing._duckdb_get_enum_value
         self._duckdb_get_int8 = existing._duckdb_get_int8
         self._duckdb_get_uint8 = existing._duckdb_get_uint8
         self._duckdb_get_int16 = existing._duckdb_get_int16
@@ -1015,14 +1073,20 @@ struct LibDuckDB(Movable):
         self._duckdb_get_int32 = existing._duckdb_get_int32
         self._duckdb_get_uint32 = existing._duckdb_get_uint32
         self._duckdb_get_int64 = existing._duckdb_get_int64
+        self._duckdb_get_hugeint = existing._duckdb_get_hugeint
         self._duckdb_get_uint64 = existing._duckdb_get_uint64
+        self._duckdb_get_uhugeint = existing._duckdb_get_uhugeint
         self._duckdb_get_float = existing._duckdb_get_float
         self._duckdb_get_double = existing._duckdb_get_double
         self._duckdb_get_date = existing._duckdb_get_date
+        self._duckdb_get_time = existing._duckdb_get_time
         self._duckdb_get_timestamp = existing._duckdb_get_timestamp
         self._duckdb_get_interval = existing._duckdb_get_interval
         self._duckdb_get_varchar = existing._duckdb_get_varchar
         self._duckdb_get_value_type = existing._duckdb_get_value_type
+        self._duckdb_get_blob = existing._duckdb_get_blob
+        self._duckdb_get_bit = existing._duckdb_get_bit
+        self._duckdb_get_uuid = existing._duckdb_get_uuid
         self._duckdb_is_null_value = existing._duckdb_is_null_value
         self._duckdb_value_to_string = existing._duckdb_value_to_string
 
@@ -2161,8 +2225,31 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_create_struct_type(member_types, member_names, member_count)
 
-    # fn duckdb_create_enum_type TODO
-    # fn duckdb_create_decimal_type TODO
+    fn duckdb_create_enum_type(
+        self,
+        member_names: UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin],
+        member_count: idx_t,
+    ) -> duckdb_logical_type:
+        """Creates an ENUM type from the passed member name array.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * member_names: The array of names that the enum should consist of.
+        * member_count: The number of members that were specified in the array.
+        * returns: The logical type.
+        """
+        return self._duckdb_create_enum_type(member_names, member_count)
+
+    fn duckdb_create_decimal_type(
+        self, width: UInt8, scale: UInt8
+    ) -> duckdb_logical_type:
+        """Creates a DECIMAL type from the passed width and scale.
+        The resulting type should be destroyed with `duckdb_destroy_logical_type`.
+
+        * width: The width of the decimal type.
+        * scale: The scale of the decimal type.
+        * returns: The logical type.
+        """
+        return self._duckdb_create_decimal_type(width, scale)
 
     fn duckdb_get_type_id(self, type: duckdb_logical_type) -> duckdb_type:
         """Retrieves the enum type class of a `duckdb_logical_type`.
@@ -2338,6 +2425,14 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_create_int64(input)
 
+    fn duckdb_create_hugeint(self, input: duckdb_hugeint) -> duckdb_value:
+        """Creates a value from a hugeint.
+
+        * input: The hugeint value
+        * returns: The value. This must be destroyed with `duckdb_destroy_value`.
+        """
+        return self._duckdb_create_hugeint(input)
+
     fn duckdb_create_uint64(self, input: UInt64) -> duckdb_value:
         """Creates a value from a uint64_t (a ubigint).
 
@@ -2345,6 +2440,14 @@ struct LibDuckDB(Movable):
         * returns: The value. This must be destroyed with `duckdb_destroy_value`.
         """
         return self._duckdb_create_uint64(input)
+
+    fn duckdb_create_uhugeint(self, input: duckdb_uhugeint) -> duckdb_value:
+        """Creates a value from a uhugeint.
+
+        * input: The uhugeint value
+        * returns: The value. This must be destroyed with `duckdb_destroy_value`.
+        """
+        return self._duckdb_create_uhugeint(input)
 
     fn duckdb_create_float(self, input: Float32) -> duckdb_value:
         """Creates a value from a float.
@@ -2369,6 +2472,14 @@ struct LibDuckDB(Movable):
         * returns: The value. This must be destroyed with `duckdb_destroy_value`.
         """
         return self._duckdb_create_date(input)
+
+    fn duckdb_create_time(self, input: duckdb_time) -> duckdb_value:
+        """Creates a value from a time.
+
+        * input: The time value
+        * returns: The value. This must be destroyed with `duckdb_destroy_value`.
+        """
+        return self._duckdb_create_time(input)
 
     fn duckdb_create_timestamp(self, input: duckdb_timestamp) -> duckdb_value:
         """Creates a TIMESTAMP value from a duckdb_timestamp.
@@ -2395,12 +2506,45 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_create_blob(data, length)
 
+    fn duckdb_create_bit(self, input: duckdb_bit) -> duckdb_value:
+        """Creates a value from a bit.
+
+        * input: The bit input
+        * returns: The value. This must be destroyed with `duckdb_destroy_value`.
+        """
+        return self._duckdb_create_bit(input)
+
+    fn duckdb_create_uuid(self, input: duckdb_uhugeint) -> duckdb_value:
+        """Creates a value from a uuid.
+
+        * input: The uuid input
+        * returns: The value. This must be destroyed with `duckdb_destroy_value`.
+        """
+        return self._duckdb_create_uuid(input)
+
     fn duckdb_create_null_value(self) -> duckdb_value:
         """Creates a value of type SQLNULL.
 
         * returns: The duckdb_value representing SQLNULL. This must be destroyed with `duckdb_destroy_value`.
         """
         return self._duckdb_create_null_value()
+
+    fn duckdb_create_decimal(self, input: duckdb_decimal) -> duckdb_value:
+        """Creates a DECIMAL value from the given decimal value.
+
+        * input: The decimal value.
+        * returns: A duckdb_value containing the decimal.
+        """
+        return self._duckdb_mojo_create_decimal(UnsafePointer(to=input).unsafe_origin_cast[ImmutAnyOrigin]())
+
+    fn duckdb_create_enum_value(self, type: duckdb_logical_type, value: UInt64) -> duckdb_value:
+        """Creates an ENUM value from the given type and value.
+        
+        * type: The enum type.
+        * value: The enum value.
+        * returns: A duckdb_value containing the enum value.
+        """
+        return self._duckdb_create_enum_value(type, value)
 
     fn duckdb_get_bool(self, val: duckdb_value) -> Bool:
         """Returns the boolean value of the given value.
@@ -2409,6 +2553,24 @@ struct LibDuckDB(Movable):
         * returns: A boolean, or false if the value cannot be converted
         """
         return self._duckdb_get_bool(val)
+
+    fn duckdb_get_decimal(self, val: duckdb_value) -> duckdb_decimal:
+        """Returns the decimal value of the given value.
+        
+        * val: A duckdb_value containing a decimal
+        * returns: A decimal, or 0 if the value cannot be converted
+        """
+        var result = duckdb_decimal(width=0, scale=0, value=0)
+        self._duckdb_mojo_get_decimal(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())
+        return result
+
+    fn duckdb_get_enum_value(self, val: duckdb_value) -> UInt64:
+        """Returns the enum value of the given value.
+        
+        * val: A duckdb_value containing an enum
+        * returns: The enum value, or 0 if the value cannot be converted
+        """
+        return self._duckdb_get_enum_value(val)
 
     fn duckdb_get_int8(self, val: duckdb_value) -> Int8:
         """Returns the int8_t value of the given value.
@@ -2466,6 +2628,14 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_get_int64(val)
 
+    fn duckdb_get_hugeint(self, val: duckdb_value) -> duckdb_hugeint:
+        """Returns the hugeint value of the given value.
+
+        * val: A duckdb_value containing a hugeint
+        * returns: A hugeint
+        """
+        return self._duckdb_get_hugeint(val)
+
     fn duckdb_get_uint64(self, val: duckdb_value) -> UInt64:
         """Returns the uint64_t value of the given value.
 
@@ -2473,6 +2643,14 @@ struct LibDuckDB(Movable):
         * returns: A uint64_t, or MinValue if the value cannot be converted
         """
         return self._duckdb_get_uint64(val)
+
+    fn duckdb_get_uhugeint(self, val: duckdb_value) -> duckdb_uhugeint:
+        """Returns the uhugeint value of the given value.
+
+        * val: A duckdb_value containing a uhugeint
+        * returns: A uhugeint
+        """
+        return self._duckdb_get_uhugeint(val)
 
     fn duckdb_get_float(self, val: duckdb_value) -> Float32:
         """Returns the float value of the given value.
@@ -2497,6 +2675,14 @@ struct LibDuckDB(Movable):
         * returns: A duckdb_date, or MinValue if the value cannot be converted
         """
         return self._duckdb_get_date(val)
+
+    fn duckdb_get_time(self, val: duckdb_value) -> duckdb_time:
+        """Returns the time value of the given value.
+
+        * val: A duckdb_value containing a time
+        * returns: A duckdb_time, or MinValue if the value cannot be converted
+        """
+        return self._duckdb_get_time(val)
 
     fn duckdb_get_timestamp(self, val: duckdb_value) -> duckdb_timestamp:
         """Returns the TIMESTAMP value of the given value.
@@ -2531,6 +2717,30 @@ struct LibDuckDB(Movable):
         * returns: A duckdb_logical_type.
         """
         return self._duckdb_get_value_type(val)
+
+    fn duckdb_get_blob(self, val: duckdb_value) -> duckdb_blob:
+        """Returns the blob value of the given value.
+
+        * val: A duckdb_value
+        * returns: A duckdb_blob.
+        """
+        return self._duckdb_get_blob(val)
+
+    fn duckdb_get_bit(self, val: duckdb_value) -> duckdb_bit:
+        """Returns the bit value of the given value.
+
+        * val: A duckdb_value
+        * returns: A duckdb_bit.
+        """
+        return self._duckdb_get_bit(val)
+
+    fn duckdb_get_uuid(self, val: duckdb_value) -> duckdb_uhugeint:
+        """Returns the uuid value of the given value.
+
+        * val: A duckdb_value
+        * returns: A duckdb_uhugeint.
+        """
+        return self._duckdb_get_uuid(val)
 
     fn duckdb_is_null_value(self, value: duckdb_value) -> Bool:
         """Returns whether the value's type is SQLNULL or not.
@@ -3179,4 +3389,80 @@ comptime _duckdb_is_null_value = _dylib_function["duckdb_is_null_value",
 
 comptime _duckdb_value_to_string = _dylib_function["duckdb_value_to_string",
     fn (duckdb_value) -> UnsafePointer[c_char, MutExternalOrigin]
+]
+
+comptime _duckdb_create_bit = _dylib_function["duckdb_create_bit",
+    fn(duckdb_bit) -> duckdb_value
+]
+
+comptime _duckdb_create_hugeint = _dylib_function["duckdb_create_hugeint",
+    fn (duckdb_hugeint) -> duckdb_value
+]
+
+comptime _duckdb_create_uhugeint = _dylib_function["duckdb_create_uhugeint",
+    fn (duckdb_uhugeint) -> duckdb_value
+]
+
+comptime _duckdb_create_time = _dylib_function["duckdb_create_time",
+    fn (duckdb_time) -> duckdb_value
+]
+
+comptime _duckdb_get_hugeint = _dylib_function["duckdb_get_hugeint",
+    fn (duckdb_value) -> duckdb_hugeint
+]
+
+comptime _duckdb_get_uhugeint = _dylib_function["duckdb_get_uhugeint",
+    fn (duckdb_value) -> duckdb_uhugeint
+]
+
+comptime _duckdb_get_time = _dylib_function["duckdb_get_time",
+    fn (duckdb_value) -> duckdb_time
+]
+
+comptime _duckdb_create_uuid = _dylib_function["duckdb_create_uuid",
+    fn(duckdb_uhugeint) -> duckdb_value
+]
+
+comptime _duckdb_get_blob = _dylib_function["duckdb_get_blob",
+    fn(duckdb_value) -> duckdb_blob
+]
+
+comptime _duckdb_get_bit = _dylib_function["duckdb_get_bit",
+    fn(duckdb_value) -> duckdb_bit
+]
+
+comptime _duckdb_get_uuid = _dylib_function["duckdb_get_uuid",
+    fn(duckdb_value) -> duckdb_uhugeint
+]
+
+comptime _duckdb_create_enum_type = _dylib_function["duckdb_create_enum_type",
+    fn(UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], ImmutAnyOrigin], idx_t) -> duckdb_logical_type
+]
+
+comptime _duckdb_create_decimal_type = _dylib_function["duckdb_create_decimal_type",
+    fn(UInt8, UInt8) -> duckdb_logical_type
+]
+
+comptime _duckdb_create_decimal = _dylib_function["duckdb_create_decimal",
+    fn(duckdb_decimal) -> duckdb_value
+]
+
+comptime _duckdb_create_enum_value = _dylib_function["duckdb_create_enum_value",
+    fn(duckdb_logical_type, UInt64) -> duckdb_value
+]
+
+comptime _duckdb_get_decimal = _dylib_function["duckdb_get_decimal",
+    fn(duckdb_value) -> duckdb_decimal
+]
+
+comptime _duckdb_get_enum_value = _dylib_function["duckdb_get_enum_value",
+    fn(duckdb_value) -> UInt64
+]
+
+comptime _duckdb_mojo_get_decimal = _dylib_helpers_function["duckdb_mojo_get_decimal",
+    fn(duckdb_value, UnsafePointer[duckdb_decimal, MutExternalOrigin]) -> None
+]
+
+comptime _duckdb_mojo_create_decimal = _dylib_helpers_function["duckdb_mojo_create_decimal",
+    fn(UnsafePointer[duckdb_decimal, ImmutAnyOrigin]) -> duckdb_value
 ]

@@ -1,8 +1,11 @@
 from testing import assert_equal, assert_true, assert_false
 from duckdb import DuckDBValue
 from duckdb._libduckdb import *
+from duckdb.duckdb_type import Decimal
 from math import isnan
 from testing.suite import TestSuite
+from collections import List
+from duckdb.logical_type import enum_type
 
 
 fn test_null_value() raises:
@@ -123,6 +126,80 @@ fn test_uint64_values() raises:
     )
 
 
+fn test_hugeint_values() raises:
+    """Test creating and extracting hugeint values."""
+    # Construct hugeint from upper (int64) and lower (uint64) parts manually
+    # duckdb_hugeint is aliased to Int128
+    
+    # Max hugeint: upper = MAX_INT64, lower = MAX_UINT64
+    var max_upper = Int128(9223372036854775807)
+    var max_lower = Int128(18446744073709551615)
+    var val_pos_int128 = (max_upper << 64) | max_lower
+    var val_pos = DuckDBValue.from_hugeint(val_pos_int128)
+
+    # Min hugeint: upper = MIN_INT64, lower = 0
+    var min_upper = Int128(-9223372036854775808)
+    var val_neg_int128 = (min_upper << 64) 
+    var val_neg = DuckDBValue.from_hugeint(val_neg_int128)
+
+    var val_zero = DuckDBValue.from_hugeint(0)
+    
+    # Additional test cases
+    var val_small_pos_int128 = Int128(123456789)
+    var val_small_pos = DuckDBValue.from_hugeint(val_small_pos_int128)
+    
+    var val_small_neg_int128 = Int128(-123456789)
+    var val_small_neg = DuckDBValue.from_hugeint(val_small_neg_int128)
+    
+    # Just above 2^64
+    var val_above_64_int128 = (Int128(1) << 64) + 1
+    var val_above_64 = DuckDBValue.from_hugeint(val_above_64_int128)
+
+    # Just below -2^63 (min int64)
+    var val_below_min_64_int128 = Int128(-9223372036854775808) - 1
+    var val_below_min_64 = DuckDBValue.from_hugeint(val_below_min_64_int128)
+
+    assert_equal(
+        val_pos.as_hugeint(), val_pos_int128, "Max hugeint should match"
+    )
+    assert_equal(
+        val_neg.as_hugeint(), val_neg_int128, "Min hugeint should match"
+    )
+    assert_equal(val_zero.as_hugeint(), 0, "Zero hugeint should match")
+    assert_equal(val_small_pos.as_hugeint(), val_small_pos_int128, "Small positive hugeint should match")
+    assert_equal(val_small_neg.as_hugeint(), val_small_neg_int128, "Small negative hugeint should match")
+    assert_equal(val_above_64.as_hugeint(), val_above_64_int128, "Above 2^64 hugeint should match")
+    assert_equal(val_below_min_64.as_hugeint(), val_below_min_64_int128, "Below min int64 hugeint should match")
+
+
+fn test_uhugeint_values() raises:
+    """Test creating and extracting uhugeint values."""
+    # duckdb_uhugeint is aliased to UInt128
+    
+    # Max uhugeint: upper = MAX_UINT64, lower = MAX_UINT64
+    var max_upper = UInt128(18446744073709551615)
+    var max_lower = UInt128(18446744073709551615)
+    var val_pos_uint128 = (max_upper << 64) | max_lower
+    var val_pos = DuckDBValue.from_uhugeint(val_pos_uint128)
+    
+    var val_zero = DuckDBValue.from_uhugeint(0)
+
+    # Additional test cases
+    var val_small_pos_uint128 = UInt128(123456789)
+    var val_small_pos = DuckDBValue.from_uhugeint(val_small_pos_uint128)
+    
+    # Just above 2^64
+    var val_above_64_uint128 = (UInt128(1) << 64) + 1
+    var val_above_64 = DuckDBValue.from_uhugeint(val_above_64_uint128)
+
+    assert_equal(
+        val_pos.as_uhugeint(), val_pos_uint128, "Max uhugeint should match"
+    )
+    assert_equal(val_zero.as_uhugeint(), 0, "Zero uhugeint should match")
+    assert_equal(val_small_pos.as_uhugeint(), val_small_pos_uint128, "Small positive uhugeint should match")
+    assert_equal(val_above_64.as_uhugeint(), val_above_64_uint128, "Above 2^64 uhugeint should match")
+
+
 fn test_float32_values() raises:
     """Test creating and extracting float32 values."""
     var val_pos = DuckDBValue.from_float32(3.14)
@@ -205,6 +282,18 @@ fn test_timestamp_values() raises:
     assert_equal(result, ts)
 
 
+fn test_time_values() raises:
+    """Test creating and extracting time values."""
+    # Time is stored as microseconds since midnight
+    var t = duckdb_time(micros=123456000)
+    var val = DuckDBValue.from_time(t)
+
+    var result = val.as_time()
+
+    assert_false(val.is_null(), "Time value should not be null")
+    assert_equal(result, t)
+
+
 fn test_interval_values() raises:
     var interval = Interval(
         months=1, days=2, micros=3000000
@@ -215,14 +304,35 @@ fn test_interval_values() raises:
     assert_equal(result, interval)
 
 
+fn test_decimal_values() raises:
+    """Test creating and extracting decimal values."""
+    # Create a decimal with width 18, scale 3.
+    # Value is (internal) 123456 -> 123.456
+    var h: Int128 = Int128(123456)
+    var dec = Decimal(width=18, scale=3, value=h)
+    var val = DuckDBValue.from_decimal(dec)
+
+    var result = val.as_decimal()
+    
+    assert_equal(result.width, 18, "Width should match")
+    assert_equal(result.scale, 3, "Scale should match")
+    assert_equal(result.value(), 123456, "Value should match")
+
+fn test_enum_values() raises:
+    """Test creating and extracting enum values."""
+    # Create logic type enum
+    var names: List[String] = ["Apple", "Banana", "Cherry"]
+    var t_enum = enum_type(names)
+    
+    # Create enum value (index 1 = Banana)
+    var val = DuckDBValue.from_enum(t_enum, 1)
+    
+    var result = val.as_enum_value()
+    assert_equal(result, 1, "Enum index should be 1")
+
 fn test_blob_values() raises:
     """Test creating and extracting blob values."""
-    var data = List[UInt8]()
-    data.append(1)
-    data.append(2)
-    data.append(3)
-    data.append(4)
-    data.append(5)
+    var data: List[UInt8] = [1, 2, 3, 4, 5]
     var span = Span[UInt8, ImmutAnyOrigin](
         ptr=data.unsafe_ptr(), length=len(data)
     )
@@ -297,6 +407,24 @@ fn test_logical_type_ownership() raises:
         DUCKDB_TYPE_BIGINT,
         "Borrowed type should still be valid",
     )
+
+
+fn test_bit_values() raises:
+    """Test creating and extracting bit values."""
+    var bit_data: List[UInt8] = [0b10101010, 0b01010101]
+    var val = DuckDBValue.from_bit(bit_data)
+    var result = val.as_bit()
+    assert_equal(len(result), 2)
+    assert_equal(result[0], 0b10101010)
+    assert_equal(result[1], 0b01010101)
+
+
+fn test_uuid_values() raises:
+    """Test creating and extracting uuid values."""
+    var uuid_val = UInt128(12345678901234567890)
+    var val = DuckDBValue.from_uuid(uuid_val)
+    var result = val.as_uuid()
+    assert_equal(result, uuid_val)
 
 
 def main():

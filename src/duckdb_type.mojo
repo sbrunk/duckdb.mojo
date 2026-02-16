@@ -425,46 +425,47 @@ struct Interval(TrivialRegisterPassable, Equatable, Stringable, Representable):
         )
 
 
-@fieldwise_init
-struct Int128(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
-    """Hugeints are composed of a (lower, upper) component.
 
-    The value of the hugeint is upper * 2^64 + lower
-    For easy usage, the functions duckdb_hugeint_to_double/duckdb_double_to_hugeint are recommended
-    """
+# Int128 and UInt128 are builtin types in Mojo.
 
-    var lower: UInt64
-    var upper: Int64
-
-    fn __str__(self) -> String:
-        return "lower: " + String(self.lower) + ", upper: " + String(self.upper)
-
-    fn __repr__(self) -> String:
-        return "Int128(" + String(self.lower) + ", " + String(self.upper) + ")"
-
-
-@fieldwise_init
-struct UInt128(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
-    """UHugeints are composed of a (lower, upper) component."""
-
-    var lower: UInt64
-    var upper: UInt64
-
-    fn __str__(self) -> String:
-        return "lower: " + String(self.lower) + ", upper: " + String(self.upper)
-
-    fn __repr__(self) -> String:
-        return "UInt128(" + String(self.lower) + ", " + String(self.upper) + ")"
-
-
-@fieldwise_init
 struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
     """Decimals are composed of a width and a scale, and are stored in a hugeint.
     """
 
     var width: UInt8
     var scale: UInt8
-    var value: UInt128
+    # Int128 is 16-byte aligned, which causes 14 bytes of padding after scale.
+    # We want 8-byte alignment to match C layout (width+scale+6pad+value).
+    # But we can't easily force 8-byte alignment on Int128 field if type itself is 16-byte aligned.
+    # So we use 2 Int64s/UInt64s to mimic the layout of duckdb_hugeint.
+    
+    # Padding: 6 bytes to reach 8-byte alignment for the next fields
+    var _pad0: UInt8
+    var _pad1: UInt8
+    var _pad2: UInt8
+    var _pad3: UInt8
+    var _pad4: UInt8
+    var _pad5: UInt8
+
+    var lower: UInt64
+    var upper: Int64
+
+    fn __init__(out self, width: UInt8, scale: UInt8, value: Int128):
+        self.width = width
+        self.scale = scale
+        self._pad0 = 0
+        self._pad1 = 0
+        self._pad2 = 0
+        self._pad3 = 0
+        self._pad4 = 0
+        self._pad5 = 0
+        self.lower = value.cast[DType.uint64]()
+        self.upper = (value >> 64).cast[DType.int64]() # Shift right to get upper bits
+
+    fn value(self) -> Int128:
+        var l = self.lower.cast[DType.int128]()
+        var u = self.upper.cast[DType.int128]() 
+        return (u << 64) | l
 
     fn __str__(self) -> String:
         return (
@@ -473,7 +474,7 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable,
             + ", scale: "
             + String(self.scale)
             + ", value: "
-            + String(self.value)
+            + String(self.value())
         )
 
     fn __repr__(self) -> String:
@@ -483,6 +484,6 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable,
             + ", "
             + String(self.scale)
             + ", "
-            + String(self.value)
+            + String(self.value())
             + ")"
         )
