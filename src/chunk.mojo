@@ -48,7 +48,7 @@ struct Chunk[is_owned: Bool](Movable, Sized):
         """
         self._chunk = chunk
 
-    fn __init__(out self: Chunk[is_owned=True], types: List[LogicalType]):
+    fn __init__(out self: Chunk[is_owned=True], types: List[LogicalType[is_owned=True, origin=MutExternalOrigin]]):
         """Creates an empty data chunk with the specified column types.
         
         This creates an owned `Chunk[True]` that will be destroyed when it goes out of scope.

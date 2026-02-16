@@ -1,40 +1,78 @@
 from duckdb._libduckdb import *
 
 
-struct LogicalType(ImplicitlyCopyable & Movable & Equatable & Writable & Stringable):
-    """Represents a potentially nested DuckDB type."""
-
+struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Movable & Equatable & Writable & Stringable):
+    """Represents a potentially nested DuckDB type.
+    
+    LogicalTypes can be borrowed from DuckDB structures or owned standalone. Ownership
+    is tracked at compile-time via the `is_owned` parameter:
+    - `LogicalType[False, ...]`: Borrowed from DuckDB, will not be destroyed
+    - `LogicalType[True, ...]`: Owned standalone type, will be destroyed when it goes out of scope
+    
+    Parameters:
+        is_owned: Whether this LogicalType owns its pointer and should destroy it.
+        origin: The origin tracking lifetime dependencies.
+    """
     var _logical_type: duckdb_logical_type
 
-    fn __init__(out self, type_id: DuckDBType):
-        """Creates a `LogicalType` from a standard primitive type."""
+    fn __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], type_id: DuckDBType):
+        """Creates an owned LogicalType from a standard primitive type."""
         ref libduckdb = DuckDB().libduckdb()
         self._logical_type = libduckdb.duckdb_create_logical_type(type_id.value)
 
-    fn __init__(out self, logical_type: duckdb_logical_type):
+    fn __init__(out self: LogicalType[is_owned=False, origin=Self.origin], logical_type: duckdb_logical_type):
+        """Creates a borrowed LogicalType (not owned).
+        
+        This creates a `LogicalType` that does not own the logical type and will not
+        destroy it when it goes out of scope. Used for types from DuckDB structures.
+        
+        Args:
+            logical_type: The duckdb_logical_type pointer.
+        """
+        self._logical_type = logical_type
+
+    fn __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], var logical_type: duckdb_logical_type):
+        """Creates an owned LogicalType from a duckdb_logical_type pointer.
+        
+        This takes ownership of the logical type and will destroy it.
+        
+        Args:
+            logical_type: The duckdb_logical_type pointer.
+        """
         self._logical_type = logical_type
 
     fn __copyinit__(out self, other: Self):
-        if other.get_type_id() == DuckDBType.list:
-            var child = other.list_type_child_type()
-            self = child.create_list_type()
-        # TODO remaining nested types
-        # if not other.get_type_id().is_nested():
+        @parameter
+        if Self.is_owned:
+            if other.get_type_id() == DuckDBType.list:
+                var child = other.list_type_child_type()
+                var list_type = child.create_list_type()
+                # Take ownership of the pointer before list_type's destructor runs
+                self._logical_type = list_type._logical_type
+                # Prevent list_type from destroying the pointer we just took
+                list_type._logical_type = duckdb_logical_type()
+            # TODO remaining nested types
+            else:
+                ref libduckdb = DuckDB().libduckdb()
+                self._logical_type = libduckdb.duckdb_create_logical_type(other.get_type_id().value)
         else:
-            self = Self(other.get_type_id())
+            self._logical_type = other._logical_type
 
     fn __moveinit__(out self, deinit other: Self):
         self._logical_type = other._logical_type
 
     fn __del__(deinit self):
-        ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_logical_type(
-            UnsafePointer(to=self._logical_type)
-        )
+        """Destroys owned LogicalTypes only."""
+        @parameter
+        if Self.is_owned:
+            ref libduckdb = DuckDB().libduckdb()
+            libduckdb.duckdb_destroy_logical_type(
+                UnsafePointer(to=self._logical_type)
+            )
 
-    fn create_list_type(self) -> Self:
+    fn create_list_type(self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_create_list_type(self._logical_type))
+        return LogicalType[is_owned=True, origin=MutExternalOrigin](libduckdb.duckdb_create_list_type(self._logical_type))
 
     fn get_type_id(self) -> DuckDBType:
         """Retrieves the enum type class of this `LogicalType`.
@@ -45,29 +83,35 @@ struct LogicalType(ImplicitlyCopyable & Movable & Equatable & Writable & Stringa
         ref libduckdb = DuckDB().libduckdb()
         return DuckDBType(libduckdb.duckdb_get_type_id(self._logical_type))
 
-    fn list_type_child_type(self) -> Self:
+    fn list_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child type of the given list type.
+        
+        The returned type is borrowed from this list type and should not be destroyed separately.
 
         * type: The logical type object
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_list_type_child_type(self._logical_type))
+        return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_list_type_child_type(self._logical_type))
 
-    fn map_type_key_type(self) -> Self:
+    fn map_type_key_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the key type of the given map type.
+        
+        The returned type is borrowed from this map type and should not be destroyed separately.
 
         * type: The logical type object
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_map_type_key_type(self._logical_type))
+        return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_map_type_key_type(self._logical_type))
 
-    fn map_type_value_type(self) -> Self:
+    fn map_type_value_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the value type of the given map type.
+        
+        The returned type is borrowed from this map type and should not be destroyed separately.
 
         * type: The logical type object
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_map_type_value_type(self._logical_type))
+        return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_map_type_value_type(self._logical_type))
 
     fn array_type_array_size(self) -> idx_t:
         """Retrieves the array size of the given array type.
@@ -81,11 +125,13 @@ struct LogicalType(ImplicitlyCopyable & Movable & Equatable & Writable & Stringa
         if self.get_type_id() != other.get_type_id():
             return False
         if self.get_type_id() == DuckDBType.list:
-            return self.list_type_child_type() == other.list_type_child_type()
+            # Compare child types by ID to avoid origin mismatch
+            return self.list_type_child_type().get_type_id() == other.list_type_child_type().get_type_id()
         if self.get_type_id() == DuckDBType.map:
+            # Compare child types by ID to avoid origin mismatch
             return (
-                self.map_type_key_type() == other.map_type_key_type()
-                and self.map_type_value_type() == other.map_type_value_type()
+                self.map_type_key_type().get_type_id() == other.map_type_key_type().get_type_id()
+                and self.map_type_value_type().get_type_id() == other.map_type_value_type().get_type_id()
             )
         # TODO remaining nested types
         return True

@@ -9,18 +9,18 @@ struct Col[T: Copyable & Movable, Builder: DuckDBWrapper](ImplicitlyCopyable & M
 
     # using a variant here allows us to create aliases for simple types below
     # as we can't create a LogicalType at compile time due to calling into duckdb
-    var _type: Variant[LogicalType, DuckDBType]
+    var _type: Variant[LogicalType[is_owned=True, origin=MutExternalOrigin], DuckDBType]
 
     fn __init__(out self, duckdb_type: DuckDBType):
         self._type = duckdb_type
 
-    fn __init__(out self, logical_type: LogicalType):
+    fn __init__(out self, logical_type: LogicalType[is_owned=True, origin=MutExternalOrigin]):
         self._type = logical_type
 
-    fn type(self) -> LogicalType:
-        if self._type.isa[LogicalType]():
-            return self._type[LogicalType]
-        return LogicalType(self._type[DuckDBType])
+    fn type(self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+        if self._type.isa[LogicalType[is_owned=True, origin=MutExternalOrigin]]():
+            return self._type[LogicalType[is_owned=True, origin=MutExternalOrigin]]
+        return LogicalType[is_owned=True, origin=MutExternalOrigin](self._type[DuckDBType])
 
 
 comptime boolean = Col[Bool, BoolVal](DuckDBType.boolean)

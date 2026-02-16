@@ -553,7 +553,7 @@ struct StatementType(
 struct Column(Movable & Copyable & Stringable & Writable):
     var index: Int
     var name: String
-    var type: LogicalType
+    var type: LogicalType[is_owned=True, origin=MutExternalOrigin]
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -573,8 +573,9 @@ struct Result(Writable, Stringable):
         self._result = result
         self.columns = List[Column]()
         for i in range(self.column_count()):
+            var borrowed_type = self.column_type(i)
             var col = Column(
-                index=i, name=self.column_name(i), type=self.column_type(i)
+                index=i, name=self.column_name(i), type=LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id())
             )
             self.columns.append(col^)
 
@@ -591,15 +592,17 @@ struct Result(Writable, Stringable):
         )
         return String(unsafe_from_utf8_ptr=c_str)
 
-    fn column_types(self) -> List[LogicalType]:
-        var types = List[LogicalType]()
+    fn column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+        var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
         for i in range(self.column_count()):
-            types.append(self.column_type(i))
+            # Copy the borrowed type to create an owned version
+            var borrowed_type = self.column_type(i)
+            types.append(LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id()))
         return types^
 
-    fn column_type(self, col: Int) -> LogicalType:
+    fn column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         ref libduckdb = DuckDB().libduckdb()
-        return LogicalType(
+        return LogicalType[is_owned=False, origin=origin_of(self)](
             libduckdb.duckdb_column_logical_type(
                 UnsafePointer(to=self._result), UInt64(col)
             )
@@ -799,10 +802,10 @@ struct MaterializedResult(Sized, Movable):
     fn column_name(self, col: Int) -> String:
         return self.result.column_name(col)
 
-    fn column_types(self) -> List[LogicalType]:
+    fn column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
         return self.result.column_types()
 
-    fn column_type(self, col: Int) -> LogicalType:
+    fn column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self.result)]:
         return self.result.column_type(col)
 
     fn columns(self) -> List[Column]:

@@ -55,13 +55,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
-    fn get_column_type(self) -> LogicalType:
+    fn get_column_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the column type of the specified vector.
 
         * returns: The type of the vector
         """
         ref libduckdb = DuckDB().libduckdb()
-        return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
+        return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_vector_get_column_type(self._vector))
 
     fn get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the data pointer of the vector.
@@ -241,12 +241,14 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 
-    fn _check_type(self, db_type: LogicalType) raises:
+    fn _check_type[db_is_owned: Bool, db_origin: ImmutOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
         """
-        if self.get_column_type() != db_type:
+        var self_type_id = self.get_column_type().get_type_id()
+        var db_type_id = db_type.get_type_id()
+        if self_type_id != db_type_id:
             raise "Expected type " + String(db_type) + " but got " + String(
-                self.get_column_type()
+                self_type_id
             )
 
     fn get[
