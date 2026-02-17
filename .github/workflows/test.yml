@@ -28,6 +28,7 @@ jobs:
         with:
           pixi-version: v0.63.2
           cache: true
+          environments: default
 
       - name: Execute tests
         run: |
