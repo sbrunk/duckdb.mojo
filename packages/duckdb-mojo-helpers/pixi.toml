@@ -1,11 +1,3 @@
-[workspace]
-authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["https://prefix.dev/conda-forge"]
-platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
-preview = ["pixi-build"]                                  
-name = "duckdb-mojo-helpers"
-version = "0.0.1"
-
 [package] 
 name = "duckdb-mojo-helpers"
 version = "0.0.1"
@@ -15,6 +7,14 @@ backend = { name = "pixi-build-cmake", version = "0.3.*" }
 
 [package.build.config]
 extra-args = ["-DCMAKE_BUILD_TYPE=Release"] 
+
+[package.host-dependencies]
+libduckdb-devel = "=1.4"
+
+# Feature: operator-replacement (requires building DuckDB from source)
+[feature.operator-replacement.dependencies]
+duckdb-from-source = { path = "../duckdb-from-source" }
+duckdb-operator-replacement = { path = "../operator-replacement" }
 
 # duckdb-from-source provides the same headers/library as libduckdb-devel
 # CMake will find whichever is available in $PREFIX
