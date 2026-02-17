@@ -1,6 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.logical_type import *
-from duckdb.duckdb_value import *
+from duckdb.duckdb_wrapper import *
 from collections import Optional
 
 from sys.intrinsics import _type_is_eq
@@ -55,13 +55,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
-    fn get_column_type(self) -> LogicalType:
+    fn get_column_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the column type of the specified vector.
 
         * returns: The type of the vector
         """
         ref libduckdb = DuckDB().libduckdb()
-        return LogicalType(libduckdb.duckdb_vector_get_column_type(self._vector))
+        return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_vector_get_column_type(self._vector))
 
     fn get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the data pointer of the vector.
@@ -241,12 +241,14 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 
-    fn _check_type(self, db_type: LogicalType) raises:
+    fn _check_type[db_is_owned: Bool, db_origin: ImmutOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
         """
-        if self.get_column_type() != db_type:
+        var self_type_id = self.get_column_type().get_type_id()
+        var db_type_id = db_type.get_type_id()
+        if self_type_id != db_type_id:
             raise "Expected type " + String(db_type) + " but got " + String(
-                self.get_column_type()
+                self_type_id
             )
 
     fn get[
@@ -281,13 +283,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         var result = DuckDBList[expected_type.Builder](
             self, length=length, offset=0
         )
-        # The way we are building our Mojo representation of the data currently via the DuckDBValue
+        # The way we are building our Mojo representation of the data currently via the DuckDBWrapper
         # trait, with different __init__ implementations depending on the concrete type, means
         # that the types don't match.
         #
         # We can cast the result to the expected type though because
         # 1. We have ensured that the runtime type matches the expected type through _check_type
-        # 2. The DuckDBValue implementations are all thin wrappers with conversion logic
+        # 2. The DuckDBWrapper implementations are all thin wrappers with conversion logic
         # around the underlying type we're converting into.
         return rebind[List[Optional[T]]](result).copy()
         

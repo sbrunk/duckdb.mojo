@@ -18,3 +18,19 @@ duckdb_statement_type duckdb_result_statement_type_ptr(duckdb_result *result) {
     }
     return duckdb_result_statement_type(*result);
 }
+
+// Helper wrapper for duckdb_get_decimal to avoid returning large structs by value
+void duckdb_mojo_get_decimal(duckdb_value val, duckdb_decimal *out_decimal) {
+    if (out_decimal) {
+        *out_decimal = duckdb_get_decimal(val);
+    }
+}
+
+// Helper wrapper for duckdb_create_decimal to avoid passing large structs by value from Mojo
+duckdb_value duckdb_mojo_create_decimal(duckdb_decimal *decimal) {
+    if (!decimal) {
+        return NULL; 
+    }
+    return duckdb_create_decimal(*decimal);
+}
+

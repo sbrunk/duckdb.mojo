@@ -5,7 +5,7 @@ from testing.suite import TestSuite
 
 def test_chunk_create():
     """Test creating a data chunk with specific types."""
-    var types = List[LogicalType]()
+    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.varchar))
     types.append(LogicalType(DuckDBType.double))
@@ -18,7 +18,7 @@ def test_chunk_create():
 
 def test_chunk_set_size():
     """Test setting the size of a data chunk."""
-    var types = List[LogicalType]()
+    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.double))
     
@@ -33,7 +33,7 @@ def test_chunk_set_size():
 
 def test_chunk_reset():
     """Test resetting a data chunk."""
-    var types = List[LogicalType]()
+    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     
     var chunk = Chunk[True](types)
@@ -47,7 +47,7 @@ def test_chunk_reset():
 
 def test_chunk_get_vector():
     """Test getting a vector from a data chunk."""
-    var types = List[LogicalType]()
+    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.varchar))
     
@@ -60,7 +60,7 @@ def test_chunk_get_vector():
 
 def test_chunk_type():
     """Test getting column types from a data chunk."""
-    var types = List[LogicalType]()
+    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.bigint))
     types.append(LogicalType(DuckDBType.boolean))
     types.append(LogicalType(DuckDBType.double))
