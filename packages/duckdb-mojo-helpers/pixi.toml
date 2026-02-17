@@ -18,8 +18,3 @@ extra-args = ["-DCMAKE_BUILD_TYPE=Release"]
 
 # duckdb-from-source provides the same headers/library as libduckdb-devel
 # CMake will find whichever is available in $PREFIX
-[package.host-dependencies]
-duckdb-from-source = { path = "../duckdb-from-source" }
-
-[package.run-dependencies]
-duckdb-from-source = { path = "../duckdb-from-source" }

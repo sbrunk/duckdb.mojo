@@ -66,8 +66,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
       - conda: .
         build: hb0f4dca_0
-      - conda: packages/duckdb-from-source
-        build: hb0f4dca_0
       - conda: packages/duckdb-mojo-helpers
         build: hb0f4dca_0
       linux-aarch64:
@@ -128,8 +126,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/zstd-1.5.7-h85ac4a6_6.conda
       - conda: .
         build: he8cfe8b_0
-      - conda: packages/duckdb-from-source
-        build: he8cfe8b_0
       - conda: packages/duckdb-mojo-helpers
         build: he8cfe8b_0
       osx-arm64:
@@ -181,8 +177,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: .
-        build: h60d57d3_0
-      - conda: packages/duckdb-from-source
         build: h60d57d3_0
       - conda: packages/duckdb-mojo-helpers
         build: h60d57d3_0
@@ -538,11 +532,7 @@ packages:
   variants:
     target_platform: osx-arm64
   depends:
-  - duckdb-from-source
   - libcxx >=21
-  sources:
-    duckdb-from-source:
-      path: ../duckdb-from-source
 - conda: packages/duckdb-mojo-helpers
   name: duckdb-mojo-helpers
   version: 0.0.1
@@ -551,12 +541,8 @@ packages:
   variants:
     target_platform: linux-64
   depends:
-  - duckdb-from-source
   - libstdcxx >=15
   - libgcc >=15
-  sources:
-    duckdb-from-source:
-      path: ../duckdb-from-source
 - conda: packages/duckdb-mojo-helpers
   name: duckdb-mojo-helpers
   version: 0.0.1
@@ -565,12 +551,8 @@ packages:
   variants:
     target_platform: linux-aarch64
   depends:
-  - duckdb-from-source
   - libstdcxx >=15
   - libgcc >=15
-  sources:
-    duckdb-from-source:
-      path: ../duckdb-from-source
 - conda: packages/operator-replacement
   name: duckdb-operator-replacement
   version: 0.0.1
