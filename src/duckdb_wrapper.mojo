@@ -88,8 +88,8 @@ struct FixedSizeValue[
 
         self = vector.get_data().bitcast[Self]()[offset=offset]
 
-    fn __copyinit__(out self, other: Self):
-        self.value = other.value
+    fn __copyinit__(out self, copy: Self):
+        self.value = copy.value
 
 comptime DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
 comptime DuckDBDate = FixedSizeValue[DuckDBType.date, Date]

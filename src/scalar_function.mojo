@@ -131,14 +131,14 @@ struct ScalarFunction(Movable):
         self._function = libduckdb.duckdb_create_scalar_function()
         self._owned = True
 
-    fn __moveinit__(out self, deinit existing: Self):
+    fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
-        self._function = existing._function
-        self._owned = existing._owned
+        self._function = take._function
+        self._owned = take._owned
 
-    fn __copyinit__(out self, existing: Self):
+    fn __copyinit__(out self, copy: Self):
         """Copy constructor - shares the pointer but doesn't own it."""
-        self._function = existing._function
+        self._function = copy._function
         self._owned = False  # Copy doesn't own the resource
 
     fn __del__(deinit self):
@@ -465,14 +465,14 @@ struct ScalarFunctionSet(Movable):
         self._function_set = libduckdb.duckdb_create_scalar_function_set(name_copy.as_c_string_slice().unsafe_ptr())
         self._owned = True
 
-    fn __moveinit__(out self, deinit existing: Self):
+    fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
-        self._function_set = existing._function_set
-        self._owned = existing._owned
+        self._function_set = take._function_set
+        self._owned = take._owned
 
-    fn __copyinit__(out self, existing: Self):
+    fn __copyinit__(out self, copy: Self):
         """Copy constructor - shares the pointer but doesn't own it."""
-        self._function_set = existing._function_set
+        self._function_set = copy._function_set
         self._owned = False  # Copy doesn't own the resource
 
     fn __del__(deinit self):

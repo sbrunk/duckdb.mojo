@@ -79,8 +79,8 @@ struct Chunk[is_owned: Bool](Movable, Sized):
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self._chunk = existing._chunk
+    fn __moveinit__(out self, deinit take: Self):
+        self._chunk = take._chunk
 
     fn __len__(self) -> Int:
         """Returns the current number of tuples (rows) in the data chunk.
@@ -218,9 +218,9 @@ struct _ChunkIter[lifetime: ImmutOrigin]:
             # Create an owned Chunk to properly destroy it
             _ = Chunk[is_owned=True](self._next_chunk)
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self._result = existing._result
-        self._next_chunk = existing._next_chunk
+    fn __moveinit__(out self, deinit take: Self):
+        self._result = take._result
+        self._next_chunk = take._next_chunk
 
     fn __iter__(var self) -> Self:
         return self^

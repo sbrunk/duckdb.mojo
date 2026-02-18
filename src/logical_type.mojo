@@ -44,11 +44,11 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         """
         self._logical_type = logical_type
 
-    fn __copyinit__(out self, other: Self):
+    fn __copyinit__(out self, copy: Self):
         @parameter
         if Self.is_owned:
-            if other.get_type_id() == DuckDBType.list:
-                var child = other.list_type_child_type()
+            if copy.get_type_id() == DuckDBType.list:
+                var child = copy.list_type_child_type()
                 var list_type = child.create_list_type()
                 # Take ownership of the pointer before list_type's destructor runs
                 self._logical_type = list_type._logical_type
@@ -57,12 +57,12 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
             # TODO remaining nested types
             else:
                 ref libduckdb = DuckDB().libduckdb()
-                self._logical_type = libduckdb.duckdb_create_logical_type(other.get_type_id().value)
+                self._logical_type = libduckdb.duckdb_create_logical_type(copy.get_type_id().value)
         else:
-            self._logical_type = other._logical_type
+            self._logical_type = copy._logical_type
 
-    fn __moveinit__(out self, deinit other: Self):
-        self._logical_type = other._logical_type
+    fn __moveinit__(out self, deinit take: Self):
+        self._logical_type = take._logical_type
 
     fn __del__(deinit self):
         """Destroys owned LogicalTypes only."""

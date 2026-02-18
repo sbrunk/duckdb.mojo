@@ -11,7 +11,7 @@ duckdb-from-source = { path = "../duckdb-from-source" }
 
 # Testing dependencies
 [dependencies] 
-mojo = "=0.26.2.0.dev2026021105"
+mojo = "=0.26.2.0.dev2026021805"
 
 [tasks]
 test = "./test_operator_replacement"

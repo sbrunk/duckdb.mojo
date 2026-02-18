@@ -659,9 +659,9 @@ struct Result(Writable, Stringable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_result(UnsafePointer(to=self._result))
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self._result = existing._result^
-        self.columns = existing.columns^
+    fn __moveinit__(out self, deinit take: Self):
+        self._result = take._result^
+        self.columns = take.columns^
 
 
 @fieldwise_init

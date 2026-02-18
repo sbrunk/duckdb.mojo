@@ -41,13 +41,13 @@ struct DuckDBValue(Movable):
         """
         self._value = value
 
-    fn __moveinit__(out self, deinit existing: Self):
+    fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership of the underlying value.
         
         Args:
-            existing: The existing DuckDBValue to move from.
+            take: The existing DuckDBValue to move from.
         """
-        self._value = existing._value
+        self._value = take._value
 
     fn __del__(deinit self):
         """Destroys the value and deallocates all associated memory."""
