@@ -1,9 +1,11 @@
 #include "duckdb_operator_replacement.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
+#include "duckdb/common/exception.hpp"
 
 namespace duckdb {
 
@@ -69,12 +71,58 @@ void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, uniq
                         arg_types.push_back(child->return_type);
                     }
                     
-                    // Get the matching function overload
-                    auto replacement_func = scalar_func.functions.GetFunctionByArguments(context, arg_types);
-                    
-                    // Replace the function pointer in place while preserving bind_info
-                    // This ensures C API registered functions keep their required metadata
-                    func_expr.function = replacement_func;
+                    // Try to get the matching function overload.
+                    // Skip replacement if no compatible overload exists (e.g., when
+                    // intermediate DECIMAL types are wider than our registered functions
+                    // can handle, or when types like DATE/INTERVAL don't match).
+                    try {
+                        auto replacement_func = scalar_func.functions.GetFunctionByArguments(context, arg_types);
+
+                        // Save the original expression return type before modification.
+                        // Parent expressions were bound expecting this type.
+                        auto original_return_type = func_expr.return_type;
+
+                        // Insert BoundCastExpression wrappers on children whose types
+                        // don't match the replacement function's declared parameter types.
+                        // E.g., DECIMAL(15,2) -> DECIMAL(18,4) scale adjustment.
+                        // AddCastToType is a no-op when source == target type.
+                        for (idx_t i = 0; i < func_expr.children.size() && i < replacement_func.arguments.size(); i++) {
+                            if (func_expr.children[i]->return_type != replacement_func.arguments[i]) {
+                                func_expr.children[i] = BoundCastExpression::AddCastToType(
+                                    context, std::move(func_expr.children[i]), replacement_func.arguments[i]);
+                            }
+                        }
+
+                        // Replace the function and update the expression's return type
+                        // so the execution engine allocates the correct output vector.
+                        func_expr.function = replacement_func;
+                        func_expr.return_type = replacement_func.return_type;
+
+                        // Re-bind the function to create proper bind_info for the
+                        // replacement function. The original bind_info was created by
+                        // the built-in function's bind callback and is incompatible
+                        // with the C API wrapper that our replacement uses (which
+                        // expects CScalarFunctionInfo). Without re-binding, the
+                        // execution wrapper interprets the wrong memory layout → crash.
+                        if (func_expr.function.bind) {
+                            func_expr.bind_info = func_expr.function.bind(context, func_expr.function, func_expr.children);
+                        } else {
+                            func_expr.bind_info = nullptr;
+                        }
+
+                        // If the return type changed, wrap the whole expression in a
+                        // cast back to the original type so parent expressions (which
+                        // were bound expecting the original type) remain compatible.
+                        // E.g., our DECIMAL(18,4) result gets cast to DECIMAL(34,6)
+                        // that the parent SUM() was bound with.
+                        // NOTE: after this std::move, func_expr/expr refs are invalid.
+                        if (original_return_type != replacement_func.return_type) {
+                            *expr_ptr = BoundCastExpression::AddCastToType(
+                                context, std::move(*expr_ptr), original_return_type);
+                        }
+                    } catch (...) {
+                        // No compatible overload found — keep the original function
+                    }
                 }
             }
         }
