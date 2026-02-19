@@ -42,7 +42,7 @@ def test_types():
     assert_equal(result.fetch_chunk().get(ubigint, row=0, col=0).value(), 42)
 
     result = con.execute("SELECT 42.0::FLOAT")
-    assert_equal(result.fetch_chunk().get(float_, row=0, col=0).value(), 42.0)
+    assert_equal(result.fetch_chunk().get(float, row=0, col=0).value(), 42.0)
 
     result = con.execute("SELECT 42.0::DOUBLE")
     assert_equal(result.fetch_chunk().get(double, row=0, col=0).value(), 42.0)

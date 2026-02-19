@@ -386,6 +386,93 @@ struct ScalarFunction(Movable):
 
         self.set_function[wrapper]()
 
+    # --- Overloads accepting stdlib math function signatures ----------------
+    # These accept fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]
+    # so you can pass math.sqrt, math.sin, etc. directly.
+
+    fn set_simd_function[
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+    ](self):
+        """Sets a unary SIMD function using the stdlib math function signature.
+
+        Accepts functions with the standard library signature
+        `fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        (e.g. `math.sqrt`, `math.sin`, `math.cos`, `math.exp`, `math.log`).
+
+        Parameters:
+            D: The DType for both input and output.
+            func: A stdlib-style SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        var sf = ScalarFunction()
+        sf.set_name("my_sqrt")
+        sf.add_parameter(decimal_type(18, 4))  # Custom DECIMAL type
+        sf.set_return_type(decimal_type(18, 4))
+        sf.set_simd_function[DType.int64, math.sqrt]()
+        sf.register(conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
+            var out_data = output.get_data().bitcast[Scalar[D]]()
+
+            fn apply[w: Int](idx: Int) unified {mut}:
+                (out_data + idx).store(func((in_data + idx).load[width=w]()))
+
+            vectorize[simd_width_of[D]()](size, apply)
+
+        self.set_function[wrapper]()
+
+    fn set_simd_function[
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+    ](self):
+        """Sets a binary SIMD function using the stdlib math function signature.
+
+        Accepts functions with the standard library signature
+        `fn[dtype: DType, width: Int](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
+        (e.g. `math.atan2`).
+
+        Parameters:
+            D: The DType for both inputs and output.
+            func: A stdlib-style binary SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        var sf = ScalarFunction()
+        sf.set_name("my_atan2")
+        sf.add_parameter(LogicalType(DuckDBType.DOUBLE))
+        sf.add_parameter(LogicalType(DuckDBType.DOUBLE))
+        sf.set_return_type(LogicalType(DuckDBType.DOUBLE))
+        sf.set_simd_function[DType.float64, math.atan2]()
+        sf.register(conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
+            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[D]]()
+            var out_data = output.get_data().bitcast[Scalar[D]]()
+
+            fn apply[w: Int](idx: Int) unified {mut}:
+                (out_data + idx).store(
+                    func(
+                        (in1_data + idx).load[width=w](),
+                        (in2_data + idx).load[width=w](),
+                    )
+                )
+
+            vectorize[simd_width_of[D]()](size, apply)
+
+        self.set_function[wrapper]()
+
     fn register(mut self, conn: Connection) raises:
         """Registers the scalar function within the given connection.
 
@@ -694,6 +781,78 @@ struct ScalarFunction(Movable):
         sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
         sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
         sf.set_simd_function[In1, In2, Out, func]()
+        sf.register(conn)
+
+    # --- Overloads accepting stdlib math function signatures ----------------
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+    ](conn: Connection) raises:
+        """Create and register a unary scalar function from a stdlib math function.
+
+        Accepts functions with the standard library signature
+        `fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        so you can pass `math.sqrt`, `math.sin`, `math.cos`, etc. directly
+        without writing thin wrappers.
+
+        Since stdlib math functions have the same input and output type, only a
+        single DType parameter `D` is needed.
+
+        Parameters:
+            name: The SQL function name.
+            D: The DType for both input and output.
+            func: A stdlib-style SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt](conn)
+        ScalarFunction.from_simd_function["mojo_sin", DType.float64, math.sin](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_simd_function[D, func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+    ](conn: Connection) raises:
+        """Create and register a binary scalar function from a stdlib math function.
+
+        Accepts functions with the standard library signature
+        `fn[dtype: DType, width: Int](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
+        so you can pass `math.atan2`, etc. directly without writing thin wrappers.
+
+        Both inputs and output share the same DType.
+
+        Parameters:
+            name: The SQL function name.
+            D: The DType for both inputs and output.
+            func: A stdlib-style binary SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_simd_function[D, func]()
         sf.register(conn)
 
     @staticmethod

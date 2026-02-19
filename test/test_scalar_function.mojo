@@ -3,6 +3,7 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo
 from duckdb._libduckdb import *
 from testing import *
 from testing.suite import TestSuite
+import math
 
 
 # ===--------------------------------------------------------------------===#
@@ -301,7 +302,7 @@ def test_scalar_function_float_type():
     # Test the function
     var result = conn.execute("SELECT multiply_two(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float_, col=0, row=0).value()
+    var value = chunk.get(float, col=0, row=0).value()
     # Use approximate equality for floats
     assert_true(abs(value - 42.0) < 0.001)
 
@@ -425,7 +426,7 @@ def test_scalar_function_set_multiple_overloads():
     # Test float overload
     var result2 = conn.execute("SELECT my_add(20.5::FLOAT, 21.5::FLOAT) as answer")
     var chunk2 = result2.fetch_chunk()
-    var value = chunk2.get(float_, col=0, row=0).value()
+    var value = chunk2.get(float, col=0, row=0).value()
     assert_true(abs(value - 42.0) < 0.001)
 
 
@@ -523,7 +524,7 @@ def test_multiple_functions_same_connection():
     var chunk = result.fetch_chunk()
     
     assert_equal(chunk.get(integer, col=0, row=0).value(), 41)
-    var b_val = chunk.get(float_, col=1, row=0).value()
+    var b_val = chunk.get(float, col=1, row=0).value()
     assert_almost_equal(b_val, 42.0)
 
 
@@ -574,7 +575,7 @@ def test_create_unary_float():
 
     var result = conn.execute("SELECT create_mul2(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float_, col=0, row=0).value()
+    var value = chunk.get(float, col=0, row=0).value()
     assert_almost_equal(value, 42.0)
 
 
@@ -641,7 +642,7 @@ def test_from_function_unary_float():
 
     var result = conn.execute("SELECT ff_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float_, col=0, row=0).value()
+    var value = chunk.get(float, col=0, row=0).value()
     assert_true(abs(value - 42.0) < 0.001)
 
 
@@ -723,7 +724,7 @@ def test_from_simd_function_unary_float():
 
     var result = conn.execute("SELECT sf_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float_, col=0, row=0).value()
+    var value = chunk.get(float, col=0, row=0).value()
     assert_almost_equal(value, 42.0)
 
 
@@ -782,6 +783,81 @@ def test_from_simd_function_large_table():
     assert_equal(chunk.get(integer, col=0, row=2).value(), 6)
     assert_equal(chunk.get(integer, col=0, row=3).value(), 9)
     assert_equal(chunk.get(integer, col=0, row=4).value(), 12)
+
+
+# ===--------------------------------------------------------------------===#
+# from_simd_function stdlib-compatible overload tests
+# ===--------------------------------------------------------------------===#
+
+def test_from_simd_function_stdlib_unary():
+    """Test from_simd_function with stdlib math.sqrt passed directly."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_stdlib_sqrt", DType.float64, math.sqrt](conn)
+
+    var result = conn.execute("SELECT sf_stdlib_sqrt(16.0) as answer")
+    var chunk = result.fetch_chunk()
+    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 4.0)
+
+
+def test_from_simd_function_stdlib_sin():
+    """Test from_simd_function with stdlib math.sin passed directly."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_stdlib_sin", DType.float64, math.sin](conn)
+
+    var result = conn.execute("SELECT sf_stdlib_sin(0.0) as answer")
+    var chunk = result.fetch_chunk()
+    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0)
+
+
+def test_from_simd_function_stdlib_binary():
+    """Test from_simd_function with stdlib math.atan2 passed directly."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_stdlib_atan2", DType.float64, math.atan2](conn)
+
+    var result = conn.execute("SELECT sf_stdlib_atan2(0.0, 1.0) as answer")
+    var chunk = result.fetch_chunk()
+    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0)
+
+
+def test_from_simd_function_stdlib_on_table():
+    """Test stdlib overload on table data (exercises SIMD vectorization + tail)."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_stdlib_exp", DType.float64, math.exp](conn)
+
+    _ = conn.execute(
+        "CREATE TABLE sf_stdlib AS SELECT i::DOUBLE as x FROM range(100) t(i)"
+    )
+
+    var result = conn.execute(
+        "SELECT sf_stdlib_exp(x) as y FROM sf_stdlib WHERE x = 0.0"
+    )
+    var chunk = result.fetch_chunk()
+    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 1.0)
+
+
+def test_from_simd_function_stdlib_matches_builtin():
+    """Test that stdlib overload produces identical results to DuckDB builtins."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_stdlib_log", DType.float64, math.log](conn)
+    ScalarFunction.from_simd_function["sf_stdlib_cos", DType.float64, math.cos](conn)
+
+    _ = conn.execute(
+        "CREATE TABLE sf_cmp AS SELECT (i + 1)::DOUBLE as x FROM range(50) t(i)"
+    )
+
+    # Compare Mojo stdlib log vs DuckDB ln
+    var result = conn.execute(
+        "SELECT SUM(ABS(sf_stdlib_log(x) - ln(x))) as diff FROM sf_cmp"
+    )
+    var chunk = result.fetch_chunk()
+    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0, atol=1e-6)
+
+    # Compare Mojo stdlib cos vs DuckDB cos
+    var result2 = conn.execute(
+        "SELECT SUM(ABS(sf_stdlib_cos(x) - cos(x))) as diff FROM sf_cmp"
+    )
+    var chunk2 = result2.fetch_chunk()
+    assert_almost_equal(chunk2.get(double, col=0, row=0).value(), 0.0, atol=1e-6)
 
 
 # ===--------------------------------------------------------------------===#

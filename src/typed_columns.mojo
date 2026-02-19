@@ -32,7 +32,7 @@ comptime utinyint = Col[UInt8, UInt8Val](DuckDBType.utinyint)
 comptime usmallint = Col[UInt16, UInt16Val](DuckDBType.usmallint)
 comptime uinteger = Col[UInt32, UInt32Val](DuckDBType.uinteger)
 comptime ubigint = Col[UInt64, UInt64Val](DuckDBType.ubigint)
-comptime float_ = Col[Float32, Float32Val](DuckDBType.float)
+comptime float = Col[Float32, Float32Val](DuckDBType.float)
 """A float32 column."""
 comptime double = Col[Float64, Float64Val](DuckDBType.double)
 """A float64 column."""
