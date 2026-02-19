@@ -5,9 +5,8 @@ from duckdb.duckdb_type import *
 from sys.info import CompilationTarget
 from os import abort
 from pathlib import Path
-from ffi import _find_dylib
 from ffi import _get_dylib_function as _ffi_get_dylib_function
-from ffi import _Global, OwnedDLHandle
+from ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
 from memory import UnsafePointer
 
 # ===--------------------------------------------------------------------===#
@@ -298,6 +297,7 @@ struct duckdb_string_t_inlined(Copyable, Movable):
     var length: UInt32
     var inlined: InlineArray[c_char, 12]
 
+comptime duckdb_string_t = UnsafeUnion[duckdb_string_t_pointer, duckdb_string_t_inlined]
 
 #! DuckDB's LISTs are composed of a 'parent' vector holding metadata of each list,
 #! and a child vector holding the entries of the lists.

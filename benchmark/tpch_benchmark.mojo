@@ -20,122 +20,49 @@ from duckdb import *
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, FunctionInfo
 from duckdb.logical_type import LogicalType, decimal_type
 from duckdb._libduckdb import *
+from sys import simd_width_of
 import benchmark
 
 
 # ===--------------------------------------------------------------------===#
-# SIMD width for Int64 operations
+# SIMD arithmetic kernels
 # ===--------------------------------------------------------------------===#
-
-comptime SIMD_WIDTH = 8
-
-
-# ===--------------------------------------------------------------------===#
-# SIMD-accelerated DECIMAL arithmetic (operates on scaled Int64 values)
-# ===--------------------------------------------------------------------===#
+# Pure SIMD functions with less boilerplate.  The vectorized loop (SIMD-width
+# batches + scalar tail) is generated automatically by set_simd_function /
+# from_simd_function using the hardware-optimal SIMD width.
+#
 # DECIMAL(15,2) is stored as Int64 internally (width 15 ≤ 18).
 # For add/sub the raw integers share the same scale, so we just add/sub.
 # For multiply the scales add (2+2=4), stored in the output type metadata.
 # No scale adjustment (division) is needed — exactly matching DuckDB internals.
 
-fn mojo_add(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """SIMD addition on scaled Int64 DECIMAL values."""
-    var size = len(input)
-    var a_data = input.get_vector(0).get_data().bitcast[Int64]()
-    var b_data = input.get_vector(1).get_data().bitcast[Int64]()
-    var out_data = output.get_data().bitcast[Int64]()
 
-    var num_simd = size // SIMD_WIDTH
-    for i in range(num_simd):
-        var idx = i * SIMD_WIDTH
-        var a_vec = (a_data + idx).load[width=SIMD_WIDTH]()
-        var b_vec = (b_data + idx).load[width=SIMD_WIDTH]()
-        (out_data + idx).store(a_vec + b_vec)
-
-    for i in range(num_simd * SIMD_WIDTH, size):
-        out_data[i] = a_data[i] + b_data[i]
+fn simd_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+    """DECIMAL add: same-scale Int64 addition."""
+    return a + b
 
 
-fn mojo_subtract(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """SIMD subtraction on scaled Int64 DECIMAL values."""
-    var size = len(input)
-    var a_data = input.get_vector(0).get_data().bitcast[Int64]()
-    var b_data = input.get_vector(1).get_data().bitcast[Int64]()
-    var out_data = output.get_data().bitcast[Int64]()
-
-    var num_simd = size // SIMD_WIDTH
-    for i in range(num_simd):
-        var idx = i * SIMD_WIDTH
-        var a_vec = (a_data + idx).load[width=SIMD_WIDTH]()
-        var b_vec = (b_data + idx).load[width=SIMD_WIDTH]()
-        (out_data + idx).store(a_vec - b_vec)
-
-    for i in range(num_simd * SIMD_WIDTH, size):
-        out_data[i] = a_data[i] - b_data[i]
+fn simd_subtract[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+    """DECIMAL subtract: same-scale Int64 subtraction."""
+    return a - b
 
 
-fn mojo_multiply(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """SIMD multiplication on scaled Int64 DECIMAL values.
+fn simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+    """DECIMAL multiply with scale correction.
 
-    Both inputs are DECIMAL(18,4) — scale 4 each. Raw multiply gives scale 8.
-    We divide by 10^4 = 10000 to bring result back to scale 4.
-    This division is exact for TPC-H data (original DECIMAL(15,2) values
-    upcast to scale 4 have at most 4 fractional digits after multiply).
+    Both inputs are scale-4, so raw multiply gives scale 8.
+    Divide by 10^4 = 10000 to bring result back to scale 4.
     """
-    var size = len(input)
-    var a_data = input.get_vector(0).get_data().bitcast[Int64]()
-    var b_data = input.get_vector(1).get_data().bitcast[Int64]()
-    var out_data = output.get_data().bitcast[Int64]()
-
-    comptime SCALE_CORRECTION = SIMD[DType.int64, SIMD_WIDTH](10000)
-
-    var num_simd = size // SIMD_WIDTH
-    for i in range(num_simd):
-        var idx = i * SIMD_WIDTH
-        var a_vec = (a_data + idx).load[width=SIMD_WIDTH]()
-        var b_vec = (b_data + idx).load[width=SIMD_WIDTH]()
-        (out_data + idx).store(a_vec * b_vec // SCALE_CORRECTION)
-
-    for i in range(num_simd * SIMD_WIDTH, size):
-        out_data[i] = a_data[i] * b_data[i] // 10000
+    return a * b // 10000
 
 
 # For division and mixed DOUBLE expressions (Q14: 100.00 * sum(...) / sum(...)),
 # we keep DOUBLE since DuckDB itself casts DECIMAL→DOUBLE for '/'.
-fn mojo_multiply_f64(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """SIMD multiplication (DOUBLE) — for mixed expressions involving DOUBLE."""
-    var size = len(input)
-    var a_data = input.get_vector(0).get_data().bitcast[Float64]()
-    var b_data = input.get_vector(1).get_data().bitcast[Float64]()
-    var out_data = output.get_data().bitcast[Float64]()
-
-    var num_simd = size // SIMD_WIDTH
-    for i in range(num_simd):
-        var idx = i * SIMD_WIDTH
-        var a_vec = (a_data + idx).load[width=SIMD_WIDTH]()
-        var b_vec = (b_data + idx).load[width=SIMD_WIDTH]()
-        (out_data + idx).store(a_vec * b_vec)
-
-    for i in range(num_simd * SIMD_WIDTH, size):
-        out_data[i] = a_data[i] * b_data[i]
 
 
-fn mojo_divide_f64(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """SIMD division (DOUBLE) — DuckDB uses DOUBLE for DECIMAL division too."""
-    var size = len(input)
-    var a_data = input.get_vector(0).get_data().bitcast[Float64]()
-    var b_data = input.get_vector(1).get_data().bitcast[Float64]()
-    var out_data = output.get_data().bitcast[Float64]()
-
-    var num_simd = size // SIMD_WIDTH
-    for i in range(num_simd):
-        var idx = i * SIMD_WIDTH
-        var a_vec = (a_data + idx).load[width=SIMD_WIDTH]()
-        var b_vec = (b_data + idx).load[width=SIMD_WIDTH]()
-        (out_data + idx).store(a_vec / b_vec)
-
-    for i in range(num_simd * SIMD_WIDTH, size):
-        out_data[i] = a_data[i] / b_data[i]
+fn simd_divide_f64[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+    """DOUBLE division — DuckDB uses DOUBLE for DECIMAL division too."""
+    return a / b
 
 
 # ===--------------------------------------------------------------------===#
@@ -145,14 +72,12 @@ fn mojo_divide_f64(info: FunctionInfo, mut input: Chunk, output: Vector):
 fn register_functions(conn: Connection) raises:
     """Register mojo_add, mojo_subtract, mojo_multiply, mojo_divide.
 
-    Each function is a single ScalarFunction with DECIMAL(18,4) as the universal
-    input/output type. DuckDB implicitly casts narrower DECIMAL inputs (e.g.
-    DECIMAL(15,2)) to DECIMAL(18,4). Multiply includes scale correction (÷10000).
-    Division uses DOUBLE (matching DuckDB's own DECIMAL division behavior).
+    DECIMAL functions use set_simd_function with manual type setup (DECIMAL
+    can't be auto-derived from DType).  Division uses from_simd_function
+    with DOUBLE types (fully auto-derived).
     """
 
     var d18_4 = decimal_type(18, 4)
-    var dbl = LogicalType(DuckDBType.double)
 
     # --- mojo_add: (18,4) + (18,4) → (18,4) ---
     var add_fn = ScalarFunction()
@@ -160,7 +85,7 @@ fn register_functions(conn: Connection) raises:
     add_fn.add_parameter(d18_4)
     add_fn.add_parameter(d18_4)
     add_fn.set_return_type(d18_4)
-    add_fn.set_function[mojo_add]()
+    add_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_add]()
     add_fn.register(conn)
 
     # --- mojo_subtract: (18,4) - (18,4) → (18,4) ---
@@ -169,7 +94,7 @@ fn register_functions(conn: Connection) raises:
     sub_fn.add_parameter(d18_4)
     sub_fn.add_parameter(d18_4)
     sub_fn.set_return_type(d18_4)
-    sub_fn.set_function[mojo_subtract]()
+    sub_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_subtract]()
     sub_fn.register(conn)
 
     # --- mojo_multiply: (18,4) × (18,4) → (18,4) ---
@@ -179,18 +104,14 @@ fn register_functions(conn: Connection) raises:
     mul_fn.add_parameter(d18_4)
     mul_fn.add_parameter(d18_4)
     mul_fn.set_return_type(d18_4)
-    mul_fn.set_function[mojo_multiply]()
+    mul_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_multiply]()
     mul_fn.register(conn)
 
     # --- mojo_divide: (DOUBLE, DOUBLE) → DOUBLE ---
-    # Division always goes through DOUBLE (matching DuckDB behavior)
-    var div_fn = ScalarFunction()
-    div_fn.set_name("mojo_divide")
-    div_fn.add_parameter(dbl)
-    div_fn.add_parameter(dbl)
-    div_fn.set_return_type(dbl)
-    div_fn.set_function[mojo_divide_f64]()
-    div_fn.register(conn)
+    # Division always goes through DOUBLE — types fully auto-derived.
+    ScalarFunction.from_simd_function[
+        "mojo_divide", DType.float64, DType.float64, DType.float64, simd_divide_f64
+    ](conn)
 
 
 # ===--------------------------------------------------------------------===#
@@ -365,7 +286,7 @@ fn main() raises:
     print("TPC-H Benchmark: Mojo SIMD Scalar Functions")
     print("=" * 70)
     print("Scale Factor: " + String(scale_factor))
-    print("SIMD Width:   " + String(SIMD_WIDTH) + " (Int64)")
+    print("SIMD Width:   " + String(simd_width_of[DType.int64]()) + " (Int64, auto-detected)")
     print("Max Iters:    " + String(max_iters))
     print()
 

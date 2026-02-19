@@ -2,6 +2,7 @@ from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from collections import Set
 from hashlib.hasher import Hasher
+from sys.intrinsics import _type_is_eq
 
 
 @fieldwise_init
@@ -487,3 +488,95 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable,
             + String(self.value())
             + ")"
         )
+
+
+fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
+    """Maps a Mojo DType to its corresponding DuckDB type at compile time.
+
+    This enables deriving DuckDB parameter/return types from Mojo scalar types,
+    eliminating the need to manually create `LogicalType` instances.
+
+    Parameters:
+        dt: The Mojo DType to map.
+
+    Returns:
+        The corresponding DuckDBType.
+
+    Example:
+    ```mojo
+    comptime duckdb_int = dtype_to_duckdb_type[DType.int32]()
+    # duckdb_int == DuckDBType.integer
+    ```
+    """
+    @parameter
+    if dt == DType.bool:
+        return DuckDBType.boolean
+    elif dt == DType.int8:
+        return DuckDBType.tinyint
+    elif dt == DType.int16:
+        return DuckDBType.smallint
+    elif dt == DType.int32:
+        return DuckDBType.integer
+    elif dt == DType.int64:
+        return DuckDBType.bigint
+    elif dt == DType.uint8:
+        return DuckDBType.utinyint
+    elif dt == DType.uint16:
+        return DuckDBType.usmallint
+    elif dt == DType.uint32:
+        return DuckDBType.uinteger
+    elif dt == DType.uint64:
+        return DuckDBType.ubigint
+    elif dt == DType.float32:
+        return DuckDBType.float
+    elif dt == DType.float64:
+        return DuckDBType.double
+    else:
+        constrained[False, "Unsupported DType for DuckDB mapping"]()
+        return DuckDBType.invalid
+
+
+fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
+    """Maps a Mojo scalar type to its corresponding DuckDB type at compile time.
+
+    Supports: Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
+    Float32, Float64.
+
+    Parameters:
+        T: The Mojo scalar type to map.
+
+    Returns:
+        The corresponding DuckDBType.
+
+    Example:
+    ```mojo
+    comptime duckdb_int = mojo_to_duckdb_type[Int32]()
+    # duckdb_int == DuckDBType.integer
+    ```
+    """
+    @parameter
+    if _type_is_eq[T, Bool]():
+        return DuckDBType.boolean
+    elif _type_is_eq[T, Int8]():
+        return DuckDBType.tinyint
+    elif _type_is_eq[T, Int16]():
+        return DuckDBType.smallint
+    elif _type_is_eq[T, Int32]():
+        return DuckDBType.integer
+    elif _type_is_eq[T, Int64]():
+        return DuckDBType.bigint
+    elif _type_is_eq[T, UInt8]():
+        return DuckDBType.utinyint
+    elif _type_is_eq[T, UInt16]():
+        return DuckDBType.usmallint
+    elif _type_is_eq[T, UInt32]():
+        return DuckDBType.uinteger
+    elif _type_is_eq[T, UInt64]():
+        return DuckDBType.ubigint
+    elif _type_is_eq[T, Float32]():
+        return DuckDBType.float
+    elif _type_is_eq[T, Float64]():
+        return DuckDBType.double
+    else:
+        constrained[False, "Unsupported Mojo type for DuckDB mapping"]()
+        return DuckDBType.invalid

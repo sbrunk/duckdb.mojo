@@ -2,6 +2,9 @@ from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
 from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
+from duckdb.duckdb_type import dtype_to_duckdb_type
+from algorithm.functional import vectorize
+from sys import simd_width_of
 
 
 struct FunctionInfo:
@@ -286,6 +289,103 @@ struct ScalarFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_function(self._function, wrapper)
 
+    fn set_simd_function[
+        In1: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+    ](self):
+        """Sets a unary SIMD-vectorized function as the execution function.
+
+        Generates a vectorized wrapper that processes chunk data in SIMD-width
+        batches (using the optimal width for the target hardware), with a scalar
+        tail loop for remaining elements.
+
+        Use this when you need manual control over parameter/return types
+        (e.g. DECIMAL) but still want auto-vectorized execution.
+
+        Parameters:
+            In1: The DType of the input data in memory.
+            Out: The DType of the output data in memory.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn add_one[w: Int](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+            return x + 1
+
+        var sf = ScalarFunction()
+        sf.set_name("add_one")
+        sf.add_parameter(decimal_type(18, 4))  # Custom DECIMAL type
+        sf.set_return_type(decimal_type(18, 4))
+        sf.set_simd_function[DType.int64, DType.int64, add_one]()
+        sf.register(conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var out_data = output.get_data().bitcast[Scalar[Out]]()
+
+            fn apply[w: Int](idx: Int) unified {mut}:
+                (out_data + idx).store(func((in_data + idx).load[width=w]()))
+
+            vectorize[simd_width_of[In1]()](size, apply)
+
+        self.set_function[wrapper]()
+
+    fn set_simd_function[
+        In1: DType,
+        In2: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+    ](self):
+        """Sets a binary SIMD-vectorized function as the execution function.
+
+        Generates a vectorized wrapper that processes chunk data in SIMD-width
+        batches, with a scalar tail loop for remaining elements.
+
+        Use this when you need manual control over parameter/return types
+        (e.g. DECIMAL) but still want auto-vectorized execution.
+
+        Parameters:
+            In1: The DType of the first input in memory.
+            In2: The DType of the second input in memory.
+            Out: The DType of the output data in memory.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn my_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+            return a + b
+
+        var sf = ScalarFunction()
+        sf.set_name("mojo_add")
+        sf.add_parameter(decimal_type(18, 4))
+        sf.add_parameter(decimal_type(18, 4))
+        sf.set_return_type(decimal_type(18, 4))
+        sf.set_simd_function[DType.int64, DType.int64, DType.int64, my_add]()
+        sf.register(conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
+            var out_data = output.get_data().bitcast[Scalar[Out]]()
+
+            fn apply[w: Int](idx: Int) unified {mut}:
+                (out_data + idx).store(
+                    func(
+                        (in1_data + idx).load[width=w](),
+                        (in2_data + idx).load[width=w](),
+                    )
+                )
+
+            comptime sw = min(simd_width_of[In1](), simd_width_of[In2]())
+            vectorize[sw](size, apply)
+
+        self.set_function[wrapper]()
+
     fn register(mut self, conn: Connection) raises:
         """Registers the scalar function within the given connection.
 
@@ -300,6 +400,301 @@ struct ScalarFunction(Movable):
         _ = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
         # Release ownership - DuckDB now manages this
         self._owned = False
+
+    # ===--------------------------------------------------------------------===#
+    # Convenience factory methods
+    # ===--------------------------------------------------------------------===#
+
+    @staticmethod
+    fn create[
+        name: StringLiteral,
+        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        Out: DType,
+    ](conn: Connection) raises:
+        """Create and register a zero-parameter scalar function.
+
+        Eliminates boilerplate by deriving DuckDB types from Mojo `DType` parameters.
+
+        Parameters:
+            name: The SQL function name.
+            func: The vectorized function implementation.
+            Out: The return DType (mapped to DuckDB type automatically).
+
+        Example:
+        ```mojo
+        fn constant_42(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var out_data = output.get_data().bitcast[Int32]()
+            for i in range(len(input)):
+                out_data[i] = 42
+
+        ScalarFunction.create["constant_42", constant_42, DType.int32](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn create[
+        name: StringLiteral,
+        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        In1: DType,
+        Out: DType,
+    ](conn: Connection) raises:
+        """Create and register a unary scalar function.
+
+        Deriving DuckDB types from Mojo `DType` parameters.
+
+        Parameters:
+            name: The SQL function name.
+            func: The vectorized function implementation.
+            In1: The input parameter DType.
+            Out: The return DType.
+
+        Example:
+        ```mojo
+        fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_data = input.get_vector(0).get_data().bitcast[Int32]()
+            var out_data = output.get_data().bitcast[Int32]()
+            for i in range(size):
+                out_data[i] = in_data[i] + 1
+
+        ScalarFunction.create["add_one", add_one, DType.int32, DType.int32](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn create[
+        name: StringLiteral,
+        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        In1: DType,
+        In2: DType,
+        Out: DType,
+    ](conn: Connection) raises:
+        """Create and register a binary scalar function.
+
+        Parameters:
+            name: The SQL function name.
+            func: The vectorized function implementation.
+            In1: The first input parameter DType.
+            In2: The second input parameter DType.
+            Out: The return DType.
+
+        Example:
+        ```mojo
+        fn my_add(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var a = input.get_vector(0).get_data().bitcast[Int32]()
+            var b = input.get_vector(1).get_data().bitcast[Int32]()
+            var out = output.get_data().bitcast[Int32]()
+            for i in range(size):
+                out[i] = a[i] + b[i]
+
+        ScalarFunction.create["my_add", my_add, DType.int32, DType.int32, DType.int32](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn create[
+        name: StringLiteral,
+        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        In1: DType,
+        In2: DType,
+        In3: DType,
+        Out: DType,
+    ](conn: Connection) raises:
+        """Create and register a ternary scalar function.
+
+        Parameters:
+            name: The SQL function name.
+            func: The vectorized function implementation.
+            In1: The first input parameter DType.
+            In2: The second input parameter DType.
+            In3: The third input parameter DType.
+            Out: The return DType.
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In3]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[func]()
+        sf.register(conn)
+
+    # ===--------------------------------------------------------------------===#
+    # Row-at-a-time function wrappers
+    # ===--------------------------------------------------------------------===#
+
+    @staticmethod
+    fn from_function[
+        name: StringLiteral,
+        In1: DType,
+        Out: DType,
+        func: fn (Scalar[In1]) -> Scalar[Out],
+    ](conn: Connection) raises:
+        """Create and register a scalar function from a simple row-at-a-time function.
+
+        Automatically generates a vectorized wrapper that loops over chunk rows,
+        so you only need to write the per-row logic.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The input DType.
+            Out: The return DType.
+            func: A simple scalar function `fn(Scalar[In1]) -> Scalar[Out]`.
+
+        Example:
+        ```mojo
+        fn add_one(x: Int32) -> Int32:
+            return x + 1
+
+        # Registers with DuckDB — types derived from DType parameters
+        ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            for i in range(size):
+                out_data[i] = func(in_data[i])
+
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[wrapper]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_function[
+        name: StringLiteral,
+        In1: DType,
+        In2: DType,
+        Out: DType,
+        func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
+    ](conn: Connection) raises:
+        """Create and register a binary scalar function from a simple row-at-a-time function.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The first input DType.
+            In2: The second input DType.
+            Out: The return DType.
+            func: A simple scalar function `fn(Scalar[In1], Scalar[In2]) -> Scalar[Out]`.
+
+        Example:
+        ```mojo
+        fn my_add(a: Int32, b: Int32) -> Int32:
+            return a + b
+
+        ScalarFunction.from_function["my_add", DType.int32, DType.int32, DType.int32, my_add](conn)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
+            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            for i in range(size):
+                out_data[i] = func(in1_data[i], in2_data[i])
+
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[wrapper]()
+        sf.register(conn)
+
+    # ===--------------------------------------------------------------------===#
+    # SIMD-vectorized function wrappers
+    # ===--------------------------------------------------------------------===#
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        In1: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+    ](conn: Connection) raises:
+        """Create and register a scalar function from a SIMD-vectorized function.
+
+        The user-provided function operates on `SIMD[dt, width]` vectors.
+        The wrapper automatically processes the chunk data in SIMD-width batches
+        using the optimal width for the target hardware, with a scalar tail loop
+        for remaining elements.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The input DType.
+            Out: The return DType.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+            return x + 1
+
+        ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_simd_function[In1, Out, func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        In1: DType,
+        In2: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+    ](conn: Connection) raises:
+        """Create and register a binary scalar function from a SIMD-vectorized function.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The first input DType.
+            In2: The second input DType.
+            Out: The return DType.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+            return a + b
+
+        ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add](conn)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_simd_function[In1, In2, Out, func]()
+        sf.register(conn)
 
     @staticmethod
     fn get_extra_info(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:

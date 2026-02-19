@@ -553,5 +553,270 @@ def test_function_reuse_across_queries():
     assert_equal(chunk3.get(integer, col=0, row=0).value(), 101)
 
 
+# ===--------------------------------------------------------------------===#
+# ScalarFunction.create convenience API tests
+# ===--------------------------------------------------------------------===#
+
+def test_create_unary_int():
+    """Test ScalarFunction.create with a unary integer function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.create["create_add_one", add_one, DType.int32, DType.int32](conn)
+
+    var result = conn.execute("SELECT create_add_one(41) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_create_unary_float():
+    """Test ScalarFunction.create with a unary float function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.create["create_mul2", multiply_two, DType.float32, DType.float32](conn)
+
+    var result = conn.execute("SELECT create_mul2(21.0::FLOAT) as answer")
+    var chunk = result.fetch_chunk()
+    var value = chunk.get(float_, col=0, row=0).value()
+    assert_almost_equal(value, 42.0)
+
+
+def test_create_binary():
+    """Test ScalarFunction.create with a binary function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.create["create_my_add", binary_add, DType.int32, DType.int32, DType.int32](conn)
+
+    var result = conn.execute("SELECT create_my_add(10, 32) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_create_on_table():
+    """Test ScalarFunction.create with table data."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.create["tbl_add_one", add_one, DType.int32, DType.int32](conn)
+
+    _ = conn.execute("CREATE TABLE create_nums (x INTEGER)")
+    _ = conn.execute("INSERT INTO create_nums VALUES (1), (2), (3)")
+
+    var result = conn.execute("SELECT tbl_add_one(x) as y FROM create_nums ORDER BY x")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 2)
+    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
+    assert_equal(chunk.get(integer, col=0, row=2).value(), 4)
+
+
+# ===--------------------------------------------------------------------===#
+# ScalarFunction.from_function row-at-a-time API tests
+# ===--------------------------------------------------------------------===#
+
+# Simple row-at-a-time functions (not vectorized)
+fn simple_add_one(x: Int32) -> Int32:
+    return x + 1
+
+
+fn simple_double(x: Float32) -> Float32:
+    return x * 2.0
+
+
+fn simple_add(a: Int32, b: Int32) -> Int32:
+    return a + b
+
+
+fn simple_add_float(a: Float64, b: Float64) -> Float64:
+    return a + b
+
+
+def test_from_function_unary_int():
+    """Test from_function with a simple unary int function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_function["ff_add_one", DType.int32, DType.int32, simple_add_one](conn)
+
+    var result = conn.execute("SELECT ff_add_one(41) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_from_function_unary_float():
+    """Test from_function with a simple unary float function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_function["ff_double", DType.float32, DType.float32, simple_double](conn)
+
+    var result = conn.execute("SELECT ff_double(21.0::FLOAT) as answer")
+    var chunk = result.fetch_chunk()
+    var value = chunk.get(float_, col=0, row=0).value()
+    assert_true(abs(value - 42.0) < 0.001)
+
+
+def test_from_function_binary():
+    """Test from_function with a binary function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_function["ff_add", DType.int32, DType.int32, DType.int32, simple_add](conn)
+
+    var result = conn.execute("SELECT ff_add(10, 32) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_from_function_binary_float():
+    """Test from_function with a binary float function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_function["ff_add_f64", DType.float64, DType.float64, DType.float64, simple_add_float](conn)
+
+    var result = conn.execute("SELECT ff_add_f64(20.5, 21.5) as answer")
+    var chunk = result.fetch_chunk()
+    var value = chunk.get(double, col=0, row=0).value()
+    assert_true(abs(value - 42.0) < 0.001)
+
+
+def test_from_function_on_table():
+    """Test from_function applied to table data."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_function["ff_tbl_add_one", DType.int32, DType.int32, simple_add_one](conn)
+
+    _ = conn.execute("CREATE TABLE ff_nums (x INTEGER)")
+    _ = conn.execute("INSERT INTO ff_nums VALUES (10), (20), (30)")
+
+    var result = conn.execute("SELECT ff_tbl_add_one(x) as y FROM ff_nums ORDER BY x")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 11)
+    assert_equal(chunk.get(integer, col=0, row=1).value(), 21)
+    assert_equal(chunk.get(integer, col=0, row=2).value(), 31)
+
+
+# ===--------------------------------------------------------------------===#
+# ScalarFunction.from_simd_function SIMD-vectorized API tests
+# ===--------------------------------------------------------------------===#
+
+# SIMD-vectorized functions (operate on SIMD[dt, width] vectors)
+fn simd_add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+    return x + 1
+
+
+fn simd_double[width: Int](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
+    return x * 2.0
+
+
+fn simd_add[width: Int](
+    a: SIMD[DType.int32, width], b: SIMD[DType.int32, width]
+) -> SIMD[DType.int32, width]:
+    return a + b
+
+
+fn simd_add_f64[width: Int](
+    a: SIMD[DType.float64, width], b: SIMD[DType.float64, width]
+) -> SIMD[DType.float64, width]:
+    return a + b
+
+
+def test_from_simd_function_unary_int():
+    """Test from_simd_function with a unary SIMD int function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_add_one", DType.int32, DType.int32, simd_add_one](conn)
+
+    var result = conn.execute("SELECT sf_add_one(41) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_from_simd_function_unary_float():
+    """Test from_simd_function with a unary SIMD float function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_double", DType.float32, DType.float32, simd_double](conn)
+
+    var result = conn.execute("SELECT sf_double(21.0::FLOAT) as answer")
+    var chunk = result.fetch_chunk()
+    var value = chunk.get(float_, col=0, row=0).value()
+    assert_almost_equal(value, 42.0)
+
+
+def test_from_simd_function_binary_int():
+    """Test from_simd_function with a binary SIMD int function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_add", DType.int32, DType.int32, DType.int32, simd_add](conn)
+
+    var result = conn.execute("SELECT sf_add(10, 32) as answer")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+
+
+def test_from_simd_function_binary_float():
+    """Test from_simd_function with a binary SIMD float64 function."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_add_f64", DType.float64, DType.float64, DType.float64, simd_add_f64](conn)
+
+    var result = conn.execute("SELECT sf_add_f64(20.5, 21.5) as answer")
+    var chunk = result.fetch_chunk()
+    var value = chunk.get(double, col=0, row=0).value()
+    assert_almost_equal(value, 42.0)
+
+
+def test_from_simd_function_on_table():
+    """Test from_simd_function applied to table data (exercises SIMD + tail loop)."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_tbl_add_one", DType.int32, DType.int32, simd_add_one](conn)
+
+    _ = conn.execute("CREATE TABLE sf_nums (x INTEGER)")
+    _ = conn.execute("INSERT INTO sf_nums VALUES (1), (2), (3), (4), (5), (6), (7)")
+
+    var result = conn.execute("SELECT sf_tbl_add_one(x) as y FROM sf_nums ORDER BY x")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 2)
+    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
+    assert_equal(chunk.get(integer, col=0, row=2).value(), 4)
+    assert_equal(chunk.get(integer, col=0, row=3).value(), 5)
+    assert_equal(chunk.get(integer, col=0, row=4).value(), 6)
+    assert_equal(chunk.get(integer, col=0, row=5).value(), 7)
+    assert_equal(chunk.get(integer, col=0, row=6).value(), 8)
+
+
+def test_from_simd_function_large_table():
+    """Test from_simd_function on a larger table to exercise multiple SIMD batches."""
+    var conn = DuckDB.connect(":memory:")
+    ScalarFunction.from_simd_function["sf_big_add", DType.int32, DType.int32, DType.int32, simd_add](conn)
+
+    _ = conn.execute("CREATE TABLE sf_big AS SELECT i::INTEGER as a, (i*2)::INTEGER as b FROM range(1000) t(i)")
+
+    var result = conn.execute("SELECT sf_big_add(a, b) as c FROM sf_big ORDER BY a LIMIT 5")
+    var chunk = result.fetch_chunk()
+    # a=0,b=0 -> 0; a=1,b=2 -> 3; a=2,b=4 -> 6; a=3,b=6 -> 9; a=4,b=8 -> 12
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
+    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
+    assert_equal(chunk.get(integer, col=0, row=2).value(), 6)
+    assert_equal(chunk.get(integer, col=0, row=3).value(), 9)
+    assert_equal(chunk.get(integer, col=0, row=4).value(), 12)
+
+
+# ===--------------------------------------------------------------------===#
+# dtype_to_duckdb_type / mojo_to_duckdb_type tests
+# ===--------------------------------------------------------------------===#
+
+def test_dtype_to_duckdb_type():
+    """Test compile-time DType to DuckDBType mapping."""
+    assert_equal(dtype_to_duckdb_type[DType.bool](), DuckDBType.boolean)
+    assert_equal(dtype_to_duckdb_type[DType.int8](), DuckDBType.tinyint)
+    assert_equal(dtype_to_duckdb_type[DType.int16](), DuckDBType.smallint)
+    assert_equal(dtype_to_duckdb_type[DType.int32](), DuckDBType.integer)
+    assert_equal(dtype_to_duckdb_type[DType.int64](), DuckDBType.bigint)
+    assert_equal(dtype_to_duckdb_type[DType.uint8](), DuckDBType.utinyint)
+    assert_equal(dtype_to_duckdb_type[DType.uint16](), DuckDBType.usmallint)
+    assert_equal(dtype_to_duckdb_type[DType.uint32](), DuckDBType.uinteger)
+    assert_equal(dtype_to_duckdb_type[DType.uint64](), DuckDBType.ubigint)
+    assert_equal(dtype_to_duckdb_type[DType.float32](), DuckDBType.float)
+    assert_equal(dtype_to_duckdb_type[DType.float64](), DuckDBType.double)
+
+
+def test_mojo_to_duckdb_type():
+    """Test compile-time Mojo type to DuckDBType mapping."""
+    assert_equal(mojo_to_duckdb_type[Bool](), DuckDBType.boolean)
+    assert_equal(mojo_to_duckdb_type[Int8](), DuckDBType.tinyint)
+    assert_equal(mojo_to_duckdb_type[Int16](), DuckDBType.smallint)
+    assert_equal(mojo_to_duckdb_type[Int32](), DuckDBType.integer)
+    assert_equal(mojo_to_duckdb_type[Int64](), DuckDBType.bigint)
+    assert_equal(mojo_to_duckdb_type[UInt8](), DuckDBType.utinyint)
+    assert_equal(mojo_to_duckdb_type[UInt16](), DuckDBType.usmallint)
+    assert_equal(mojo_to_duckdb_type[UInt32](), DuckDBType.uinteger)
+    assert_equal(mojo_to_duckdb_type[UInt64](), DuckDBType.ubigint)
+    assert_equal(mojo_to_duckdb_type[Float32](), DuckDBType.float)
+    assert_equal(mojo_to_duckdb_type[Float64](), DuckDBType.double)
+
+
 def main():
     TestSuite.discover_tests[__functions_in_module()]().run()
