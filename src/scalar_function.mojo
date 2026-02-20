@@ -310,9 +310,14 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.logical_type import decimal_type
+        from duckdb.connection import Connection
+
         fn add_one[w: Int](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return x + 1
 
+        var conn = Connection(":memory:")
         var sf = ScalarFunction()
         sf.set_name("add_one")
         sf.add_parameter(decimal_type(18, 4))  # Custom DECIMAL type
@@ -355,9 +360,14 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.logical_type import decimal_type
+        from duckdb.connection import Connection
+
         fn my_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return a + b
 
+        var conn = Connection(":memory:")
         var sf = ScalarFunction()
         sf.set_name("mojo_add")
         sf.add_parameter(decimal_type(18, 4))
@@ -407,7 +417,11 @@ struct ScalarFunction(Movable):
         Example:
         ```mojo
         import math
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.logical_type import decimal_type
+        from duckdb.connection import Connection
 
+        var conn = Connection(":memory:")
         var sf = ScalarFunction()
         sf.set_name("my_sqrt")
         sf.add_parameter(decimal_type(18, 4))  # Custom DECIMAL type
@@ -445,12 +459,17 @@ struct ScalarFunction(Movable):
         Example:
         ```mojo
         import math
+        from duckdb import DuckDBType
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.logical_type import LogicalType
+        from duckdb.connection import Connection
 
+        var conn = Connection(":memory:")
         var sf = ScalarFunction()
         sf.set_name("my_atan2")
-        sf.add_parameter(LogicalType(DuckDBType.DOUBLE))
-        sf.add_parameter(LogicalType(DuckDBType.DOUBLE))
-        sf.set_return_type(LogicalType(DuckDBType.DOUBLE))
+        sf.add_parameter(LogicalType(DuckDBType.double))
+        sf.add_parameter(LogicalType(DuckDBType.double))
+        sf.set_return_type(LogicalType(DuckDBType.double))
         sf.set_simd_function[DType.float64, math.atan2]()
         sf.register(conn)
         ```
@@ -509,11 +528,17 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb import Chunk
+        from duckdb.scalar_function import ScalarFunction, FunctionInfo
+        from duckdb.vector import Vector
+        from duckdb.connection import Connection
+
         fn constant_42(info: FunctionInfo, mut input: Chunk, output: Vector):
             var out_data = output.get_data().bitcast[Int32]()
             for i in range(len(input)):
                 out_data[i] = 42
 
+        var conn = Connection(":memory:")
         ScalarFunction.create["constant_42", constant_42, DType.int32](conn)
         ```
         """
@@ -542,6 +567,11 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb import Chunk
+        from duckdb.scalar_function import ScalarFunction, FunctionInfo
+        from duckdb.vector import Vector
+        from duckdb.connection import Connection
+
         fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Int32]()
@@ -549,6 +579,7 @@ struct ScalarFunction(Movable):
             for i in range(size):
                 out_data[i] = in_data[i] + 1
 
+        var conn = Connection(":memory:")
         ScalarFunction.create["add_one", add_one, DType.int32, DType.int32](conn)
         ```
         """
@@ -578,6 +609,11 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb import Chunk
+        from duckdb.scalar_function import ScalarFunction, FunctionInfo
+        from duckdb.vector import Vector
+        from duckdb.connection import Connection
+
         fn my_add(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var a = input.get_vector(0).get_data().bitcast[Int32]()
@@ -586,6 +622,7 @@ struct ScalarFunction(Movable):
             for i in range(size):
                 out[i] = a[i] + b[i]
 
+        var conn = Connection(":memory:")
         ScalarFunction.create["my_add", my_add, DType.int32, DType.int32, DType.int32](conn)
         ```
         """
@@ -649,9 +686,13 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
+
         fn add_one(x: Int32) -> Int32:
             return x + 1
 
+        var conn = Connection(":memory:")
         # Registers with DuckDB — types derived from DType parameters
         ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
         ```
@@ -689,9 +730,13 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
+
         fn my_add(a: Int32, b: Int32) -> Int32:
             return a + b
 
+        var conn = Connection(":memory:")
         ScalarFunction.from_function["my_add", DType.int32, DType.int32, DType.int32, my_add](conn)
         ```
         """
@@ -737,9 +782,13 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
+
         fn add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
             return x + 1
 
+        var conn = Connection(":memory:")
         ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one](conn)
         ```
         """
@@ -769,9 +818,13 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
+
         fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
 
+        var conn = Connection(":memory:")
         ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add](conn)
         ```
         """
@@ -809,7 +862,10 @@ struct ScalarFunction(Movable):
         Example:
         ```mojo
         import math
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
 
+        var conn = Connection(":memory:")
         ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt](conn)
         ScalarFunction.from_simd_function["mojo_sin", DType.float64, math.sin](conn)
         ```
@@ -843,7 +899,10 @@ struct ScalarFunction(Movable):
         Example:
         ```mojo
         import math
+        from duckdb.scalar_function import ScalarFunction
+        from duckdb.connection import Connection
 
+        var conn = Connection(":memory:")
         ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
         ```
         """

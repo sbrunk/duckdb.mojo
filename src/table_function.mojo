@@ -15,7 +15,7 @@ struct TableFunctionInfo:
     Example:
     ```mojo
     from duckdb import Chunk
-    from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
+    from duckdb.table_function import TableFunctionInfo
 
     fn my_function(info: TableFunctionInfo, output: Chunk):
         var bind_data = info.get_bind_data()
@@ -96,7 +96,9 @@ struct TableBindInfo:
 
     Example:
     ```mojo
+    from duckdb import DuckDBType
     from duckdb.table_function import TableBindInfo
+    from duckdb.logical_type import LogicalType
 
     fn my_bind(info: TableBindInfo):
         info.add_result_column("id", LogicalType(DuckDBType.integer))
@@ -228,6 +230,8 @@ struct TableInitInfo:
 
     Example:
     ```mojo
+    from duckdb.table_function import TableInitInfo
+
     fn my_init(info: TableInitInfo):
         # Optionally set init data and max threads
         info.set_max_threads(4)
@@ -549,6 +553,9 @@ struct TableFunction(Movable):
 
         Example:
         ```mojo
+        from duckdb import Chunk
+        from duckdb.table_function import TableFunctionInfo, TableFunction
+
         fn my_function(info: TableFunctionInfo, mut output: Chunk):
             var data = output.get_vector(0).get_data().bitcast[Int32]()
             for i in range(5):
