@@ -142,3 +142,190 @@ and binary functions (hypot, atan2). Change the `F` constant to switch between
 ```shell
 pixi run mojo run benchmark/math_benchmark.mojo
 ```
+
+## Table Functions
+
+Register Mojo functions as DuckDB table functions that generate rows.
+A table function needs three callbacks: **bind** (declare output columns and
+store parameters), **init** (optional per-scan setup), and the **main function**
+(produce output batches).
+
+```mojo
+from duckdb import *
+from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
+from duckdb._libduckdb import *
+from memory.unsafe_pointer import alloc
+
+@fieldwise_init
+struct CounterBindData(Copyable, Movable):
+    var limit: Int
+    var current_row: Int
+
+fn destroy_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
+    data.bitcast[CounterBindData]().destroy_pointee()
+
+fn counter_bind(info: TableBindInfo):
+    info.add_result_column("i", LogicalType(DuckDBType.integer))
+    var limit = Int(info.get_parameter(0).as_int32())
+    var bind_data = alloc[CounterBindData](1)
+    bind_data.init_pointee_move(CounterBindData(limit=limit, current_row=0))
+    info.set_bind_data(bind_data.bitcast[NoneType](), destroy_bind_data)
+
+fn counter_init(info: TableInitInfo):
+    pass
+
+fn counter_function(info: TableFunctionInfo, mut output: Chunk):
+    var bind_data = info.get_bind_data().bitcast[CounterBindData]()
+    var current = bind_data[].current_row
+    var remaining = bind_data[].limit - current
+    if remaining <= 0:
+        output.set_size(0)
+        return
+    var batch = min(remaining, 2048)
+    var out = output.get_vector(0).get_data().bitcast[Int32]()
+    for i in range(batch):
+        out[i] = Int32(current + i)
+    bind_data[].current_row = current + batch
+    output.set_size(batch)
+
+fn main() raises:
+    var conn = DuckDB.connect(":memory:")
+    var tf = TableFunction()
+    tf.set_name("generate_ints")
+    tf.add_parameter(LogicalType(DuckDBType.bigint))
+    tf.set_function[counter_bind, counter_init, counter_function]()
+    tf.register(conn)
+
+    var result = conn.execute("SELECT sum(i) FROM generate_ints(100)")
+```
+
+## Aggregate Functions
+
+Register Mojo functions as DuckDB aggregate functions that reduce many rows
+into a single value (per group). There are two API levels: high-level
+convenience methods and a low-level callback API.
+
+### High-level: reduction-based aggregates
+
+Use `from_sum`, `from_max`, `from_min`, `from_product`, and `from_mean` to
+register common aggregates in one line:
+
+```mojo
+from duckdb import *
+from duckdb.aggregate_function import AggregateFunction
+
+var conn = DuckDB.connect(":memory:")
+
+AggregateFunction.from_sum["mojo_sum", DType.float64](conn)
+AggregateFunction.from_max["mojo_max", DType.float64](conn)
+AggregateFunction.from_min["mojo_min", DType.float64](conn)
+AggregateFunction.from_mean["mojo_avg", DType.float64](conn)
+AggregateFunction.from_product["mojo_product", DType.float64](conn)
+
+var result = conn.execute("SELECT mojo_sum(x), mojo_max(x) FROM my_table")
+```
+
+### Custom reductions with `from_reduce`
+
+Define your own binary SIMD reduce function and identity element:
+
+```mojo
+fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+    return a + b
+
+fn zero() -> Scalar[DType.float64]:
+    return 0.0
+
+AggregateFunction.from_reduce["custom_sum", DType.float64, my_add, zero](conn)
+```
+
+A separate-type overload allows accumulating into a wider type (e.g. Int32 input
+→ Int64 output):
+
+```mojo
+fn add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+    return a + b
+
+fn zero() -> Scalar[DType.int64]:
+    return 0
+
+AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
+```
+
+### Low-level API
+
+For full control, implement the five aggregate callbacks manually
+(state_size, state_init, update, combine, finalize) plus an optional destructor:
+
+```mojo
+from sys.info import size_of
+from duckdb import *
+from duckdb.aggregate_function import *
+from duckdb._libduckdb import *
+
+fn my_state_size(info: AggregateFunctionInfo) -> idx_t:
+    return idx_t(size_of[Int64]())
+
+fn my_state_init(info: AggregateFunctionInfo, state: AggregateState):
+    state.get_data().bitcast[Int64]().init_pointee_move(0)
+
+fn my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
+    var data = input.get_vector(0).get_data().bitcast[Int32]()
+    for i in range(len(input)):
+        var s = states.get_state(i).get_data().bitcast[Int64]()
+        s[] += Int64(data[i])
+
+fn my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
+              target: AggregateStateArray, count: Int):
+    for i in range(count):
+        var s = source.get_state(i).get_data().bitcast[Int64]()
+        var t = target.get_state(i).get_data().bitcast[Int64]()
+        t[] += s[]
+
+fn my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
+               result: Vector, count: Int, offset: Int):
+    var out = result.get_data().bitcast[Int64]()
+    for i in range(count):
+        var s = source.get_state(i).get_data().bitcast[Int64]()
+        out[offset + i] = s[]
+
+fn main() raises:
+    var conn = DuckDB.connect(":memory:")
+    var func = AggregateFunction()
+    func.set_name("my_sum")
+    func.add_parameter(LogicalType(DuckDBType.integer))
+    func.set_return_type(LogicalType(DuckDBType.bigint))
+    func.set_functions[my_state_size, my_state_init, my_update, my_combine, my_finalize]()
+    func.register(conn)
+```
+
+### Reduction Benchmark
+
+A benchmark comparing Mojo aggregate functions against DuckDB builtins is
+available in `benchmark/reduction_benchmark.mojo`. It covers ungrouped and
+grouped aggregates (sum, max, min, avg) on 10M rows.
+
+```shell
+pixi run mojo run benchmark/reduction_benchmark.mojo
+```
+
+### Note on SIMD utilization and the DuckDB C API
+
+Mojo's `algorithm.reduction` module provides highly optimized SIMD-vectorized
+and parallelized reduction functions (`sum`, `max`, `min`, `mean`, etc.) that
+operate on contiguous `Span` data. However, these cannot be used directly in
+DuckDB aggregate callbacks because the C API `update` function receives one
+state pointer **per row** (`duckdb_aggregate_state *states`), where each pointer
+may reference a different group's state — there is no contiguous buffer-to-single-accumulator path.
+
+DuckDB's internal aggregates use a separate `simple_update` callback for
+ungrouped aggregates that passes the entire vector plus a single state pointer,
+which would be a natural fit for stdlib reduction. However, the C API does not
+expose this — `simple_update` is hardcoded to `nullptr` for all C API aggregate
+functions.
+
+Exposing a `duckdb_aggregate_function_set_simple_update(fn(info, vector, state, count))`
+callback in the C API would allow Mojo bindings to call
+`algorithm.reduction.sum(Span(vector_data, count))` directly on the input
+vector, leveraging full SIMD vectorization and parallel execution for ungrouped
+aggregates instead of the current scalar per-row accumulation loop.
