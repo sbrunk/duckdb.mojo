@@ -2,6 +2,11 @@
 
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
+duckdb.mojo can be used in two ways:
+
+1. **Client API** — Query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
+2. **Extension development** *(experimental)* — Build DuckDB [C Extension API](https://duckdb.org/docs/extensions/extending_duckdb/c_extensions) extensions written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
+
 ## 10 minute presentation at the MAX & Mojo community meeting
 
 <div align="center">
@@ -9,7 +14,8 @@
 </div>
 
 Status:
-- Work in progress, many parts of the API are still missing (PRs welcome).
+- The [FFI bindings](src/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
+- We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
 
 ## Example
 

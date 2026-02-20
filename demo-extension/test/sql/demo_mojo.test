@@ -1,0 +1,30 @@
+# name: test/sql/demo_mojo.test
+# description: test demo mojo extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT mojo_add_numbers(40, 2);
+----
+Catalog Error: Scalar Function with name mojo_add_numbers does not exist!
+
+# After loading the extension, it should work
+require demo_mojo
+
+# Basic addition
+query I
+SELECT mojo_add_numbers(40, 2);
+----
+42
+
+# Zero values
+query I
+SELECT mojo_add_numbers(0, 0);
+----
+0
+
+# Negative values
+query I
+SELECT mojo_add_numbers(-10, 5);
+----
+-5

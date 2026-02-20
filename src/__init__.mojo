@@ -8,5 +8,6 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo, 
 from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet, AggregateFunctionInfo, AggregateState, AggregateStateArray
 from duckdb.value import DuckDBValue
+from duckdb.extension import ExtensionConnection, duckdb_extension_access
 
 from duckdb.logical_type import LogicalType, decimal_type, enum_type
