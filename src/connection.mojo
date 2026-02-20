@@ -22,7 +22,7 @@ struct Connection(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self.database = Database(path)
         self._conn = UnsafePointer[
-            duckdb_connection.type, ImmutExternalOrigin
+            duckdb_connection.type, MutExternalOrigin
         ]()
         if (
             libduckdb.duckdb_connect(

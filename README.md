@@ -75,6 +75,16 @@ pixi run test
 pixi build
 ```
 
+### (Re-)generate the C API bindings
+
+The low-level bindings in `src/_libduckdb.mojo` are auto-generated from DuckDB's
+declarative JSON schemata (the same source used to generate `duckdb.h`).
+To regenerate them (e.g. after bumping the DuckDB version in `pixi.toml`):
+
+```shell
+pixi run generate-api
+```
+
 ## Scalar Functions
 
 Register Mojo functions as DuckDB scalar functions (UDFs) that operate on table
