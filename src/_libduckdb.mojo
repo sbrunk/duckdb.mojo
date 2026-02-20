@@ -369,6 +369,11 @@ struct _duckdb_bind_info:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
 comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
 
+#! The init info for table functions.
+struct _duckdb_init_info:
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
+comptime duckdb_init_info = UnsafePointer[_duckdb_init_info, MutExternalOrigin]
+
 #! An expression.
 struct _duckdb_expression:
     var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
@@ -394,6 +399,26 @@ comptime duckdb_scalar_function_bind_t = fn (duckdb_bind_info) -> NoneType
 #! The main function of the scalar function.
 comptime duckdb_scalar_function_t = fn (
     duckdb_function_info, duckdb_data_chunk, duckdb_vector
+) -> NoneType
+
+# ===--------------------------------------------------------------------===#
+# Table function types
+# ===--------------------------------------------------------------------===#
+
+#! A table function. Must be destroyed with `duckdb_destroy_table_function`.
+struct _duckdb_table_function:
+    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
+comptime duckdb_table_function = UnsafePointer[_duckdb_table_function, MutExternalOrigin]
+
+#! The bind function of the table function.
+comptime duckdb_table_function_bind_t = fn (duckdb_bind_info) -> NoneType
+
+#! The possibly thread-local initialization function of the table function.
+comptime duckdb_table_function_init_t = fn (duckdb_init_info) -> NoneType
+
+#! The function to generate an output chunk during table function execution.
+comptime duckdb_table_function_t = fn (
+    duckdb_function_info, duckdb_data_chunk
 ) -> NoneType
 
 # ===--------------------------------------------------------------------===#
@@ -663,6 +688,38 @@ struct LibDuckDB(Movable):
     var _duckdb_register_scalar_function_set: _duckdb_register_scalar_function_set.fn_type
     var _duckdb_scalar_function_bind_get_argument_count: _duckdb_scalar_function_bind_get_argument_count.fn_type
     var _duckdb_scalar_function_bind_get_argument: _duckdb_scalar_function_bind_get_argument.fn_type
+    var _duckdb_create_table_function: _duckdb_create_table_function.fn_type
+    var _duckdb_destroy_table_function: _duckdb_destroy_table_function.fn_type
+    var _duckdb_table_function_set_name: _duckdb_table_function_set_name.fn_type
+    var _duckdb_table_function_add_parameter: _duckdb_table_function_add_parameter.fn_type
+    var _duckdb_table_function_add_named_parameter: _duckdb_table_function_add_named_parameter.fn_type
+    var _duckdb_table_function_set_extra_info: _duckdb_table_function_set_extra_info.fn_type
+    var _duckdb_table_function_set_bind: _duckdb_table_function_set_bind.fn_type
+    var _duckdb_table_function_set_init: _duckdb_table_function_set_init.fn_type
+    var _duckdb_table_function_set_local_init: _duckdb_table_function_set_local_init.fn_type
+    var _duckdb_table_function_set_function: _duckdb_table_function_set_function.fn_type
+    var _duckdb_table_function_supports_projection_pushdown: _duckdb_table_function_supports_projection_pushdown.fn_type
+    var _duckdb_register_table_function: _duckdb_register_table_function.fn_type
+    var _duckdb_bind_get_extra_info: _duckdb_bind_get_extra_info.fn_type
+    var _duckdb_bind_add_result_column: _duckdb_bind_add_result_column.fn_type
+    var _duckdb_bind_get_parameter_count: _duckdb_bind_get_parameter_count.fn_type
+    var _duckdb_bind_get_parameter: _duckdb_bind_get_parameter.fn_type
+    var _duckdb_bind_get_named_parameter: _duckdb_bind_get_named_parameter.fn_type
+    var _duckdb_bind_set_bind_data: _duckdb_bind_set_bind_data.fn_type
+    var _duckdb_bind_set_cardinality: _duckdb_bind_set_cardinality.fn_type
+    var _duckdb_bind_set_error: _duckdb_bind_set_error.fn_type
+    var _duckdb_init_get_extra_info: _duckdb_init_get_extra_info.fn_type
+    var _duckdb_init_get_bind_data: _duckdb_init_get_bind_data.fn_type
+    var _duckdb_init_set_init_data: _duckdb_init_set_init_data.fn_type
+    var _duckdb_init_get_column_count: _duckdb_init_get_column_count.fn_type
+    var _duckdb_init_get_column_index: _duckdb_init_get_column_index.fn_type
+    var _duckdb_init_set_max_threads: _duckdb_init_set_max_threads.fn_type
+    var _duckdb_init_set_error: _duckdb_init_set_error.fn_type
+    var _duckdb_function_get_extra_info: _duckdb_function_get_extra_info.fn_type
+    var _duckdb_function_get_bind_data: _duckdb_function_get_bind_data.fn_type
+    var _duckdb_function_get_init_data: _duckdb_function_get_init_data.fn_type
+    var _duckdb_function_get_local_init_data: _duckdb_function_get_local_init_data.fn_type
+    var _duckdb_function_set_error: _duckdb_function_set_error.fn_type
     var _duckdb_create_aggregate_function: _duckdb_create_aggregate_function.fn_type
     var _duckdb_destroy_aggregate_function: _duckdb_destroy_aggregate_function.fn_type
     var _duckdb_aggregate_function_set_name: _duckdb_aggregate_function_set_name.fn_type
@@ -834,6 +891,38 @@ struct LibDuckDB(Movable):
             self._duckdb_scalar_function_bind_get_argument = _duckdb_scalar_function_bind_get_argument.load()
             self._duckdb_add_scalar_function_to_set = _duckdb_add_scalar_function_to_set.load()
             self._duckdb_register_scalar_function_set = _duckdb_register_scalar_function_set.load()
+            self._duckdb_create_table_function = _duckdb_create_table_function.load()
+            self._duckdb_destroy_table_function = _duckdb_destroy_table_function.load()
+            self._duckdb_table_function_set_name = _duckdb_table_function_set_name.load()
+            self._duckdb_table_function_add_parameter = _duckdb_table_function_add_parameter.load()
+            self._duckdb_table_function_add_named_parameter = _duckdb_table_function_add_named_parameter.load()
+            self._duckdb_table_function_set_extra_info = _duckdb_table_function_set_extra_info.load()
+            self._duckdb_table_function_set_bind = _duckdb_table_function_set_bind.load()
+            self._duckdb_table_function_set_init = _duckdb_table_function_set_init.load()
+            self._duckdb_table_function_set_local_init = _duckdb_table_function_set_local_init.load()
+            self._duckdb_table_function_set_function = _duckdb_table_function_set_function.load()
+            self._duckdb_table_function_supports_projection_pushdown = _duckdb_table_function_supports_projection_pushdown.load()
+            self._duckdb_register_table_function = _duckdb_register_table_function.load()
+            self._duckdb_bind_get_extra_info = _duckdb_bind_get_extra_info.load()
+            self._duckdb_bind_add_result_column = _duckdb_bind_add_result_column.load()
+            self._duckdb_bind_get_parameter_count = _duckdb_bind_get_parameter_count.load()
+            self._duckdb_bind_get_parameter = _duckdb_bind_get_parameter.load()
+            self._duckdb_bind_get_named_parameter = _duckdb_bind_get_named_parameter.load()
+            self._duckdb_bind_set_bind_data = _duckdb_bind_set_bind_data.load()
+            self._duckdb_bind_set_cardinality = _duckdb_bind_set_cardinality.load()
+            self._duckdb_bind_set_error = _duckdb_bind_set_error.load()
+            self._duckdb_init_get_extra_info = _duckdb_init_get_extra_info.load()
+            self._duckdb_init_get_bind_data = _duckdb_init_get_bind_data.load()
+            self._duckdb_init_set_init_data = _duckdb_init_set_init_data.load()
+            self._duckdb_init_get_column_count = _duckdb_init_get_column_count.load()
+            self._duckdb_init_get_column_index = _duckdb_init_get_column_index.load()
+            self._duckdb_init_set_max_threads = _duckdb_init_set_max_threads.load()
+            self._duckdb_init_set_error = _duckdb_init_set_error.load()
+            self._duckdb_function_get_extra_info = _duckdb_function_get_extra_info.load()
+            self._duckdb_function_get_bind_data = _duckdb_function_get_bind_data.load()
+            self._duckdb_function_get_init_data = _duckdb_function_get_init_data.load()
+            self._duckdb_function_get_local_init_data = _duckdb_function_get_local_init_data.load()
+            self._duckdb_function_set_error = _duckdb_function_set_error.load()
             self._duckdb_create_aggregate_function = _duckdb_create_aggregate_function.load()
             self._duckdb_destroy_aggregate_function = _duckdb_destroy_aggregate_function.load()
             self._duckdb_aggregate_function_set_name = _duckdb_aggregate_function_set_name.load()
@@ -1004,6 +1093,38 @@ struct LibDuckDB(Movable):
         self._duckdb_register_scalar_function_set = take._duckdb_register_scalar_function_set
         self._duckdb_scalar_function_bind_get_argument_count = take._duckdb_scalar_function_bind_get_argument_count
         self._duckdb_scalar_function_bind_get_argument = take._duckdb_scalar_function_bind_get_argument
+        self._duckdb_create_table_function = take._duckdb_create_table_function
+        self._duckdb_destroy_table_function = take._duckdb_destroy_table_function
+        self._duckdb_table_function_set_name = take._duckdb_table_function_set_name
+        self._duckdb_table_function_add_parameter = take._duckdb_table_function_add_parameter
+        self._duckdb_table_function_add_named_parameter = take._duckdb_table_function_add_named_parameter
+        self._duckdb_table_function_set_extra_info = take._duckdb_table_function_set_extra_info
+        self._duckdb_table_function_set_bind = take._duckdb_table_function_set_bind
+        self._duckdb_table_function_set_init = take._duckdb_table_function_set_init
+        self._duckdb_table_function_set_local_init = take._duckdb_table_function_set_local_init
+        self._duckdb_table_function_set_function = take._duckdb_table_function_set_function
+        self._duckdb_table_function_supports_projection_pushdown = take._duckdb_table_function_supports_projection_pushdown
+        self._duckdb_register_table_function = take._duckdb_register_table_function
+        self._duckdb_bind_get_extra_info = take._duckdb_bind_get_extra_info
+        self._duckdb_bind_add_result_column = take._duckdb_bind_add_result_column
+        self._duckdb_bind_get_parameter_count = take._duckdb_bind_get_parameter_count
+        self._duckdb_bind_get_parameter = take._duckdb_bind_get_parameter
+        self._duckdb_bind_get_named_parameter = take._duckdb_bind_get_named_parameter
+        self._duckdb_bind_set_bind_data = take._duckdb_bind_set_bind_data
+        self._duckdb_bind_set_cardinality = take._duckdb_bind_set_cardinality
+        self._duckdb_bind_set_error = take._duckdb_bind_set_error
+        self._duckdb_init_get_extra_info = take._duckdb_init_get_extra_info
+        self._duckdb_init_get_bind_data = take._duckdb_init_get_bind_data
+        self._duckdb_init_set_init_data = take._duckdb_init_set_init_data
+        self._duckdb_init_get_column_count = take._duckdb_init_get_column_count
+        self._duckdb_init_get_column_index = take._duckdb_init_get_column_index
+        self._duckdb_init_set_max_threads = take._duckdb_init_set_max_threads
+        self._duckdb_init_set_error = take._duckdb_init_set_error
+        self._duckdb_function_get_extra_info = take._duckdb_function_get_extra_info
+        self._duckdb_function_get_bind_data = take._duckdb_function_get_bind_data
+        self._duckdb_function_get_init_data = take._duckdb_function_get_init_data
+        self._duckdb_function_get_local_init_data = take._duckdb_function_get_local_init_data
+        self._duckdb_function_set_error = take._duckdb_function_set_error
         self._duckdb_create_aggregate_function = take._duckdb_create_aggregate_function
         self._duckdb_destroy_aggregate_function = take._duckdb_destroy_aggregate_function
         self._duckdb_aggregate_function_set_name = take._duckdb_aggregate_function_set_name
@@ -2032,6 +2153,257 @@ struct LibDuckDB(Movable):
         * @return The expression at the specified index.
         """
         return self._duckdb_scalar_function_bind_get_argument(info, index)
+
+    # ===--------------------------------------------------------------------===#
+    # Table Function Interface
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_create_table_function(self) -> duckdb_table_function:
+        """Creates a new empty table function.
+        The return value must be destroyed with `duckdb_destroy_table_function`.
+        * @return The table function object.
+        """
+        return self._duckdb_create_table_function()
+
+    fn duckdb_destroy_table_function(self, table_function: UnsafePointer[duckdb_table_function, MutAnyOrigin]) -> NoneType:
+        """Destroys the given table function object.
+        * @param table_function The table function to destroy.
+        """
+        return self._duckdb_destroy_table_function(table_function)
+
+    fn duckdb_table_function_set_name(self, table_function: duckdb_table_function, name: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
+        """Sets the name of the given table function.
+        * @param table_function The table function.
+        * @param name The name of the table function.
+        """
+        return self._duckdb_table_function_set_name(table_function, name)
+
+    fn duckdb_table_function_add_parameter(self, table_function: duckdb_table_function, type: duckdb_logical_type) -> NoneType:
+        """Adds a parameter to the table function.
+        * @param table_function The table function.
+        * @param type The parameter type.
+        """
+        return self._duckdb_table_function_add_parameter(table_function, type)
+
+    fn duckdb_table_function_add_named_parameter(self, table_function: duckdb_table_function, name: UnsafePointer[c_char, ImmutAnyOrigin], type: duckdb_logical_type) -> NoneType:
+        """Adds a named parameter to the table function.
+        * @param table_function The table function.
+        * @param name The parameter name.
+        * @param type The parameter type.
+        """
+        return self._duckdb_table_function_add_named_parameter(table_function, name, type)
+
+    fn duckdb_table_function_set_extra_info(self, table_function: duckdb_table_function, extra_info: UnsafePointer[NoneType, MutAnyOrigin], destroy: duckdb_delete_callback_t) -> NoneType:
+        """Assigns extra information to the table function.
+        * @param table_function The table function.
+        * @param extra_info The extra information.
+        * @param destroy The callback to destroy the extra information.
+        """
+        return self._duckdb_table_function_set_extra_info(table_function, extra_info, destroy)
+
+    fn duckdb_table_function_set_bind(self, table_function: duckdb_table_function, bind: duckdb_table_function_bind_t) -> NoneType:
+        """Sets the bind function of the table function.
+        * @param table_function The table function.
+        * @param bind The bind function.
+        """
+        return self._duckdb_table_function_set_bind(table_function, bind)
+
+    fn duckdb_table_function_set_init(self, table_function: duckdb_table_function, init: duckdb_table_function_init_t) -> NoneType:
+        """Sets the init function of the table function.
+        * @param table_function The table function.
+        * @param init The init function.
+        """
+        return self._duckdb_table_function_set_init(table_function, init)
+
+    fn duckdb_table_function_set_local_init(self, table_function: duckdb_table_function, init: duckdb_table_function_init_t) -> NoneType:
+        """Sets the thread-local init function of the table function.
+        * @param table_function The table function.
+        * @param init The init function.
+        """
+        return self._duckdb_table_function_set_local_init(table_function, init)
+
+    fn duckdb_table_function_set_function(self, table_function: duckdb_table_function, function: duckdb_table_function_t) -> NoneType:
+        """Sets the main function of the table function.
+        * @param table_function The table function.
+        * @param function The function.
+        """
+        return self._duckdb_table_function_set_function(table_function, function)
+
+    fn duckdb_table_function_supports_projection_pushdown(self, table_function: duckdb_table_function, pushdown: Bool) -> NoneType:
+        """Sets whether or not the given table function supports projection pushdown.
+        * @param table_function The table function.
+        * @param pushdown True if the table function supports projection pushdown.
+        """
+        return self._duckdb_table_function_supports_projection_pushdown(table_function, pushdown)
+
+    fn duckdb_register_table_function(self, con: duckdb_connection, function: duckdb_table_function) -> duckdb_state:
+        """Register the table function object within the given connection.
+        * @param con The connection to register it in.
+        * @param function The function pointer.
+        * @return Whether or not the registration was successful.
+        """
+        return self._duckdb_register_table_function(con, function)
+
+    # ===--------------------------------------------------------------------===#
+    # Table Function Bind
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_bind_get_extra_info(self, info: duckdb_bind_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Retrieves the extra info of the function as set in `duckdb_table_function_set_extra_info`.
+        * @param info The info object.
+        * @return The extra info.
+        """
+        return self._duckdb_bind_get_extra_info(info)
+
+    fn duckdb_bind_add_result_column(self, info: duckdb_bind_info, name: UnsafePointer[c_char, ImmutAnyOrigin], type: duckdb_logical_type) -> NoneType:
+        """Adds a result column to the output of the table function.
+        * @param info The table function's bind info.
+        * @param name The column name.
+        * @param type The logical column type.
+        """
+        return self._duckdb_bind_add_result_column(info, name, type)
+
+    fn duckdb_bind_get_parameter_count(self, info: duckdb_bind_info) -> idx_t:
+        """Retrieves the number of regular (non-named) parameters to the function.
+        * @param info The info object.
+        * @return The number of parameters.
+        """
+        return self._duckdb_bind_get_parameter_count(info)
+
+    fn duckdb_bind_get_parameter(self, info: duckdb_bind_info, index: idx_t) -> duckdb_value:
+        """Retrieves the parameter at the given index.
+        The result must be destroyed with `duckdb_destroy_value`.
+        * @param info The info object.
+        * @param index The index of the parameter to get.
+        * @return The value of the parameter.
+        """
+        return self._duckdb_bind_get_parameter(info, index)
+
+    fn duckdb_bind_get_named_parameter(self, info: duckdb_bind_info, name: UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_value:
+        """Retrieves a named parameter with the given name.
+        The result must be destroyed with `duckdb_destroy_value`.
+        * @param info The info object.
+        * @param name The name of the parameter.
+        * @return The value of the parameter.
+        """
+        return self._duckdb_bind_get_named_parameter(info, name)
+
+    fn duckdb_bind_set_bind_data(self, info: duckdb_bind_info, bind_data: UnsafePointer[NoneType, MutAnyOrigin], destroy: duckdb_delete_callback_t) -> NoneType:
+        """Sets the user-provided bind data in the bind object of the table function.
+        * @param info The bind info of the table function.
+        * @param bind_data The bind data object.
+        * @param destroy The callback to destroy the bind data.
+        """
+        return self._duckdb_bind_set_bind_data(info, bind_data, destroy)
+
+    fn duckdb_bind_set_cardinality(self, info: duckdb_bind_info, cardinality: idx_t, is_exact: Bool) -> NoneType:
+        """Sets the cardinality estimate for the table function, used for optimization.
+        * @param info The bind data object.
+        * @param cardinality The cardinality estimate.
+        * @param is_exact Whether or not the cardinality estimate is exact.
+        """
+        return self._duckdb_bind_set_cardinality(info, cardinality, is_exact)
+
+    fn duckdb_bind_set_error(self, info: duckdb_bind_info, error: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
+        """Report that an error has occurred while calling bind on a table function.
+        * @param info The info object.
+        * @param error The error message.
+        """
+        return self._duckdb_bind_set_error(info, error)
+
+    # ===--------------------------------------------------------------------===#
+    # Table Function Init
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_init_get_extra_info(self, info: duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Retrieves the extra info of the function as set in `duckdb_table_function_set_extra_info`.
+        * @param info The info object.
+        * @return The extra info.
+        """
+        return self._duckdb_init_get_extra_info(info)
+
+    fn duckdb_init_get_bind_data(self, info: duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Gets the bind data set by `duckdb_bind_set_bind_data` during the bind.
+        * @param info The info object.
+        * @return The bind data object.
+        """
+        return self._duckdb_init_get_bind_data(info)
+
+    fn duckdb_init_set_init_data(self, info: duckdb_init_info, init_data: UnsafePointer[NoneType, MutAnyOrigin], destroy: duckdb_delete_callback_t) -> NoneType:
+        """Sets the user-provided init data in the init object.
+        * @param info The info object.
+        * @param init_data The init data object.
+        * @param destroy The callback to destroy the init data.
+        """
+        return self._duckdb_init_set_init_data(info, init_data, destroy)
+
+    fn duckdb_init_get_column_count(self, info: duckdb_init_info) -> idx_t:
+        """Returns the number of projected columns.
+        * @param info The info object.
+        * @return The number of projected columns.
+        """
+        return self._duckdb_init_get_column_count(info)
+
+    fn duckdb_init_get_column_index(self, info: duckdb_init_info, column_index: idx_t) -> idx_t:
+        """Returns the column index of the projected column at the specified position.
+        * @param info The info object.
+        * @param column_index The index at which to get the projected column index.
+        * @return The column index of the projected column.
+        """
+        return self._duckdb_init_get_column_index(info, column_index)
+
+    fn duckdb_init_set_max_threads(self, info: duckdb_init_info, max_threads: idx_t) -> NoneType:
+        """Sets how many threads can process this table function in parallel.
+        * @param info The info object.
+        * @param max_threads The maximum amount of threads.
+        """
+        return self._duckdb_init_set_max_threads(info, max_threads)
+
+    fn duckdb_init_set_error(self, info: duckdb_init_info, error: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
+        """Report that an error has occurred while calling init.
+        * @param info The info object.
+        * @param error The error message.
+        """
+        return self._duckdb_init_set_error(info, error)
+
+    # ===--------------------------------------------------------------------===#
+    # Table Function Execution
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_function_get_extra_info(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Retrieves the extra info of the function.
+        * @param info The info object.
+        * @return The extra info.
+        """
+        return self._duckdb_function_get_extra_info(info)
+
+    fn duckdb_function_get_bind_data(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Gets the table function's bind data.
+        * @param info The function info object.
+        * @return The bind data object.
+        """
+        return self._duckdb_function_get_bind_data(info)
+
+    fn duckdb_function_get_init_data(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Gets the init data set by `duckdb_init_set_init_data` during the init.
+        * @param info The info object.
+        * @return The init data object.
+        """
+        return self._duckdb_function_get_init_data(info)
+
+    fn duckdb_function_get_local_init_data(self, info: duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """Gets the thread-local init data set during the local_init.
+        * @param info The info object.
+        * @return The init data object.
+        """
+        return self._duckdb_function_get_local_init_data(info)
+
+    fn duckdb_function_set_error(self, info: duckdb_function_info, error: UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType:
+        """Report that an error has occurred while executing the function.
+        * @param info The info object.
+        * @param error The error message.
+        """
+        return self._duckdb_function_set_error(info, error)
 
     # ===--------------------------------------------------------------------===#
     # Aggregate Function Interface
@@ -3119,6 +3491,150 @@ comptime _duckdb_scalar_function_bind_get_argument_count = _dylib_function["duck
 
 comptime _duckdb_scalar_function_bind_get_argument = _dylib_function["duckdb_scalar_function_bind_get_argument",
     fn (duckdb_bind_info, idx_t) -> duckdb_expression
+]
+
+# ===--------------------------------------------------------------------===#
+# Table Function Interface
+# ===--------------------------------------------------------------------===#
+
+comptime _duckdb_create_table_function = _dylib_function["duckdb_create_table_function",
+    fn () -> duckdb_table_function
+]
+
+comptime _duckdb_destroy_table_function = _dylib_function["duckdb_destroy_table_function",
+    fn (UnsafePointer[duckdb_table_function, MutAnyOrigin]) -> NoneType
+]
+
+comptime _duckdb_table_function_set_name = _dylib_function["duckdb_table_function_set_name",
+    fn (duckdb_table_function, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+comptime _duckdb_table_function_add_parameter = _dylib_function["duckdb_table_function_add_parameter",
+    fn (duckdb_table_function, duckdb_logical_type) -> NoneType
+]
+
+comptime _duckdb_table_function_add_named_parameter = _dylib_function["duckdb_table_function_add_named_parameter",
+    fn (duckdb_table_function, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_logical_type) -> NoneType
+]
+
+comptime _duckdb_table_function_set_extra_info = _dylib_function["duckdb_table_function_set_extra_info",
+    fn (duckdb_table_function, UnsafePointer[NoneType, MutAnyOrigin], duckdb_delete_callback_t) -> NoneType
+]
+
+comptime _duckdb_table_function_set_bind = _dylib_function["duckdb_table_function_set_bind",
+    fn (duckdb_table_function, duckdb_table_function_bind_t) -> NoneType
+]
+
+comptime _duckdb_table_function_set_init = _dylib_function["duckdb_table_function_set_init",
+    fn (duckdb_table_function, duckdb_table_function_init_t) -> NoneType
+]
+
+comptime _duckdb_table_function_set_local_init = _dylib_function["duckdb_table_function_set_local_init",
+    fn (duckdb_table_function, duckdb_table_function_init_t) -> NoneType
+]
+
+comptime _duckdb_table_function_set_function = _dylib_function["duckdb_table_function_set_function",
+    fn (duckdb_table_function, duckdb_table_function_t) -> NoneType
+]
+
+comptime _duckdb_table_function_supports_projection_pushdown = _dylib_function["duckdb_table_function_supports_projection_pushdown",
+    fn (duckdb_table_function, Bool) -> NoneType
+]
+
+comptime _duckdb_register_table_function = _dylib_function["duckdb_register_table_function",
+    fn (duckdb_connection, duckdb_table_function) -> duckdb_state
+]
+
+# ===--------------------------------------------------------------------===#
+# Table Function Bind
+# ===--------------------------------------------------------------------===#
+
+comptime _duckdb_bind_get_extra_info = _dylib_function["duckdb_bind_get_extra_info",
+    fn (duckdb_bind_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_bind_add_result_column = _dylib_function["duckdb_bind_add_result_column",
+    fn (duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_logical_type) -> NoneType
+]
+
+comptime _duckdb_bind_get_parameter_count = _dylib_function["duckdb_bind_get_parameter_count",
+    fn (duckdb_bind_info) -> idx_t
+]
+
+comptime _duckdb_bind_get_parameter = _dylib_function["duckdb_bind_get_parameter",
+    fn (duckdb_bind_info, idx_t) -> duckdb_value
+]
+
+comptime _duckdb_bind_get_named_parameter = _dylib_function["duckdb_bind_get_named_parameter",
+    fn (duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_value
+]
+
+comptime _duckdb_bind_set_bind_data = _dylib_function["duckdb_bind_set_bind_data",
+    fn (duckdb_bind_info, UnsafePointer[NoneType, MutAnyOrigin], duckdb_delete_callback_t) -> NoneType
+]
+
+comptime _duckdb_bind_set_cardinality = _dylib_function["duckdb_bind_set_cardinality",
+    fn (duckdb_bind_info, idx_t, Bool) -> NoneType
+]
+
+comptime _duckdb_bind_set_error = _dylib_function["duckdb_bind_set_error",
+    fn (duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# ===--------------------------------------------------------------------===#
+# Table Function Init
+# ===--------------------------------------------------------------------===#
+
+comptime _duckdb_init_get_extra_info = _dylib_function["duckdb_init_get_extra_info",
+    fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_init_get_bind_data = _dylib_function["duckdb_init_get_bind_data",
+    fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_init_set_init_data = _dylib_function["duckdb_init_set_init_data",
+    fn (duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], duckdb_delete_callback_t) -> NoneType
+]
+
+comptime _duckdb_init_get_column_count = _dylib_function["duckdb_init_get_column_count",
+    fn (duckdb_init_info) -> idx_t
+]
+
+comptime _duckdb_init_get_column_index = _dylib_function["duckdb_init_get_column_index",
+    fn (duckdb_init_info, idx_t) -> idx_t
+]
+
+comptime _duckdb_init_set_max_threads = _dylib_function["duckdb_init_set_max_threads",
+    fn (duckdb_init_info, idx_t) -> NoneType
+]
+
+comptime _duckdb_init_set_error = _dylib_function["duckdb_init_set_error",
+    fn (duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# ===--------------------------------------------------------------------===#
+# Table Function Execution
+# ===--------------------------------------------------------------------===#
+
+comptime _duckdb_function_get_extra_info = _dylib_function["duckdb_function_get_extra_info",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_function_get_bind_data = _dylib_function["duckdb_function_get_bind_data",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_function_get_init_data = _dylib_function["duckdb_function_get_init_data",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_function_get_local_init_data = _dylib_function["duckdb_function_get_local_init_data",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+comptime _duckdb_function_set_error = _dylib_function["duckdb_function_set_error",
+    fn (duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#
