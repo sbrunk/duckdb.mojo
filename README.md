@@ -5,7 +5,7 @@
 duckdb.mojo can be used in two ways:
 
 1. **Client API** — Query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. **Extension development** *(experimental)* — Build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) extensions written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
+2. **Extension development** *(experimental)* — Build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
