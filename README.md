@@ -5,7 +5,7 @@
 duckdb.mojo can be used in two ways:
 
 1. **Client API** — Query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. **Extension development** *(experimental)* — Build DuckDB [C Extension API](https://duckdb.org/docs/extensions/extending_duckdb/c_extensions) extensions written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
+2. **Extension development** *(experimental)* — Build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) extensions written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
@@ -13,11 +13,9 @@ duckdb.mojo can be used in two ways:
   <a href="https://www.youtube.com/watch?v=6huytcgQgk8&t=788"><img src="https://img.youtube.com/vi/6huytcgQgk8/0.jpg" alt="10 minute DuckDB.mojo presentation at the MAX & Mojo community meeting"></a>
 </div>
 
-Status:
-- The [FFI bindings](src/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
-- We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
+## Examples
 
-## Example
+### Client API
 
 ```mojo
 from duckdb import *
@@ -26,16 +24,12 @@ def main():
     var con = DuckDB.connect(":memory:")
 
     _ = con.execute("""
-    SET autoinstall_known_extensions=1;
-    SET autoload_known_extensions=1;
-
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
     """
     )
 
-    var result = con.execute(
-        """
+    var result = con.execute("""
     -- Get the top-3 busiest train stations
     SELECT "Stop:Station name", count(*) AS num_services
     FROM train_services
@@ -48,9 +42,7 @@ def main():
     for col in result.columns():
         print(col)
 
-    print()
-    print("Length: " + String(len(result)))
-    print()
+    print("\nLength:", len(result), "\n")
 
     for row in range(len(result)):
         print(
@@ -59,6 +51,50 @@ def main():
             result.get(bigint, col=1, row=row).value(),
         )
 ```
+
+### Extension
+
+Build DuckDB extensions as shared libraries in Mojo. Write an init function
+that receives a `Connection` and registers your functions, then pass it to
+`Extension.run`:
+
+```mojo
+from duckdb._libduckdb import duckdb_extension_info
+from duckdb.extension import duckdb_extension_access, Extension
+from duckdb.connection import Connection
+from duckdb.scalar_function import ScalarFunction
+
+fn add_numbers(a: Int64, b: Int64) -> Int64:
+    return a + b
+
+fn init(conn: Connection) raises:
+    ScalarFunction.from_function[
+        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
+    ](conn)
+
+@export("my_ext_init_c_api", ABI="C")
+fn my_ext_init_c_api(
+    info: duckdb_extension_info,
+    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+) -> Bool:
+    return Extension.run[init](info, access)
+```
+
+```sh
+mojo build my_ext.mojo --emit shared-lib -o my_ext.duckdb_extension
+```
+
+```sql
+LOAD 'my_ext.duckdb_extension';
+SELECT mojo_add_numbers(40, 2);  -- 42
+```
+
+See the [demo extension](demo-extension/) for a full working example.
+
+## Status
+- The [FFI bindings](src/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
+- We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
+
 
 ## Installation
 

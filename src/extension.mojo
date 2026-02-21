@@ -11,46 +11,30 @@ the DuckDB API to register new functions, types, etc.
 
 To create an extension, you need to:
 1. Write your functions using the existing duckdb.mojo API (ScalarFunction, etc.)
-2. Create an init function that registers them via `ExtensionConnection`
+2. Create an init function that registers them via a `Connection` to the
+   extension's `Database`
 3. Export the entry point using `@export`
 
 Example:
 ```mojo
-from duckdb.extension import (
-    duckdb_extension_access,
-    ExtensionConnection,
-)
-from duckdb._libduckdb import duckdb_extension_info, DuckDBError
-from duckdb import ScalarFunction, DuckDBType
-from duckdb.scalar_function import FunctionInfo
-from duckdb.chunk import Chunk
-from duckdb.vector import Vector
-from duckdb.logical_type import LogicalType
+from duckdb.extension import Extension, duckdb_extension_access
+from duckdb._libduckdb import duckdb_extension_info
+from duckdb import Connection, ScalarFunction
 
-fn add_numbers(info: FunctionInfo, mut input: Chunk, output: Vector):
-    var size = len(input)
-    var a = input.get_vector(0).get_data().bitcast[Int64]()
-    var b = input.get_vector(1).get_data().bitcast[Int64]()
-    var result = output.get_data().bitcast[Int64]()
-    for i in range(size):
-        result[i] = a[i] + b[i]
+fn add_one(x: Int64) -> Int64:
+    return x + 1
+
+fn init(conn: Connection) raises:
+    ScalarFunction.from_function[
+        "add_one", DType.int64, DType.int64, add_one
+    ](conn)
 
 @export("my_extension_init_c_api", ABI="C")
 fn my_extension_init(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access],
 ) -> Bool:
-    var ext_conn = ExtensionConnection(info, access)
-    if not ext_conn:
-        return False
-    var func = ScalarFunction()
-    func.set_name("add_numbers")
-    func.add_parameter(LogicalType(DuckDBType.bigint))
-    func.add_parameter(LogicalType(DuckDBType.bigint))
-    func.set_return_type(LogicalType(DuckDBType.bigint))
-    func.set_function[add_numbers]()
-    ext_conn.register(func)
-    return True
+    return Extension.run[init](info, access)
 ```
 
 Then build with:
@@ -61,17 +45,14 @@ mojo build my_extension.mojo --emit shared-lib -o my_extension.duckdb_extension
 And load in DuckDB:
 ```sql
 LOAD 'my_extension.duckdb_extension';
-SELECT add_numbers(1, 2);
+SELECT add_one(41);  -- Returns 42
 ```
 """
 
 from duckdb._libduckdb import *
 from duckdb.database import Database
-from duckdb.api import DuckDB
 from duckdb.connection import Connection
-from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet
-from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet
-from duckdb.table_function import TableFunction
+from duckdb.api import DuckDB
 
 
 # ===--------------------------------------------------------------------===#
@@ -100,16 +81,15 @@ struct duckdb_extension_access(ImplicitlyCopyable, Movable):
 
 
 # ===--------------------------------------------------------------------===#
-# ExtensionConnection
+# Extension
 # ===--------------------------------------------------------------------===#
 
 
-struct ExtensionConnection(Movable, Boolable):
-    """A connection to a DuckDB database obtained from within an extension.
+struct Extension(Movable):
+    """Access to a DuckDB database from within an extension.
 
-    Wraps a `Connection` internally and delegates all registration methods to it.
-
-    Use this to register functions, types, and other extension functionality.
+    Provides a non-owning `Database` handle and convenience `connect()` method
+    for creating connections and registering functions, types, etc.
 
     Example:
     ```mojo
@@ -118,15 +98,16 @@ struct ExtensionConnection(Movable, Boolable):
         info: duckdb_extension_info,
         access: UnsafePointer[duckdb_extension_access],
     ) -> Bool:
-        var ext_conn = ExtensionConnection(info, access)
-        if not ext_conn:
+        var ext = Extension(info, access)
+        try:
+            var conn = ext.connect()
+            # Register functions via conn ...
+        except:
             return False
-        # Register functions using ext_conn
         return True
     ```
     """
 
-    var _conn: Optional[Connection]
     var _info: duckdb_extension_info
     var _access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]
 
@@ -135,10 +116,7 @@ struct ExtensionConnection(Movable, Boolable):
         info: duckdb_extension_info,
         access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
     ):
-        """Create an extension connection from the DuckDB-provided info and access.
-
-        Gets the database handle from DuckDB and opens a connection to it.
-        If the connection fails, the object will be invalid (bool(self) == False).
+        """Create an Extension from the DuckDB-provided info and access.
 
         Args:
             info: The extension info handle from DuckDB.
@@ -147,87 +125,72 @@ struct ExtensionConnection(Movable, Boolable):
         self._info = info
         self._access = access
 
-        # Get the database handle from DuckDB and open a connection
-        var db_ptr = access[].get_database(info)
-        var db = db_ptr[]
-        try:
-            self._conn = Connection(Database(_handle=db))
-        except e:
-            self._conn = None
-            self._set_error(e._error)
+    fn database(self) -> Database:
+        """Return a non-owning Database handle for this extension's database."""
+        var db_ptr = self._access[].get_database(self._info)
+        return Database(_handle=db_ptr[])
 
-    fn __bool__(self) -> Bool:
-        """Check if the connection is valid."""
-        return self._conn is not None
+    fn connect(self) raises -> Connection:
+        """Create a connection to the extension's database.
 
-    fn _set_error(self, error: String):
+        Example:
+        ```mojo
+        var conn = ext.connect()
+        ```
+        """
+        return Connection(self.database())
+
+    fn set_error(self, error: String):
         """Report an error back to DuckDB."""
         var error_copy = error.copy()
         self._access[].set_error(
             self._info, error_copy.as_c_string_slice().unsafe_ptr()
         )
 
-    fn register(self, func: ScalarFunction):
-        """Register a scalar function with DuckDB.
+    @staticmethod
+    fn run[
+        init_fn: fn (conn: Connection) raises -> None
+    ](
+        info: duckdb_extension_info,
+        access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    ) -> Bool:
+        """Run an extension init function with automatic error handling.
 
-        DuckDB copies the function internally during registration.
+        Creates an `Extension`, connects to the database, calls `init_fn`,
+        and reports any errors back to DuckDB. This eliminates the
+        boilerplate of writing an extension entry point.
 
-        Args:
-            func: The scalar function to register.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_scalar_function(
-            self._conn.value()._conn, func._function
-        )
-
-    fn register(self, func_set: ScalarFunctionSet):
-        """Register a scalar function set with DuckDB.
-
-        DuckDB copies the function set internally during registration.
-
-        Args:
-            func_set: The scalar function set to register.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_scalar_function_set(
-            self._conn.value()._conn, func_set._function_set
-        )
-
-    fn register(self, func: AggregateFunction):
-        """Register an aggregate function with DuckDB.
-
-        DuckDB copies the function internally during registration.
+        Parameters:
+            init_fn: A function that receives a `Connection` and registers
+                extension functionality. Raise on failure.
 
         Args:
-            func: The aggregate function to register.
+            info: The extension info handle from DuckDB.
+            access: Pointer to the extension access struct from DuckDB.
+
+        Returns:
+            True on success, False on failure.
+
+        Example:
+        ```mojo
+        fn init(conn: Connection) raises:
+            ScalarFunction.from_function[
+                "add_one", DType.int64, DType.int64, add_one
+            ](conn)
+
+        @export("my_ext_init_c_api", ABI="C")
+        fn my_ext_init(
+            info: duckdb_extension_info,
+            access: UnsafePointer[duckdb_extension_access],
+        ) -> Bool:
+            return Extension.run[init](info, access)
+        ```
         """
-        ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_aggregate_function(
-            self._conn.value()._conn, func._function
-        )
-
-    fn register(self, func_set: AggregateFunctionSet):
-        """Register an aggregate function set with DuckDB.
-
-        DuckDB copies the function set internally during registration.
-
-        Args:
-            func_set: The aggregate function set to register.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_aggregate_function_set(
-            self._conn.value()._conn, func_set._function_set
-        )
-
-    fn register(self, func: TableFunction):
-        """Register a table function with DuckDB.
-
-        DuckDB copies the function internally during registration.
-
-        Args:
-            func: The table function to register.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_table_function(
-            self._conn.value()._conn, func._function
-        )
+        var ext = Extension(info, access)
+        try:
+            var conn = ext.connect()
+            init_fn(conn)
+        except e:
+            ext.set_error(String(e))
+            return False
+        return True

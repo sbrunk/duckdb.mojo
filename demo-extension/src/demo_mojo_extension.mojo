@@ -18,11 +18,9 @@ Load in DuckDB:
     SELECT mojo_add_numbers(40, 2);  -- Returns 42
 """
 
-from duckdb._libduckdb import (
-    duckdb_extension_info,
-    DuckDBError,
-)
-from duckdb.extension import duckdb_extension_access, ExtensionConnection
+from duckdb._libduckdb import duckdb_extension_info
+from duckdb.extension import duckdb_extension_access, Extension
+from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
 
@@ -41,28 +39,17 @@ fn add_numbers(a: Int64, b: Int64) -> Int64:
 # ===--------------------------------------------------------------------===#
 
 
+fn init(conn: Connection) raises:
+    """Register extension functions."""
+    ScalarFunction.from_function[
+        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
+    ](conn)
+
+
 @export("demo_mojo_init_c_api", ABI="C")
 fn demo_mojo_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) -> Bool:
-    """Entry point called by DuckDB when loading this extension.
-
-    DuckDB calls this function with the extension info and an access struct
-    containing function pointers to interact with the database.
-
-    Returns True on success, False on failure.
-    """
-    # Create a connection to the database
-    var ext_conn = ExtensionConnection(info, access)
-    if not ext_conn:
-        return False
-
-    # Register our functions
-    var func = ScalarFunction.from_function[
-        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
-    ]()
-    ext_conn.register(func)
-
-    # Connection is automatically closed when ext_conn goes out of scope
-    return True
+    """Entry point called by DuckDB when loading this extension."""
+    return Extension.run[init](info, access)

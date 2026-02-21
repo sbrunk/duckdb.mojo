@@ -661,7 +661,7 @@ struct ScalarFunction(Movable):
         so you only need to write the per-row logic.
 
         Returns the configured ScalarFunction without registering it, so it can
-        be registered with either a `Connection` or an `ExtensionConnection`.
+        be registered on any `Connection`.
 
         Parameters:
             name: The SQL function name.
@@ -675,7 +675,7 @@ struct ScalarFunction(Movable):
             return x + 1
 
         var func = ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one]()
-        ext_conn.register(func)  # or conn.register(func)
+        func.register(conn)
         ```
         """
         fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
@@ -747,7 +747,7 @@ struct ScalarFunction(Movable):
             return a + b
 
         var func = ScalarFunction.from_function["my_add", DType.int64, DType.int64, DType.int64, my_add]()
-        ext_conn.register(func)
+        func.register(conn)
         ```
         """
         fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
@@ -825,7 +825,7 @@ struct ScalarFunction(Movable):
             return x + 1
 
         var func = ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one]()
-        ext_conn.register(func)
+        func.register(conn)
         ```
         """
         var sf = ScalarFunction()
@@ -890,7 +890,7 @@ struct ScalarFunction(Movable):
             return a + b
 
         var func = ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add]()
-        ext_conn.register(func)
+        func.register(conn)
         ```
         """
         var sf = ScalarFunction()
@@ -959,7 +959,7 @@ struct ScalarFunction(Movable):
         import math
 
         var func = ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt]()
-        ext_conn.register(func)
+        func.register(conn)
         ```
         """
         var sf = ScalarFunction()
@@ -1018,7 +1018,7 @@ struct ScalarFunction(Movable):
         import math
 
         var func = ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2]()
-        ext_conn.register(func)
+        func.register(conn)
         ```
         """
         var sf = ScalarFunction()

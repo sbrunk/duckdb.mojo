@@ -26,9 +26,7 @@ def main():
     for col in result.columns():
         print(col)
 
-    print()
-    print("Length: " + String(len(result)))
-    print()
+    print("\nLength:", len(result), "\n")
 
     for row in range(len(result)):
         print(

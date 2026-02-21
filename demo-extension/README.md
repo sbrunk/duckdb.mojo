@@ -92,7 +92,7 @@ To create your own Mojo extension for DuckDB:
 
 1. **Copy this directory** as a starting point
 2. **Write your functions** using the duckdb.mojo API (`ScalarFunction`, `AggregateFunction`, `TableFunction`)
-3. **Create your init function** that registers them via `ExtensionConnection`
+3. **Create an init function** that registers them via a `Connection`
 4. **Export the entry point** using `@export("{name}_init_c_api", ABI="C")`
 5. **Build and load** using the pixi tasks or manual steps above
 
@@ -106,11 +106,60 @@ fn my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) -> Bool:
-    var ext_conn = ExtensionConnection(info, access)
-    if not ext_conn:
-        return False
-    # Register functions here...
-    return True
+    ...
 ```
 
 The `{extension_name}` part must match the filename stem of the `.duckdb_extension` file (e.g., `demo_mojo.duckdb_extension` → `demo_mojo_init_c_api`).
+
+### Using `Extension.run` (recommended)
+
+The simplest way to implement the entry point. Write an init function that
+receives a `Connection` and registers your functions, then pass it to
+`Extension.run`:
+
+```mojo
+from duckdb._libduckdb import duckdb_extension_info
+from duckdb.extension import duckdb_extension_access, Extension
+from duckdb.connection import Connection
+from duckdb.scalar_function import ScalarFunction
+
+fn add_numbers(a: Int64, b: Int64) -> Int64:
+    return a + b
+
+fn init(conn: Connection) raises:
+    ScalarFunction.from_function[
+        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
+    ](conn)
+
+@export("my_extension_init_c_api", ABI="C")
+fn my_extension_init_c_api(
+    info: duckdb_extension_info,
+    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+) -> Bool:
+    return Extension.run[init](info, access)
+```
+
+`Extension.run` handles creating the connection and reporting errors back to
+DuckDB automatically. If `init` raises, the error message is forwarded to
+DuckDB via `set_error`.
+
+### Using `Extension` directly
+
+For more control (e.g. to access the `Database` handle or report custom errors),
+create an `Extension` manually:
+
+```mojo
+@export("my_extension_init_c_api", ABI="C")
+fn my_extension_init_c_api(
+    info: duckdb_extension_info,
+    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+) -> Bool:
+    var ext = Extension(info, access)
+    try:
+        var conn = ext.connect()
+        # Register functions via conn ...
+    except e:
+        ext.set_error(String(e))
+        return False
+    return True
+```
