@@ -3829,7 +3829,7 @@ struct LibDuckDB(Movable):
         connection: duckdb_connection,
     ) -> NoneType:
         """
-        Interrupt running query
+        Interrupt running query.
         """
         return self._duckdb_interrupt(connection)
 
@@ -3838,7 +3838,7 @@ struct LibDuckDB(Movable):
         connection: duckdb_connection,
     ) -> duckdb_query_progress_type:
         """
-        Get progress of the running query
+        Get progress of the running query.
         """
         return self._duckdb_query_progress(connection)
 
@@ -3902,8 +3902,8 @@ struct LibDuckDB(Movable):
         self,
     ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
         """
-        Returns the version of the linked DuckDB, with a version postfix for dev versions
-        
+        Returns the version of the linked DuckDB, with a version postfix for dev versions.
+
         Usually used for developing C extensions that must return this for a compatibility check.
         """
         return self._duckdb_library_version()
@@ -3931,10 +3931,10 @@ struct LibDuckDB(Movable):
         """
         Initializes an empty configuration object that can be used to provide start-up options for the DuckDB instance
         through `duckdb_open_ext`.
-        The duckdb_config must be destroyed using 'duckdb_destroy_config'
-        
+        The duckdb_config must be destroyed using 'duckdb_destroy_config'.
+
         This will always succeed unless there is a malloc failure.
-        
+
         Note that `duckdb_destroy_config` should always be called on the resulting config, even if the function returns
         `DuckDBError`.
         """
@@ -3945,7 +3945,7 @@ struct LibDuckDB(Movable):
     ) -> UInt:
         """
         This returns the total amount of configuration options available for usage with `duckdb_get_config_flag`.
-        
+
         This should not be called in a loop as it internally loops over all the options.
         """
         return self._duckdb_config_count()
@@ -3959,7 +3959,7 @@ struct LibDuckDB(Movable):
         """
         Obtains a human-readable name and description of a specific configuration option. This can be used to e.g.
         display configuration options. This will succeed unless `index` is out of range (i.e. `>= duckdb_config_count`).
-        
+
         The result name or description MUST NOT be freed.
         """
         return self._duckdb_get_config_flag(index, out_name, out_description)
@@ -3973,9 +3973,9 @@ struct LibDuckDB(Movable):
         """
         Sets the specified option for the specified configuration. The configuration option is indicated by name.
         To obtain a list of config options, see `duckdb_get_config_flag`.
-        
+
         In the source code, configuration options are defined in `config.cpp`.
-        
+
         This can fail if either the name is invalid, or if the value provided for the option is invalid.
         """
         return self._duckdb_set_config(config, name, option)
@@ -4056,7 +4056,7 @@ struct LibDuckDB(Movable):
         Executes a SQL query within a connection and stores the full (materialized) result in the out_result pointer.
         If the query fails to execute, DuckDBError is returned and the error message can be retrieved by calling
         `duckdb_result_error`.
-        
+
         Note that after running `duckdb_query`, `duckdb_destroy_result` must be called on the result object even if the
         query fails, otherwise the error stored within the result will not be freed correctly.
         """
@@ -4079,7 +4079,7 @@ struct LibDuckDB(Movable):
         """
         Returns the column name of the specified column. The result should not need to be freed; the column names will
         automatically be destroyed when the result is destroyed.
-        
+
         Returns `NULL` if the column is out of range.
         """
         return self._duckdb_column_name(result, col)
@@ -4091,7 +4091,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_type:
         """
         Returns the column type of the specified column.
-        
+
         Returns `DUCKDB_TYPE_INVALID` if the column is out of range.
         """
         return self._duckdb_column_type(result, col)
@@ -4101,7 +4101,7 @@ struct LibDuckDB(Movable):
         result: duckdb_result,
     ) -> duckdb_statement_type:
         """
-        Returns the statement type of the statement that was executed
+        Returns the statement type of the statement that was executed.
 
         NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI.
         We therefore call a workaround function that accepts a pointer instead.
@@ -4115,9 +4115,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Returns the logical column type of the specified column.
-        
+
         The return type of this call should be destroyed with `duckdb_destroy_logical_type`.
-        
+
         Returns `NULL` if the column is out of range.
         """
         return self._duckdb_column_logical_type(result, col)
@@ -4157,13 +4157,13 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[NoneType, MutExternalOrigin]:
         """
         **DEPRECATED**: Prefer using `duckdb_result_get_chunk` instead.
-        
+
         Returns the data of a specific column of a result in columnar format.
-        
+
         The function returns a dense array which contains the result data. The exact type stored in the array depends on the
         corresponding duckdb_type (as provided by `duckdb_column_type`). For the exact type by which the data should be
         accessed, see the comments in [the types section](types) or the `DUCKDB_TYPE` enum.
-        
+
         For example, for a column of type `DUCKDB_TYPE_INTEGER`, rows can be accessed in the following manner:
         ```c
         int32_t *data = (int32_t *) duckdb_column_data(&result, 0);
@@ -4179,11 +4179,11 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[Bool, MutExternalOrigin]:
         """
         **DEPRECATED**: Prefer using `duckdb_result_get_chunk` instead.
-        
+
         Returns the nullmask of a specific column of a result in columnar format. The nullmask indicates for every row
         whether or not the corresponding row is `NULL`. If a row is `NULL`, the values present in the array provided
         by `duckdb_column_data` are undefined.
-        
+
         ```c
         int32_t *data = (int32_t *) duckdb_column_data(&result, 0);
         bool *nullmask = duckdb_nullmask_data(&result, 0);
@@ -4202,7 +4202,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
         """
         Returns the error message contained within the result. The error is only set if `duckdb_query` returns `DuckDBError`.
-        
+
         The result of this function must not be freed. It will be cleaned up when `duckdb_destroy_result` is called.
         """
         return self._duckdb_result_error(result)
@@ -4266,7 +4266,7 @@ struct LibDuckDB(Movable):
         string: duckdb_string_t,
     ) -> UInt32:
         """
-        Get the string length of a string_t
+        Get the string length of a string_t.
         """
         return self._duckdb_string_t_length(string)
 
@@ -4275,7 +4275,7 @@ struct LibDuckDB(Movable):
         string: UnsafePointer[duckdb_string_t, MutAnyOrigin],
     ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
         """
-        Get a pointer to the string data of a string_t
+        Get a pointer to the string data of a string_t.
         """
         return self._duckdb_string_t_data(string)
 
@@ -4336,7 +4336,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_time_tz_struct:
         """
         Decompose a TIME_TZ objects into micros and a timezone offset.
-        
+
         Use `duckdb_from_time` to further decompose the micros into hour, minute, second and microsecond.
         """
         return self._duckdb_from_time_tz(micros)
@@ -4417,7 +4417,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_decimal:
         """
         Converts a double value to a duckdb_decimal object.
-        
+
         If the conversion fails because the double value is too big, or the width/scale are invalid the result will be 0.
         """
         return self._duckdb_double_to_decimal(val, width, scale)
@@ -4444,10 +4444,10 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Create a prepared statement object from a query.
-        
+
         Note that after calling `duckdb_prepare`, the prepared statement should always be destroyed using
         `duckdb_destroy_prepare`, even if the prepare fails.
-        
+
         If the prepare fails, `duckdb_prepare_error` can be called to obtain the reason why the prepare failed.
         """
         return self._duckdb_prepare(connection, query, out_prepared_statement)
@@ -4468,7 +4468,7 @@ struct LibDuckDB(Movable):
         """
         Returns the error message associated with the given prepared statement.
         If the prepared statement has no error message, this returns `nullptr` instead.
-        
+
         The error message should not be freed. It will be de-allocated when `duckdb_destroy_prepare` is called.
         """
         return self._duckdb_prepare_error(prepared_statement)
@@ -4479,7 +4479,7 @@ struct LibDuckDB(Movable):
     ) -> idx_t:
         """
         Returns the number of parameters that can be provided to the given prepared statement.
-        
+
         Returns 0 if the query was not successfully prepared.
         """
         return self._duckdb_nparams(prepared_statement)
@@ -4492,7 +4492,7 @@ struct LibDuckDB(Movable):
         """
         Returns the name used to identify the parameter
         The returned string should be freed using `duckdb_free`.
-        
+
         Returns NULL if the index is out of range for the provided prepared statement.
         """
         return self._duckdb_parameter_name(prepared_statement, index)
@@ -4504,7 +4504,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_type:
         """
         Returns the parameter type for the parameter at the given index.
-        
+
         Returns `DUCKDB_TYPE_INVALID` if the parameter index is out of range or the statement was not successfully prepared.
         """
         return self._duckdb_param_type(prepared_statement, param_idx)
@@ -4516,9 +4516,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Returns the logical type for the parameter at the given index.
-        
+
         Returns `nullptr` if the parameter index is out of range or the statement was not successfully prepared.
-        
+
         The return type of this call should be destroyed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_param_logical_type(prepared_statement, param_idx)
@@ -4537,7 +4537,7 @@ struct LibDuckDB(Movable):
         statement: duckdb_prepared_statement,
     ) -> duckdb_statement_type:
         """
-        Returns the statement type of the statement to be executed
+        Returns the statement type of the statement to be executed.
         """
         return self._duckdb_prepared_statement_type(statement)
 
@@ -4558,7 +4558,7 @@ struct LibDuckDB(Movable):
         """
         Returns the name of the specified column of the result of the prepared_statement.
         The returned string should be freed using `duckdb_free`.
-        
+
         Returns `nullptr` if the column is out of range.
         """
         return self._duckdb_prepared_statement_column_name(prepared_statement, col_idx)
@@ -4570,7 +4570,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Returns the column type of the specified column of the result of the prepared_statement.
-        
+
         Returns `DUCKDB_TYPE_INVALID` if the column is out of range.
         The return type of this call should be destroyed with `duckdb_destroy_logical_type`.
         """
@@ -4583,7 +4583,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_type:
         """
         Returns the column type of the specified column of the result of the prepared_statement.
-        
+
         Returns `DUCKDB_TYPE_INVALID` if the column is out of range.
         """
         return self._duckdb_prepared_statement_column_type(prepared_statement, col_idx)
@@ -4611,7 +4611,7 @@ struct LibDuckDB(Movable):
         name: UnsafePointer[c_char, ImmutAnyOrigin],
     ) -> duckdb_state:
         """
-        Retrieve the index of the parameter for the prepared statement, identified by name
+        Retrieve the index of the parameter for the prepared statement, identified by name.
         """
         return self._duckdb_bind_parameter_index(prepared_statement, param_idx_out, name)
 
@@ -4881,10 +4881,10 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Executes the prepared statement with the given bound parameters, and returns a materialized query result.
-        
+
         This method can be called multiple times for each prepared statement, and the parameters can be modified
         between calls to this function.
-        
+
         Note that the result must be freed with `duckdb_destroy_result`.
         """
         return self._duckdb_execute_prepared(prepared_statement, out_result)
@@ -4904,7 +4904,7 @@ struct LibDuckDB(Movable):
         Extract all statements from a query.
         Note that after calling `duckdb_extract_statements`, the extracted statements should always be destroyed using
         `duckdb_destroy_extracted`, even if no statements were extracted.
-        
+
         If the extract fails, `duckdb_extract_statements_error` can be called to obtain the reason why the extract failed.
         """
         return self._duckdb_extract_statements(connection, query, out_extracted_statements)
@@ -4920,7 +4920,7 @@ struct LibDuckDB(Movable):
         Prepare an extracted statement.
         Note that after calling `duckdb_prepare_extracted_statement`, the prepared statement should always be destroyed using
         `duckdb_destroy_prepare`, even if the prepare fails.
-        
+
         If the prepare fails, `duckdb_prepare_error` can be called to obtain the reason why the prepare failed.
         """
         return self._duckdb_prepare_extracted_statement(connection, extracted_statements, index, out_prepared_statement)
@@ -4958,7 +4958,7 @@ struct LibDuckDB(Movable):
         Executes the prepared statement with the given bound parameters, and returns a pending result.
         The pending result represents an intermediate structure for a query that is not yet fully executed.
         The pending result can be used to incrementally execute a query, returning control to the client between tasks.
-        
+
         Note that after calling `duckdb_pending_prepared`, the pending result should always be destroyed using
         `duckdb_destroy_pending`, even if this function returns DuckDBError.
         """
@@ -4979,7 +4979,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
         """
         Returns the error message contained within the pending result.
-        
+
         The result of this function must not be freed. It will be cleaned up when `duckdb_destroy_pending` is called.
         """
         return self._duckdb_pending_error(pending_result)
@@ -4990,11 +4990,11 @@ struct LibDuckDB(Movable):
     ) -> duckdb_pending_state:
         """
         Executes a single task within the query, returning whether or not the query is ready.
-        
+
         If this returns DUCKDB_PENDING_RESULT_READY, the duckdb_execute_pending function can be called to obtain the result.
         If this returns DUCKDB_PENDING_RESULT_NOT_READY, the duckdb_pending_execute_task function should be called again.
         If this returns DUCKDB_PENDING_ERROR, an error occurred during execution.
-        
+
         The error message can be obtained by calling duckdb_pending_error on the pending_result.
         """
         return self._duckdb_pending_execute_task(pending_result)
@@ -5007,7 +5007,7 @@ struct LibDuckDB(Movable):
         If this returns DUCKDB_PENDING_RESULT_READY, the duckdb_execute_pending function can be called to obtain the result.
         If this returns DUCKDB_PENDING_RESULT_NOT_READY, the duckdb_pending_execute_check_state function should be called again.
         If this returns DUCKDB_PENDING_ERROR, an error occurred during execution.
-        
+
         The error message can be obtained by calling duckdb_pending_error on the pending_result.
         """
         return self._duckdb_pending_execute_check_state(pending_result)
@@ -5019,10 +5019,10 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Fully execute a pending query result, returning the final query result.
-        
+
         If duckdb_pending_execute_task has been called until DUCKDB_PENDING_RESULT_READY was returned, this will return fast.
         Otherwise, all remaining tasks must be executed first.
-        
+
         Note that the result must be freed with `duckdb_destroy_result`.
         """
         return self._duckdb_execute_pending(pending_result, out_result)
@@ -5056,7 +5056,7 @@ struct LibDuckDB(Movable):
         text: UnsafePointer[c_char, ImmutAnyOrigin],
     ) -> duckdb_value:
         """
-        Creates a value from a null-terminated string
+        Creates a value from a null-terminated string.
         """
         return self._duckdb_create_varchar(text)
 
@@ -5066,7 +5066,7 @@ struct LibDuckDB(Movable):
         length: idx_t,
     ) -> duckdb_value:
         """
-        Creates a value from a string
+        Creates a value from a string.
         """
         return self._duckdb_create_varchar_length(text, length)
 
@@ -5075,7 +5075,7 @@ struct LibDuckDB(Movable):
         input_: Bool,
     ) -> duckdb_value:
         """
-        Creates a value from a boolean
+        Creates a value from a boolean.
         """
         return self._duckdb_create_bool(input_)
 
@@ -5084,7 +5084,7 @@ struct LibDuckDB(Movable):
         input_: Int8,
     ) -> duckdb_value:
         """
-        Creates a value from an int8_t (a tinyint)
+        Creates a value from an int8_t (a tinyint).
         """
         return self._duckdb_create_int8(input_)
 
@@ -5093,7 +5093,7 @@ struct LibDuckDB(Movable):
         input_: UInt8,
     ) -> duckdb_value:
         """
-        Creates a value from a uint8_t (a utinyint)
+        Creates a value from a uint8_t (a utinyint).
         """
         return self._duckdb_create_uint8(input_)
 
@@ -5102,7 +5102,7 @@ struct LibDuckDB(Movable):
         input_: Int16,
     ) -> duckdb_value:
         """
-        Creates a value from an int16_t (a smallint)
+        Creates a value from an int16_t (a smallint).
         """
         return self._duckdb_create_int16(input_)
 
@@ -5111,7 +5111,7 @@ struct LibDuckDB(Movable):
         input_: UInt16,
     ) -> duckdb_value:
         """
-        Creates a value from a uint16_t (a usmallint)
+        Creates a value from a uint16_t (a usmallint).
         """
         return self._duckdb_create_uint16(input_)
 
@@ -5120,7 +5120,7 @@ struct LibDuckDB(Movable):
         input_: Int32,
     ) -> duckdb_value:
         """
-        Creates a value from an int32_t (an integer)
+        Creates a value from an int32_t (an integer).
         """
         return self._duckdb_create_int32(input_)
 
@@ -5129,7 +5129,7 @@ struct LibDuckDB(Movable):
         input_: UInt32,
     ) -> duckdb_value:
         """
-        Creates a value from a uint32_t (a uinteger)
+        Creates a value from a uint32_t (a uinteger).
         """
         return self._duckdb_create_uint32(input_)
 
@@ -5138,7 +5138,7 @@ struct LibDuckDB(Movable):
         input_: UInt64,
     ) -> duckdb_value:
         """
-        Creates a value from a uint64_t (a ubigint)
+        Creates a value from a uint64_t (a ubigint).
         """
         return self._duckdb_create_uint64(input_)
 
@@ -5147,7 +5147,7 @@ struct LibDuckDB(Movable):
         val: Int64,
     ) -> duckdb_value:
         """
-        Creates a value from an int64
+        Creates a value from an int64.
         """
         return self._duckdb_create_int64(val)
 
@@ -5156,7 +5156,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_hugeint,
     ) -> duckdb_value:
         """
-        Creates a value from a hugeint
+        Creates a value from a hugeint.
         """
         return self._duckdb_create_hugeint(input_)
 
@@ -5165,7 +5165,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_uhugeint,
     ) -> duckdb_value:
         """
-        Creates a value from a uhugeint
+        Creates a value from a uhugeint.
         """
         return self._duckdb_create_uhugeint(input_)
 
@@ -5174,7 +5174,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_bignum,
     ) -> duckdb_value:
         """
-        Creates a BIGNUM value from a duckdb_bignum
+        Creates a BIGNUM value from a duckdb_bignum.
         """
         return self._duckdb_create_bignum(input_)
 
@@ -5197,7 +5197,7 @@ struct LibDuckDB(Movable):
         input_: Float32,
     ) -> duckdb_value:
         """
-        Creates a value from a float
+        Creates a value from a float.
         """
         return self._duckdb_create_float(input_)
 
@@ -5206,7 +5206,7 @@ struct LibDuckDB(Movable):
         input_: Float64,
     ) -> duckdb_value:
         """
-        Creates a value from a double
+        Creates a value from a double.
         """
         return self._duckdb_create_double(input_)
 
@@ -5215,7 +5215,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_date,
     ) -> duckdb_value:
         """
-        Creates a value from a date
+        Creates a value from a date.
         """
         return self._duckdb_create_date(input_)
 
@@ -5224,7 +5224,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_time,
     ) -> duckdb_value:
         """
-        Creates a value from a time
+        Creates a value from a time.
         """
         return self._duckdb_create_time(input_)
 
@@ -5233,7 +5233,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_time_ns,
     ) -> duckdb_value:
         """
-        Creates a value from a time_ns
+        Creates a value from a time_ns.
         """
         return self._duckdb_create_time_ns(input_)
 
@@ -5252,7 +5252,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_timestamp,
     ) -> duckdb_value:
         """
-        Creates a TIMESTAMP value from a duckdb_timestamp
+        Creates a TIMESTAMP value from a duckdb_timestamp.
         """
         return self._duckdb_create_timestamp(input_)
 
@@ -5261,7 +5261,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_timestamp,
     ) -> duckdb_value:
         """
-        Creates a TIMESTAMP_TZ value from a duckdb_timestamp
+        Creates a TIMESTAMP_TZ value from a duckdb_timestamp.
         """
         return self._duckdb_create_timestamp_tz(input_)
 
@@ -5270,7 +5270,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_timestamp_s,
     ) -> duckdb_value:
         """
-        Creates a TIMESTAMP_S value from a duckdb_timestamp_s
+        Creates a TIMESTAMP_S value from a duckdb_timestamp_s.
         """
         return self._duckdb_create_timestamp_s(input_)
 
@@ -5279,7 +5279,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_timestamp_ms,
     ) -> duckdb_value:
         """
-        Creates a TIMESTAMP_MS value from a duckdb_timestamp_ms
+        Creates a TIMESTAMP_MS value from a duckdb_timestamp_ms.
         """
         return self._duckdb_create_timestamp_ms(input_)
 
@@ -5288,7 +5288,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_timestamp_ns,
     ) -> duckdb_value:
         """
-        Creates a TIMESTAMP_NS value from a duckdb_timestamp_ns
+        Creates a TIMESTAMP_NS value from a duckdb_timestamp_ns.
         """
         return self._duckdb_create_timestamp_ns(input_)
 
@@ -5297,7 +5297,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_interval,
     ) -> duckdb_value:
         """
-        Creates a value from an interval
+        Creates a value from an interval.
         """
         return self._duckdb_create_interval(input_)
 
@@ -5307,7 +5307,7 @@ struct LibDuckDB(Movable):
         length: idx_t,
     ) -> duckdb_value:
         """
-        Creates a value from a blob
+        Creates a value from a blob.
         """
         return self._duckdb_create_blob(data, length)
 
@@ -5316,7 +5316,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_bit,
     ) -> duckdb_value:
         """
-        Creates a BIT value from a duckdb_bit
+        Creates a BIT value from a duckdb_bit.
         """
         return self._duckdb_create_bit(input_)
 
@@ -5325,7 +5325,7 @@ struct LibDuckDB(Movable):
         input_: duckdb_uhugeint,
     ) -> duckdb_value:
         """
-        Creates a UUID value from a uhugeint
+        Creates a UUID value from a uhugeint.
         """
         return self._duckdb_create_uuid(input_)
 
@@ -5784,7 +5784,7 @@ struct LibDuckDB(Movable):
         """
         Creates a `duckdb_logical_type` from a primitive type.
         The resulting logical type must be destroyed with `duckdb_destroy_logical_type`.
-        
+
         Returns an invalid logical type, if type is: `DUCKDB_TYPE_INVALID`, `DUCKDB_TYPE_DECIMAL`, `DUCKDB_TYPE_ENUM`,
         `DUCKDB_TYPE_LIST`, `DUCKDB_TYPE_STRUCT`, `DUCKDB_TYPE_MAP`, `DUCKDB_TYPE_ARRAY`, or `DUCKDB_TYPE_UNION`.
         """
@@ -5949,7 +5949,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[c_char, MutExternalOrigin]:
         """
         Retrieves the dictionary value at the specified position from the enum.
-        
+
         The result must be freed with `duckdb_free`.
         """
         return self._duckdb_enum_dictionary_value(type_, index)
@@ -5970,7 +5970,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the child type of the given ARRAY type.
-        
+
         The result must be freed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_array_type_child_type(type_)
@@ -5990,7 +5990,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the key type of the given map type.
-        
+
         The result must be freed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_map_type_key_type(type_)
@@ -6001,7 +6001,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the value type of the given map type.
-        
+
         The result must be freed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_map_type_value_type(type_)
@@ -6022,7 +6022,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[c_char, MutExternalOrigin]:
         """
         Retrieves the name of the struct child.
-        
+
         The result must be freed with `duckdb_free`.
         """
         return self._duckdb_struct_type_child_name(type_, index)
@@ -6034,7 +6034,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the child type of the given struct type at the specified index.
-        
+
         The result must be freed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_struct_type_child_type(type_, index)
@@ -6055,7 +6055,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[c_char, MutExternalOrigin]:
         """
         Retrieves the name of the union member.
-        
+
         The result must be freed with `duckdb_free`.
         """
         return self._duckdb_union_type_member_name(type_, index)
@@ -6067,7 +6067,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the child type of the given union member at the specified index.
-        
+
         The result must be freed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_union_type_member_type(type_, index)
@@ -6089,7 +6089,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Registers a custom type within the given connection.
-        The type must have an alias
+        The type must have an alias.
         """
         return self._duckdb_register_logical_type(con, type_, info)
 
@@ -6125,7 +6125,7 @@ struct LibDuckDB(Movable):
         """
         Resets a data chunk, clearing the validity masks and setting the cardinality of the data chunk to 0.
         After calling this method, you must call `duckdb_vector_get_validity` and `duckdb_vector_get_data` to obtain current
-        data and validity pointers
+        data and validity pointers.
         """
         return self._duckdb_data_chunk_reset(chunk)
 
@@ -6145,7 +6145,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_vector:
         """
         Retrieves the vector at the specified column index in the data chunk.
-        
+
         The pointer to the vector is valid for as long as the chunk is alive.
         It does NOT need to be destroyed.
         """
@@ -6200,7 +6200,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Retrieves the column type of the specified vector.
-        
+
         The result must be destroyed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_vector_get_column_type(vector)
@@ -6211,7 +6211,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[NoneType, MutExternalOrigin]:
         """
         Retrieves the data pointer of the vector.
-        
+
         The data pointer can be used to read or write values from the vector.
         How to read or write values depends on the type of the vector.
         """
@@ -6223,19 +6223,19 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[UInt64, MutExternalOrigin]:
         """
         Retrieves the validity mask pointer of the specified vector.
-        
+
         If all values are valid, this function MIGHT return NULL!
-        
+
         The validity mask is a bitset that signifies null-ness within the data chunk.
         It is a series of uint64_t values, where each uint64_t value contains validity for 64 tuples.
         The bit is set to 1 if the value is valid (i.e. not NULL) or 0 if the value is invalid (i.e. NULL).
-        
+
         Validity of a specific value can be obtained like this:
-        
+
         idx_t entry_idx = row_idx / 64;
         idx_t idx_in_entry = row_idx % 64;
         bool is_valid = validity_mask[entry_idx] & (1 << idx_in_entry);
-        
+
         Alternatively, the (slower) duckdb_validity_row_is_valid function can be used.
         """
         return self._duckdb_vector_get_validity(vector)
@@ -6246,7 +6246,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Ensures the validity mask is writable by allocating it.
-        
+
         After this function is called, `duckdb_vector_get_validity` will ALWAYS return non-NULL.
         This allows NULL values to be written to the vector, regardless of whether a validity mask was present before.
         """
@@ -6281,7 +6281,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_vector:
         """
         Retrieves the child vector of a list vector.
-        
+
         The resulting vector is valid as long as the parent vector is valid.
         """
         return self._duckdb_list_vector_get_child(vector)
@@ -6312,7 +6312,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Sets the total capacity of the underlying child-vector of a list.
-        
+
         After calling this method, you must call `duckdb_vector_get_validity` and `duckdb_vector_get_data` to obtain current
         data and validity pointers
         """
@@ -6410,7 +6410,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to either valid or invalid.
-        
+
         Note that `duckdb_vector_ensure_validity_writable` should be called before calling `duckdb_vector_get_validity`,
         to ensure that there is a validity mask to write to.
         """
@@ -6423,7 +6423,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to invalid.
-        
+
         Equivalent to `duckdb_validity_set_row_validity` with valid set to false.
         """
         return self._duckdb_validity_set_row_invalid(validity, row)
@@ -6435,7 +6435,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         In a validity mask, sets a specific row to valid.
-        
+
         Equivalent to `duckdb_validity_set_row_validity` with valid set to true.
         """
         return self._duckdb_validity_set_row_valid(validity, row)
@@ -6450,7 +6450,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_scalar_function:
         """
         Creates a new empty scalar function.
-        
+
         The return value must be destroyed with `duckdb_destroy_scalar_function`.
         """
         return self._duckdb_create_scalar_function()
@@ -6595,9 +6595,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Register the scalar function object within the given connection.
-        
+
         The function requires at least a name, a function and a return type.
-        
+
         If the function is incomplete or a function with this name already exists DuckDBError is returned.
         """
         return self._duckdb_register_scalar_function(con, scalar_function)
@@ -6656,7 +6656,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_scalar_function_set:
         """
         Creates a new empty scalar function set.
-        
+
         The return value must be destroyed with `duckdb_destroy_scalar_function_set`.
         """
         return self._duckdb_create_scalar_function_set(name)
@@ -6677,7 +6677,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Adds the scalar function as a new overload to the scalar function set.
-        
+
         Returns DuckDBError if the function could not be added, for example if the overload already exists.
         """
         return self._duckdb_add_scalar_function_to_set(set_, function_)
@@ -6689,9 +6689,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Register the scalar function set within the given connection.
-        
+
         The set requires at least a single valid overload.
-        
+
         If the set is incomplete or a function with this name already exists DuckDBError is returned.
         """
         return self._duckdb_register_scalar_function_set(con, set_)
@@ -6758,7 +6758,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_aggregate_function:
         """
         Creates a new empty aggregate function.
-        
+
         The return value should be destroyed with `duckdb_destroy_aggregate_function`.
         """
         return self._duckdb_create_aggregate_function()
@@ -6822,7 +6822,7 @@ struct LibDuckDB(Movable):
         destroy: fn (UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) -> NoneType,
     ) -> NoneType:
         """
-        Sets the state destructor callback of the aggregate function (optional)
+        Sets the state destructor callback of the aggregate function (optional).
         """
         return self._duckdb_aggregate_function_set_destructor(aggregate_function, destroy)
 
@@ -6833,9 +6833,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Register the aggregate function object within the given connection.
-        
+
         The function requires at least a name, functions and a return type.
-        
+
         If the function is incomplete or a function with this name already exists DuckDBError is returned.
         """
         return self._duckdb_register_aggregate_function(con, aggregate_function)
@@ -6885,7 +6885,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_aggregate_function_set:
         """
         Creates a new empty aggregate function set.
-        
+
         The return value should be destroyed with `duckdb_destroy_aggregate_function_set`.
         """
         return self._duckdb_create_aggregate_function_set(name)
@@ -6906,7 +6906,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Adds the aggregate function as a new overload to the aggregate function set.
-        
+
         Returns DuckDBError if the function could not be added, for example if the overload already exists.
         """
         return self._duckdb_add_aggregate_function_to_set(set_, function_)
@@ -6918,9 +6918,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Register the aggregate function set within the given connection.
-        
+
         The set requires at least a single valid overload.
-        
+
         If the set is incomplete or a function with this name already exists DuckDBError is returned.
         """
         return self._duckdb_register_aggregate_function_set(con, set_)
@@ -6935,7 +6935,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_table_function:
         """
         Creates a new empty table function.
-        
+
         The return value should be destroyed with `duckdb_destroy_table_function`.
         """
         return self._duckdb_create_table_function()
@@ -7038,7 +7038,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Sets whether or not the given table function supports projection pushdown.
-        
+
         If this is set to true, the system will provide a list of all required columns in the `init` stage through
         the `duckdb_init_get_column_count` and `duckdb_init_get_column_index` functions.
         If this is set to false (the default), the system will expect all columns to be projected.
@@ -7052,9 +7052,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Register the table function object within the given connection.
-        
+
         The function requires at least a name, a bind function, an init function and a main function.
-        
+
         If the function is incomplete or a function with this name already exists DuckDBError is returned.
         """
         return self._duckdb_register_table_function(con, function_)
@@ -7110,7 +7110,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_value:
         """
         Retrieves the parameter at the given index.
-        
+
         The result must be destroyed with `duckdb_destroy_value`.
         """
         return self._duckdb_bind_get_parameter(info, index)
@@ -7122,7 +7122,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_value:
         """
         Retrieves a named parameter with the given name.
-        
+
         The result must be destroyed with `duckdb_destroy_value`.
         """
         return self._duckdb_bind_get_named_parameter(info, name)
@@ -7180,7 +7180,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[NoneType, MutExternalOrigin]:
         """
         Gets the bind data set by `duckdb_bind_set_bind_data` during the bind.
-        
+
         Note that the bind data should be considered as read-only.
         For tracking state, use the init data instead.
         """
@@ -7203,7 +7203,7 @@ struct LibDuckDB(Movable):
     ) -> idx_t:
         """
         Returns the number of projected columns.
-        
+
         This function must be used if projection pushdown is enabled to figure out which columns to emit.
         """
         return self._duckdb_init_get_column_count(info)
@@ -7215,7 +7215,7 @@ struct LibDuckDB(Movable):
     ) -> idx_t:
         """
         Returns the column index of the projected column at the specified position.
-        
+
         This function must be used if projection pushdown is enabled to figure out which columns to emit.
         """
         return self._duckdb_init_get_column_index(info, column_index)
@@ -7226,7 +7226,7 @@ struct LibDuckDB(Movable):
         max_threads: idx_t,
     ) -> NoneType:
         """
-        Sets how many threads can process this table function in parallel (default: 1)
+        Sets how many threads can process this table function in parallel (default: 1).
         """
         return self._duckdb_init_set_max_threads(info, max_threads)
 
@@ -7260,7 +7260,7 @@ struct LibDuckDB(Movable):
     ) -> UnsafePointer[NoneType, MutExternalOrigin]:
         """
         Gets the table function's bind data set by `duckdb_bind_set_bind_data`.
-        
+
         Note that the bind data is read-only.
         For tracking state, use the init data instead.
         """
@@ -7411,7 +7411,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Creates an appender object.
-        
+
         Note that the object must be destroyed with `duckdb_appender_destroy`.
         """
         return self._duckdb_appender_create(connection, schema, table, out_appender)
@@ -7426,7 +7426,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Creates an appender object.
-        
+
         Note that the object must be destroyed with `duckdb_appender_destroy`.
         """
         return self._duckdb_appender_create_ext(connection, catalog, schema, table, out_appender)
@@ -7443,7 +7443,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Creates an appender object that executes the given query with any data appended to it.
-        
+
         Note that the object must be destroyed with `duckdb_appender_destroy`.
         """
         return self._duckdb_appender_create_query(connection, query, column_count, types, table_name, column_names, out_appender)
@@ -7465,7 +7465,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_logical_type:
         """
         Returns the type of the column at the specified index. This is either a type in the active column list, or the same type as a column in the receiving table.
-        
+
         Note: The resulting type must be destroyed with `duckdb_destroy_logical_type`.
         """
         return self._duckdb_appender_column_type(appender, col_idx)
@@ -7524,7 +7524,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Appends a column to the active column list of the appender. Immediately flushes all previous data.
-        
+
         The active column list specifies all columns that are expected when flushing the data. Any non-active columns are filled with their default values, or NULL.
         """
         return self._duckdb_appender_add_column(appender, name)
@@ -7896,7 +7896,7 @@ struct LibDuckDB(Movable):
         out_schema: UnsafePointer[NoneType, MutAnyOrigin],
     ) -> duckdb_error_data:
         """
-        Transforms a DuckDB Schema into an Arrow Schema
+        Transforms a DuckDB Schema into an Arrow Schema.
         """
         return self._duckdb_to_arrow_schema(arrow_options, types, names, column_count, out_schema)
 
@@ -7955,7 +7955,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Execute DuckDB tasks on this thread.
-        
+
         Will return after `max_tasks` have been executed, or if there are no more tasks present.
         """
         return self._duckdb_execute_tasks(database, max_tasks)
@@ -7967,7 +7967,7 @@ struct LibDuckDB(Movable):
         """
         Creates a task state that can be used with duckdb_execute_tasks_state to execute tasks until
         `duckdb_finish_execution` is called on the state.
-        
+
         `duckdb_destroy_state` must be called on the result.
         """
         return self._duckdb_create_task_state(database)
@@ -7978,7 +7978,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Execute DuckDB tasks on this thread.
-        
+
         The thread will keep on executing tasks forever, until duckdb_finish_execution is called on the state.
         Multiple threads can share the same duckdb_task_state.
         """
@@ -7991,10 +7991,10 @@ struct LibDuckDB(Movable):
     ) -> idx_t:
         """
         Execute DuckDB tasks on this thread.
-        
+
         The thread will keep on executing tasks until either duckdb_finish_execution is called on the state,
         max_tasks tasks have been executed or there are no more tasks to be executed.
-        
+
         Multiple threads can share the same duckdb_task_state.
         """
         return self._duckdb_execute_n_tasks_state(state, max_tasks)
@@ -8013,7 +8013,7 @@ struct LibDuckDB(Movable):
         state: duckdb_task_state,
     ) -> Bool:
         """
-        Check if the provided duckdb_task_state has finished execution
+        Check if the provided duckdb_task_state has finished execution.
         """
         return self._duckdb_task_state_is_finished(state)
 
@@ -8023,7 +8023,7 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Destroys the task state returned from duckdb_create_task_state.
-        
+
         Note that this should not be called while there is an active duckdb_execute_tasks_state running
         on the task state.
         """
@@ -8049,9 +8049,9 @@ struct LibDuckDB(Movable):
     ) -> duckdb_data_chunk:
         """
         Fetches a data chunk from a duckdb_result. This function should be called repeatedly until the result is exhausted.
-        
+
         The result must be destroyed with `duckdb_destroy_data_chunk`.
-        
+
         It is not known beforehand how many chunks will be returned by this result.
 
         NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI.
@@ -8245,7 +8245,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_hugeint:
         """
         Converts a double value to a duckdb_hugeint object.
-        
+
         If the conversion fails because the double value is too big the result will be 0.
         """
         return self._duckdb_double_to_hugeint(val)
@@ -8260,7 +8260,7 @@ struct LibDuckDB(Movable):
         result: duckdb_result,
     ) -> duckdb_result_type:
         """
-        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error
+        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error.
         """
         return self._duckdb_result_return_type(result)
 
@@ -8284,7 +8284,7 @@ struct LibDuckDB(Movable):
     ) -> duckdb_uhugeint:
         """
         Converts a double value to a duckdb_uhugeint object.
-        
+
         If the conversion fails because the double value is too big the result will be 0.
         """
         return self._duckdb_double_to_uhugeint(val)

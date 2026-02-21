@@ -504,6 +504,31 @@ def mojo_method_signature(entry: dict, *, use_ptr_helper: bool = False) -> str:
     return sig
 
 
+def _ensure_period(line: str) -> str:
+    """Ensure a line ends with a period."""
+    stripped = line.rstrip()
+    if stripped and not stripped.endswith("."):
+        return stripped + "."
+    return stripped
+
+
+def _ensure_summary_period(desc_lines: list[str]) -> list[str]:
+    """Ensure the docstring summary paragraph ends with a period.
+
+    Mojo checks the last line of the first paragraph (before the first blank
+    line) for a trailing period.  We find that line and append '.' if needed.
+    """
+    # Find end of summary paragraph (first blank line, or end)
+    summary_end = len(desc_lines)
+    for i, line in enumerate(desc_lines):
+        if not line.strip():
+            summary_end = i
+            break
+    if summary_end > 0:
+        desc_lines[summary_end - 1] = _ensure_period(desc_lines[summary_end - 1])
+    return desc_lines
+
+
 def mojo_method_body(entry: dict, *, use_ptr_helper: bool = False) -> str:
     """Build the body of a LibDuckDB method: docstring + return self._name(args)."""
     name = entry["name"]
@@ -515,9 +540,11 @@ def mojo_method_body(entry: dict, *, use_ptr_helper: bool = False) -> str:
     # Docstring
     desc = comment.get("description", "").strip()
     if desc:
+        desc_lines = _ensure_summary_period(desc.split("\n"))
         lines.append('        """')
-        for line in desc.split("\n"):
-            lines.append(f"        {line.rstrip()}")
+        for line in desc_lines:
+            stripped = line.rstrip()
+            lines.append(f"        {stripped}" if stripped else "")
         lines.append('        """')
 
     # Call
@@ -1388,9 +1415,11 @@ def _generate_normal_method(entry: dict) -> str:
     # Docstring
     desc = comment.get("description", "").strip()
     if desc:
+        desc_lines = _ensure_summary_period(desc.split("\n"))
         lines.append('        """')
-        for line in desc.split("\n"):
-            lines.append(f"        {line.rstrip()}")
+        for line in desc_lines:
+            stripped = line.rstrip()
+            lines.append(f"        {stripped}" if stripped else "")
         lines.append('        """')
 
     # Call body
@@ -1433,9 +1462,11 @@ def _generate_byval_workaround_method(entry: dict, workaround_name: str) -> str:
     # Docstring
     desc = comment.get("description", "").strip()
     if desc:
+        desc_lines = _ensure_summary_period(desc.split("\n"))
         lines.append('        """')
-        for line in desc.split("\n"):
-            lines.append(f"        {line.rstrip()}")
+        for line in desc_lines:
+            stripped = line.rstrip()
+            lines.append(f"        {stripped}" if stripped else "")
         lines.append("")
         lines.append("        NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI.")
         lines.append("        We therefore call a workaround function that accepts a pointer instead.")

@@ -1,12 +1,13 @@
 from duckdb._libduckdb import *
 from duckdb.logical_type import *
 from duckdb.duckdb_wrapper import *
+from duckdb.api_level import ApiLevel
 from collections import Optional
 
 from sys.intrinsics import _type_is_eq
 
 
-struct Vector[is_owned: Bool, origin: ImmutOrigin]:
+struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLevel.CLIENT]:
     """A wrapper around a DuckDB vector.
     
     Vectors can be borrowed from a Chunk or owned standalone. Ownership is tracked
@@ -18,9 +19,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
     - For standalone vectors: ImmutExternalOrigin (no dependency)
     - For vectors from chunks: origin_of(chunk) (extends chunk's lifetime)
     
+    The ``api_level`` parameter gates access to unstable C API functions at
+    compile time.  The default (``CLIENT``) gives full access.
+
     Parameters:
         is_owned: Whether this Vector owns its pointer and should destroy it.
         origin: The origin tracking lifetime dependencies.
+        api_level: API surface available.  Defaults to ``ApiLevel.CLIENT``.
     """
     var _vector: duckdb_vector
 
@@ -41,10 +46,17 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         This creates a `Vector` that owns the underlying duckdb_vector
         and will destroy it when it goes out of scope.
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         Args:
             type: The logical type of the vector.
             capacity: The capacity of the vector.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "standalone Vector creation requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
 
@@ -52,6 +64,10 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         """Destroys standalone owned vectors."""
         @parameter
         if Self.is_owned:
+            constrained[
+                Self.api_level.includes_unstable(),
+                "destroying an owned Vector requires the unstable API or client mode",
+            ]()
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
@@ -198,9 +214,16 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         The length of the selection vector must be less than or equal to the length of the vector.
         Turns the vector into a dictionary vector.
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         * sel: The selection vector.
         * len: The length of the selection vector.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "Vector.slice requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_slice_vector(self._vector, sel, len)
 
@@ -214,6 +237,9 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
     ) -> NoneType:
         """Copy this vector to the dst with a selection vector that identifies which indices to copy.
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         * dst: The vector to copy to.
         * sel: The selection vector. The length of the selection vector should not be more than the length of the src vector
         * src_count: The number of entries from selection vector to copy. Think of this as the effective length of the
@@ -222,22 +248,40 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin]:
         src_count - src_offset).
         * dst_offset: The offset in the dst vector to start copying to.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "Vector.copy_sel requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_copy_sel(self._vector, dst._vector, sel, src_count, src_offset, dst_offset)
 
     fn reference_value(self, value: duckdb_value) -> NoneType:
         """Copies the value from `value` to this vector.
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         * value: The value to copy into the vector.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "Vector.reference_value requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_value(self._vector, value)
 
     fn reference_vector(self, from_vector: Vector[_]) -> NoneType:
         """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         * from_vector: The vector to reference.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "Vector.reference_vector requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 

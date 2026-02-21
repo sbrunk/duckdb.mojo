@@ -478,7 +478,7 @@ struct AggregateFunction(Movable):
             self._function, raw_destroy
         )
 
-    fn register(self, conn: Connection) raises:
+    fn register(self, conn: Connection[_]) raises:
         """Registers the aggregate function within the given connection.
 
         The function requires at least a name, a return type,
@@ -513,7 +513,7 @@ struct AggregateFunction(Movable):
             SIMD[D, width], SIMD[D, width]
         ) -> SIMD[D, width],
         init_fn: fn () -> Scalar[D],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a unary aggregate from a SIMD reduction function.
 
         Auto-generates all aggregate callbacks (state_size, init, update,
@@ -618,7 +618,7 @@ struct AggregateFunction(Movable):
             SIMD[Out, width], SIMD[Out, width]
         ) -> SIMD[Out, width],
         init_fn: fn () -> Scalar[Out],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a unary aggregate with separate input/output types.
 
         Input values are cast to ``Out`` before accumulation.  The reduce
@@ -718,7 +718,7 @@ struct AggregateFunction(Movable):
             SIMD[dtype, width], SIMD[dtype, width]
         ) -> SIMD[dtype, width],
         init_fn: fn () -> Scalar[D],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a unary aggregate from a stdlib-compatible function.
 
         Accepts functions with the standard library signature
@@ -812,7 +812,7 @@ struct AggregateFunction(Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_sum[name: StringLiteral, D: DType](conn: Connection) raises:
+    fn from_sum[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a SUM aggregate.
 
         Computes the sum of all non-NULL input values.  Returns NULL for
@@ -838,7 +838,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _add, _zero](conn)
 
     @staticmethod
-    fn from_product[name: StringLiteral, D: DType](conn: Connection) raises:
+    fn from_product[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a PRODUCT aggregate.
 
         Computes the product of all non-NULL input values.  Returns NULL for
@@ -863,7 +863,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _mul, _one](conn)
 
     @staticmethod
-    fn from_max[name: StringLiteral, D: DType](conn: Connection) raises:
+    fn from_max[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MAX aggregate.
 
         Returns the maximum non-NULL input value, or NULL for empty groups.
@@ -887,7 +887,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _max, _init](conn)
 
     @staticmethod
-    fn from_min[name: StringLiteral, D: DType](conn: Connection) raises:
+    fn from_min[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MIN aggregate.
 
         Returns the minimum non-NULL input value, or NULL for empty groups.
@@ -911,7 +911,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _min, _init](conn)
 
     @staticmethod
-    fn from_mean[name: StringLiteral, D: DType](conn: Connection) raises:
+    fn from_mean[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MEAN (average) aggregate.
 
         Computes the arithmetic mean of all non-NULL input values.
@@ -1070,7 +1070,7 @@ struct AggregateFunctionSet(Movable):
                 "Failed to add function to set - overload may already exist"
             )
 
-    fn register(self, conn: Connection) raises:
+    fn register(self, conn: Connection[_]) raises:
         """Registers the aggregate function set within the given connection.
 
         The set requires at least one valid overload.

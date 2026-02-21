@@ -103,7 +103,7 @@ def test_extension_load_idempotent():
 
 
 def test_get_api_invalid_version_returns_null():
-    """get_api with an unsupported version prevents extension from loading."""
+    """Calling get_api with an unsupported version prevents extension from loading."""
     var db = _open_unsigned()
     var conn = Connection(db^)
     try:

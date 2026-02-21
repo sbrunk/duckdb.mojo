@@ -1,5 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
+from duckdb.api_level import ApiLevel
 from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
@@ -87,12 +88,19 @@ struct FunctionInfo:
         )
 
 
-struct ScalarFunction(Movable):
+struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     """A scalar function that can be registered in DuckDB.
 
     Functions are written using high-level Mojo types (FunctionInfo, Chunk, Vector)
     which provide better ergonomics and type safety. The API automatically handles
     conversion from low-level FFI types.
+
+    The ``api_level`` parameter gates access to unstable C API methods
+    (e.g. ``set_bind``) at compile time.  The default (``CLIENT``) allows
+    everything; pass ``EXT_STABLE`` to forbid unstable calls.
+
+    Parameters:
+        api_level: API surface available.  Defaults to ``ApiLevel.CLIENT``.
     
     Example:
     ```mojo
@@ -223,8 +231,15 @@ struct ScalarFunction(Movable):
         - Set the return type dynamically
         - Store bind data for use during execution
 
+        **Requires unstable API** — blocked at compile time for
+        ``ApiLevel.EXT_STABLE`` extensions.
+
         * bind: The bind function callback.
         """
+        constrained[
+            Self.api_level.includes_unstable(),
+            "ScalarFunction.set_bind requires the unstable API or client mode",
+        ]()
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
@@ -475,7 +490,7 @@ struct ScalarFunction(Movable):
 
         self.set_function[wrapper]()
 
-    fn register(self, conn: Connection) raises:
+    fn register(self, conn: Connection[_]) raises:
         """Registers the scalar function within the given connection.
 
         The function requires at least a name, a function, and a return type.
@@ -498,7 +513,7 @@ struct ScalarFunction(Movable):
         name: StringLiteral,
         func: fn (FunctionInfo, mut Chunk, Vector) -> None,
         Out: DType,
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a zero-parameter scalar function.
 
         Eliminates boilerplate by deriving DuckDB types from Mojo `DType` parameters.
@@ -536,7 +551,7 @@ struct ScalarFunction(Movable):
         func: fn (FunctionInfo, mut Chunk, Vector) -> None,
         In1: DType,
         Out: DType,
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a unary scalar function.
 
         Deriving DuckDB types from Mojo `DType` parameters.
@@ -579,7 +594,7 @@ struct ScalarFunction(Movable):
         In1: DType,
         In2: DType,
         Out: DType,
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a binary scalar function.
 
         Parameters:
@@ -624,7 +639,7 @@ struct ScalarFunction(Movable):
         In2: DType,
         In3: DType,
         Out: DType,
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a ternary scalar function.
 
         Parameters:
@@ -698,7 +713,7 @@ struct ScalarFunction(Movable):
         In1: DType,
         Out: DType,
         func: fn (Scalar[In1]) -> Scalar[Out],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a scalar function from a simple row-at-a-time function.
 
         Parameters:
@@ -773,7 +788,7 @@ struct ScalarFunction(Movable):
         In2: DType,
         Out: DType,
         func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a simple row-at-a-time function.
 
         Parameters:
@@ -841,7 +856,7 @@ struct ScalarFunction(Movable):
         In1: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a scalar function from a SIMD-vectorized function.
 
         Parameters:
@@ -908,7 +923,7 @@ struct ScalarFunction(Movable):
         In2: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a SIMD-vectorized function.
 
         Parameters:
@@ -974,7 +989,7 @@ struct ScalarFunction(Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a unary scalar function from a stdlib math function.
 
         Parameters:
@@ -1034,7 +1049,7 @@ struct ScalarFunction(Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
-    ](conn: Connection) raises:
+    ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a stdlib math function.
 
         Parameters:
@@ -1246,7 +1261,7 @@ struct ScalarFunctionSet(Movable):
         if status != DuckDBSuccess:
             raise Error("Failed to add function to set - overload may already exist")
 
-    fn register(self, conn: Connection) raises:
+    fn register(self, conn: Connection[_]) raises:
         """Registers the scalar function set within the given connection.
 
         The set requires at least one valid overload.
