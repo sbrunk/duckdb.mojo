@@ -40,7 +40,12 @@ generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckd
 # Demo extension
 build-demo-extension = { cmd = "mojo build demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py demo-extension/build/demo_mojo.duckdb_extension", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
-test = {depends-on = ["test-library", "test-demo-extension"]}
+
+# Test extension
+build-test-extension = { cmd = "mkdir -p test-extension/build && mojo build test-extension/src/test_mojo_extension.mojo --emit shared-lib -o test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo.duckdb_extension && mojo build test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/bad_api.duckdb_extension", depends-on = ["build"] }
+test-extension = { cmd = "mojo run test-extension/test_extension.mojo", depends-on = ["build-test-extension"] }
+
+test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
 # for local development
 [dependencies]

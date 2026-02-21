@@ -54,6 +54,17 @@ from duckdb.database import Database
 from duckdb.connection import Connection
 from duckdb.api import DuckDB
 
+# ===--------------------------------------------------------------------===#
+# Extension API version
+# ===--------------------------------------------------------------------===#
+
+comptime EXTENSION_API_VERSION = "v1.2.0"
+"""The C Extension API version this library targets.
+
+This corresponds to `DUCKDB_EXTENSION_API_VERSION_STRING` in duckdb_extension.h.
+When calling `get_api`, pass this version to request the stable v1.2.0 API.
+"""
+
 
 # ===--------------------------------------------------------------------===#
 # Extension C API types
@@ -147,6 +158,38 @@ struct Extension(Movable):
             self._info, error_copy.as_c_string_slice().unsafe_ptr()
         )
 
+    fn get_api(
+        self, version: String = EXTENSION_API_VERSION
+    ) -> UnsafePointer[NoneType, ImmutExternalOrigin]:
+        """Request the DuckDB C API function pointer struct.
+
+        Calls the `get_api` function pointer provided by DuckDB to retrieve the
+        versioned `duckdb_ext_api_v1` struct. DuckDB validates that the
+        requested version is compatible; if not, it returns a null pointer and
+        sets an internal error.
+
+        Args:
+            version: The semver API version string to request (e.g. "v1.2.0").
+                Defaults to `EXTENSION_API_VERSION`.
+
+        Returns:
+            An opaque pointer to the `duckdb_ext_api_v1` struct, or a null
+            pointer if the requested version is not supported.
+
+        Example:
+        ```mojo
+        var ext = Extension(info, access)
+        var api = ext.get_api()
+        if not api:
+            ext.set_error("Unsupported API version")
+            return False
+        ```
+        """
+        var version_copy = version.copy()
+        return self._access[].get_api(
+            self._info, version_copy.as_c_string_slice().unsafe_ptr()
+        )
+
     @staticmethod
     fn run[
         init_fn: fn (conn: Connection) raises -> None
@@ -187,6 +230,13 @@ struct Extension(Movable):
         ```
         """
         var ext = Extension(info, access)
+        if not ext.get_api():
+            ext.set_error(
+                "Incompatible DuckDB C API version (requested "
+                + EXTENSION_API_VERSION
+                + ")"
+            )
+            return False
         try:
             var conn = ext.connect()
             init_fn(conn)
