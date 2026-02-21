@@ -21,11 +21,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from packaging.version import Version
+
 # ---------------------------------------------------------------------------
 # Paths relative to the DuckDB source tree
 # ---------------------------------------------------------------------------
 CAPI_FUNCTION_DEFINITION_FILES = "src/include/duckdb/main/capi/header_generation/functions/**/*.json"
 BASE_HEADER_TEMPLATE = "src/include/duckdb/main/capi/header_generation/header_base.hpp.template"
+
+# Extension API version definitions (stable + unstable)
+EXT_API_DEFINITION_PATTERN = "src/include/duckdb/main/capi/header_generation/apis/v1/*/*.json"
+EXT_API_EXCLUSION_FILE = "src/include/duckdb/main/capi/header_generation/apis/v1/exclusion_list.json"
 
 # Output file (relative to the workspace root)
 OUTPUT_FILE = "src/libduckdb.mojo"
@@ -376,6 +382,40 @@ def parse_capi_function_definitions(duckdb_dir: str):
     return ordered, function_map
 
 
+def parse_ext_api_definitions(duckdb_dir: str):
+    """Parse the extension API version JSON files.
+
+    Returns a list of version dicts, in order: stable versions sorted by
+    semver, then unstable versions sorted alphabetically — matching the
+    ordering used by DuckDB's ``generate_c_api.py``.
+
+    Each dict has keys ``version`` (str) and ``entries`` (list[str] of
+    function names).
+    """
+    pattern = os.path.join(duckdb_dir, EXT_API_DEFINITION_PATTERN)
+    api_definitions: dict[str, dict] = {}
+    stable_versions: list[str] = []
+    unstable_versions: list[str] = []
+
+    for fpath in glob.glob(pattern):
+        # Skip the exclusion list file.
+        if fpath.endswith("exclusion_list.json"):
+            continue
+        with open(fpath, "r") as f:
+            obj = json.load(f)
+        ver = obj["version"]
+        api_definitions[ver] = obj
+        if ver.startswith("unstable_"):
+            unstable_versions.append(ver)
+        else:
+            stable_versions.append(ver)
+
+    stable_versions.sort(key=Version)
+    unstable_versions.sort()
+
+    return [api_definitions[v] for v in (stable_versions + unstable_versions)]
+
+
 # ---------------------------------------------------------------------------
 # Deprecation helpers
 # ---------------------------------------------------------------------------
@@ -525,19 +565,20 @@ def headline_capitalize(s: str) -> str:
 # We need to know this so we can generate compatible code.
 # ---------------------------------------------------------------------------
 
-# Functions that take duckdb_result by value and need a ptr helper wrapper
-# (loaded from the helper library via _dylib_helpers_function).
-HELPER_WRAPPER_FUNCTIONS = {
-    "duckdb_result_statement_type": "duckdb_result_statement_type_ptr",
-    "duckdb_fetch_chunk": "duckdb_fetch_chunk_ptr",
+# Functions that take duckdb_result by value and need a ptr helper wrapper.
+# These workarounds are loaded from libduckdb_mojo_helpers.
+# The original functions are ALSO kept in LibDuckDB (for ext API compatibility).
+BYVAL_WORKAROUND_FUNCTIONS = {
+    "duckdb_result_statement_type": "workaround_result_statement_type_ptr",
+    "duckdb_fetch_chunk": "workaround_fetch_chunk_ptr",
 }
 
-# Functions that are replaced by Mojo helper library functions.
-# The original C functions take/return duckdb_decimal by value, which doesn't
-# work across the Mojo FFI. The helpers accept/return via pointer.
-DECIMAL_HELPER_FUNCTIONS = {
-    "duckdb_create_decimal",
-    "duckdb_get_decimal",
+# Functions that take/return duckdb_decimal by value, which doesn't work
+# across the Mojo FFI. Workarounds accept/return via pointer.
+# The original functions are ALSO kept in LibDuckDB (for ext API compatibility).
+DECIMAL_WORKAROUND_FUNCTIONS = {
+    "duckdb_create_decimal": "workaround_create_decimal_ptr",
+    "duckdb_get_decimal": "workaround_get_decimal_ptr",
 }
 
 # ---------------------------------------------------------------------------
@@ -547,6 +588,21 @@ DECIMAL_HELPER_FUNCTIONS = {
 def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
     """Generate the complete libduckdb.mojo content."""
     groups, function_map = parse_capi_function_definitions(duckdb_dir)
+
+    # Parse extension API version definitions
+    ext_api_definitions = parse_ext_api_definitions(duckdb_dir)
+
+    # Build function_name → version map for version tags
+    ext_api_version_map: dict[str, str] = {}
+    for api_ver in ext_api_definitions:
+        for fn_name in api_ver["entries"]:
+            ext_api_version_map[fn_name] = api_ver["version"]
+
+    # Build stable function names list (non-unstable versions)
+    stable_fn_names: set[str] = set()
+    for api_ver in ext_api_definitions:
+        if not api_ver["version"].startswith("unstable_"):
+            stable_fn_names.update(api_ver["entries"])
 
     # Collect non-deprecated functions we want to generate
     all_entries: list[dict] = []
@@ -575,16 +631,20 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
     out.append(_generate_types(duckdb_dir))
     out.append("")
 
+    # ---- Extension API structs (duckdb_ext_api_v1, duckdb_ext_api_v1_unstable) ----
+    out.append(_generate_ext_api_structs(ext_api_definitions, function_map))
+    out.append("")
+
     # ---- Library Load ----
     out.append(_generate_library_load())
     out.append("")
 
     # ---- LibDuckDB struct ----
-    out.append(_generate_libduckdb_struct(grouped_entries))
+    out.append(_generate_libduckdb_struct(grouped_entries, stable_fn_names))
     out.append("")
 
     # ---- comptime _dylib_function declarations ----
-    out.append(_generate_dylib_declarations(grouped_entries))
+    out.append(_generate_dylib_declarations(grouped_entries, ext_api_version_map))
 
     return "\n".join(out)
 
@@ -1169,8 +1229,16 @@ struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](Tr
         return _get_dylib_helpers_function[Self.fn_name, Self.type]()"""
 
 
-def _generate_libduckdb_struct(grouped_entries: list[tuple[str, str, list[dict]]]) -> str:
-    """Generate the LibDuckDB struct with vars, __init__, __moveinit__, and methods."""
+def _generate_libduckdb_struct(
+    grouped_entries: list[tuple[str, str, list[dict]]],
+    stable_fn_names: set[str],
+) -> str:
+    """Generate the LibDuckDB struct with vars, __init__ (2 variants), __moveinit__, and methods.
+    
+    Parameters:
+        grouped_entries: All function groups
+        stable_fn_names: Function names in the stable duckdb_ext_api_v1 struct
+    """
     lines: list[str] = []
 
     # Collect all function names for the struct
@@ -1179,42 +1247,82 @@ def _generate_libduckdb_struct(grouped_entries: list[tuple[str, str, list[dict]]
         for entry in entries:
             all_fn_names.append(entry["name"])
 
-    # Mojo helper function names (loaded from the helper library)
-    MOJO_HELPER_FN_NAMES = sorted(["duckdb_mojo_get_decimal", "duckdb_mojo_create_decimal"])
+    # Collect workaround function names
+    workaround_fn_names = (
+        list(BYVAL_WORKAROUND_FUNCTIONS.values()) +
+        list(DECIMAL_WORKAROUND_FUNCTIONS.values())
+    )
 
     lines.append("struct LibDuckDB(Movable):")
     lines.append("")
 
     # ---- var declarations ----
+    # Include ALL original functions (for ext API compatibility)
     for name in all_fn_names:
-        if name in DECIMAL_HELPER_FUNCTIONS:
-            # Skipped: replaced by Mojo helper functions
-            continue
-        if name in HELPER_WRAPPER_FUNCTIONS:
-            # For by-value result functions, we use the helper wrapper
-            helper_name = HELPER_WRAPPER_FUNCTIONS[name]
-            lines.append(f"    var _{helper_name}: _{helper_name}.fn_type")
-        else:
-            lines.append(f"    var _{name}: _{name}.fn_type")
-
-    # Add Mojo helper vars
-    for name in MOJO_HELPER_FN_NAMES:
         lines.append(f"    var _{name}: _{name}.fn_type")
+
+    # Add workaround function vars (loaded from C shim library)
+    lines.append("")
+    lines.append("    # Workaround functions for Mojo FFI byval struct issues (from libduckdb_mojo_helpers)")
+    for workaround_name in sorted(workaround_fn_names):
+        lines.append(f"    var _{workaround_name}: _{workaround_name}.fn_type")
     lines.append("")
 
-    # ---- __init__ ----
+    # ---- __init__ (dlopen/dlsym based) ----
     lines.append("    fn __init__(out self):")
+    lines.append("        \"\"\"Initialize LibDuckDB by loading functions via dlopen/dlsym.")
+    lines.append("")
+    lines.append("        This constructor is used in standalone mode (not as an extension).\"\"\"")
     lines.append("        try:")
     for name in all_fn_names:
-        if name in DECIMAL_HELPER_FUNCTIONS:
-            continue
-        if name in HELPER_WRAPPER_FUNCTIONS:
-            helper_name = HELPER_WRAPPER_FUNCTIONS[name]
-            lines.append(f"            self._{helper_name} = _{helper_name}.load()")
-        else:
-            lines.append(f"            self._{name} = _{name}.load()")
-    for name in MOJO_HELPER_FN_NAMES:
         lines.append(f"            self._{name} = _{name}.load()")
+    lines.append("            # Load workaround functions from C shim library")
+    for workaround_name in sorted(workaround_fn_names):
+        lines.append(f"            self._{workaround_name} = _{workaround_name}.load()")
+    lines.append("        except e:")
+    lines.append("            abort(String(e))")
+    lines.append("")
+
+    # ---- __init__ (from stable ext API struct) ----
+    lines.append("    fn __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]):")
+    lines.append("        \"\"\"Initialize LibDuckDB from a stable DuckDB extension API struct pointer.")
+    lines.append("")
+    lines.append("        This constructor is used when loaded as a DuckDB extension")
+    lines.append("        with the stable API. Stable functions are read from the struct;")
+    lines.append("        unstable functions fall back to dlsym (available in the extension's")
+    lines.append("        address space). Use the unstable constructor to avoid dlsym entirely.\"\"\"")
+    lines.append("        try:")
+    
+    # For functions in the stable API, assign from struct
+    for name in all_fn_names:
+        if name in stable_fn_names:
+            lines.append(f"            self._{name} = api[].{name}")
+        else:
+            # Unstable functions fall back to dlsym
+            lines.append(f"            self._{name} = _{name}.load()")
+    
+    lines.append("            # Load workaround functions from C shim library")
+    for workaround_name in sorted(workaround_fn_names):
+        lines.append(f"            self._{workaround_name} = _{workaround_name}.load()")
+    lines.append("        except e:")
+    lines.append("            abort(String(e))")
+    lines.append("")
+
+    # ---- __init__ (from unstable ext API struct) ----
+    lines.append("    fn __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]):")
+    lines.append("        \"\"\"Initialize LibDuckDB from an unstable DuckDB extension API struct pointer.")
+    lines.append("")
+    lines.append("        This constructor is used when loaded as a DuckDB extension")
+    lines.append("        with the unstable API. All functions are read from the struct.\"\"\"")
+    lines.append("        try:")
+    
+    # All functions come from the unstable struct
+    for name in all_fn_names:
+        lines.append(f"            self._{name} = api[].{name}")
+    
+    lines.append("            # Load workaround functions from C shim library")
+    for workaround_name in sorted(workaround_fn_names):
+        lines.append(f"            self._{workaround_name} = _{workaround_name}.load()")
     lines.append("        except e:")
     lines.append("            abort(String(e))")
     lines.append("")
@@ -1222,15 +1330,9 @@ def _generate_libduckdb_struct(grouped_entries: list[tuple[str, str, list[dict]]
     # ---- __moveinit__ ----
     lines.append("    fn __moveinit__(out self, deinit take: Self):")
     for name in all_fn_names:
-        if name in DECIMAL_HELPER_FUNCTIONS:
-            continue
-        if name in HELPER_WRAPPER_FUNCTIONS:
-            helper_name = HELPER_WRAPPER_FUNCTIONS[name]
-            lines.append(f"        self._{helper_name} = take._{helper_name}")
-        else:
-            lines.append(f"        self._{name} = take._{name}")
-    for name in MOJO_HELPER_FN_NAMES:
         lines.append(f"        self._{name} = take._{name}")
+    for workaround_name in sorted(workaround_fn_names):
+        lines.append(f"        self._{workaround_name} = take._{workaround_name}")
     lines.append("")
 
     # ---- Methods ----
@@ -1245,14 +1347,16 @@ def _generate_libduckdb_struct(grouped_entries: list[tuple[str, str, list[dict]]
         for entry in entries:
             name = entry["name"]
             
-            # Special handling for functions that take duckdb_result by value
-            if name in HELPER_WRAPPER_FUNCTIONS:
-                helper_name = HELPER_WRAPPER_FUNCTIONS[name]
-                lines.append(_generate_byval_helper_method(entry, helper_name))
-            elif name == "duckdb_create_decimal":
-                lines.append(_generate_decimal_create_method(entry))
-            elif name == "duckdb_get_decimal":
-                lines.append(_generate_decimal_get_method(entry))
+            # Special handling for functions with Mojo FFI issues
+            if name in BYVAL_WORKAROUND_FUNCTIONS:
+                workaround_name = BYVAL_WORKAROUND_FUNCTIONS[name]
+                lines.append(_generate_byval_workaround_method(entry, workaround_name))
+            elif name in DECIMAL_WORKAROUND_FUNCTIONS:
+                workaround_name = DECIMAL_WORKAROUND_FUNCTIONS[name]
+                if name == "duckdb_create_decimal":
+                    lines.append(_generate_decimal_create_method(entry, workaround_name))
+                else:  # duckdb_get_decimal
+                    lines.append(_generate_decimal_get_method(entry, workaround_name))
             else:
                 lines.append(_generate_normal_method(entry))
             lines.append("")
@@ -1301,8 +1405,8 @@ def _generate_normal_method(entry: dict) -> str:
     return "\n".join(lines)
 
 
-def _generate_byval_helper_method(entry: dict, helper_name: str) -> str:
-    """Generate a method that uses a pointer-based helper wrapper for large by-value structs."""
+def _generate_byval_workaround_method(entry: dict, workaround_name: str) -> str:
+    """Generate a method that uses a pointer-based workaround for large by-value structs."""
     name = entry["name"]
     params = entry.get("params", [])
     ret = entry["return_type"]
@@ -1334,7 +1438,7 @@ def _generate_byval_helper_method(entry: dict, helper_name: str) -> str:
             lines.append(f"        {line.rstrip()}")
         lines.append("")
         lines.append("        NOTE: Mojo cannot currently pass large structs by value correctly over the C ABI.")
-        lines.append("        We therefore call a helper wrapper that accepts a pointer instead.")
+        lines.append("        We therefore call a workaround function that accepts a pointer instead.")
         lines.append('        """')
 
     # Call body – wrap the by-value arg in UnsafePointer
@@ -1348,13 +1452,13 @@ def _generate_byval_helper_method(entry: dict, helper_name: str) -> str:
             args.append(f"UnsafePointer(to={pname})")
         else:
             args.append(pname)
-    lines.append(f"        return self._{helper_name}({', '.join(args)})")
+    lines.append(f"        return self._{workaround_name}({', '.join(args)})")
 
     return "\n".join(lines)
 
 
-def _generate_decimal_create_method(entry: dict) -> str:
-    """Generate the special create_decimal method that uses the helper."""
+def _generate_decimal_create_method(entry: dict, workaround_name: str) -> str:
+    """Generate the special create_decimal method that uses the workaround."""
     lines = [
         "    fn duckdb_create_decimal(",
         "        self,",
@@ -1364,14 +1468,17 @@ def _generate_decimal_create_method(entry: dict) -> str:
         "",
         "        * input: The decimal value.",
         "        * returns: A duckdb_value containing the decimal.",
+        "",
+        "        NOTE: Mojo cannot pass duckdb_decimal by value correctly over the C ABI.",
+        "        We therefore call a workaround function that accepts a pointer instead.",
         '        """',
-        "        return self._duckdb_mojo_create_decimal(UnsafePointer(to=input_).unsafe_origin_cast[ImmutAnyOrigin]())",
+        f"        return self._{workaround_name}(UnsafePointer(to=input_).unsafe_origin_cast[ImmutAnyOrigin]())",
     ]
     return "\n".join(lines)
 
 
-def _generate_decimal_get_method(entry: dict) -> str:
-    """Generate the special get_decimal method that uses the helper."""
+def _generate_decimal_get_method(entry: dict, workaround_name: str) -> str:
+    """Generate the special get_decimal method that uses the workaround."""
     lines = [
         "    fn duckdb_get_decimal(",
         "        self,",
@@ -1381,16 +1488,108 @@ def _generate_decimal_get_method(entry: dict) -> str:
         "",
         "        * val: A duckdb_value containing a decimal",
         "        * returns: A decimal, or 0 if the value cannot be converted",
+        "",
+        "        NOTE: Mojo cannot return duckdb_decimal by value correctly over the C ABI.",
+        "        We therefore call a workaround function that returns via pointer instead.",
         '        """',
         "        var result = duckdb_decimal(width=0, scale=0, value=0)",
-        "        self._duckdb_mojo_get_decimal(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())",
+        f"        self._{workaround_name}(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())",
         "        return result",
     ]
     return "\n".join(lines)
 
 
-def _generate_dylib_declarations(grouped_entries: list[tuple[str, str, list[dict]]]) -> str:
-    """Generate the comptime _dylib_function declarations."""
+def _ext_api_fn_type(entry: dict) -> str:
+    """Build the Mojo fn(...) -> ... type for an extension API struct field.
+
+    Unlike `mojo_fn_type`, this never uses the byval helper wrapper
+    (extensions always receive the original function pointers).
+    """
+    params = entry.get("params", [])
+    ret = entry["return_type"]
+
+    mojo_params: list[str] = [c_type_to_mojo(p["type"].strip()) for p in params]
+    mojo_ret = c_type_to_mojo(ret, is_return=True)
+
+    if mojo_params:
+        return f"fn ({', '.join(mojo_params)}) -> {mojo_ret}"
+    return f"fn () -> {mojo_ret}"
+
+
+def _generate_ext_api_structs(
+    ext_api_definitions: list[dict],
+    function_map: dict[str, dict],
+) -> str:
+    """Generate the ``duckdb_ext_api_v1`` and ``duckdb_ext_api_v1_unstable`` structs.
+
+    ``duckdb_ext_api_v1`` contains only fields from stable API versions.
+    ``duckdb_ext_api_v1_unstable`` is the full superset (stable prefix, then
+    unstable appendages) — a pointer bitcast from a full API struct is safe
+    because the stable fields are a prefix of the unstable layout.
+
+    Parameters:
+        ext_api_definitions: Ordered version defs from ``parse_ext_api_definitions``.
+        function_map: name→entry dict from ``parse_capi_function_definitions``.
+    """
+    # Collect stable and all entries in struct order.
+    stable_fields: list[tuple[str, str, dict]] = []  # (version, name, entry)
+    all_fields: list[tuple[str, str, dict]] = []      # (version, name, entry)
+
+    for api_ver in ext_api_definitions:
+        version = api_ver["version"]
+        is_unstable = version.startswith("unstable_")
+        for fn_name in api_ver["entries"]:
+            if fn_name not in function_map:
+                print(
+                    f"WARNING: ext API entry '{fn_name}' (version {version}) "
+                    f"not found in function definitions — skipping",
+                    file=sys.stderr
+                )
+                continue
+            entry = function_map[fn_name]
+            all_fields.append((version, fn_name, entry))
+            if not is_unstable:
+                stable_fields.append((version, fn_name, entry))
+
+    def _emit_struct(name: str, fields: list[tuple[str, str, dict]]) -> list[str]:
+        lines: list[str] = []
+        lines.append("")
+        lines.append("")
+        lines.append("@fieldwise_init")
+        lines.append(f"struct {name}:")
+        lines.append(f'    """DuckDB Extension C API function pointer table ({name}).')
+        lines.append("")
+        lines.append(f"    Contains {len(fields)} function pointers.")
+        lines.append('    """')
+
+        current_version: str | None = None
+        for version, fn_name, entry in fields:
+            if version != current_version:
+                lines.append("")
+                lines.append(f"    # --- {version} ---")
+                current_version = version
+            fn_type = _ext_api_fn_type(entry)
+            lines.append(f"    var {fn_name}: {fn_type}")
+
+        lines.append("")
+        return lines
+
+    out_lines: list[str] = []
+    out_lines.append(format_section_header("Extension API Structs"))
+    out_lines.extend(_emit_struct("duckdb_ext_api_v1", stable_fields))
+    out_lines.extend(_emit_struct("duckdb_ext_api_v1_unstable", all_fields))
+    return "\n".join(out_lines)
+
+
+def _generate_dylib_declarations(
+    grouped_entries: list[tuple[str, str, list[dict]]],
+    ext_api_version_map: dict[str, str] | None = None,
+) -> str:
+    """Generate the comptime _dylib_function declarations.
+
+    If *ext_api_version_map* is provided (name→version), a comment tag like
+    ``# [ext_api: v1.2.0]`` is emitted before each matching declaration.
+    """
     lines: list[str] = []
 
     for group_name, desc, entries in grouped_entries:
@@ -1400,9 +1599,18 @@ def _generate_dylib_declarations(grouped_entries: list[tuple[str, str, list[dict
         for entry in entries:
             name = entry["name"]
             
-            if name in HELPER_WRAPPER_FUNCTIONS:
-                # Generate the helper function declaration
-                helper_name = HELPER_WRAPPER_FUNCTIONS[name]
+            # Always generate the original function declaration (for ext API compatibility)
+            fn_type = mojo_fn_type(entry)
+            if ext_api_version_map and name in ext_api_version_map:
+                lines.append(f"# [ext_api: {ext_api_version_map[name]}]")
+            lines.append(f'comptime _{name} = _dylib_function["{name}",')
+            lines.append(f"    {fn_type}")
+            lines.append("]")
+            lines.append("")
+            
+            # Also generate workaround declarations where needed
+            if name in BYVAL_WORKAROUND_FUNCTIONS:
+                workaround_name = BYVAL_WORKAROUND_FUNCTIONS[name]
                 # Build a modified entry with pointer params
                 modified_params = []
                 for p in entry.get("params", []):
@@ -1411,38 +1619,26 @@ def _generate_dylib_declarations(grouped_entries: list[tuple[str, str, list[dict
                     else:
                         modified_params.append(p)
                 # Generate the ptr version using helpers library
-                helper_entry = dict(entry)
-                helper_entry["params"] = modified_params
-                fn_type = mojo_fn_type(helper_entry)
+                workaround_entry = dict(entry)
+                workaround_entry["params"] = modified_params
+                workaround_fn_type = mojo_fn_type(workaround_entry)
                 # Use ImmutAnyOrigin for the result pointer param in helpers
-                fn_type = fn_type.replace(
+                workaround_fn_type = workaround_fn_type.replace(
                     "UnsafePointer[duckdb_result, MutAnyOrigin]",
                     "UnsafePointer[duckdb_result, ImmutAnyOrigin]"
                 )
-                lines.append(f'comptime _{helper_name} = _dylib_helpers_function["{helper_name}",')
-                lines.append(f"    {fn_type}")
-                lines.append("]")
-                lines.append("")
-            elif name == "duckdb_create_decimal":
-                # Skip - handled via helper
-                pass
-            elif name == "duckdb_get_decimal":
-                # Skip - handled via helper
-                pass
-            else:
-                fn_type = mojo_fn_type(entry)
-                lines.append(f'comptime _{name} = _dylib_function["{name}",')
-                lines.append(f"    {fn_type}")
+                lines.append(f'comptime _{workaround_name} = _dylib_helpers_function["{workaround_name}",')
+                lines.append(f"    {workaround_fn_type}")
                 lines.append("]")
                 lines.append("")
 
-    # Add the Mojo helper declarations
-    lines.append(format_section_header("Mojo Helper Functions"))
-    lines.append('comptime _duckdb_mojo_get_decimal = _dylib_helpers_function["duckdb_mojo_get_decimal",')
+    # Add the workaround function declarations for decimal helpers
+    lines.append(format_section_header("Decimal Workaround Functions"))
+    lines.append('comptime _workaround_get_decimal_ptr = _dylib_helpers_function["workaround_get_decimal_ptr",')
     lines.append("    fn(duckdb_value, UnsafePointer[duckdb_decimal, MutExternalOrigin]) -> NoneType")
     lines.append("]")
     lines.append("")
-    lines.append('comptime _duckdb_mojo_create_decimal = _dylib_helpers_function["duckdb_mojo_create_decimal",')
+    lines.append('comptime _workaround_create_decimal_ptr = _dylib_helpers_function["workaround_create_decimal_ptr",')
     lines.append("    fn(UnsafePointer[duckdb_decimal, ImmutAnyOrigin]) -> duckdb_value")
     lines.append("]")
     lines.append("")

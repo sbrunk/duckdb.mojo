@@ -52,7 +52,7 @@ SELECT add_one(41);  -- Returns 42
 from duckdb._libduckdb import *
 from duckdb.database import Database
 from duckdb.connection import Connection
-from duckdb.api import DuckDB
+from duckdb.api import DuckDB, _set_ext_api_ptr, _set_ext_api_unstable_ptr
 
 # ===--------------------------------------------------------------------===#
 # Extension API version
@@ -64,6 +64,13 @@ comptime EXTENSION_API_VERSION = "v1.2.0"
 This corresponds to `DUCKDB_EXTENSION_API_VERSION_STRING` in duckdb_extension.h.
 When calling `get_api`, pass this version to request the stable v1.2.0 API.
 """
+
+# Default API struct for stable usage
+comptime ExtApi = duckdb_ext_api_v1
+"""The default (stable) extension API struct type."""
+
+comptime ExtApiUnstable = duckdb_ext_api_v1_unstable
+"""The full extension API struct type, including unstable functions."""
 
 
 # ===--------------------------------------------------------------------===#
@@ -161,38 +168,60 @@ struct Extension(Movable):
     fn get_api(
         self, version: String = EXTENSION_API_VERSION
     ) -> UnsafePointer[NoneType, ImmutExternalOrigin]:
-        """Request the DuckDB C API function pointer struct.
+        """Request the DuckDB C API function pointer struct (untyped).
 
-        Calls the `get_api` function pointer provided by DuckDB to retrieve the
-        versioned `duckdb_ext_api_v1` struct. DuckDB validates that the
-        requested version is compatible; if not, it returns a null pointer and
-        sets an internal error.
+        Returns an opaque pointer that can be bitcast to the appropriate
+        ``duckdb_ext_api_v1`` or ``duckdb_ext_api_v1_unstable`` struct.
 
         Args:
             version: The semver API version string to request (e.g. "v1.2.0").
                 Defaults to `EXTENSION_API_VERSION`.
 
         Returns:
-            An opaque pointer to the `duckdb_ext_api_v1` struct, or a null
-            pointer if the requested version is not supported.
-
-        Example:
-        ```mojo
-        var ext = Extension(info, access)
-        var api = ext.get_api()
-        if not api:
-            ext.set_error("Unsupported API version")
-            return False
-        ```
+            An opaque pointer to the API struct, or null if unsupported.
         """
         var version_copy = version.copy()
         return self._access[].get_api(
             self._info, version_copy.as_c_string_slice().unsafe_ptr()
         )
 
+    fn get_api_typed[
+        ApiStruct: AnyType = ExtApi
+    ](
+        self, version: String = EXTENSION_API_VERSION
+    ) -> UnsafePointer[ApiStruct, ImmutExternalOrigin]:
+        """Request the DuckDB C API as a typed struct pointer.
+
+        Returns a pointer to the API struct with the expected struct layout.
+        Use ``ExtApi`` (default) for the stable API, or ``ExtApiUnstable``
+        for the full API including unstable functions.
+
+        Parameters:
+            ApiStruct: The struct type to cast to. Defaults to ``ExtApi``
+                (same as ``duckdb_ext_api_v1``).
+
+        Args:
+            version: The semver API version string to request.
+
+        Returns:
+            A typed pointer to the API struct, or null if unsupported.
+
+        Example:
+        ```mojo
+        var api = ext.get_api_typed[ExtApi]()
+        if not api:
+            ext.set_error("Unsupported API version")
+            return False
+        # Access function pointers via api[].duckdb_open(...)
+        ```
+        """
+        var raw = self.get_api(version)
+        return raw.bitcast[ApiStruct]()
+
     @staticmethod
     fn run[
-        init_fn: fn (conn: Connection) raises -> None
+        init_fn: fn (conn: Connection) raises -> None,
+        unstable: Bool = False,
     ](
         info: duckdb_extension_info,
         access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
@@ -206,6 +235,8 @@ struct Extension(Movable):
         Parameters:
             init_fn: A function that receives a `Connection` and registers
                 extension functionality. Raise on failure.
+            unstable: If True, request the unstable API (all functions
+                available). If False (default), request only the stable API.
 
         Args:
             info: The extension info handle from DuckDB.
@@ -230,13 +261,32 @@ struct Extension(Movable):
         ```
         """
         var ext = Extension(info, access)
-        if not ext.get_api():
-            ext.set_error(
-                "Incompatible DuckDB C API version (requested "
-                + EXTENSION_API_VERSION
-                + ")"
-            )
-            return False
+
+        # Seed the global so DuckDB() constructs LibDuckDB from the API
+        # struct instead of dlopen/dlsym. Must happen before any DuckDB()
+        # usage (e.g. ext.connect() -> Connection -> DuckDB().libduckdb()).
+        @parameter
+        if unstable:
+            var api_ptr = ext.get_api_typed[ExtApiUnstable]()
+            if not api_ptr:
+                ext.set_error(
+                    "Incompatible DuckDB C API version (requested "
+                    + EXTENSION_API_VERSION
+                    + ")"
+                )
+                return False
+            _set_ext_api_unstable_ptr(api_ptr)
+        else:
+            var api_ptr = ext.get_api_typed[ExtApi]()
+            if not api_ptr:
+                ext.set_error(
+                    "Incompatible DuckDB C API version (requested "
+                    + EXTENSION_API_VERSION
+                    + ")"
+                )
+                return False
+            _set_ext_api_ptr(api_ptr)
+
         try:
             var conn = ext.connect()
             init_fn(conn)
