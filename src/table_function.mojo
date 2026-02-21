@@ -374,7 +374,6 @@ struct TableFunction(Movable):
     """
 
     var _function: duckdb_table_function
-    var _owned: Bool
 
     fn __init__(out self):
         """Creates a new table function.
@@ -383,25 +382,17 @@ struct TableFunction(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_table_function()
-        self._owned = True
 
     fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
-        self._owned = take._owned
-
-    fn __copyinit__(out self, copy: Self):
-        """Copy constructor - shares the pointer but doesn't own it."""
-        self._function = copy._function
-        self._owned = False
 
     fn __del__(deinit self):
         """Destroys the table function and deallocates all memory."""
-        if self._owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_table_function(
-                UnsafePointer(to=self._function)
-            )
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_table_function(
+            UnsafePointer(to=self._function)
+        )
 
     fn set_name(self, name: String):
         """Sets the name of the table function.
@@ -600,11 +591,15 @@ struct TableFunction(Movable):
             self._function, pushdown
         )
 
-    fn register(mut self, conn: Connection) raises:
+    fn register(self, conn: Connection) raises:
         """Registers the table function within the given connection.
 
         The function requires at least a name, a bind function, an init function,
         and a main function.
+
+        DuckDB copies the function internally during registration, so the
+        function handle remains valid and will be cleaned up normally when
+        this struct goes out of scope.
 
         Args:
             conn: The connection to register the function in.
@@ -618,4 +613,3 @@ struct TableFunction(Movable):
         )
         if status != DuckDBSuccess:
             raise Error("Failed to register table function")
-        self._owned = False

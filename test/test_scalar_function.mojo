@@ -379,8 +379,6 @@ def test_scalar_function_set_execute():
     
     func_set.add_function(func1)
     func_set.register(conn)
-    # Release ownership after registration
-    func1._release_ownership()
     
     # Test the integer overload
     var result = conn.execute("SELECT my_add(15, 27) as answer")
@@ -414,9 +412,6 @@ def test_scalar_function_set_multiple_overloads():
     func_set.add_function(func2)
     
     func_set.register(conn)
-    # Release ownership after registration
-    func1._release_ownership()
-    func2._release_ownership()
     
     # Test integer overload
     var result1 = conn.execute("SELECT my_add(20, 22) as answer")
@@ -552,6 +547,57 @@ def test_function_reuse_across_queries():
     var result3 = conn.execute("SELECT add_one(100) as val")
     var chunk3 = result3.fetch_chunk()
     assert_equal(chunk3.get(integer, col=0, row=0).value(), 101)
+
+
+def test_function_outlives_connection():
+    """Test that a ScalarFunction stays valid after a connection it was registered on is dropped.
+    
+    DuckDB copies function handles during registration, so the original handle is
+    independent. We should be able to register the same function on a second connection
+    after the first connection goes out of scope.
+    """
+    var db = Database(":memory:")
+    var func = ScalarFunction.from_function[
+        "outlive_test", DType.int32, DType.int32, simple_add_one
+    ]()
+
+    # Register on first connection, use it, then let the connection go out of scope
+    var conn1 = Connection(db)
+    func.register(conn1)
+    var result1 = conn1.execute("SELECT outlive_test(41) as val")
+    var chunk1 = result1.fetch_chunk()
+    assert_equal(chunk1.get(integer, col=0, row=0).value(), 42)
+    # conn1 is still alive here but will go out of scope when reassigned below
+
+    # Register the same function handle on a second connection
+    var conn2 = Connection(db)
+    func.register(conn2)
+    var result2 = conn2.execute("SELECT outlive_test(99) as val")
+    var chunk2 = result2.fetch_chunk()
+    assert_equal(chunk2.get(integer, col=0, row=0).value(), 100)
+
+
+def test_connection_outlives_function():
+    """Test that a registered function works after the ScalarFunction handle is destroyed.
+    
+    DuckDB copies function handles during registration, so destroying our handle
+    does not affect the registered function in the database. Mojo's ASAP destruction
+    means `func` is destroyed right after `register()` (its last use), so by the
+    time we call `execute()` below, the ScalarFunction handle is already gone.
+    """
+    var conn = DuckDB.connect(":memory:")
+
+    # func's last use is register() — ASAP destruction destroys it before execute().
+    var func = ScalarFunction.from_function[
+        "survive_test", DType.int32, DType.int32, simple_add_one
+    ]()
+    func.register(conn)
+
+    # The ScalarFunction handle is now destroyed, but the registered function
+    # should still work because DuckDB made an internal copy during registration.
+    var result = conn.execute("SELECT survive_test(41) as val")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
 
 
 # ===--------------------------------------------------------------------===#

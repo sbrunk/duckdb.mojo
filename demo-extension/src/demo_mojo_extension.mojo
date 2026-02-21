@@ -20,17 +20,10 @@ Load in DuckDB:
 
 from duckdb._libduckdb import (
     duckdb_extension_info,
-    duckdb_function_info,
-    duckdb_data_chunk,
-    duckdb_vector,
     DuckDBError,
 )
 from duckdb.extension import duckdb_extension_access, ExtensionConnection
-from duckdb.scalar_function import ScalarFunction, FunctionInfo
-from duckdb.logical_type import LogicalType
-from duckdb.duckdb_type import DuckDBType
-from duckdb.chunk import Chunk
-from duckdb.vector import Vector
+from duckdb.scalar_function import ScalarFunction
 
 
 # ===--------------------------------------------------------------------===#
@@ -38,28 +31,9 @@ from duckdb.vector import Vector
 # ===--------------------------------------------------------------------===#
 
 
-fn add_numbers_together(info: FunctionInfo, mut input: Chunk, output: Vector):
-    """Adds two BIGINT columns element-wise."""
-    var size = len(input)
-    var a = input.get_vector(0).get_data().bitcast[Int64]()
-    var b = input.get_vector(1).get_data().bitcast[Int64]()
-    var result = output.get_data().bitcast[Int64]()
-    for i in range(size):
-        result[i] = a[i] + b[i]
-
-
-fn register_add_numbers(ext_conn: ExtensionConnection):
-    """Create and register the mojo_add_numbers function."""
-    var func = ScalarFunction()
-    func.set_name("mojo_add_numbers")
-
-    var bigint_type = LogicalType(DuckDBType.bigint)
-    func.add_parameter(bigint_type)
-    func.add_parameter(bigint_type)
-    func.set_return_type(bigint_type)
-
-    func.set_function[add_numbers_together]()
-    ext_conn.register(func)
+fn add_numbers(a: Int64, b: Int64) -> Int64:
+    """Adds two integers together."""
+    return a + b
 
 
 # ===--------------------------------------------------------------------===#
@@ -85,7 +59,10 @@ fn demo_mojo_init_c_api(
         return False
 
     # Register our functions
-    register_add_numbers(ext_conn)
+    var func = ScalarFunction.from_function[
+        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
+    ]()
+    ext_conn.register(func)
 
     # Connection is automatically closed when ext_conn goes out of scope
     return True

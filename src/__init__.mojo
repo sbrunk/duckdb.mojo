@@ -9,5 +9,6 @@ from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInf
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet, AggregateFunctionInfo, AggregateState, AggregateStateArray
 from duckdb.value import DuckDBValue
 from duckdb.extension import ExtensionConnection, duckdb_extension_access
+from duckdb.database import Database
 
 from duckdb.logical_type import LogicalType, decimal_type, enum_type

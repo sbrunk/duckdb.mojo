@@ -238,7 +238,6 @@ struct AggregateFunction(Movable):
     """
 
     var _function: duckdb_aggregate_function
-    var _owned: Bool
 
     fn __init__(out self):
         """Creates a new aggregate function.
@@ -247,25 +246,17 @@ struct AggregateFunction(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_aggregate_function()
-        self._owned = True
 
     fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
-        self._owned = take._owned
-
-    fn __copyinit__(out self, copy: Self):
-        """Copy constructor - shares the pointer but doesn't own it."""
-        self._function = copy._function
-        self._owned = False
 
     fn __del__(deinit self):
         """Destroys the aggregate function and deallocates all memory."""
-        if self._owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_aggregate_function(
-                UnsafePointer(to=self._function)
-            )
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_aggregate_function(
+            UnsafePointer(to=self._function)
+        )
 
     fn set_name(self, name: String):
         """Sets the name of the aggregate function.
@@ -487,13 +478,15 @@ struct AggregateFunction(Movable):
             self._function, raw_destroy
         )
 
-    fn register(mut self, conn: Connection) raises:
+    fn register(self, conn: Connection) raises:
         """Registers the aggregate function within the given connection.
 
         The function requires at least a name, a return type,
         and an update and finalize function.
 
-        This method releases ownership to transfer it to DuckDB.
+        DuckDB copies the function internally during registration, so the
+        function handle remains valid and will be cleaned up normally when
+        this struct goes out of scope.
 
         Args:
             conn: The connection to register the function in.
@@ -507,7 +500,6 @@ struct AggregateFunction(Movable):
         )
         if status != DuckDBSuccess:
             raise Error("Failed to register aggregate function")
-        self._owned = False
 
     # ===--------------------------------------------------------------------===#
     # High-level reduction-based aggregate constructors
@@ -1033,7 +1025,6 @@ struct AggregateFunctionSet(Movable):
     """
 
     var _function_set: duckdb_aggregate_function_set
-    var _owned: Bool
 
     fn __init__(out self, name: String):
         """Creates a new aggregate function set.
@@ -1046,28 +1037,23 @@ struct AggregateFunctionSet(Movable):
         self._function_set = libduckdb.duckdb_create_aggregate_function_set(
             name_copy.as_c_string_slice().unsafe_ptr()
         )
-        self._owned = True
 
     fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
-        self._owned = take._owned
-
-    fn __copyinit__(out self, copy: Self):
-        """Copy constructor - shares the pointer but doesn't own it."""
-        self._function_set = copy._function_set
-        self._owned = False
 
     fn __del__(deinit self):
         """Destroys the aggregate function set and deallocates all memory."""
-        if self._owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_aggregate_function_set(
-                UnsafePointer(to=self._function_set)
-            )
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_aggregate_function_set(
+            UnsafePointer(to=self._function_set)
+        )
 
     fn add_function(self, function: AggregateFunction) raises:
         """Adds an aggregate function as a new overload to the function set.
+
+        DuckDB copies the function internally, so the original AggregateFunction
+        remains valid and will be cleaned up normally when it goes out of scope.
 
         Args:
             function: The function to add. Must have matching name.
@@ -1084,10 +1070,13 @@ struct AggregateFunctionSet(Movable):
                 "Failed to add function to set - overload may already exist"
             )
 
-    fn register(mut self, conn: Connection) raises:
+    fn register(self, conn: Connection) raises:
         """Registers the aggregate function set within the given connection.
 
         The set requires at least one valid overload.
+        DuckDB copies the function set internally during registration, so the
+        handle remains valid and will be cleaned up normally when this struct
+        goes out of scope.
 
         Args:
             conn: The connection to register the function set in.
@@ -1101,4 +1090,3 @@ struct AggregateFunctionSet(Movable):
         )
         if status != DuckDBSuccess:
             raise Error("Failed to register aggregate function set")
-        self._owned = False

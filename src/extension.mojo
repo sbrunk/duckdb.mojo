@@ -66,7 +66,9 @@ SELECT add_numbers(1, 2);
 """
 
 from duckdb._libduckdb import *
+from duckdb.database import Database
 from duckdb.api import DuckDB
+from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet
 from duckdb.table_function import TableFunction
@@ -105,9 +107,7 @@ struct duckdb_extension_access(ImplicitlyCopyable, Movable):
 struct ExtensionConnection(Movable, Boolable):
     """A connection to a DuckDB database obtained from within an extension.
 
-    Unlike `Connection`, this does not own the database. The connection is
-    created during extension initialization and automatically closed when
-    this object goes out of scope.
+    Wraps a `Connection` internally and delegates all registration methods to it.
 
     Use this to register functions, types, and other extension functionality.
 
@@ -126,8 +126,7 @@ struct ExtensionConnection(Movable, Boolable):
     ```
     """
 
-    var _conn: duckdb_connection
-    var _valid: Bool
+    var _conn: Optional[Connection]
     var _info: duckdb_extension_info
     var _access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]
 
@@ -147,37 +146,19 @@ struct ExtensionConnection(Movable, Boolable):
         """
         self._info = info
         self._access = access
-        self._valid = False
 
-        # Get the database handle from DuckDB
+        # Get the database handle from DuckDB and open a connection
         var db_ptr = access[].get_database(info)
         var db = db_ptr[]
-
-        # Open a connection
-        ref libduckdb = DuckDB().libduckdb()
-        self._conn = UnsafePointer[duckdb_connection.type, MutExternalOrigin]()
-        if (
-            libduckdb.duckdb_connect(db, UnsafePointer(to=self._conn))
-        ) == DuckDBError:
-            self._set_error("Failed to open connection to database")
-            return
-        self._valid = True
-
-    fn __moveinit__(out self, deinit take: Self):
-        self._conn = take._conn
-        self._valid = take._valid
-        self._info = take._info
-        self._access = take._access
-
-    fn __del__(deinit self):
-        """Close the connection if valid."""
-        if self._valid:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
+        try:
+            self._conn = Connection(Database(_handle=db))
+        except e:
+            self._conn = None
+            self._set_error(e._error)
 
     fn __bool__(self) -> Bool:
         """Check if the connection is valid."""
-        return self._valid
+        return self._conn is not None
 
     fn _set_error(self, error: String):
         """Report an error back to DuckDB."""
@@ -186,66 +167,67 @@ struct ExtensionConnection(Movable, Boolable):
             self._info, error_copy.as_c_string_slice().unsafe_ptr()
         )
 
-    fn register(self, mut func: ScalarFunction):
+    fn register(self, func: ScalarFunction):
         """Register a scalar function with DuckDB.
 
+        DuckDB copies the function internally during registration.
+
         Args:
-            func: The scalar function to register. Ownership is transferred to DuckDB.
+            func: The scalar function to register.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_scalar_function(
-            self._conn, func._function
+            self._conn.value()._conn, func._function
         )
-        func._owned = False
 
-    fn register(self, mut func_set: ScalarFunctionSet):
+    fn register(self, func_set: ScalarFunctionSet):
         """Register a scalar function set with DuckDB.
+
+        DuckDB copies the function set internally during registration.
 
         Args:
             func_set: The scalar function set to register.
-                Ownership is transferred to DuckDB.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_scalar_function_set(
-            self._conn, func_set._function_set
+            self._conn.value()._conn, func_set._function_set
         )
-        func_set._owned = False
 
-    fn register(self, mut func: AggregateFunction):
+    fn register(self, func: AggregateFunction):
         """Register an aggregate function with DuckDB.
+
+        DuckDB copies the function internally during registration.
 
         Args:
             func: The aggregate function to register.
-                Ownership is transferred to DuckDB.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_aggregate_function(
-            self._conn, func._function
+            self._conn.value()._conn, func._function
         )
-        func._owned = False
 
-    fn register(self, mut func_set: AggregateFunctionSet):
+    fn register(self, func_set: AggregateFunctionSet):
         """Register an aggregate function set with DuckDB.
+
+        DuckDB copies the function set internally during registration.
 
         Args:
             func_set: The aggregate function set to register.
-                Ownership is transferred to DuckDB.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_aggregate_function_set(
-            self._conn, func_set._function_set
+            self._conn.value()._conn, func_set._function_set
         )
-        func_set._owned = False
 
-    fn register(self, mut func: TableFunction):
+    fn register(self, func: TableFunction):
         """Register a table function with DuckDB.
+
+        DuckDB copies the function internally during registration.
 
         Args:
             func: The table function to register.
-                Ownership is transferred to DuckDB.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_table_function(
-            self._conn, func._function
+            self._conn.value()._conn, func._function
         )
-        func._owned = False

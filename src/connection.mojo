@@ -7,27 +7,54 @@ from duckdb.result import ResultError, ResultType, ErrorType
 struct Connection(Movable):
     """A connection to a DuckDB database.
 
+    Connection borrows the Database handle during construction — it does **not**
+    take ownership. The caller is responsible for keeping the Database alive for
+    the lifetime of all its connections (same contract as the C API).
+
+    The convenience constructor ``Connection(path)`` (and ``DuckDB.connect()``)
+    creates *and owns* an internal Database so the connection is self-contained.
+
     Example:
     ```mojo
     from duckdb import DuckDB
+    # Self-contained (owns its own database):
     var con = DuckDB.connect(":memory:")
-    var result = con.execute("SELECT lst, lst || 'duckdb' FROM range(10) tbl(lst)")
+
+    # Shared database, multiple connections:
+    var db = Database(":memory:")
+    var con1 = Connection(db)
+    var con2 = Connection(db)
     ```
     """
 
-    var database: Database
+    var _db: Database
     var _conn: duckdb_connection
 
     fn __init__(out self, path: String) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        self.database = Database(path)
+        """Create a connection with a new database."""
+        self._db = Database(path)
         self._conn = UnsafePointer[
             duckdb_connection.type, MutExternalOrigin
         ]()
+        ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_connect(
-                self.database._db, UnsafePointer(to=self._conn)
-            )
+            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
+        ) == DuckDBError:
+            raise Error("Could not connect to database")
+
+    fn __init__(out self, db: Database) raises:
+        """Create a connection from an existing database.
+
+        Args:
+            db: An existing database handle.
+        """
+        self._db = Database(_handle=db._db)
+        self._conn = UnsafePointer[
+            duckdb_connection.type, MutExternalOrigin
+        ]()
+        ref libduckdb = DuckDB().libduckdb()
+        if (
+            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
         ) == DuckDBError:
             raise Error("Could not connect to database")
 

@@ -123,7 +123,6 @@ struct ScalarFunction(Movable):
     """
 
     var _function: duckdb_scalar_function
-    var _owned: Bool  # Tracks if this struct owns the underlying pointer
 
     fn __init__(out self):
         """Creates a new scalar function.
@@ -132,31 +131,15 @@ struct ScalarFunction(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_scalar_function()
-        self._owned = True
 
     fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
-        self._owned = take._owned
-
-    fn __copyinit__(out self, copy: Self):
-        """Copy constructor - shares the pointer but doesn't own it."""
-        self._function = copy._function
-        self._owned = False  # Copy doesn't own the resource
 
     fn __del__(deinit self):
         """Destroys the scalar function and deallocates all memory."""
-        if self._owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_scalar_function(UnsafePointer(to=self._function))
-
-    fn _release_ownership(mut self):
-        """Releases ownership of the underlying pointer.
-        
-        After calling this, the destructor will not destroy the underlying DuckDB function.
-        This is used internally when adding functions to sets or registering them.
-        """
-        self._owned = False
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_scalar_function(UnsafePointer(to=self._function))
 
     fn set_name(self, name: String):
         """Sets the name of the scalar function.
@@ -492,20 +475,19 @@ struct ScalarFunction(Movable):
 
         self.set_function[wrapper]()
 
-    fn register(mut self, conn: Connection) raises:
+    fn register(self, conn: Connection) raises:
         """Registers the scalar function within the given connection.
 
         The function requires at least a name, a function, and a return type.
-        This method releases ownership to transfer it to DuckDB.
-        The function will be managed by the connection and should not be destroyed manually.
+        DuckDB copies the function internally during registration, so the
+        function handle remains valid and will be cleaned up normally when
+        this struct goes out of scope.
         
         * conn: The connection to register the function in.
         * raises: Error if the registration was unsuccessful.
         """
         ref libduckdb = DuckDB().libduckdb()
         _ = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
-        # Release ownership - DuckDB now manages this
-        self._owned = False
 
     # ===--------------------------------------------------------------------===#
     # Convenience factory methods
@@ -672,11 +654,52 @@ struct ScalarFunction(Movable):
         In1: DType,
         Out: DType,
         func: fn (Scalar[In1]) -> Scalar[Out],
-    ](conn: Connection) raises:
-        """Create and register a scalar function from a simple row-at-a-time function.
+    ]() -> ScalarFunction:
+        """Create a scalar function from a simple row-at-a-time function.
 
         Automatically generates a vectorized wrapper that loops over chunk rows,
         so you only need to write the per-row logic.
+
+        Returns the configured ScalarFunction without registering it, so it can
+        be registered with either a `Connection` or an `ExtensionConnection`.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The input DType.
+            Out: The return DType.
+            func: A simple scalar function `fn(Scalar[In1]) -> Scalar[Out]`.
+
+        Example:
+        ```mojo
+        fn add_one(x: Int32) -> Int32:
+            return x + 1
+
+        var func = ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one]()
+        ext_conn.register(func)  # or conn.register(func)
+        ```
+        """
+        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+            var size = len(input)
+            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            for i in range(size):
+                out_data[i] = func(in_data[i])
+
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_function[wrapper]()
+        return sf^
+
+    @staticmethod
+    fn from_function[
+        name: StringLiteral,
+        In1: DType,
+        Out: DType,
+        func: fn (Scalar[In1]) -> Scalar[Out],
+    ](conn: Connection) raises:
+        """Create and register a scalar function from a simple row-at-a-time function.
 
         Parameters:
             name: The SQL function name.
@@ -693,23 +716,55 @@ struct ScalarFunction(Movable):
             return x + 1
 
         var conn = Connection(":memory:")
-        # Registers with DuckDB — types derived from DType parameters
         ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
+        ```
+        """
+        var sf = ScalarFunction.from_function[name, In1, Out, func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_function[
+        name: StringLiteral,
+        In1: DType,
+        In2: DType,
+        Out: DType,
+        func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
+    ]() -> ScalarFunction:
+        """Create a binary scalar function from a simple row-at-a-time function.
+
+        Returns the configured ScalarFunction without registering it.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The first input DType.
+            In2: The second input DType.
+            Out: The return DType.
+            func: A simple scalar function `fn(Scalar[In1], Scalar[In2]) -> Scalar[Out]`.
+
+        Example:
+        ```mojo
+        fn my_add(a: Int64, b: Int64) -> Int64:
+            return a + b
+
+        var func = ScalarFunction.from_function["my_add", DType.int64, DType.int64, DType.int64, my_add]()
+        ext_conn.register(func)
         ```
         """
         fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
+            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
             var out_data = output.get_data().bitcast[Scalar[Out]]()
             for i in range(size):
-                out_data[i] = func(in_data[i])
+                out_data[i] = func(in1_data[i], in2_data[i])
 
         var sf = ScalarFunction()
         sf.set_name(name)
         sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
         sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
         sf.set_function[wrapper]()
-        sf.register(conn)
+        return sf^
 
     @staticmethod
     fn from_function[
@@ -740,20 +795,7 @@ struct ScalarFunction(Movable):
         ScalarFunction.from_function["my_add", DType.int32, DType.int32, DType.int32, my_add](conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
-            var size = len(input)
-            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
-            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
-            var out_data = output.get_data().bitcast[Scalar[Out]]()
-            for i in range(size):
-                out_data[i] = func(in1_data[i], in2_data[i])
-
-        var sf = ScalarFunction()
-        sf.set_name(name)
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
-        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
-        sf.set_function[wrapper]()
+        var sf = ScalarFunction.from_function[name, In1, In2, Out, func]()
         sf.register(conn)
 
     # ===--------------------------------------------------------------------===#
@@ -766,13 +808,41 @@ struct ScalarFunction(Movable):
         In1: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+    ]() -> ScalarFunction:
+        """Create a scalar function from a SIMD-vectorized function.
+
+        Returns the configured ScalarFunction without registering it.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The input DType.
+            Out: The return DType.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+            return x + 1
+
+        var func = ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one]()
+        ext_conn.register(func)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
+        sf.set_simd_function[In1, Out, func]()
+        return sf^
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        In1: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
     ](conn: Connection) raises:
         """Create and register a scalar function from a SIMD-vectorized function.
-
-        The user-provided function operates on `SIMD[dt, width]` vectors.
-        The wrapper automatically processes the chunk data in SIMD-width batches
-        using the optimal width for the target hardware, with a scalar tail loop
-        for remaining elements.
 
         Parameters:
             name: The SQL function name.
@@ -792,12 +862,44 @@ struct ScalarFunction(Movable):
         ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one](conn)
         ```
         """
+        var sf = ScalarFunction.from_simd_function[name, In1, Out, func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        In1: DType,
+        In2: DType,
+        Out: DType,
+        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+    ]() -> ScalarFunction:
+        """Create a binary scalar function from a SIMD-vectorized function.
+
+        Returns the configured ScalarFunction without registering it.
+
+        Parameters:
+            name: The SQL function name.
+            In1: The first input DType.
+            In2: The second input DType.
+            Out: The return DType.
+            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+
+        Example:
+        ```mojo
+        fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+            return a + b
+
+        var func = ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add]()
+        ext_conn.register(func)
+        ```
+        """
         var sf = ScalarFunction()
         sf.set_name(name)
         sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
         sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
-        sf.set_simd_function[In1, Out, func]()
-        sf.register(conn)
+        sf.set_simd_function[In1, In2, Out, func]()
+        return sf^
 
     @staticmethod
     fn from_simd_function[
@@ -828,12 +930,7 @@ struct ScalarFunction(Movable):
         ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add](conn)
         ```
         """
-        var sf = ScalarFunction()
-        sf.set_name(name)
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In1]()))
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[In2]()))
-        sf.set_return_type(LogicalType(dtype_to_duckdb_type[Out]()))
-        sf.set_simd_function[In1, In2, Out, func]()
+        var sf = ScalarFunction.from_simd_function[name, In1, In2, Out, func]()
         sf.register(conn)
 
     # --- Overloads accepting stdlib math function signatures ----------------
@@ -843,16 +940,42 @@ struct ScalarFunction(Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
-    ](conn: Connection) raises:
-        """Create and register a unary scalar function from a stdlib math function.
+    ]() -> ScalarFunction:
+        """Create a unary scalar function from a stdlib math function.
+
+        Returns the configured ScalarFunction without registering it.
 
         Accepts functions with the standard library signature
         `fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]`
-        so you can pass `math.sqrt`, `math.sin`, `math.cos`, etc. directly
-        without writing thin wrappers.
+        so you can pass `math.sqrt`, `math.sin`, `math.cos`, etc. directly.
 
-        Since stdlib math functions have the same input and output type, only a
-        single DType parameter `D` is needed.
+        Parameters:
+            name: The SQL function name.
+            D: The DType for both input and output.
+            func: A stdlib-style SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        var func = ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt]()
+        ext_conn.register(func)
+        ```
+        """
+        var sf = ScalarFunction()
+        sf.set_name(name)
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_return_type(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.set_simd_function[D, func]()
+        return sf^
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+    ](conn: Connection) raises:
+        """Create and register a unary scalar function from a stdlib math function.
 
         Parameters:
             name: The SQL function name.
@@ -870,12 +993,41 @@ struct ScalarFunction(Movable):
         ScalarFunction.from_simd_function["mojo_sin", DType.float64, math.sin](conn)
         ```
         """
+        var sf = ScalarFunction.from_simd_function[name, D, func]()
+        sf.register(conn)
+
+    @staticmethod
+    fn from_simd_function[
+        name: StringLiteral,
+        D: DType,
+        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+    ]() -> ScalarFunction:
+        """Create a binary scalar function from a stdlib math function.
+
+        Returns the configured ScalarFunction without registering it.
+
+        Both inputs and output share the same DType.
+
+        Parameters:
+            name: The SQL function name.
+            D: The DType for both inputs and output.
+            func: A stdlib-style binary SIMD math function.
+
+        Example:
+        ```mojo
+        import math
+
+        var func = ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2]()
+        ext_conn.register(func)
+        ```
+        """
         var sf = ScalarFunction()
         sf.set_name(name)
         sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
+        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
         sf.set_return_type(LogicalType(dtype_to_duckdb_type[D]()))
         sf.set_simd_function[D, func]()
-        sf.register(conn)
+        return sf^
 
     @staticmethod
     fn from_simd_function[
@@ -884,12 +1036,6 @@ struct ScalarFunction(Movable):
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
     ](conn: Connection) raises:
         """Create and register a binary scalar function from a stdlib math function.
-
-        Accepts functions with the standard library signature
-        `fn[dtype: DType, width: Int](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
-        so you can pass `math.atan2`, etc. directly without writing thin wrappers.
-
-        Both inputs and output share the same DType.
 
         Parameters:
             name: The SQL function name.
@@ -906,12 +1052,7 @@ struct ScalarFunction(Movable):
         ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
         ```
         """
-        var sf = ScalarFunction()
-        sf.set_name(name)
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
-        sf.add_parameter(LogicalType(dtype_to_duckdb_type[D]()))
-        sf.set_return_type(LogicalType(dtype_to_duckdb_type[D]()))
-        sf.set_simd_function[D, func]()
+        var sf = ScalarFunction.from_simd_function[name, D, func]()
         sf.register(conn)
 
     @staticmethod
@@ -1066,7 +1207,6 @@ struct ScalarFunctionSet(Movable):
     """
 
     var _function_set: duckdb_scalar_function_set
-    var _owned: Bool  # Tracks if this struct owns the underlying pointer
 
     fn __init__(out self, name: String):
         """Creates a new scalar function set.
@@ -1076,23 +1216,15 @@ struct ScalarFunctionSet(Movable):
         var name_copy = name.copy()
         ref libduckdb = DuckDB().libduckdb()
         self._function_set = libduckdb.duckdb_create_scalar_function_set(name_copy.as_c_string_slice().unsafe_ptr())
-        self._owned = True
 
     fn __moveinit__(out self, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
-        self._owned = take._owned
-
-    fn __copyinit__(out self, copy: Self):
-        """Copy constructor - shares the pointer but doesn't own it."""
-        self._function_set = copy._function_set
-        self._owned = False  # Copy doesn't own the resource
 
     fn __del__(deinit self):
         """Destroys the scalar function set and deallocates all memory."""
-        if self._owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_scalar_function_set(UnsafePointer(to=self._function_set))
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_destroy_scalar_function_set(UnsafePointer(to=self._function_set))
 
     fn add_function(self, function: ScalarFunction) raises:
         """Adds a scalar function as a new overload to the function set.
@@ -1100,8 +1232,8 @@ struct ScalarFunctionSet(Movable):
         IMPORTANT: The function must have its name set to match the function set's name
         using set_name() before being added to the set.
 
-        The function pointer is added to the set. The caller must ensure the function
-        remains alive until after the set is registered with the connection.
+        DuckDB copies the function internally, so the original ScalarFunction
+        remains valid and will be cleaned up normally when it goes out of scope.
 
         * function: The function to add (passed by reference). Must have matching name.
         * raises: Error if the function could not be added (e.g., duplicate signature).
@@ -1114,12 +1246,13 @@ struct ScalarFunctionSet(Movable):
         if status != DuckDBSuccess:
             raise Error("Failed to add function to set - overload may already exist")
 
-    fn register(mut self, conn: Connection) raises:
+    fn register(self, conn: Connection) raises:
         """Registers the scalar function set within the given connection.
 
         The set requires at least one valid overload.
-        This method releases ownership to transfer it to DuckDB.
-        The function set will be managed by the connection and should not be destroyed manually.
+        DuckDB copies the function set internally during registration, so the
+        handle remains valid and will be cleaned up normally when this struct
+        goes out of scope.
 
         * conn: The connection to register the function set in.
         * raises: Error if the registration was unsuccessful.
@@ -1128,5 +1261,3 @@ struct ScalarFunctionSet(Movable):
         var status = libduckdb.duckdb_register_scalar_function_set(conn._conn, self._function_set)
         if status != DuckDBSuccess:
             raise Error("Failed to register scalar function set")
-        # Release ownership - DuckDB now manages this
-        self._owned = False

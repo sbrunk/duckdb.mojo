@@ -33,13 +33,14 @@ name = "duckdb"
 
 [tasks]
 build = "pixi run mojo package src -o duckdb.mojopkg"
-test = { cmd = "sh -c 'for f in test/test_*.mojo; do mojo run \"$f\" || exit 1; done'" }
+test-library = { cmd = "sh -c 'for f in test/test_*.mojo; do mojo run \"$f\" || exit 1; done'" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
 generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckdb-src --output src/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
 
 # Demo extension
 build-demo-extension = { cmd = "mojo build demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py demo-extension/build/demo_mojo.duckdb_extension", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
+test = {depends-on = ["test-library", "test-demo-extension"]}
 
 # for local development
 [dependencies]

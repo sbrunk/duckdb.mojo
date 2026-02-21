@@ -3,10 +3,12 @@ from duckdb.api import DuckDB
 
 struct Database(Movable):
     var _db: duckdb_database
+    var _is_owned: Bool
 
     fn __init__(out self, path: Optional[String] = None) raises:
         ref libduckdb = DuckDB().libduckdb()
         self._db = UnsafePointer[duckdb_database.type, MutExternalOrigin]()
+        self._is_owned = True
         var db_addr = UnsafePointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
         var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
@@ -20,6 +22,20 @@ struct Database(Movable):
             libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
             raise Error(error_msg)
 
+    fn __init__(out self, *, _handle: duckdb_database):
+        """Wrap an existing database handle without taking ownership.
+
+        The caller retains ownership — the handle will not be closed
+        when this Database is destroyed.
+
+        Args:
+            _handle: An existing database handle (not owned).
+        """
+        self._db = _handle
+        self._is_owned = False
+
     fn __del__(deinit self):
+        if not self._is_owned:
+            return
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_close(UnsafePointer(to=self._db))
