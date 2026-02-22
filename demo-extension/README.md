@@ -75,16 +75,50 @@ pixi run duckdb -unsigned -c "
 
 Expected output: `42`
 
+## API Level & Compile-Time Safety
+
+Extension init functions receive a `Connection` parameterized with an
+`ApiLevel` that controls which DuckDB C API functions are available:
+
+| Level | Meaning | Unstable functions |
+| --- | --- | --- |
+| `ApiLevel.CLIENT` | Standalone client binary (default) | ✅ all available |
+| `ApiLevel.EXT_STABLE` | Extension via `Extension.run` | ❌ compile error |
+| `ApiLevel.EXT_UNSTABLE` | Extension via `Extension.run_unstable` | ✅ all available |
+
+`Extension.run` uses the stable `duckdb_ext_api_v1` struct, so only stable
+functions are resolved.  Calling an unstable-only method (e.g.
+`ScalarFunction.set_bind()`, `Vector.slice()`) from a stable extension is
+caught at **compile time**:
+
+```mojo
+fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+    var sf = ScalarFunction()
+    sf.set_bind(my_bind)  # ← compile error: requires unstable API
+```
+
+To opt into the full (unstable) API surface, use `Extension.run_unstable`:
+
+```mojo
+fn init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
+    var sf = ScalarFunction()
+    sf.set_bind(my_bind)  # ← OK
+    ...
+
+@export("my_ext_init_c_api", ABI="C")
+fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]) -> Bool:
+    return Extension.run_unstable[init](info, access)
+```
+
+Client code (standalone programs using `DuckDB.connect()`) is completely
+unaffected — `ApiLevel.CLIENT` is the default and gives full access.
+
 ## Limitations
 
 > [!NOTE]
-> Mojo extensions currently resolve DuckDB functions via dynamic symbol lookup
-> rather than through the `duckdb_ext_api_v1` struct, meaning unstable/internal
-> APIs are accessible even when targeting the stable `C_STRUCT` ABI. In practice,
-> this ties extensions to a specific DuckDB version. Additionally, the build
-> system differs from the official CMake-based toolchain, so extensions cannot
-> yet be published as signed extensions through DuckDB's extension distribution
-> mechanism.
+> The build system differs from the official CMake-based toolchain, so
+> extensions cannot yet be published as signed extensions through DuckDB's
+> extension distribution mechanism.
 
 ## Creating Your Own Extension
 
@@ -114,19 +148,20 @@ The `{extension_name}` part must match the filename stem of the `.duckdb_extensi
 ### Using `Extension.run` (recommended)
 
 The simplest way to implement the entry point. Write an init function that
-receives a `Connection` and registers your functions, then pass it to
-`Extension.run`:
+receives a `Connection[ApiLevel.EXT_STABLE]` and registers your functions,
+then pass it to `Extension.run`:
 
 ```mojo
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension
+from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
 fn add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection) raises:
+fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
@@ -142,6 +177,15 @@ fn my_extension_init_c_api(
 `Extension.run` handles creating the connection and reporting errors back to
 DuckDB automatically. If `init` raises, the error message is forwarded to
 DuckDB via `set_error`.
+
+The `Connection` is parameterized with `ApiLevel.EXT_STABLE`, which means any
+attempt to call an unstable C API function (e.g. `ScalarFunction.set_bind()`,
+`Vector.slice()`) will be caught at **compile time**. If you need unstable
+functions, use `Extension.run_unstable` which provides a
+`Connection[ApiLevel.EXT_UNSTABLE]` instead.
+
+See the [API Level & Compile-Time Safety](#api-level--compile-time-safety)
+section below for details.
 
 ### Using `Extension` directly
 

@@ -61,13 +61,14 @@ that receives a `Connection` and registers your functions, then pass it to
 ```mojo
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension
+from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
 fn add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection) raises:
+fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
@@ -78,6 +79,41 @@ fn my_ext_init_c_api(
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) -> Bool:
     return Extension.run[init](info, access)
+```
+
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb_extension.h)
+instead of relying on dynamic symbol lookup. The struct is split into a
+**stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
+for the full design):
+
+- **Stable** (`Extension.run`) — uses only functions stabilized since DuckDB
+  v1.2.0.  Because the stable struct is append-only and never modified, the
+  compiled extension binary is forward-compatible with all future DuckDB
+  releases that share the same API major version.
+- **Unstable** (`Extension.run_unstable`) — additionally exposes recently added
+  functions that are candidates for future stabilization.  Unstable extensions
+  are tied to the exact DuckDB version they were compiled against, since
+  unstable entries may be reordered or removed between releases.
+
+`Extension.run` resolves functions from `duckdb_ext_api_v1` (stable part).
+The `Connection` is parameterized with an `ApiLevel` that gates access to
+unstable functions at **compile time** — calling an unstable method from a
+stable-only extension is a compile error, not a runtime crash.
+
+If you need access to unstable C API functions, use `Extension.run_unstable` instead:
+
+```mojo
+fn init_unstable(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
+    # Unstable methods like ScalarFunction.set_bind() are available here
+    ...
+
+@export("my_ext_init_c_api", ABI="C")
+fn my_ext_init_c_api(
+    info: duckdb_extension_info,
+    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+) -> Bool:
+    return Extension.run_unstable[init_unstable](info, access)
 ```
 
 ```sh

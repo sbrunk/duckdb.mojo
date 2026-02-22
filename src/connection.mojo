@@ -1,10 +1,11 @@
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
+from duckdb.api_level import ApiLevel
 from duckdb.database import Database
 from duckdb.result import ResultError, ResultType, ErrorType
 
 
-struct Connection(Movable):
+struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     """A connection to a DuckDB database.
 
     Connection borrows the Database handle during construction — it does **not**
@@ -13,6 +14,15 @@ struct Connection(Movable):
 
     The convenience constructor ``Connection(path)`` (and ``DuckDB.connect()``)
     creates *and owns* an internal Database so the connection is self-contained.
+
+    The ``api_level`` parameter controls compile-time access to unstable API
+    functions.  The default (``ApiLevel.CLIENT``) gives full access.  When
+    running as an extension, ``Extension.run`` creates a connection with the
+    appropriate level (``EXT_STABLE`` or ``EXT_UNSTABLE``).
+
+    Parameters:
+        api_level: The API surface available at compile time.  Defaults to
+            ``ApiLevel.CLIENT`` (full access).
 
     Example:
     ```mojo

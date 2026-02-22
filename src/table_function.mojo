@@ -591,7 +591,7 @@ struct TableFunction(Movable):
             self._function, pushdown
         )
 
-    fn register(self, conn: Connection) raises:
+    fn register(self, conn: Connection[_]) raises:
         """Registers the table function within the given connection.
 
         The function requires at least a name, a bind function, an init function,
