@@ -1,6 +1,7 @@
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
 from duckdb.api_level import ApiLevel
+from duckdb.config import Config
 from duckdb.database import Database
 from duckdb.result import ResultError, ResultType, ErrorType
 
@@ -26,14 +27,19 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     Example:
     ```mojo
-    from duckdb import DuckDB
+    from duckdb import DuckDB, Config
     # Self-contained (owns its own database):
     var con = DuckDB.connect(":memory:")
 
+    # With startup config:
+    var config = Config()
+    config.set("threads", "2")
+    var con2 = DuckDB.connect(":memory:", config^)
+
     # Shared database, multiple connections:
     var db = Database(":memory:")
-    var con1 = Connection(db)
-    var con2 = Connection(db)
+    var con3 = Connection(db)
+    var con4 = Connection(db)
     ```
     """
 
@@ -43,6 +49,23 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     fn __init__(out self, path: String) raises:
         """Create a connection with a new database."""
         self._db = Database(path)
+        self._conn = UnsafePointer[
+            duckdb_connection.type, MutExternalOrigin
+        ]()
+        ref libduckdb = DuckDB().libduckdb()
+        if (
+            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
+        ) == DuckDBError:
+            raise Error("Could not connect to database")
+
+    fn __init__(out self, path: String, config: Config) raises:
+        """Create a connection with a new database and startup configuration.
+
+        Args:
+            path: Database path (e.g. ``":memory:"`` or a file path).
+            config: Startup configuration (borrowed; DuckDB copies it internally).
+        """
+        self._db = Database(path, config)
         self._conn = UnsafePointer[
             duckdb_connection.type, MutExternalOrigin
         ]()

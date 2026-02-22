@@ -10,8 +10,6 @@ Tests load the test extension shared library into DuckDB and verify:
 """
 
 from duckdb import *
-from duckdb._libduckdb import *
-from duckdb.api import DuckDB as _DuckDB
 from testing import *
 from testing.suite import TestSuite
 
@@ -23,43 +21,8 @@ comptime BAD_API_EXT_PATH = "test-extension/build/bad_api.duckdb_extension"
 
 fn _open_unsigned() raises -> Database:
     """Open an in-memory database with allow_unsigned_extensions enabled."""
-    ref libduckdb = _DuckDB().libduckdb()
-    var cfg = duckdb_config()
-    var cfg_addr = UnsafePointer(to=cfg)
-    if libduckdb.duckdb_create_config(cfg_addr) == DuckDBError:
-        raise Error("Failed to create config")
-    var name = String("allow_unsigned_extensions")
-    var val = String("true")
-    if (
-        libduckdb.duckdb_set_config(
-            cfg,
-            name.as_c_string_slice().unsafe_ptr(),
-            val.as_c_string_slice().unsafe_ptr(),
-        )
-        == DuckDBError
-    ):
-        libduckdb.duckdb_destroy_config(cfg_addr)
-        raise Error("Failed to set allow_unsigned_extensions")
-    var db = duckdb_database()
-    var db_addr = UnsafePointer(to=db)
-    var out_error = alloc[UnsafePointer[c_char, MutAnyOrigin]](1)
-    var path = String(":memory:")
-    if (
-        libduckdb.duckdb_open_ext(
-            path.as_c_string_slice().unsafe_ptr(),
-            db_addr,
-            config=cfg,
-            out_error=out_error,
-        )
-        == DuckDBError
-    ):
-        var error_ptr = out_error[]
-        var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
-        libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
-        libduckdb.duckdb_destroy_config(cfg_addr)
-        raise Error(error_msg)
-    libduckdb.duckdb_destroy_config(cfg_addr)
-    return Database(_handle=db)
+    var config = Config({"allow_unsigned_extensions": "true"})
+    return Database(":memory:", config)
 
 
 fn _connect() raises -> Connection:
