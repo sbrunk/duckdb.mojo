@@ -891,3 +891,65 @@ fn deserialize_from_vector[
                 result.append(None)
 
     return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# Nullable column support — Optional[T] extension
+# ──────────────────────────────────────────────────────────────────
+#
+# These types allow `get[Optional[T]]` to return None for NULL values
+# instead of raising a runtime error.  Without Optional, a NULL triggers
+# an error — making null-avoidance the default.
+#
+#   get[Int64](col=0, row=0)            → Int64          (raises on NULL)
+#   get[Optional[Int64]](col=0, row=0)  → Optional[Int64] (None on NULL)
+# ──────────────────────────────────────────────────────────────────
+
+
+trait _NullableColumn(_DBase):
+    """Marker for types that accept NULL as None (i.e., Optional[T])."""
+
+    @staticmethod
+    fn _expected_duckdb_type() -> DuckDBType:
+        """DuckDB type of the wrapped inner type."""
+        ...
+
+    @staticmethod
+    fn _deserialize_single_nullable(
+        vector: Vector, row: Int, is_null: Bool
+    ) raises -> Self:
+        """Deserialize one value, returning None when is_null is True."""
+        ...
+
+    @staticmethod
+    fn _deserialize_column_nullable(
+        vector: Vector, count: Int, offset: Int
+    ) raises -> List[Self]:
+        """Deserialize a full column with None for NULL entries."""
+        ...
+
+
+__extension Optional(_NullableColumn):
+    @staticmethod
+    fn _expected_duckdb_type() -> DuckDBType:
+        return mojo_type_to_duckdb_type[downcast[Self.T, _DBase]]()
+
+    @staticmethod
+    fn _deserialize_single_nullable(
+        vector: Vector, row: Int, is_null: Bool
+    ) raises -> Self:
+        if is_null:
+            return None
+        var val = _deserialize_table_field[downcast[Self.T, _DBase]](
+            vector, row
+        )
+        return rebind_var[Self](Optional(val^))
+
+    @staticmethod
+    fn _deserialize_column_nullable(
+        vector: Vector, count: Int, offset: Int
+    ) raises -> List[Self]:
+        var inner = deserialize_from_vector[downcast[Self.T, _DBase]](
+            vector, count, offset
+        )
+        return rebind_var[List[Self]](inner^)

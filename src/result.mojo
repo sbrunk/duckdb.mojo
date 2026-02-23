@@ -817,27 +817,30 @@ struct MaterializedResult(Sized, Movable):
 
     fn get[
         T: Copyable & Movable
-    ](self, *, col: Int) raises -> List[Optional[T]]:
-        """Get all typed values from a column (new API).
-        
+    ](self, *, col: Int) raises -> List[T]:
+        """Get all typed values from a column.
+
+        When T is a plain type, raises if any value is NULL.
+        When T is Optional[X], NULL entries become None.
+
         Parameters:
-            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
-            
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
         Args:
             col: Column index.
-            
+
         Returns:
-            List[Optional[T]] containing all values, with None for NULLs.
-            
+            List[T] containing all values.
+
         Example:
             ```mojo
             var result = con.execute("SELECT * FROM table").materialize()
             var int_values = result.get[Int64](col=0)
-            var string_values = result.get[String](col=1)
+            var nullable = result.get[Optional[String]](col=1)
             ```
         """
         ref libduckdb = DuckDB().libduckdb()
-        var result = List[Optional[T]](
+        var result = List[T](
             capacity=len(self.chunks) * Int(libduckdb.duckdb_vector_size())
         )
         for chunk_ptr in self.chunks:
@@ -846,19 +849,22 @@ struct MaterializedResult(Sized, Movable):
 
     fn get[
         T: Copyable & Movable
-    ](self, *, col: Int, row: Int) raises -> Optional[T]:
-        """Get a single typed value (new API).
-        
+    ](self, *, col: Int, row: Int) raises -> T:
+        """Get a single typed value.
+
+        When T is a plain type, raises on NULL.
+        When T is Optional[X], returns None for NULL.
+
         Parameters:
-            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
-            
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
         Args:
             col: Column index.
             row: Row index.
-            
+
         Returns:
-            Optional[T] containing the value, or None if NULL.
-            
+            The deserialized value.
+
         Example:
             ```mojo
             var result = con.execute("SELECT * FROM table").materialize()

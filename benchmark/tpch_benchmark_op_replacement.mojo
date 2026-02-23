@@ -241,11 +241,11 @@ fn main() raises:
 
     var lineitem_count = conn.execute("SELECT count(*) FROM lineitem")
     var li_chunk = lineitem_count.fetch_chunk()
-    print("  lineitem rows: " + String(li_chunk.get[Int64](col=0, row=0).value()))
+    print("  lineitem rows: " + String(li_chunk.get[Int64](col=0, row=0)))
 
     var orders_count = conn.execute("SELECT count(*) FROM orders")
     var o_chunk = orders_count.fetch_chunk()
-    print("  orders rows:   " + String(o_chunk.get[Int64](col=0, row=0).value()))
+    print("  orders rows:   " + String(o_chunk.get[Int64](col=0, row=0)))
 
     # TPC-H queries to benchmark (arithmetic-heavy)
     var tpch_queries = List[Int]()

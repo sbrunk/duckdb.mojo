@@ -7,6 +7,7 @@ from duckdb.typed_api import (
     deserialize_from_vector,
     deserialize_list_column,
     _deserialize_table_field,
+    _NullableColumn,
 )
 from collections import Optional
 from memory import UnsafePointer
@@ -198,80 +199,166 @@ struct Chunk[is_owned: Bool](Movable, Sized):
 
     fn get[
         T: Copyable & Movable
-    ](self, *, col: Int, row: Int) raises -> Optional[T]:
+    ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value from the chunk.
-        
+
+        When T is a plain type (e.g. Int64), raises on NULL.
+        When T is Optional[X], returns None for NULL values.
+
         Parameters:
-            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
-            
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
         Args:
             col: Column index.
             row: Row index.
-            
+
         Returns:
-            Optional[T] containing the value, or None if NULL.
-            
+            The deserialized value (or Optional[X] when T is Optional).
+
         Example:
             ```mojo
-            var value = chunk.get[Int64](col=0, row=0)
-            if value:
-                print(value.value())
+            var value = chunk.get[Int64](col=0, row=0)         # raises on NULL
+            var maybe = chunk.get[Optional[Int64]](col=0, row=0)  # None on NULL
             ```
         """
         self._check_bounds(col, row)
-        if self.is_null(col=col, row=row):
-            return None
-        
-        # Deserialize the entire column and return the specific row
-        var all_values = deserialize_from_vector[T](self.get_vector(col), len(self), 0)
-        return all_values[row]
+
+        # Validate column type matches expected Mojo type
+        var actual_type = self.type(col)
+
+        @parameter
+        if conforms_to(T, _NullableColumn):
+            var expected = downcast[
+                T, _NullableColumn
+            ]._expected_duckdb_type()
+            if actual_type != expected:
+                raise Error(
+                    "Type mismatch: expected "
+                    + String(expected)
+                    + " but column has "
+                    + String(actual_type)
+                )
+            var val = downcast[
+                T, _NullableColumn
+            ]._deserialize_single_nullable(
+                self.get_vector(col), row, self.is_null(col=col, row=row)
+            )
+            return rebind_var[T](val^)
+        else:
+            comptime expected_db_type = mojo_type_to_duckdb_type[T]()
+            if actual_type != expected_db_type:
+                raise Error(
+                    "Type mismatch: expected "
+                    + String(expected_db_type)
+                    + " but column has "
+                    + String(actual_type)
+                )
+            if self.is_null(col=col, row=row):
+                raise Error(
+                    "NULL value at col="
+                    + String(col)
+                    + ", row="
+                    + String(row)
+                    + ". Use get[Optional["
+                    + String(get_type_name[T]())
+                    + "]](col=, row=) for nullable values."
+                )
+            return _deserialize_table_field[T](self.get_vector(col), row)
 
     fn get[
         T: Copyable & Movable
-    ](self, *, col: Int) raises -> List[Optional[T]]:
+    ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
-        
+
+        When T is a plain type, raises if any value is NULL.
+        When T is Optional[X], NULL entries become None.
+
         Parameters:
-            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
-            
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
         Args:
             col: Column index.
-            
+
         Returns:
-            List[Optional[T]] containing all values, with None for NULLs.
-            
+            List[T] containing all values.
+
         Example:
             ```mojo
-            var int_values = chunk.get[Int64](col=0)
-            var string_values = chunk.get[String](col=1)
+            var ints = chunk.get[Int64](col=0)               # raises on NULL
+            var maybes = chunk.get[Optional[Int64]](col=0)   # None on NULL
             ```
         """
         self._check_bounds(col)
-        return deserialize_from_vector[T](self.get_vector(col), len(self), 0)
+
+        # Validate column type matches expected Mojo type
+        var actual_type = self.type(col)
+
+        @parameter
+        if conforms_to(T, _NullableColumn):
+            var expected = downcast[
+                T, _NullableColumn
+            ]._expected_duckdb_type()
+            if actual_type != expected:
+                raise Error(
+                    "Type mismatch: expected "
+                    + String(expected)
+                    + " but column has "
+                    + String(actual_type)
+                )
+            var result = downcast[
+                T, _NullableColumn
+            ]._deserialize_column_nullable(
+                self.get_vector(col), len(self), 0
+            )
+            return rebind_var[List[T]](result^)
+        else:
+            comptime expected_db_type = mojo_type_to_duckdb_type[T]()
+            if actual_type != expected_db_type:
+                raise Error(
+                    "Type mismatch: expected "
+                    + String(expected_db_type)
+                    + " but column has "
+                    + String(actual_type)
+                )
+            var opt_result = deserialize_from_vector[T](
+                self.get_vector(col), len(self), 0
+            )
+            var result = List[T](capacity=len(opt_result))
+            for i in range(len(opt_result)):
+                if not opt_result[i]:
+                    raise Error(
+                        "NULL value at row "
+                        + String(i)
+                        + ". Use get[Optional["
+                        + String(get_type_name[T]())
+                        + "]](col=) for nullable values."
+                    )
+                result.append(opt_result[i].value().copy())
+            return result^
 
     fn get[
         T: Copyable & Movable
-    ](self, *, row: Int) raises -> Optional[T]:
+    ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
 
         Maps each column in the chunk to a field in T by position.
-        Returns None if any column value is NULL for this row.
+        Non-Optional fields raise on NULL; Optional fields become None.
 
         Parameters:
-            T: A Mojo struct whose fields correspond to table columns by position.
+            T: A Mojo struct whose fields correspond to table columns.
 
         Args:
             row: Row index.
 
         Returns:
-            Optional[T] — the deserialized struct, or None if any field is NULL.
+            The deserialized struct.
 
         Example:
             ```mojo
             @fieldwise_init
             struct User(Copyable, Movable):
                 var name: String
-                var age: Int64
+                var age: Optional[Int64]  # nullable
 
             var user = chunk.get[User](row=0)
             ```
@@ -303,23 +390,53 @@ struct Chunk[is_owned: Bool](Movable, Sized):
         for idx in range(field_count_):
             comptime FieldType = struct_field_types[T]()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
-            comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
             var actual_type = self.type(idx)
-            if actual_type != expected_db_type:
-                comptime field_name = struct_field_names[T]()[idx]
-                raise Error(
-                    "Type mismatch for field '"
-                    + String(field_name)
-                    + "': expected "
-                    + String(expected_db_type)
-                    + " but column has "
-                    + String(actual_type)
-                )
 
-        # Check for any NULL in this row — return None
-        for col_idx in range(self.column_count()):
-            if self.is_null(col=col_idx, row=row):
-                return None
+            @parameter
+            if conforms_to(FT, _NullableColumn):
+                var expected = downcast[
+                    FT, _NullableColumn
+                ]._expected_duckdb_type()
+                if actual_type != expected:
+                    comptime field_name = struct_field_names[T]()[idx]
+                    raise Error(
+                        "Type mismatch for field '"
+                        + String(field_name)
+                        + "': expected "
+                        + String(expected)
+                        + " but column has "
+                        + String(actual_type)
+                    )
+            else:
+                comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
+                if actual_type != expected_db_type:
+                    comptime field_name = struct_field_names[T]()[idx]
+                    raise Error(
+                        "Type mismatch for field '"
+                        + String(field_name)
+                        + "': expected "
+                        + String(expected_db_type)
+                        + " but column has "
+                        + String(actual_type)
+                    )
+
+        # Check non-Optional fields for NULL before allocating
+        @parameter
+        for idx in range(field_count_):
+            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FT = downcast[FieldType, Copyable & Movable]
+
+            @parameter
+            if not conforms_to(FT, _NullableColumn):
+                if self.is_null(col=idx, row=row):
+                    comptime field_name = struct_field_names[T]()[idx]
+                    raise Error(
+                        "NULL value for non-optional field '"
+                        + String(field_name)
+                        + "'. Declare as Optional["
+                        + String(get_type_name[FT]())
+                        + "] to handle NULLs."
+                    )
 
         # Deserialize each field from its column vector
         var ptr = alloc[T](1)
@@ -330,30 +447,40 @@ struct Chunk[is_owned: Bool](Movable, Sized):
             comptime FT = downcast[FieldType, Copyable & Movable]
             var vector = self.get_vector(idx)
             var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
-            var val = _deserialize_table_field[FT](vector, row)
-            dst.bitcast[FT]().init_pointee_move(val^)
+
+            @parameter
+            if conforms_to(FT, _NullableColumn):
+                var val = downcast[
+                    FT, _NullableColumn
+                ]._deserialize_single_nullable(
+                    vector, row, self.is_null(col=idx, row=row)
+                )
+                dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
+            else:
+                var val = _deserialize_table_field[FT](vector, row)
+                dst.bitcast[FT]().init_pointee_move(val^)
 
         var result = ptr.take_pointee()
         ptr.free()
-        return Optional(result^)
+        return result^
 
     fn get[
         T: Copyable & Movable
-    ](self) raises -> List[Optional[T]]:
+    ](self) raises -> List[T]:
         """Deserialize all table rows into Mojo structs.
 
         Parameters:
-            T: A Mojo struct whose fields correspond to table columns by position.
+            T: A Mojo struct whose fields correspond to table columns.
 
         Returns:
-            List[Optional[T]] — one struct per row, None for rows with any NULL field.
+            List[T] — one struct per row.
 
         Example:
             ```mojo
             @fieldwise_init
             struct User(Copyable, Movable):
                 var name: String
-                var age: Int64
+                var age: Optional[Int64]  # nullable
 
             var users = chunk.get[User]()
             ```
@@ -363,7 +490,7 @@ struct Chunk[is_owned: Bool](Movable, Sized):
             "get[T]() is for struct types. For column values, use get[T](col=).",
         ]()
 
-        var result = List[Optional[T]](capacity=len(self))
+        var result = List[T](capacity=len(self))
         for row in range(len(self)):
             result.append(self.get[T](row=row))
         return result^

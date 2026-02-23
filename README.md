@@ -20,6 +20,15 @@ duckdb.mojo can be used in two ways:
 ```mojo
 from duckdb import *
 
+# Define a struct matching the query columns — fields map to columns by position.
+@fieldwise_init
+struct StationCount(Writable, Copyable, Movable):
+    var station: String
+    var num_services: Int64
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.station, ": ", self.num_services)
+
 def main():
     var con = DuckDB.connect(":memory:")
 
@@ -37,19 +46,22 @@ def main():
     ORDER BY num_services DESC
     LIMIT 3;
     """
-    ).fetch_all()
+    )
+    var chunk = result.fetch_chunk()
 
-    for col in result.columns():
-        print(col)
-
-    print("\nLength:", len(result), "\n")
-
-    for row in range(len(result)):
+    # --- Per-column typed access ---
+    for row in range(len(chunk)):
         print(
-            result.get[String](col=0, row=row).value(),
+            chunk.get[String](col=0, row=row),
             " ",
-            result.get[Int64](col=1, row=row).value(),
+            chunk.get[Int64](col=1, row=row),
         )
+
+    # --- Typed struct access — deserialize whole rows at once ---
+    var stations = chunk.get[StationCount]()
+
+    for i in range(len(stations)):
+        print(stations[i])  # "Utrecht Centraal: 39363"
 ```
 
 ### Extension

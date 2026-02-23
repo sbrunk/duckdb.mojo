@@ -7,49 +7,49 @@ def test_types():
     con = DuckDB.connect(":memory:")
 
     result = con.execute("SELECT true")
-    assert_equal(result.fetch_chunk().get[Bool](row=0, col=0).value(), True)
+    assert_equal(result.fetch_chunk().get[Bool](row=0, col=0), True)
 
-    with assert_raises(contains="Expected type tinyint but got boolean"):
+    with assert_raises(contains="Type mismatch: expected tinyint but column has boolean"):
         result = con.execute("SELECT true")
-        _ = result.fetch_chunk().get[Int8](row=0, col=0).value()
+        _ = result.fetch_chunk().get[Int8](row=0, col=0)
 
-    with assert_raises(contains="Expected type varchar but got boolean"):
+    with assert_raises(contains="Type mismatch: expected varchar but column has boolean"):
         result = con.execute("SELECT true")
-        _ = result.fetch_chunk().get[String](row=0, col=0).value()
+        _ = result.fetch_chunk().get[String](row=0, col=0)
 
     result = con.execute("SELECT -42::TINYINT")
-    assert_equal(result.fetch_chunk().get[Int8](row=0, col=0).value(), -42)
+    assert_equal(result.fetch_chunk().get[Int8](row=0, col=0), -42)
 
     result = con.execute("SELECT 42::UTINYINT")
-    assert_equal(result.fetch_chunk().get[UInt8](row=0, col=0).value(), 42)
+    assert_equal(result.fetch_chunk().get[UInt8](row=0, col=0), 42)
 
     result = con.execute("SELECT -42::SMALLINT")
-    assert_equal(result.fetch_chunk().get[Int16](row=0, col=0).value(), -42)
+    assert_equal(result.fetch_chunk().get[Int16](row=0, col=0), -42)
 
     result = con.execute("SELECT 42::USMALLINT")
-    assert_equal(result.fetch_chunk().get[UInt16](row=0, col=0).value(), 42)
+    assert_equal(result.fetch_chunk().get[UInt16](row=0, col=0), 42)
 
     result = con.execute("SELECT -42::INTEGER")
-    assert_equal(result.fetch_chunk().get[Int32](row=0, col=0).value(), -42)
+    assert_equal(result.fetch_chunk().get[Int32](row=0, col=0), -42)
 
     result = con.execute("SELECT 42::UINTEGER")
-    assert_equal(result.fetch_chunk().get[UInt32](row=0, col=0).value(), 42)
+    assert_equal(result.fetch_chunk().get[UInt32](row=0, col=0), 42)
 
     result = con.execute("SELECT -42::BIGINT")
-    assert_equal(result.fetch_chunk().get[Int64](row=0, col=0).value(), -42)
+    assert_equal(result.fetch_chunk().get[Int64](row=0, col=0), -42)
 
     result = con.execute("SELECT 42::UBIGINT")
-    assert_equal(result.fetch_chunk().get[UInt64](row=0, col=0).value(), 42)
+    assert_equal(result.fetch_chunk().get[UInt64](row=0, col=0), 42)
 
     result = con.execute("SELECT 42.0::FLOAT")
-    assert_equal(result.fetch_chunk().get[Float32](row=0, col=0).value(), 42.0)
+    assert_equal(result.fetch_chunk().get[Float32](row=0, col=0), 42.0)
 
     result = con.execute("SELECT 42.0::DOUBLE")
-    assert_equal(result.fetch_chunk().get[Float64](row=0, col=0).value(), 42.0)
+    assert_equal(result.fetch_chunk().get[Float64](row=0, col=0), 42.0)
 
     result = con.execute("SELECT TIMESTAMP '1992-09-20 11:30:00.123456789'")
     assert_equal(
-        result.fetch_chunk().get[Timestamp](row=0, col=0).value(),
+        result.fetch_chunk().get[Timestamp](row=0, col=0),
         Timestamp(
             716988600123456
         ),  # SELECT epoch_us(TIMESTAMP '1992-09-20 11:30:00.123456789');
@@ -57,23 +57,23 @@ def test_types():
 
     result = con.execute("SELECT DATE '1992-09-20'")
     assert_equal(
-        result.fetch_chunk().get[Date](row=0, col=0).value(), Date(8298)
+        result.fetch_chunk().get[Date](row=0, col=0), Date(8298)
     )
 
     result = con.execute("SELECT TIME '1992-09-20 11:30:00.123456'")
     assert_equal(
-        result.fetch_chunk().get[Time](row=0, col=0).value(),
+        result.fetch_chunk().get[Time](row=0, col=0),
         Time(41400123456),  # SELECT epoch_us(TIME '11:30:00.123456');
     )
 
     result = con.execute("SELECT 'hello'")
     assert_equal(
-        result.fetch_chunk().get[String](row=0, col=0).value(), "hello"
+        result.fetch_chunk().get[String](row=0, col=0), "hello"
     )
 
     result = con.execute("SELECT 'hello longer varchar'")
     assert_equal(
-        result.fetch_chunk().get[String](row=0, col=0).value(),
+        result.fetch_chunk().get[String](row=0, col=0),
         "hello longer varchar",
     )
 
@@ -88,7 +88,7 @@ def test_list():
     assert_equal(len(lists), 2)
 
     for row_idx in range(2):
-        ref l = lists[row_idx].value()
+        ref l = lists[row_idx]
         assert_equal(len(l), 3)
         for list_idx in range(3):
             var list_value = l[list_idx].value()
@@ -97,7 +97,7 @@ def test_list():
     # A list with nulls
     result = con.execute("SELECT [1, null, 3]")
     chunk = result.fetch_chunk()
-    ref list_with_nulls = chunk.get[List[Optional[Int32]]](col=0)[0].value()
+    ref list_with_nulls = chunk.get[List[Optional[Int32]]](col=0)[0]
     assert_equal(len(list_with_nulls), 3)
 
     assert_equal(list_with_nulls[0].value(), 1)
@@ -110,14 +110,14 @@ def test_list():
     nested_lists = chunk.get[List[Optional[List[Optional[Int32]]]]](col=0)
 
     assert_equal(len(nested_lists), 2)
-    assert_equal(len(nested_lists[0].value()), 2)
-    assert_equal(len(nested_lists[0].value()[0].value()), 2)
-    assert_equal(len(nested_lists[0].value()[1].value()), 2)
-    assert_equal(len(nested_lists[1].value()), 1)
-    assert_equal(len(nested_lists[1].value()[0].value()), 2)
+    assert_equal(len(nested_lists[0]), 2)
+    assert_equal(len(nested_lists[0][0].value()), 2)
+    assert_equal(len(nested_lists[0][1].value()), 2)
+    assert_equal(len(nested_lists[1]), 1)
+    assert_equal(len(nested_lists[1][0].value()), 2)
 
     for row_idx in range(len(nested_lists)):
-        ref sublists = nested_lists[row_idx].value()
+        ref sublists = nested_lists[row_idx]
         for list_idx in range(len(sublists)):
             ref sublist = sublists[list_idx].value()
             assert_equal(len(sublist), 2)
@@ -135,11 +135,11 @@ def test_list():
     string_lists = chunk.get[List[Optional[String]]](col=0)
     assert_equal(len(string_lists), 2)
 
-    assert_equal(string_lists[0].value()[0].value(), "a")
-    assert_equal(string_lists[0].value()[1].value(), "b")
+    assert_equal(string_lists[0][0].value(), "a")
+    assert_equal(string_lists[0][1].value(), "b")
 
     assert_equal(
-        string_lists[1].value()[0].value(),
+        string_lists[1][0].value(),
         "cdefghijklmnopqrstuvwxyz",
     )
 
@@ -149,13 +149,13 @@ def test_list():
 def test_null():
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT null")
-    assert_false(result.fetch_chunk().get[Int32](row=0, col=0))
+    assert_false(result.fetch_chunk().get[Optional[Int32]](row=0, col=0))
 
     result = con.execute("SELECT [1, null, 3]")
     chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)
 
-    ref first_row_as_list = chunk.get[List[Optional[Int32]]](col=0)[0].value()
+    ref first_row_as_list = chunk.get[List[Optional[Int32]]](col=0)[0]
     assert_true(first_row_as_list[0])
     assert_false(first_row_as_list[1])
     assert_true(first_row_as_list[2])

@@ -15,71 +15,70 @@ def test_scalar_types_new_api():
     var chunk = result.fetch_chunk()
     var bool_val = chunk.get[Bool](col=0, row=0)
     assert_true(bool_val)
-    assert_equal(bool_val.value(), True)
+    assert_equal(bool_val, True)
 
     # Int types
     result = con.execute("SELECT -42::TINYINT")
     chunk = result.fetch_chunk()
     var tinyint_val = chunk.get[Int8](col=0, row=0)
-    assert_true(tinyint_val)
-    assert_equal(tinyint_val.value(), -42)
+    assert_equal(tinyint_val, -42)
 
     result = con.execute("SELECT 42::UTINYINT")
     chunk = result.fetch_chunk() 
     var utinyint_val = chunk.get[UInt8](col=0, row=0)
-    assert_equal(utinyint_val.value(), 42)
+    assert_equal(utinyint_val, 42)
 
     result = con.execute("SELECT -42::SMALLINT")
     chunk = result.fetch_chunk()
     var smallint_val = chunk.get[Int16](col=0, row=0)
-    assert_equal(smallint_val.value(), -42)
+    assert_equal(smallint_val, -42)
 
     result = con.execute("SELECT 42::USMALLINT")
     chunk = result.fetch_chunk()
     var usmallint_val = chunk.get[UInt16](col=0, row=0)
-    assert_equal(usmallint_val.value(), 42)
+    assert_equal(usmallint_val, 42)
 
     result = con.execute("SELECT -42::INTEGER")
     chunk = result.fetch_chunk()
     var int_val = chunk.get[Int32](col=0, row=0)
-    assert_equal(int_val.value(), -42)
+    assert_equal(int_val, -42)
 
     result = con.execute("SELECT 42::UINTEGER")
     chunk = result.fetch_chunk()
     var uint_val = chunk.get[UInt32](col=0, row=0)
-    assert_equal(uint_val.value(), 42)
+    assert_equal(uint_val, 42)
 
     result = con.execute("SELECT -42::BIGINT")
     chunk = result.fetch_chunk()
     var bigint_val = chunk.get[Int64](col=0, row=0)
-    assert_equal(bigint_val.value(), -42)
+    assert_equal(bigint_val, -42)
 
     result = con.execute("SELECT 42::UBIGINT")
     chunk = result.fetch_chunk()
     var ubigint_val = chunk.get[UInt64](col=0, row=0)
-    assert_equal(ubigint_val.value(), 42)
+    assert_equal(ubigint_val, 42)
 
     # Float types
     result = con.execute("SELECT 42.5::FLOAT")
     chunk = result.fetch_chunk()
     var float_val = chunk.get[Float32](col=0, row=0)
-    assert_equal(float_val.value(), 42.5)
+    assert_equal(float_val, 42.5)
 
     result = con.execute("SELECT 42.5::DOUBLE")
     chunk = result.fetch_chunk()
     var double_val = chunk.get[Float64](col=0, row=0)
-    assert_equal(double_val.value(), 42.5)
+    assert_equal(double_val, 42.5)
 
     # String
     result = con.execute("SELECT 'hello'")
     chunk = result.fetch_chunk()
     var str_val = chunk.get[String](col=0, row=0)
-    assert_equal(str_val.value(), "hello")
+    assert_equal(str_val, "hello")
 
     result = con.execute("SELECT 'hello longer varchar'")
     chunk = result.fetch_chunk()
     var long_str_val = chunk.get[String](col=0, row=0)
-    assert_equal(long_str_val.value(), "hello longer varchar")
+    assert_equal(long_str_val, "hello longer varchar")
 
 
 def test_date_time_types_new_api():
@@ -90,19 +89,19 @@ def test_date_time_types_new_api():
     result = con.execute("SELECT TIMESTAMP '1992-09-20 11:30:00.123456789'")
     var chunk = result.fetch_chunk()
     var ts_val = chunk.get[Timestamp](col=0, row=0)
-    assert_equal(ts_val.value(), Timestamp(716988600123456))
+    assert_equal(ts_val, Timestamp(716988600123456))
 
     # Date
     result = con.execute("SELECT DATE '1992-09-20'")
     chunk = result.fetch_chunk()
     var date_val = chunk.get[Date](col=0, row=0)
-    assert_equal(date_val.value(), Date(8298))
+    assert_equal(date_val, Date(8298))
 
     # Time
     result = con.execute("SELECT TIME '1992-09-20 11:30:00.123456'")
     chunk = result.fetch_chunk()
     var time_val = chunk.get[Time](col=0, row=0)
-    assert_equal(time_val.value(), Time(41400123456))
+    assert_equal(time_val, Time(41400123456))
 
 
 def test_null_handling_new_api():
@@ -112,7 +111,7 @@ def test_null_handling_new_api():
     # NULL integer
     result = con.execute("SELECT null::INT")
     var chunk = result.fetch_chunk()
-    var null_val = chunk.get[Int32](col=0, row=0)
+    var null_val = chunk.get[Optional[Int32]](col=0, row=0)
     assert_false(null_val)
 
     # Mixed nulls and values
@@ -120,15 +119,13 @@ def test_null_handling_new_api():
     chunk = result.fetch_chunk()
     
     var val1 = chunk.get[Int32](col=0, row=0)
-    assert_true(val1)
-    assert_equal(val1.value(), 1)
+    assert_equal(val1, 1)
     
-    var val2 = chunk.get[Int32](col=0, row=1)
+    var val2 = chunk.get[Optional[Int32]](col=0, row=1)
     assert_false(val2)
     
     var val3 = chunk.get[Int32](col=0, row=2)
-    assert_true(val3)
-    assert_equal(val3.value(), 3)
+    assert_equal(val3, 3)
 
 
 def test_column_retrieval_new_api():
@@ -141,8 +138,7 @@ def test_column_retrieval_new_api():
     
     assert_equal(len(values), 5)
     for i in range(5):
-        assert_true(values[i])
-        assert_equal(values[i].value(), Int32(i + 1))
+        assert_equal(values[i], Int32(i + 1))
 
 
 def test_multiple_columns_new_api():
@@ -166,13 +162,13 @@ def test_multiple_columns_new_api():
     assert_equal(len(names), 3)
     assert_equal(len(scores), 3)
     
-    assert_equal(ids[0].value(), 1)
-    assert_equal(names[0].value(), "alice")
-    assert_equal(scores[0].value(), 25.5)
+    assert_equal(ids[0], 1)
+    assert_equal(names[0], "alice")
+    assert_equal(scores[0], 25.5)
     
-    assert_equal(ids[2].value(), 3)
-    assert_equal(names[2].value(), "charlie")
-    assert_equal(scores[2].value(), 35.5)
+    assert_equal(ids[2], 3)
+    assert_equal(names[2], "charlie")
+    assert_equal(scores[2], 35.5)
 
 
 def test_type_mismatch_new_api():
@@ -320,9 +316,8 @@ def test_struct_deserialization_numeric():
     )
     var chunk = result.fetch_chunk()
     var val = chunk.get[Point](col=0, row=0)
-    assert_true(val)
-    assert_equal(val.value().x, 1.5)
-    assert_equal(val.value().y, 2.5)
+    assert_equal(val.x, 1.5)
+    assert_equal(val.y, 2.5)
 
 
 def test_struct_deserialization_column():
@@ -340,17 +335,14 @@ def test_struct_deserialization_column():
     var points = chunk.get[Point](col=0)
     assert_equal(len(points), 3)
 
-    assert_true(points[0])
-    assert_equal(points[0].value().x, 0.0)
-    assert_equal(points[0].value().y, 0.0)
+    assert_equal(points[0].x, 0.0)
+    assert_equal(points[0].y, 0.0)
 
-    assert_true(points[1])
-    assert_equal(points[1].value().x, 1.0)
-    assert_equal(points[1].value().y, 2.0)
+    assert_equal(points[1].x, 1.0)
+    assert_equal(points[1].y, 2.0)
 
-    assert_true(points[2])
-    assert_equal(points[2].value().x, 3.0)
-    assert_equal(points[2].value().y, 4.0)
+    assert_equal(points[2].x, 3.0)
+    assert_equal(points[2].y, 4.0)
 
 
 def test_struct_deserialization_mixed_int_types():
@@ -362,9 +354,8 @@ def test_struct_deserialization_mixed_int_types():
     )
     var chunk = result.fetch_chunk()
     var val = chunk.get[IntPair](col=0, row=0)
-    assert_true(val)
-    assert_equal(val.value().a, 10)
-    assert_equal(val.value().b, 20)
+    assert_equal(val.a, 10)
+    assert_equal(val.b, 20)
 
 
 def test_struct_null_handling():
@@ -379,7 +370,7 @@ def test_struct_null_handling():
         ) AS t(pt)
     """)
     var chunk = result.fetch_chunk()
-    var points = chunk.get[Point](col=0)
+    var points = chunk.get[Optional[Point]](col=0)
     assert_equal(len(points), 3)
 
     assert_true(points[0])
@@ -425,23 +416,20 @@ def test_list_column_int32():
     assert_equal(len(lists), 3)
 
     # Row 0: [1, 2, 3]
-    assert_true(lists[0])
-    var row0 = lists[0].value().copy()
+    var row0 = lists[0].copy()
     assert_equal(len(row0), 3)
     assert_equal(row0[0].value(), 1)
     assert_equal(row0[1].value(), 2)
     assert_equal(row0[2].value(), 3)
 
     # Row 1: [4, 5]
-    assert_true(lists[1])
-    var row1 = lists[1].value().copy()
+    var row1 = lists[1].copy()
     assert_equal(len(row1), 2)
     assert_equal(row1[0].value(), 4)
     assert_equal(row1[1].value(), 5)
 
     # Row 2: [6]
-    assert_true(lists[2])
-    var row2 = lists[2].value().copy()
+    var row2 = lists[2].copy()
     assert_equal(len(row2), 1)
     assert_equal(row2[0].value(), 6)
 
@@ -457,12 +445,12 @@ def test_list_column_varchar():
 
     assert_equal(len(lists), 2)
 
-    var row0 = lists[0].value().copy()
+    var row0 = lists[0].copy()
     assert_equal(len(row0), 2)
     assert_equal(row0[0].value(), "hello")
     assert_equal(row0[1].value(), "world")
 
-    var row1 = lists[1].value().copy()
+    var row1 = lists[1].copy()
     assert_equal(len(row1), 1)
     assert_equal(row1[0].value(), "mojo")
 
@@ -476,7 +464,7 @@ def test_list_column_with_nulls():
     )
     result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
-    var lists = chunk.get[List[Optional[Int32]]](col=0)
+    var lists = chunk.get[Optional[List[Optional[Int32]]]](col=0)
 
     assert_equal(len(lists), 3)
 
@@ -508,12 +496,10 @@ def test_list_column_empty_lists():
     assert_equal(len(lists), 2)
 
     # Row 0: empty list
-    assert_true(lists[0])
-    assert_equal(len(lists[0].value().copy()), 0)
+    assert_equal(len(lists[0].copy()), 0)
 
     # Row 1: [42]
-    assert_true(lists[1])
-    assert_equal(lists[1].value().copy()[0].value(), 42)
+    assert_equal(lists[1].copy()[0].value(), 42)
 
 
 def test_list_column_float64():
@@ -524,7 +510,7 @@ def test_list_column_float64():
     var lists = chunk.get[List[Optional[Float64]]](col=0)
 
     assert_equal(len(lists), 1)
-    var row0 = lists[0].value().copy()
+    var row0 = lists[0].copy()
     assert_equal(len(row0), 3)
     assert_equal(row0[0].value(), 1.5)
     assert_equal(row0[1].value(), 2.5)
@@ -544,19 +530,17 @@ def test_list_via_get():
     result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
 
-    # T = List[Optional[Int32]] → returns List[Optional[List[Optional[Int32]]]]
+    # T = List[Optional[Int32]] → returns List[List[Optional[Int32]]]
     var lists = chunk.get[List[Optional[Int32]]](col=0)
 
     assert_equal(len(lists), 2)
 
-    assert_true(lists[0])
-    var row0 = lists[0].value().copy()
+    var row0 = lists[0].copy()
     assert_equal(len(row0), 2)
     assert_equal(row0[0].value(), 10)
     assert_equal(row0[1].value(), 20)
 
-    assert_true(lists[1])
-    var row1 = lists[1].value().copy()
+    var row1 = lists[1].copy()
     assert_equal(len(row1), 1)
     assert_equal(row1[0].value(), 30)
 
@@ -568,7 +552,7 @@ def test_list_via_get_with_nulls():
     _ = con.execute("INSERT INTO t VALUES ([1, NULL, 3]), (NULL), ([4])")
     result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
-    var lists = chunk.get[List[Optional[Int32]]](col=0)
+    var lists = chunk.get[Optional[List[Optional[Int32]]]](col=0)
 
     assert_equal(len(lists), 3)
 
@@ -606,8 +590,7 @@ def test_nested_list():
     assert_equal(len(lists), 2)
 
     # Row 0: [[1, 2], [3]]
-    assert_true(lists[0])
-    var row0 = lists[0].value().copy()
+    var row0 = lists[0].copy()
     assert_equal(len(row0), 2)
 
     assert_true(row0[0])
@@ -622,8 +605,7 @@ def test_nested_list():
     assert_equal(inner1[0].value(), 3)
 
     # Row 1: [[4, 5, 6]]
-    assert_true(lists[1])
-    var row1 = lists[1].value().copy()
+    var row1 = lists[1].copy()
     assert_equal(len(row1), 1)
     var inner2 = row1[0].value().copy()
     assert_equal(len(inner2), 3)
@@ -642,7 +624,7 @@ def test_nested_list_with_nulls():
     result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[
-        List[Optional[List[Optional[Int32]]]]
+        Optional[List[Optional[List[Optional[Int32]]]]]
     ](col=0)
 
     assert_equal(len(lists), 2)
@@ -681,16 +663,14 @@ def test_table_struct_single_row():
     var chunk = result.fetch_chunk()
 
     var user = chunk.get[UserRecord](row=0)
-    assert_true(user)
-    assert_equal(user.value().name, "Alice")
-    assert_equal(user.value().age, 30)
-    assert_equal(user.value().active, True)
+    assert_equal(user.name, "Alice")
+    assert_equal(user.age, 30)
+    assert_equal(user.active, True)
 
     var user2 = chunk.get[UserRecord](row=1)
-    assert_true(user2)
-    assert_equal(user2.value().name, "Bob")
-    assert_equal(user2.value().age, 25)
-    assert_equal(user2.value().active, False)
+    assert_equal(user2.name, "Bob")
+    assert_equal(user2.age, 25)
+    assert_equal(user2.active, False)
 
 
 def test_table_struct_all_rows():
@@ -708,22 +688,19 @@ def test_table_struct_all_rows():
     var users = chunk.get[UserRecord]()
     assert_equal(len(users), 3)
 
-    assert_true(users[0])
-    assert_equal(users[0].value().name, "Alice")
-    assert_equal(users[0].value().age, 30)
+    assert_equal(users[0].name, "Alice")
+    assert_equal(users[0].age, 30)
 
-    assert_true(users[1])
-    assert_equal(users[1].value().name, "Bob")
-    assert_equal(users[1].value().age, 25)
+    assert_equal(users[1].name, "Bob")
+    assert_equal(users[1].age, 25)
 
-    assert_true(users[2])
-    assert_equal(users[2].value().name, "Charlie")
-    assert_equal(users[2].value().age, 35)
-    assert_equal(users[2].value().active, True)
+    assert_equal(users[2].name, "Charlie")
+    assert_equal(users[2].age, 35)
+    assert_equal(users[2].active, True)
 
 
 def test_table_struct_with_nulls():
-    """Rows with any NULL column value return None."""
+    """Rows with any NULL column value raise an error."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
@@ -734,22 +711,21 @@ def test_table_struct_with_nulls():
     var result = con.execute("SELECT name, age, active FROM users")
     var chunk = result.fetch_chunk()
 
-    # Row 0: all non-null → Some
+    # Row 0: all non-null → succeeds
     var user0 = chunk.get[UserRecord](row=0)
-    assert_true(user0)
-    assert_equal(user0.value().name, "Alice")
+    assert_equal(user0.name, "Alice")
 
-    # Row 1: name is NULL → None
-    var user1 = chunk.get[UserRecord](row=1)
-    assert_false(user1)
+    # Row 1: name is NULL → raises
+    with assert_raises():
+        _ = chunk.get[UserRecord](row=1)
 
-    # Row 2: age is NULL → None
-    var user2 = chunk.get[UserRecord](row=2)
-    assert_false(user2)
+    # Row 2: age is NULL → raises
+    with assert_raises():
+        _ = chunk.get[UserRecord](row=2)
 
 
 def test_table_struct_all_rows_with_nulls():
-    """All-rows get with some NULL rows returns None entries."""
+    """All-rows get raises when a non-Optional field is NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
@@ -760,12 +736,8 @@ def test_table_struct_all_rows_with_nulls():
     var result = con.execute("SELECT name, age, active FROM users")
     var chunk = result.fetch_chunk()
 
-    var users = chunk.get[UserRecord]()
-    assert_equal(len(users), 3)
-    assert_true(users[0])
-    assert_false(users[1])  # NULL name
-    assert_true(users[2])
-    assert_equal(users[2].value().name, "Charlie")
+    with assert_raises():
+        _ = chunk.get[UserRecord]()
 
 
 def test_table_struct_column_count_mismatch():
@@ -838,17 +810,15 @@ def test_table_struct_with_list_field():
     var chunk = result.fetch_chunk()
 
     var rec = chunk.get[RecordWithList](row=0)
-    assert_true(rec)
-    assert_equal(rec.value().name, "Alice")
-    assert_equal(len(rec.value().scores), 3)
-    assert_equal(rec.value().scores[0], 90.0)
-    assert_equal(rec.value().scores[1], 95.0)
-    assert_equal(rec.value().scores[2], 100.0)
+    assert_equal(rec.name, "Alice")
+    assert_equal(len(rec.scores), 3)
+    assert_equal(rec.scores[0], 90.0)
+    assert_equal(rec.scores[1], 95.0)
+    assert_equal(rec.scores[2], 100.0)
 
     var rec2 = chunk.get[RecordWithList](row=1)
-    assert_true(rec2)
-    assert_equal(rec2.value().name, "Bob")
-    assert_equal(len(rec2.value().scores), 2)
+    assert_equal(rec2.name, "Bob")
+    assert_equal(len(rec2.scores), 2)
 
 
 def test_table_struct_with_nested_struct():
@@ -865,16 +835,14 @@ def test_table_struct_with_nested_struct():
     var chunk = result.fetch_chunk()
 
     var row0 = chunk.get[LabeledPoint](row=0)
-    assert_true(row0)
-    assert_equal(row0.value().label, "origin")
-    assert_equal(row0.value().pt.x, 0.0)
-    assert_equal(row0.value().pt.y, 0.0)
+    assert_equal(row0.label, "origin")
+    assert_equal(row0.pt.x, 0.0)
+    assert_equal(row0.pt.y, 0.0)
 
     var row1 = chunk.get[LabeledPoint](row=1)
-    assert_true(row1)
-    assert_equal(row1.value().label, "offset")
-    assert_equal(row1.value().pt.x, 1.5)
-    assert_equal(row1.value().pt.y, 2.5)
+    assert_equal(row1.label, "offset")
+    assert_equal(row1.pt.x, 1.5)
+    assert_equal(row1.pt.y, 2.5)
 
 
 def main():

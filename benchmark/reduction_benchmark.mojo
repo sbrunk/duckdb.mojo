@@ -142,7 +142,7 @@ fn main() raises:
 
     var row_count = conn.execute("SELECT count(*) FROM agg_data")
     var rc = row_count.fetch_chunk()
-    print("  agg_data rows: " + String(rc.get[Int64](col=0, row=0).value()))
+    print("  agg_data rows: " + String(rc.get[Int64](col=0, row=0)))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo aggregate functions...")
@@ -160,7 +160,7 @@ fn main() raises:
     fn check_close(label: String, conn: Connection, query: String) raises:
         var res = conn.execute(query)
         var ck = res.fetch_chunk()
-        var ok = ck.get[Bool](col=0, row=0).value()
+        var ok = ck.get[Bool](col=0, row=0)
         print("  " + label + ": " + String(ok))
 
     # Use a tolerance that accommodates float accumulation differences
