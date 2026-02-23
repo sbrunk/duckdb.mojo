@@ -258,11 +258,11 @@ def test_table_function_execute_counter():
     var result = conn.execute("SELECT * FROM counter(5)")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 5)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 1)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 2)
-    assert_equal(chunk.get(integer, col=0, row=3).value(), 3)
-    assert_equal(chunk.get(integer, col=0, row=4).value(), 4)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 0)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 1)
+    assert_equal(chunk.get[Int32](col=0, row=2).value(), 2)
+    assert_equal(chunk.get[Int32](col=0, row=3).value(), 3)
+    assert_equal(chunk.get[Int32](col=0, row=4).value(), 4)
 
 
 def test_table_function_execute_counter_zero():
@@ -297,7 +297,7 @@ def test_table_function_execute_counter_single():
     var result = conn.execute("SELECT * FROM counter(1)")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 0)
 
 
 def test_table_function_with_where_clause():
@@ -315,9 +315,9 @@ def test_table_function_with_where_clause():
     var result = conn.execute("SELECT i FROM counter(10) WHERE i >= 7")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 3)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 7)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 8)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 9)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 7)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 8)
+    assert_equal(chunk.get[Int32](col=0, row=2).value(), 9)
 
 
 def test_table_function_with_order_by():
@@ -335,11 +335,11 @@ def test_table_function_with_order_by():
     var result = conn.execute("SELECT i FROM counter(5) ORDER BY i DESC")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 5)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 4)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 2)
-    assert_equal(chunk.get(integer, col=0, row=3).value(), 1)
-    assert_equal(chunk.get(integer, col=0, row=4).value(), 0)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 4)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 3)
+    assert_equal(chunk.get[Int32](col=0, row=2).value(), 2)
+    assert_equal(chunk.get[Int32](col=0, row=3).value(), 1)
+    assert_equal(chunk.get[Int32](col=0, row=4).value(), 0)
 
 
 def test_table_function_with_aggregation():
@@ -357,7 +357,7 @@ def test_table_function_with_aggregation():
     var result = conn.execute("SELECT SUM(i)::BIGINT as total FROM counter(5)")
     var chunk = result.fetch_chunk()
     # Sum of 0+1+2+3+4 = 10
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 10)
+    assert_equal(chunk.get[Int64](col=0, row=0).value(), 10)
 
 
 def test_table_function_no_params():
@@ -374,8 +374,8 @@ def test_table_function_no_params():
     var result = conn.execute("SELECT * FROM static_table()")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 2)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 100)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 200)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 100)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 200)
 
 
 def test_table_function_multi_column():
@@ -394,19 +394,19 @@ def test_table_function_multi_column():
     assert_equal(len(chunk), 3)
 
     # Check id column
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 1)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 2)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 3)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 1)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 2)
+    assert_equal(chunk.get[Int32](col=0, row=2).value(), 3)
 
     # Check name column
-    assert_equal(chunk.get(varchar, col=1, row=0).value(), "alice")
-    assert_equal(chunk.get(varchar, col=1, row=1).value(), "bob")
-    assert_equal(chunk.get(varchar, col=1, row=2).value(), "carol")
+    assert_equal(chunk.get[String](col=1, row=0).value(), "alice")
+    assert_equal(chunk.get[String](col=1, row=1).value(), "bob")
+    assert_equal(chunk.get[String](col=1, row=2).value(), "carol")
 
     # Check score column (DOUBLE = Float64)
-    assert_equal(chunk.get(double, col=2, row=0).value(), 0.0)
-    assert_equal(chunk.get(double, col=2, row=1).value(), 10.5)
-    assert_equal(chunk.get(double, col=2, row=2).value(), 21.0)
+    assert_equal(chunk.get[Float64](col=2, row=0).value(), 0.0)
+    assert_equal(chunk.get[Float64](col=2, row=1).value(), 10.5)
+    assert_equal(chunk.get[Float64](col=2, row=2).value(), 21.0)
 
 
 def test_table_function_multi_column_select_specific():
@@ -425,8 +425,8 @@ def test_table_function_multi_column_select_specific():
     )
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 2)
-    assert_equal(chunk.get(varchar, col=0, row=0).value(), "bob")
-    assert_equal(chunk.get(varchar, col=0, row=1).value(), "carol")
+    assert_equal(chunk.get[String](col=0, row=0).value(), "bob")
+    assert_equal(chunk.get[String](col=0, row=1).value(), "carol")
 
 
 def test_table_function_in_join():
@@ -453,12 +453,12 @@ def test_table_function_in_join():
     )
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 3)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
-    assert_equal(chunk.get(varchar, col=1, row=0).value(), "zero")
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 1)
-    assert_equal(chunk.get(varchar, col=1, row=1).value(), "one")
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 2)
-    assert_equal(chunk.get(varchar, col=1, row=2).value(), "two")
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 0)
+    assert_equal(chunk.get[String](col=1, row=0).value(), "zero")
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 1)
+    assert_equal(chunk.get[String](col=1, row=1).value(), "one")
+    assert_equal(chunk.get[Int32](col=0, row=2).value(), 2)
+    assert_equal(chunk.get[String](col=1, row=2).value(), "two")
 
 
 def test_table_function_supports_projection_pushdown():
@@ -478,7 +478,7 @@ def test_table_function_supports_projection_pushdown():
     var result = conn.execute("SELECT i FROM counter_pp(3)")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 3)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 0)
 
 
 def test_table_function_set_cardinality():
@@ -505,8 +505,8 @@ def test_table_function_set_cardinality():
     var result = conn.execute("SELECT * FROM cardinality_test()")
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 2)
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 100)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 200)
+    assert_equal(chunk.get[Int32](col=0, row=0).value(), 100)
+    assert_equal(chunk.get[Int32](col=0, row=1).value(), 200)
 
 
 def test_table_function_large_result():
@@ -553,10 +553,10 @@ def test_table_function_large_result_correctness():
         " MIN(i)::BIGINT as mn, MAX(i)::BIGINT as mx FROM counter(5000)"
     )
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 5000)
-    assert_equal(chunk.get(bigint, col=1, row=0).value(), 12497500)
-    assert_equal(chunk.get(bigint, col=2, row=0).value(), 0)
-    assert_equal(chunk.get(bigint, col=3, row=0).value(), 4999)
+    assert_equal(chunk.get[Int64](col=0, row=0).value(), 5000)
+    assert_equal(chunk.get[Int64](col=1, row=0).value(), 12497500)
+    assert_equal(chunk.get[Int64](col=2, row=0).value(), 0)
+    assert_equal(chunk.get[Int64](col=3, row=0).value(), 4999)
 
 
 def main():

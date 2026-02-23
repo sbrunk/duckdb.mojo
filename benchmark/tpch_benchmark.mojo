@@ -300,15 +300,15 @@ fn main() raises:
 
     var lineitem_count = conn.execute("SELECT count(*) FROM lineitem")
     var li_chunk = lineitem_count.fetch_chunk()
-    print("  lineitem rows: " + String(li_chunk.get(bigint, col=0, row=0).value()))
+    print("  lineitem rows: " + String(li_chunk.get[Int64](col=0, row=0).value()))
 
     var orders_count = conn.execute("SELECT count(*) FROM orders")
     var o_chunk = orders_count.fetch_chunk()
-    print("  orders rows:   " + String(o_chunk.get(bigint, col=0, row=0).value()))
+    print("  orders rows:   " + String(o_chunk.get[Int64](col=0, row=0).value()))
 
     var part_count = conn.execute("SELECT count(*) FROM part")
     var p_chunk = part_count.fetch_chunk()
-    print("  part rows:     " + String(p_chunk.get(bigint, col=0, row=0).value()))
+    print("  part rows:     " + String(p_chunk.get[Int64](col=0, row=0).value()))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo scalar functions...")
@@ -327,8 +327,8 @@ fn main() raises:
         + " FROM lineitem LIMIT 1"
     )
     var tc = type_check.fetch_chunk()
-    print("  mojo_multiply type: " + String(tc.get(varchar, col=0, row=0).value()))
-    print("  native * type:      " + String(tc.get(varchar, col=1, row=0).value()))
+    print("  mojo_multiply type: " + String(tc.get[String](col=0, row=0).value()))
+    print("  native * type:      " + String(tc.get[String](col=1, row=0).value()))
 
     # Validate Q1 results
     print("  Validating Q1 results match...")

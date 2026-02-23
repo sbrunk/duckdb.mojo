@@ -46,9 +46,9 @@ def main():
 
     for row in range(len(result)):
         print(
-            result.get(varchar, col=0, row=row).value(),
+            result.get[String](col=0, row=row).value(),
             " ",
-            result.get(bigint, col=1, row=row).value(),
+            result.get[Int64](col=1, row=row).value(),
         )
 ```
 

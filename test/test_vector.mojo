@@ -512,7 +512,7 @@ def test_vector_lifetime():
 
     var chunk = result.fetch_chunk()
     var vec = chunk.get_vector(0)
-    var value = vec.get(integer, 1)[0].value()
+    var value = chunk.get[Int32](col=0, row=0).value()
     assert_equal(value, 1)
 
 

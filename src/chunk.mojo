@@ -2,6 +2,7 @@ from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
 from duckdb.logical_type import LogicalType
+from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector, deserialize_list_column
 from collections import Optional
 from memory import UnsafePointer
 from memory.unsafe_pointer import alloc
@@ -184,21 +185,57 @@ struct Chunk[is_owned: Bool](Movable, Sized):
         return not is_valid
 
     fn get[
-        T: Copyable & Movable, //
-    ](self, type: Col[T], *, col: Int, row: Int) raises -> Optional[T]:
+        T: Copyable & Movable
+    ](self, *, col: Int, row: Int) raises -> Optional[T]:
+        """Get a single typed value from the chunk.
+        
+        Parameters:
+            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
+            
+        Args:
+            col: Column index.
+            row: Row index.
+            
+        Returns:
+            Optional[T] containing the value, or None if NULL.
+            
+        Example:
+            ```mojo
+            var value = chunk.get[Int64](col=0, row=0)
+            if value:
+                print(value.value())
+            ```
+        """
         self._check_bounds(col, row)
         if self.is_null(col=col, row=row):
             return None
-        # TODO optimize single row access
-        return self.get_vector(col).get(type, len(self))[row]
+        
+        # Deserialize the entire column and return the specific row
+        var all_values = deserialize_from_vector[T](self.get_vector(col), len(self), 0)
+        return all_values[row]
 
     fn get[
-        T: Copyable & Movable, //
-    ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
+        T: Copyable & Movable
+    ](self, *, col: Int) raises -> List[Optional[T]]:
+        """Get all typed values from a column.
+        
+        Parameters:
+            T: The Mojo type to deserialize (e.g., Int64, String, List[Int32]).
+            
+        Args:
+            col: Column index.
+            
+        Returns:
+            List[Optional[T]] containing all values, with None for NULLs.
+            
+        Example:
+            ```mojo
+            var int_values = chunk.get[Int64](col=0)
+            var string_values = chunk.get[String](col=1)
+            ```
+        """
         self._check_bounds(col)
-        if self.is_null(col=col):
-            return [None]
-        return self.get_vector(col).get(type, len(self))
+        return deserialize_from_vector[T](self.get_vector(col), len(self), 0)
 
     # TODO remaining types
 

@@ -295,45 +295,4 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
                 self_type_id
             )
 
-    fn get[
-        T: Copyable & Movable, //
-    ](self, expected_type: Col[T], length: Int) raises -> List[Optional[T]]:
-        """Convert the data from this vector into native Mojo data structures.
-        """
 
-        self._check_type(expected_type.type())
-
-        var type = self.get_column_type().get_type_id()
-        if type == DuckDBType.blob:
-            raise Error("Blobs are not supported yet")
-        if type == DuckDBType.decimal:
-            raise Error("Decimals are not supported yet")
-        if type == DuckDBType.timestamp_s:
-            raise Error(
-                "Timestamps with second precision are not supported yet"
-            )
-        if type == DuckDBType.timestamp_ms:
-            raise Error(
-                "Timestamps with millisecond precision are not supported yet"
-            )
-        if type == DuckDBType.timestamp_ns:
-            raise Error(
-                "Timestamps with nanosecond precision are not supported yet"
-            )
-        if type == DuckDBType.enum:
-            raise Error("Enums are not supported yet")
-
-        # Columns are essentially lists so we can use the same logic for getting the values.
-        var result = DuckDBList[expected_type.Builder](
-            self, length=length, offset=0
-        )
-        # The way we are building our Mojo representation of the data currently via the DuckDBWrapper
-        # trait, with different __init__ implementations depending on the concrete type, means
-        # that the types don't match.
-        #
-        # We can cast the result to the expected type though because
-        # 1. We have ensured that the runtime type matches the expected type through _check_type
-        # 2. The DuckDBWrapper implementations are all thin wrappers with conversion logic
-        # around the underlying type we're converting into.
-        return rebind[List[Optional[T]]](result).copy()
-        
