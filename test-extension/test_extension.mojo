@@ -45,7 +45,7 @@ def test_extension_loads():
     # If we get here, the extension loaded successfully
     var result = conn.execute("SELECT 1 AS ok")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), Int32(1))
+    assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
 
 
 def test_extension_load_idempotent():
@@ -57,7 +57,7 @@ def test_extension_load_idempotent():
     _ = conn.execute("LOAD '" + EXT_PATH + "'")
     var result = conn.execute("SELECT test_ext_add(1, 2)")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(3))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(3))
 
 
 # ===--------------------------------------------------------------------===#
@@ -90,7 +90,7 @@ def test_ext_add_basic():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(40, 2) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
 def test_ext_add_negative():
@@ -98,7 +98,7 @@ def test_ext_add_negative():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(-10, 3) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(-7))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(-7))
 
 
 def test_ext_add_zeros():
@@ -106,7 +106,7 @@ def test_ext_add_zeros():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(0, 0) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(0))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(0))
 
 
 def test_ext_add_large():
@@ -117,7 +117,7 @@ def test_ext_add_large():
     )
     var chunk = result.fetch_chunk()
     assert_equal(
-        chunk.get(bigint, col=0, row=0).value(), Int64(3000000000)
+        chunk.get[Int64](col=0, row=0), Int64(3000000000)
     )
 
 
@@ -131,7 +131,7 @@ def test_ext_negate_positive():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(42) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(-42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(-42))
 
 
 def test_ext_negate_negative():
@@ -139,7 +139,7 @@ def test_ext_negate_negative():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(-7) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(7))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(7))
 
 
 def test_ext_negate_zero():
@@ -147,7 +147,7 @@ def test_ext_negate_zero():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(0) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(0))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(0))
 
 
 # ===--------------------------------------------------------------------===#
@@ -161,7 +161,7 @@ def test_ext_multiply_basic():
     var result = conn.execute("SELECT test_ext_multiply(3.0, 7.0) AS result")
     var chunk = result.fetch_chunk()
     assert_almost_equal(
-        chunk.get(double, col=0, row=0).value(), 21.0, atol=1e-10
+        chunk.get[Float64](col=0, row=0), 21.0, atol=1e-10
     )
 
 
@@ -171,7 +171,7 @@ def test_ext_multiply_fractional():
     var result = conn.execute("SELECT test_ext_multiply(0.5, 0.25) AS result")
     var chunk = result.fetch_chunk()
     assert_almost_equal(
-        chunk.get(double, col=0, row=0).value(), 0.125, atol=1e-10
+        chunk.get[Float64](col=0, row=0), 0.125, atol=1e-10
     )
 
 
@@ -181,7 +181,7 @@ def test_ext_multiply_negative():
     var result = conn.execute("SELECT test_ext_multiply(-2.0, 3.0) AS result")
     var chunk = result.fetch_chunk()
     assert_almost_equal(
-        chunk.get(double, col=0, row=0).value(), -6.0, atol=1e-10
+        chunk.get[Float64](col=0, row=0), -6.0, atol=1e-10
     )
 
 
@@ -195,7 +195,7 @@ def test_ext_double_basic():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(21) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
 def test_ext_double_zero():
@@ -203,7 +203,7 @@ def test_ext_double_zero():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(0) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(0))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(0))
 
 
 def test_ext_double_negative():
@@ -211,7 +211,7 @@ def test_ext_double_negative():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(-5) AS result")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(-10))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(-10))
 
 
 # ===--------------------------------------------------------------------===#
@@ -225,7 +225,7 @@ def test_ext_sum_basic():
     _ = conn.execute("CREATE TABLE t AS SELECT * FROM range(1, 11) t(x)")
     var result = conn.execute("SELECT test_ext_sum(x) FROM t")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(55))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(55))
 
 
 def test_ext_sum_single():
@@ -233,7 +233,7 @@ def test_ext_sum_single():
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_sum(x) FROM (VALUES (42)) t(x)")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
 def test_ext_sum_empty():
@@ -265,7 +265,7 @@ def test_ext_add_table():
     )
     var chunk = result.fetch_chunk()
     # sum(x + 2x) = sum(3x) = 3 * sum(1..100) = 3 * 5050 = 15150
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(15150))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(15150))
 
 
 def test_ext_negate_table():
@@ -277,7 +277,7 @@ def test_ext_negate_table():
     )
     var chunk = result.fetch_chunk()
     # -(1+2+3+4+5) = -15
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(-15))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(-15))
 
 
 # ===--------------------------------------------------------------------===#
@@ -293,7 +293,7 @@ def test_ext_composition():
         "SELECT test_ext_negate(test_ext_add(20, 22)) AS result"
     )
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(-42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(-42))
 
 
 def test_ext_multiple_functions_one_query():
@@ -306,11 +306,11 @@ def test_ext_multiple_functions_one_query():
         " test_ext_multiply(3.0, 4.0) AS d"
     )
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(3))
-    assert_equal(chunk.get(bigint, col=1, row=0).value(), Int64(-5))
-    assert_equal(chunk.get(bigint, col=2, row=0).value(), Int64(42))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(3))
+    assert_equal(chunk.get[Int64](col=1, row=0), Int64(-5))
+    assert_equal(chunk.get[Int64](col=2, row=0), Int64(42))
     assert_almost_equal(
-        chunk.get(double, col=3, row=0).value(), 12.0, atol=1e-10
+        chunk.get[Float64](col=3, row=0), 12.0, atol=1e-10
     )
 
 
@@ -329,7 +329,7 @@ def test_ext_across_connections():
     var conn2 = Connection(db)
     var result = conn2.execute("SELECT test_ext_add(10, 20)")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), Int64(30))
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(30))
 
 
 # ===--------------------------------------------------------------------===#

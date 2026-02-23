@@ -69,7 +69,7 @@ def test_connection_with_config():
     # Verify the config took effect by querying current_setting
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
     var chunk = result.fetch_chunk()
-    var threads_val = chunk.get(varchar, col=0, row=0).value()
+    var threads_val = chunk.get[String](col=0, row=0)
     assert_equal(threads_val, "2")
 
 
@@ -80,7 +80,7 @@ def test_connect_with_config():
     var con = DuckDB.connect(":memory:", config)
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(varchar, col=0, row=0).value(), "1")
+    assert_equal(chunk.get[String](col=0, row=0), "1")
 
 
 def test_connect_with_dict():
@@ -90,7 +90,7 @@ def test_connect_with_dict():
     )
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(varchar, col=0, row=0).value(), "2")
+    assert_equal(chunk.get[String](col=0, row=0), "2")
 
 
 def test_config_memory_limit():
@@ -103,7 +103,7 @@ def test_config_memory_limit():
     )
     var chunk = result.fetch_chunk()
     # DuckDB normalizes memory values, so check it's set (exact format may vary)
-    var mem_val = chunk.get(varchar, col=0, row=0).value()
+    var mem_val = chunk.get[String](col=0, row=0)
     assert_true(len(mem_val) > 0, "memory_limit should be set")
 
 
@@ -117,7 +117,7 @@ def test_config_access_mode_read_write():
     _ = con.execute("INSERT INTO test_rw VALUES (42)")
     var result = con.execute("SELECT x FROM test_rw")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_config_default_order():
@@ -129,7 +129,7 @@ def test_config_default_order():
         "SELECT current_setting('default_order') AS default_order"
     )
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(varchar, col=0, row=0).value(), "DESC")
+    assert_equal(chunk.get[String](col=0, row=0), "DESC")
 
 
 def main():

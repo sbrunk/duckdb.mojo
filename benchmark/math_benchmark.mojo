@@ -185,7 +185,7 @@ fn main() raises:
 
     var row_count = conn.execute("SELECT count(*) FROM math_data")
     var rc = row_count.fetch_chunk()
-    print("  math_data rows: " + String(rc.get(bigint, col=0, row=0).value()))
+    print("  math_data rows: " + String(rc.get[Int64](col=0, row=0)))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo scalar functions...")
@@ -209,28 +209,28 @@ fn main() raises:
     if F == DType.float64:
         print(
             "  sqrt: std="
-            + String(ck.get(double, col=0, row=0).value())
+            + String(ck.get[Float64](col=0, row=0))
             + " mojo="
-            + String(ck.get(double, col=1, row=0).value())
+            + String(ck.get[Float64](col=1, row=0))
         )
         print(
             "  sin:  std="
-            + String(ck.get(double, col=2, row=0).value())
+            + String(ck.get[Float64](col=2, row=0))
             + " mojo="
-            + String(ck.get(double, col=3, row=0).value())
+            + String(ck.get[Float64](col=3, row=0))
         )
     else:
         print(
             "  sqrt: std="
-            + String(ck.get(float, col=0, row=0).value())
+            + String(ck.get[Float32](col=0, row=0))
             + " mojo="
-            + String(ck.get(float, col=1, row=0).value())
+            + String(ck.get[Float32](col=1, row=0))
         )
         print(
             "  sin:  std="
-            + String(ck.get(float, col=2, row=0).value())
+            + String(ck.get[Float32](col=2, row=0))
             + " mojo="
-            + String(ck.get(float, col=3, row=0).value())
+            + String(ck.get[Float32](col=3, row=0))
         )
 
     # Quick numeric check on aggregate — use wider tolerance for float32
@@ -251,11 +251,11 @@ fn main() raises:
     var ac = agg_check.fetch_chunk()
     print(
         "  Aggregate check — sqrt: "
-        + String(ac.get(boolean, col=0, row=0).value())
+        + String(ac.get[Bool](col=0, row=0))
         + ", sin: "
-        + String(ac.get(boolean, col=1, row=0).value())
+        + String(ac.get[Bool](col=1, row=0))
         + ", cos: "
-        + String(ac.get(boolean, col=2, row=0).value())
+        + String(ac.get[Bool](col=2, row=0))
     )
 
     # ---- Unary benchmarks ----

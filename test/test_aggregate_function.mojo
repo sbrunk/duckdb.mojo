@@ -343,7 +343,7 @@ def test_aggregate_function_sum_single_value():
 
     var result = conn.execute("SELECT my_sum(42) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int64](col=0, row=0), 42)
 
 
 def test_aggregate_function_sum_table():
@@ -369,7 +369,7 @@ def test_aggregate_function_sum_table():
 
     var result = conn.execute("SELECT my_sum(x) as total FROM nums")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 15)
+    assert_equal(chunk.get[Int64](col=0, row=0), 15)
 
 
 def test_aggregate_function_sum_empty_table():
@@ -394,7 +394,7 @@ def test_aggregate_function_sum_empty_table():
 
     var result = conn.execute("SELECT my_sum(x) as total FROM empty_nums")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 0)
+    assert_equal(chunk.get[Int64](col=0, row=0), 0)
 
 
 def test_aggregate_function_sum_with_groups():
@@ -428,9 +428,9 @@ def test_aggregate_function_sum_with_groups():
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 2)
     # Group 'a': 1+2=3
-    assert_equal(chunk.get(bigint, col=1, row=0).value(), 3)
+    assert_equal(chunk.get[Int64](col=1, row=0), 3)
     # Group 'b': 10+20+30=60
-    assert_equal(chunk.get(bigint, col=1, row=1).value(), 60)
+    assert_equal(chunk.get[Int64](col=1, row=1), 60)
 
 
 def test_aggregate_function_sum_large_input():
@@ -456,7 +456,7 @@ def test_aggregate_function_sum_large_input():
         "SELECT my_sum(i::INTEGER) as total FROM range(1, 5001) t(i)"
     )
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 12502500)
+    assert_equal(chunk.get[Int64](col=0, row=0), 12502500)
 
 
 def test_aggregate_function_count():
@@ -481,7 +481,7 @@ def test_aggregate_function_count():
 
     var result = conn.execute("SELECT my_count(x) as cnt FROM count_data")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 4)
+    assert_equal(chunk.get[Int64](col=0, row=0), 4)
 
 
 def test_aggregate_function_avg():
@@ -508,7 +508,7 @@ def test_aggregate_function_avg():
 
     var result = conn.execute("SELECT my_avg(x) as average FROM avg_data")
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 25.0)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 25.0)
 
 
 def test_aggregate_function_avg_with_groups():
@@ -540,9 +540,9 @@ def test_aggregate_function_avg_with_groups():
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 2)
     # Group 'a': (2+4)/2 = 3.0
-    assert_almost_equal(chunk.get(double, col=1, row=0).value(), 3.0)
+    assert_almost_equal(chunk.get[Float64](col=1, row=0), 3.0)
     # Group 'b': 100/1 = 100.0
-    assert_almost_equal(chunk.get(double, col=1, row=1).value(), 100.0)
+    assert_almost_equal(chunk.get[Float64](col=1, row=1), 100.0)
 
 
 def test_aggregate_function_in_subquery():
@@ -572,7 +572,7 @@ def test_aggregate_function_in_subquery():
     )
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 6)
+    assert_equal(chunk.get[Int64](col=0, row=0), 6)
 
 
 def test_aggregate_function_set_create():
@@ -625,14 +625,14 @@ def test_aggregate_function_set_register():
         "SELECT my_sum_set(x)::BIGINT as total FROM int_vals"
     )
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(bigint, col=0, row=0).value(), 6)
+    assert_equal(chunk1.get[Int64](col=0, row=0), 6)
 
     # Test double overload
     _ = conn.execute("CREATE TABLE dbl_vals (x DOUBLE)")
     _ = conn.execute("INSERT INTO dbl_vals VALUES (1.5), (2.5), (3.0)")
     var result2 = conn.execute("SELECT my_sum_set(x) as total FROM dbl_vals")
     var chunk2 = result2.fetch_chunk()
-    assert_almost_equal(chunk2.get(double, col=0, row=0).value(), 7.0)
+    assert_almost_equal(chunk2.get[Float64](col=0, row=0), 7.0)
 
 
 def test_aggregate_function_sum_negative_values():
@@ -660,7 +660,7 @@ def test_aggregate_function_sum_negative_values():
 
     var result = conn.execute("SELECT my_sum(x) as total FROM neg_data")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 0)
+    assert_equal(chunk.get[Int64](col=0, row=0), 0)
 
 
 def test_aggregate_function_sum_matches_builtin():
@@ -692,8 +692,8 @@ def test_aggregate_function_sum_matches_builtin():
     )
     var chunk = result.fetch_chunk()
     assert_equal(
-        chunk.get(bigint, col=0, row=0).value(),
-        chunk.get(bigint, col=1, row=0).value(),
+        chunk.get[Int64](col=0, row=0),
+        chunk.get[Int64](col=1, row=0),
     )
 
 

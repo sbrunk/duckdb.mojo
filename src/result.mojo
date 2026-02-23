@@ -1,5 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.chunk import Chunk, _ChunkIter
+from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector
 from collections import Optional
 from std.builtin.error import StackTrace
 
@@ -815,25 +816,67 @@ struct MaterializedResult(Sized, Movable):
         return self.size
 
     fn get[
-        T: Copyable & Movable, //
-    ](self, type: Col[T], col: Int) raises -> List[Optional[T]]:
+        T: Copyable & Movable
+    ](self, *, col: Int) raises -> List[T]:
+        """Get all typed values from a column.
+
+        When T is a plain type, raises if any value is NULL.
+        When T is Optional[X], NULL entries become None.
+
+        Parameters:
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
+        Args:
+            col: Column index.
+
+        Returns:
+            List[T] containing all values.
+
+        Example:
+            ```mojo
+            var result = con.execute("SELECT * FROM table").materialize()
+            var int_values = result.get[Int64](col=0)
+            var nullable = result.get[Optional[String]](col=1)
+            ```
+        """
         ref libduckdb = DuckDB().libduckdb()
-        var result = List[Optional[T]](
+        var result = List[T](
             capacity=len(self.chunks) * Int(libduckdb.duckdb_vector_size())
         )
         for chunk_ptr in self.chunks:
-            result.extend(chunk_ptr[].get(type, col))
+            result.extend(chunk_ptr[].get[T](col=col))
         return result^
 
     fn get[
-        T: Copyable & Movable, //
-    ](self, type: Col[T], col: Int, row: Int) raises -> Optional[T]:
+        T: Copyable & Movable
+    ](self, *, col: Int, row: Int) raises -> T:
+        """Get a single typed value.
+
+        When T is a plain type, raises on NULL.
+        When T is Optional[X], returns None for NULL.
+
+        Parameters:
+            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
+
+        Args:
+            col: Column index.
+            row: Row index.
+
+        Returns:
+            The deserialized value.
+
+        Example:
+            ```mojo
+            var result = con.execute("SELECT * FROM table").materialize()
+            var value = result.get[Int64](col=0, row=5)
+            ```
+        """
         ref libduckdb = DuckDB().libduckdb()
         if row < 0 or row >= self.size:
             raise Error("Row index out of bounds")
         var chunk_idx = Int(UInt64(row) // libduckdb.duckdb_vector_size())
         var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
-        return self.chunks[chunk_idx][].get(type, col=col, row=chunk_offset)
+        return self.chunks[chunk_idx][].get[T](col=col, row=chunk_offset)
 
     fn __del__(deinit self):
         for chunk_ptr in self.chunks:

@@ -6,7 +6,7 @@ from testing.suite import TestSuite
 def test_connection():
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 42")
-    assert_equal(result.fetch_chunk().get(integer, col=0, row=0).value(), 42)
+    assert_equal(result.fetch_chunk().get[Int32](col=0, row=0), 42)
 
 
 def test_failure():

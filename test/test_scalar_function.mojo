@@ -144,7 +144,7 @@ def test_scalar_function_execute_simple():
     # Test the function
     var result = conn.execute("SELECT add_one(41) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_scalar_function_highlevel_types():
@@ -163,7 +163,7 @@ def test_scalar_function_highlevel_types():
     # Test with a single value
     var result1 = conn.execute("SELECT highlevel_add_one(99) as answer")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 100)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 100)
     
     # Test with a table
     _ = conn.execute("CREATE TABLE nums (x INTEGER)")
@@ -171,11 +171,11 @@ def test_scalar_function_highlevel_types():
     
     var result2 = conn.execute("SELECT highlevel_add_one(x) as y FROM nums ORDER BY x")
     var chunk2 = result2.fetch_chunk()
-    assert_equal(chunk2.get(integer, col=0, row=0).value(), 2)
-    assert_equal(chunk2.get(integer, col=0, row=1).value(), 3)
-    assert_equal(chunk2.get(integer, col=0, row=2).value(), 4)
-    assert_equal(chunk2.get(integer, col=0, row=3).value(), 5)
-    assert_equal(chunk2.get(integer, col=0, row=4).value(), 6)
+    assert_equal(chunk2.get[Int32](col=0, row=0), 2)
+    assert_equal(chunk2.get[Int32](col=0, row=1), 3)
+    assert_equal(chunk2.get[Int32](col=0, row=2), 4)
+    assert_equal(chunk2.get[Int32](col=0, row=3), 5)
+    assert_equal(chunk2.get[Int32](col=0, row=4), 6)
 
 
 def test_scalar_function_auto_wrapped():
@@ -195,7 +195,7 @@ def test_scalar_function_auto_wrapped():
     # Test with a single value
     var result1 = conn.execute("SELECT auto_add_one(99) as answer")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 100)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 100)
     
     # Test with a table
     _ = conn.execute("CREATE TABLE nums2 (x INTEGER)")
@@ -203,9 +203,9 @@ def test_scalar_function_auto_wrapped():
     
     var result2 = conn.execute("SELECT auto_add_one(x) as y FROM nums2 ORDER BY x")
     var chunk2 = result2.fetch_chunk()
-    assert_equal(chunk2.get(integer, col=0, row=0).value(), 11)
-    assert_equal(chunk2.get(integer, col=0, row=1).value(), 21)
-    assert_equal(chunk2.get(integer, col=0, row=2).value(), 31)
+    assert_equal(chunk2.get[Int32](col=0, row=0), 11)
+    assert_equal(chunk2.get[Int32](col=0, row=1), 21)
+    assert_equal(chunk2.get[Int32](col=0, row=2), 31)
 
 
 def test_scalar_function_fully_highlevel():
@@ -225,7 +225,7 @@ def test_scalar_function_fully_highlevel():
     # Test with a single value
     var result1 = conn.execute("SELECT fully_hl_add_one(42) as answer")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 43)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 43)
     
     # Test with a table
     _ = conn.execute("CREATE TABLE test_nums (x INTEGER)")
@@ -233,9 +233,9 @@ def test_scalar_function_fully_highlevel():
     
     var result2 = conn.execute("SELECT fully_hl_add_one(x) as y FROM test_nums ORDER BY x")
     var chunk2 = result2.fetch_chunk()
-    assert_equal(chunk2.get(integer, col=0, row=0).value(), 101)
-    assert_equal(chunk2.get(integer, col=0, row=1).value(), 201)
-    assert_equal(chunk2.get(integer, col=0, row=2).value(), 301)
+    assert_equal(chunk2.get[Int32](col=0, row=0), 101)
+    assert_equal(chunk2.get[Int32](col=0, row=1), 201)
+    assert_equal(chunk2.get[Int32](col=0, row=2), 301)
 
 
 def test_scalar_function_execute_from_table():
@@ -260,10 +260,10 @@ def test_scalar_function_execute_from_table():
     var result = conn.execute("SELECT add_one(x) as y FROM numbers ORDER BY x")
     var chunk = result.fetch_chunk()
     
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 2)   # 1+1
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)   # 2+1
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 4)   # 3+1
-    assert_equal(chunk.get(integer, col=0, row=3).value(), 11)  # 10+1
+    assert_equal(chunk.get[Int32](col=0, row=0), 2)   # 1+1
+    assert_equal(chunk.get[Int32](col=0, row=1), 3)   # 2+1
+    assert_equal(chunk.get[Int32](col=0, row=2), 4)   # 3+1
+    assert_equal(chunk.get[Int32](col=0, row=3), 11)  # 10+1
 
 
 def test_scalar_function_binary_operator():
@@ -283,7 +283,7 @@ def test_scalar_function_binary_operator():
     # Test the function
     var result = conn.execute("SELECT my_add(10, 32) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_scalar_function_float_type():
@@ -302,7 +302,7 @@ def test_scalar_function_float_type():
     # Test the function
     var result = conn.execute("SELECT multiply_two(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float, col=0, row=0).value()
+    var value = chunk.get[Float32](col=0, row=0)
     # Use approximate equality for floats
     assert_true(abs(value - 42.0) < 0.001)
 
@@ -383,7 +383,7 @@ def test_scalar_function_set_execute():
     # Test the integer overload
     var result = conn.execute("SELECT my_add(15, 27) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_scalar_function_set_multiple_overloads():
@@ -416,12 +416,12 @@ def test_scalar_function_set_multiple_overloads():
     # Test integer overload
     var result1 = conn.execute("SELECT my_add(20, 22) as answer")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 42)
     
     # Test float overload
     var result2 = conn.execute("SELECT my_add(20.5::FLOAT, 21.5::FLOAT) as answer")
     var chunk2 = result2.fetch_chunk()
-    var value = chunk2.get(float, col=0, row=0).value()
+    var value = chunk2.get[Float32](col=0, row=0)
     assert_true(abs(value - 42.0) < 0.001)
 
 
@@ -518,8 +518,8 @@ def test_multiple_functions_same_connection():
     var result = conn.execute("SELECT add_one(40) as a, multiply_two(21.0::FLOAT) as b")
     var chunk = result.fetch_chunk()
     
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 41)
-    var b_val = chunk.get(float, col=1, row=0).value()
+    assert_equal(chunk.get[Int32](col=0, row=0), 41)
+    var b_val = chunk.get[Float32](col=1, row=0)
     assert_almost_equal(b_val, 42.0)
 
 
@@ -538,15 +538,15 @@ def test_function_reuse_across_queries():
     # Execute multiple queries using the same function
     var result1 = conn.execute("SELECT add_one(10) as val")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 11)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 11)
     
     var result2 = conn.execute("SELECT add_one(20) as val")
     var chunk2 = result2.fetch_chunk()
-    assert_equal(chunk2.get(integer, col=0, row=0).value(), 21)
+    assert_equal(chunk2.get[Int32](col=0, row=0), 21)
     
     var result3 = conn.execute("SELECT add_one(100) as val")
     var chunk3 = result3.fetch_chunk()
-    assert_equal(chunk3.get(integer, col=0, row=0).value(), 101)
+    assert_equal(chunk3.get[Int32](col=0, row=0), 101)
 
 
 def test_function_outlives_connection():
@@ -566,7 +566,7 @@ def test_function_outlives_connection():
     func.register(conn1)
     var result1 = conn1.execute("SELECT outlive_test(41) as val")
     var chunk1 = result1.fetch_chunk()
-    assert_equal(chunk1.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk1.get[Int32](col=0, row=0), 42)
     # conn1 is still alive here but will go out of scope when reassigned below
 
     # Register the same function handle on a second connection
@@ -574,7 +574,7 @@ def test_function_outlives_connection():
     func.register(conn2)
     var result2 = conn2.execute("SELECT outlive_test(99) as val")
     var chunk2 = result2.fetch_chunk()
-    assert_equal(chunk2.get(integer, col=0, row=0).value(), 100)
+    assert_equal(chunk2.get[Int32](col=0, row=0), 100)
 
 
 def test_connection_outlives_function():
@@ -597,7 +597,7 @@ def test_connection_outlives_function():
     # should still work because DuckDB made an internal copy during registration.
     var result = conn.execute("SELECT survive_test(41) as val")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 # ===--------------------------------------------------------------------===#
@@ -611,7 +611,7 @@ def test_create_unary_int():
 
     var result = conn.execute("SELECT create_add_one(41) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_create_unary_float():
@@ -621,7 +621,7 @@ def test_create_unary_float():
 
     var result = conn.execute("SELECT create_mul2(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float, col=0, row=0).value()
+    var value = chunk.get[Float32](col=0, row=0)
     assert_almost_equal(value, 42.0)
 
 
@@ -632,7 +632,7 @@ def test_create_binary():
 
     var result = conn.execute("SELECT create_my_add(10, 32) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_create_on_table():
@@ -645,9 +645,9 @@ def test_create_on_table():
 
     var result = conn.execute("SELECT tbl_add_one(x) as y FROM create_nums ORDER BY x")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 2)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 4)
+    assert_equal(chunk.get[Int32](col=0, row=0), 2)
+    assert_equal(chunk.get[Int32](col=0, row=1), 3)
+    assert_equal(chunk.get[Int32](col=0, row=2), 4)
 
 
 # ===--------------------------------------------------------------------===#
@@ -678,7 +678,7 @@ def test_from_function_unary_int():
 
     var result = conn.execute("SELECT ff_add_one(41) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_from_function_unary_float():
@@ -688,7 +688,7 @@ def test_from_function_unary_float():
 
     var result = conn.execute("SELECT ff_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float, col=0, row=0).value()
+    var value = chunk.get[Float32](col=0, row=0)
     assert_true(abs(value - 42.0) < 0.001)
 
 
@@ -699,7 +699,7 @@ def test_from_function_binary():
 
     var result = conn.execute("SELECT ff_add(10, 32) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_from_function_binary_float():
@@ -709,7 +709,7 @@ def test_from_function_binary_float():
 
     var result = conn.execute("SELECT ff_add_f64(20.5, 21.5) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(double, col=0, row=0).value()
+    var value = chunk.get[Float64](col=0, row=0)
     assert_true(abs(value - 42.0) < 0.001)
 
 
@@ -723,9 +723,9 @@ def test_from_function_on_table():
 
     var result = conn.execute("SELECT ff_tbl_add_one(x) as y FROM ff_nums ORDER BY x")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 11)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 21)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 31)
+    assert_equal(chunk.get[Int32](col=0, row=0), 11)
+    assert_equal(chunk.get[Int32](col=0, row=1), 21)
+    assert_equal(chunk.get[Int32](col=0, row=2), 31)
 
 
 # ===--------------------------------------------------------------------===#
@@ -760,7 +760,7 @@ def test_from_simd_function_unary_int():
 
     var result = conn.execute("SELECT sf_add_one(41) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_from_simd_function_unary_float():
@@ -770,7 +770,7 @@ def test_from_simd_function_unary_float():
 
     var result = conn.execute("SELECT sf_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(float, col=0, row=0).value()
+    var value = chunk.get[Float32](col=0, row=0)
     assert_almost_equal(value, 42.0)
 
 
@@ -781,7 +781,7 @@ def test_from_simd_function_binary_int():
 
     var result = conn.execute("SELECT sf_add(10, 32) as answer")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_from_simd_function_binary_float():
@@ -791,7 +791,7 @@ def test_from_simd_function_binary_float():
 
     var result = conn.execute("SELECT sf_add_f64(20.5, 21.5) as answer")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(double, col=0, row=0).value()
+    var value = chunk.get[Float64](col=0, row=0)
     assert_almost_equal(value, 42.0)
 
 
@@ -805,13 +805,13 @@ def test_from_simd_function_on_table():
 
     var result = conn.execute("SELECT sf_tbl_add_one(x) as y FROM sf_nums ORDER BY x")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 2)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 4)
-    assert_equal(chunk.get(integer, col=0, row=3).value(), 5)
-    assert_equal(chunk.get(integer, col=0, row=4).value(), 6)
-    assert_equal(chunk.get(integer, col=0, row=5).value(), 7)
-    assert_equal(chunk.get(integer, col=0, row=6).value(), 8)
+    assert_equal(chunk.get[Int32](col=0, row=0), 2)
+    assert_equal(chunk.get[Int32](col=0, row=1), 3)
+    assert_equal(chunk.get[Int32](col=0, row=2), 4)
+    assert_equal(chunk.get[Int32](col=0, row=3), 5)
+    assert_equal(chunk.get[Int32](col=0, row=4), 6)
+    assert_equal(chunk.get[Int32](col=0, row=5), 7)
+    assert_equal(chunk.get[Int32](col=0, row=6), 8)
 
 
 def test_from_simd_function_large_table():
@@ -824,11 +824,11 @@ def test_from_simd_function_large_table():
     var result = conn.execute("SELECT sf_big_add(a, b) as c FROM sf_big ORDER BY a LIMIT 5")
     var chunk = result.fetch_chunk()
     # a=0,b=0 -> 0; a=1,b=2 -> 3; a=2,b=4 -> 6; a=3,b=6 -> 9; a=4,b=8 -> 12
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 0)
-    assert_equal(chunk.get(integer, col=0, row=1).value(), 3)
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 6)
-    assert_equal(chunk.get(integer, col=0, row=3).value(), 9)
-    assert_equal(chunk.get(integer, col=0, row=4).value(), 12)
+    assert_equal(chunk.get[Int32](col=0, row=0), 0)
+    assert_equal(chunk.get[Int32](col=0, row=1), 3)
+    assert_equal(chunk.get[Int32](col=0, row=2), 6)
+    assert_equal(chunk.get[Int32](col=0, row=3), 9)
+    assert_equal(chunk.get[Int32](col=0, row=4), 12)
 
 
 # ===--------------------------------------------------------------------===#
@@ -842,7 +842,7 @@ def test_from_simd_function_stdlib_unary():
 
     var result = conn.execute("SELECT sf_stdlib_sqrt(16.0) as answer")
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 4.0)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 4.0)
 
 
 def test_from_simd_function_stdlib_sin():
@@ -852,7 +852,7 @@ def test_from_simd_function_stdlib_sin():
 
     var result = conn.execute("SELECT sf_stdlib_sin(0.0) as answer")
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 0.0)
 
 
 def test_from_simd_function_stdlib_binary():
@@ -862,7 +862,7 @@ def test_from_simd_function_stdlib_binary():
 
     var result = conn.execute("SELECT sf_stdlib_atan2(0.0, 1.0) as answer")
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 0.0)
 
 
 def test_from_simd_function_stdlib_on_table():
@@ -878,7 +878,7 @@ def test_from_simd_function_stdlib_on_table():
         "SELECT sf_stdlib_exp(x) as y FROM sf_stdlib WHERE x = 0.0"
     )
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 1.0)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 1.0)
 
 
 def test_from_simd_function_stdlib_matches_builtin():
@@ -896,14 +896,14 @@ def test_from_simd_function_stdlib_matches_builtin():
         "SELECT SUM(ABS(sf_stdlib_log(x) - ln(x))) as diff FROM sf_cmp"
     )
     var chunk = result.fetch_chunk()
-    assert_almost_equal(chunk.get(double, col=0, row=0).value(), 0.0, atol=1e-6)
+    assert_almost_equal(chunk.get[Float64](col=0, row=0), 0.0, atol=1e-6)
 
     # Compare Mojo stdlib cos vs DuckDB cos
     var result2 = conn.execute(
         "SELECT SUM(ABS(sf_stdlib_cos(x) - cos(x))) as diff FROM sf_cmp"
     )
     var chunk2 = result2.fetch_chunk()
-    assert_almost_equal(chunk2.get(double, col=0, row=0).value(), 0.0, atol=1e-6)
+    assert_almost_equal(chunk2.get[Float64](col=0, row=0), 0.0, atol=1e-6)
 
 
 # ===--------------------------------------------------------------------===#

@@ -54,7 +54,25 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took
                 list_type._logical_type = duckdb_logical_type()
-            # TODO remaining nested types
+            elif copy.get_type_id() == DuckDBType.struct_t:
+                # Deep copy struct type: recreate from children
+                var child_count = Int(copy.struct_type_child_count())
+                var child_types = List[duckdb_logical_type]()
+                var child_names_str = List[String]()
+                for i in range(child_count):
+                    var ct = copy.struct_type_child_type(idx_t(i))
+                    child_types.append(ct.internal_ptr())
+                    child_names_str.append(copy.struct_type_child_name(idx_t(i)))
+                var c_names = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+                var base_ptr = child_names_str.unsafe_ptr()
+                for i in range(child_count):
+                    c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr())
+                ref libduckdb = DuckDB().libduckdb()
+                self._logical_type = libduckdb.duckdb_create_struct_type(
+                    child_types.unsafe_ptr().bitcast[duckdb_logical_type](),
+                    c_names.unsafe_ptr(),
+                    idx_t(child_count),
+                )
             else:
                 ref libduckdb = DuckDB().libduckdb()
                 self._logical_type = libduckdb.duckdb_create_logical_type(copy.get_type_id().value)
@@ -127,6 +145,37 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_array_type_array_size(self._logical_type)
 
+    fn struct_type_child_count(self) -> idx_t:
+        """Retrieves the number of children of a struct type.
+
+        * returns: The number of children (fields) of the struct type.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_struct_type_child_count(self._logical_type)
+
+    fn struct_type_child_name(self, index: idx_t) -> String:
+        """Retrieves the name of a struct type's child at the given index.
+
+        * index: The child index.
+        * returns: The name of the child field.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        var name_ptr = libduckdb.duckdb_struct_type_child_name(self._logical_type, index)
+        return String(unsafe_from_utf8_ptr=name_ptr)
+
+    fn struct_type_child_type(ref [_]self: Self, index: idx_t) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+        """Retrieves the type of a struct type's child at the given index.
+
+        The returned type is owned and must be destroyed.
+
+        * index: The child index.
+        * returns: The child's logical type (owned).
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return LogicalType[is_owned=True, origin=MutExternalOrigin](
+            libduckdb.duckdb_struct_type_child_type(self._logical_type, index)
+        )
+
     fn __eq__(self, other: Self) -> Bool:
         if self.get_type_id() != other.get_type_id():
             return False
@@ -139,7 +188,15 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 self.map_type_key_type().get_type_id() == other.map_type_key_type().get_type_id()
                 and self.map_type_value_type().get_type_id() == other.map_type_value_type().get_type_id()
             )
-        # TODO remaining nested types
+        if self.get_type_id() == DuckDBType.struct_t:
+            if self.struct_type_child_count() != other.struct_type_child_count():
+                return False
+            for i in range(Int(self.struct_type_child_count())):
+                if self.struct_type_child_name(idx_t(i)) != other.struct_type_child_name(idx_t(i)):
+                    return False
+                if self.struct_type_child_type(idx_t(i)).get_type_id() != other.struct_type_child_type(idx_t(i)).get_type_id():
+                    return False
+            return True
         return True
 
     fn __ne__(self, other: Self) -> Bool:
@@ -156,7 +213,14 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 + String(self.map_type_value_type())
                 + ")"
             )
-        # TODO remaining nested types
+        if self.get_type_id() == DuckDBType.struct_t:
+            var s = String("struct(")
+            for i in range(Int(self.struct_type_child_count())):
+                if i > 0:
+                    s += ", "
+                s += self.struct_type_child_name(idx_t(i)) + " " + String(self.struct_type_child_type(idx_t(i)))
+            s += ")"
+            return s
         return String(self.get_type_id())
 
     fn write_to[W: Writer](self, mut writer: W):
@@ -203,5 +267,43 @@ fn enum_type(mut names: List[String]) -> LogicalType[True, MutExternalOrigin]:
     # Get pointer to the array of pointers
     return LogicalType[True, MutExternalOrigin](
         libduckdb.duckdb_create_enum_type(c_names_list.unsafe_ptr(), UInt64(count))
+    )
+
+
+fn struct_type(
+    mut names: List[String],
+    mut types: List[LogicalType[True, MutExternalOrigin]],
+) -> LogicalType[True, MutExternalOrigin]:
+    """Creates a struct logical type from field names and types.
+
+    Args:
+        names: The field names.
+        types: The field logical types.
+
+    Returns:
+        A new owned LogicalType representing the struct type.
+    """
+    ref libduckdb = DuckDB().libduckdb()
+    var count = len(names)
+
+    # Build array of raw logical type pointers
+    var c_types = List[duckdb_logical_type]()
+    c_types.reserve(count)
+    for i in range(count):
+        c_types.append(types[i].internal_ptr())
+
+    # Build array of C string pointers
+    var c_names = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+    c_names.reserve(count)
+    var base_ptr = names.unsafe_ptr()
+    for i in range(count):
+        c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr())
+
+    return LogicalType[True, MutExternalOrigin](
+        libduckdb.duckdb_create_struct_type(
+            c_types.unsafe_ptr().bitcast[duckdb_logical_type](),
+            c_names.unsafe_ptr(),
+            idx_t(count),
+        )
     )
 

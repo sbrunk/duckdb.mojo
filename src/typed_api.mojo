@@ -1,0 +1,955 @@
+"""Typed API for converting DuckDB results to native Mojo types.
+
+This module provides a type-safe API for extracting typed data from DuckDB results:
+
+```mojo
+# Direct type specification — scalars
+var value = chunk.get[Int64](col=0, row=0)  # Optional[Int64]
+var values = chunk.get[Int64](col=0)  # List[Optional[Int64]]
+
+# Lists
+var list_values = chunk.get[List[String]](col=0)
+
+# Structs — uses reflection to map fields from DuckDB STRUCT to Mojo struct
+@fieldwise_init
+struct Point(Copyable, Movable):
+    var x: Float64
+    var y: Float64
+
+var points = chunk.get[Point](col=0)
+```
+
+Key features:
+- Compile-time type mapping from Mojo types to DuckDB types
+- Automatic null handling with Optional types
+- Support for nested types (List[T], user-defined structs)
+- Reflection-based struct deserialization
+- Pure Mojo `MojoType` descriptor that mirrors DuckDB's LogicalType
+"""
+
+from sys.intrinsics import _type_is_eq
+from sys.info import size_of
+from reflection import (
+    get_base_type_name,
+    get_type_name,
+    is_struct_type,
+    struct_field_count,
+    struct_field_names,
+    struct_field_types,
+)
+from collections import Optional, List
+from memory import alloc, memcpy
+from std.builtin.rebind import downcast
+from duckdb._libduckdb import *
+from duckdb.duckdb_type import *
+from duckdb.vector import Vector
+from duckdb.logical_type import LogicalType, struct_type
+
+
+# ──────────────────────────────────────────────────────────────────
+# MojoType — a pure Mojo representation of DuckDB logical types
+# ──────────────────────────────────────────────────────────────────
+
+
+struct MojoType(Copyable, Movable, Writable, Stringable):
+    """A pure-Mojo descriptor that mirrors DuckDB's LogicalType.
+
+    This allows representing DuckDB types (including nested ones like LIST
+    and STRUCT) entirely in Mojo, constructible at compile time from Mojo type
+    parameters via `mojo_logical_type[T]()`.
+
+    The descriptor can be converted to DuckDB's runtime LogicalType via
+    `to_logical_type()` when needed for C-API interop.
+    """
+
+    var type_id: DuckDBType
+    """The base DuckDB type id."""
+
+    var children: List[MojoType]
+    """Child types (list element, struct fields, etc.)."""
+
+    var field_names: List[String]
+    """Field names (for STRUCT types). Empty for non-struct types."""
+
+    # -- Constructors ---------------------------------------------------
+
+    fn __init__(out self, type_id: DuckDBType):
+        """Create a scalar (leaf) MojoType."""
+        self.type_id = type_id
+        self.children = List[MojoType]()
+        self.field_names = List[String]()
+
+    @staticmethod
+    fn list_of(var element: MojoType) -> MojoType:
+        """Create a LIST type wrapping the given element type."""
+        var mt = MojoType(DuckDBType.list)
+        mt.children.append(element^)
+        return mt^
+
+    @staticmethod
+    fn struct_of(var names: List[String], var types: List[MojoType]) -> MojoType:
+        """Create a STRUCT type with the given field names and types.
+
+        Args:
+            names: Field names matching the struct's field order.
+            types: Corresponding DuckDB types for each field.
+        """
+        var mt = MojoType(DuckDBType.struct_t)
+        mt.field_names = names^
+        mt.children = types^
+        return mt^
+
+    # -- Conversions ----------------------------------------------------
+
+    fn to_logical_type(self) -> LogicalType[True, MutExternalOrigin]:
+        """Convert this MojoType to a DuckDB runtime LogicalType.
+
+        Returns a new *owned* LogicalType that the caller must manage.
+        """
+        if self.type_id == DuckDBType.list:
+            var child_lt = self.children[0].to_logical_type()
+            return child_lt.create_list_type()
+        elif self.type_id == DuckDBType.struct_t:
+            var child_types = List[LogicalType[True, MutExternalOrigin]]()
+            for i in range(len(self.children)):
+                child_types.append(self.children[i].to_logical_type())
+            var names = List[String]()
+            for i in range(len(self.field_names)):
+                names.append(self.field_names[i])
+            return struct_type(names, child_types)
+        else:
+            return LogicalType[True, MutExternalOrigin](self.type_id)
+
+    # -- Display --------------------------------------------------------
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        if self.type_id == DuckDBType.list:
+            writer.write("list(", self.children[0], ")")
+        elif self.type_id == DuckDBType.struct_t:
+            writer.write("struct(")
+            for i in range(len(self.field_names)):
+                if i > 0:
+                    writer.write(", ")
+                writer.write(self.field_names[i], " ", self.children[i])
+            writer.write(")")
+        else:
+            writer.write(self.type_id)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Compile-time type mapping
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
+    """Returns True if T is one of the known DuckDB-mappable scalar types."""
+    @parameter
+    if (
+        _type_is_eq[T, Bool]()
+        or _type_is_eq[T, Int8]()
+        or _type_is_eq[T, Int16]()
+        or _type_is_eq[T, Int32]()
+        or _type_is_eq[T, Int64]()
+        or _type_is_eq[T, UInt8]()
+        or _type_is_eq[T, UInt16]()
+        or _type_is_eq[T, UInt32]()
+        or _type_is_eq[T, UInt64]()
+        or _type_is_eq[T, Float32]()
+        or _type_is_eq[T, Float64]()
+        or _type_is_eq[T, String]()
+        or _type_is_eq[T, Date]()
+        or _type_is_eq[T, Time]()
+        or _type_is_eq[T, Timestamp]()
+        or _type_is_eq[T, Interval]()
+    ):
+        return True
+    else:
+        return False
+
+
+fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
+    """Maps a Mojo type to its corresponding DuckDB type at compile time.
+
+    Supports scalar types, Date/Time/Timestamp/Interval, String, List[T],
+    and user-defined structs (mapped to DuckDBType.struct_t).
+
+    Parameters:
+        T: The Mojo type to map.
+
+    Returns:
+        The corresponding DuckDBType.
+    """
+    @parameter
+    if _type_is_eq[T, Bool]():
+        return DuckDBType.boolean
+    elif _type_is_eq[T, Int8]():
+        return DuckDBType.tinyint
+    elif _type_is_eq[T, Int16]():
+        return DuckDBType.smallint
+    elif _type_is_eq[T, Int32]():
+        return DuckDBType.integer
+    elif _type_is_eq[T, Int64]():
+        return DuckDBType.bigint
+    elif _type_is_eq[T, UInt8]():
+        return DuckDBType.utinyint
+    elif _type_is_eq[T, UInt16]():
+        return DuckDBType.usmallint
+    elif _type_is_eq[T, UInt32]():
+        return DuckDBType.uinteger
+    elif _type_is_eq[T, UInt64]():
+        return DuckDBType.ubigint
+    elif _type_is_eq[T, Float32]():
+        return DuckDBType.float
+    elif _type_is_eq[T, Float64]():
+        return DuckDBType.double
+    elif _type_is_eq[T, String]():
+        return DuckDBType.varchar
+    elif _type_is_eq[T, Date]():
+        return DuckDBType.date
+    elif _type_is_eq[T, Time]():
+        return DuckDBType.time
+    elif _type_is_eq[T, Timestamp]():
+        return DuckDBType.timestamp
+    elif _type_is_eq[T, Interval]():
+        return DuckDBType.interval
+    else:
+        comptime base_name = get_base_type_name[T]()
+        @parameter
+        if base_name == "List":
+            return DuckDBType.list
+        elif base_name == "Optional":
+            constrained[
+                False,
+                "Optional types should be unwrapped before mapping."
+                " Use the element type directly.",
+            ]()
+            return DuckDBType.invalid
+        else:
+            # Treat any remaining struct type as DuckDB STRUCT
+            return DuckDBType.struct_t
+
+
+fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
+    """Map a field type (from struct_field_types) to DuckDBType.
+
+    Used during struct reflection where field types come from
+    `struct_field_types` and may not satisfy Copyable & Movable.
+
+    Parameters:
+        T: The field type.
+
+    Returns:
+        The DuckDBType for this field.
+    """
+    @parameter
+    if _type_is_eq[T, Bool]():
+        return DuckDBType.boolean
+    elif _type_is_eq[T, Int8]():
+        return DuckDBType.tinyint
+    elif _type_is_eq[T, Int16]():
+        return DuckDBType.smallint
+    elif _type_is_eq[T, Int32]():
+        return DuckDBType.integer
+    elif _type_is_eq[T, Int64]():
+        return DuckDBType.bigint
+    elif _type_is_eq[T, UInt8]():
+        return DuckDBType.utinyint
+    elif _type_is_eq[T, UInt16]():
+        return DuckDBType.usmallint
+    elif _type_is_eq[T, UInt32]():
+        return DuckDBType.uinteger
+    elif _type_is_eq[T, UInt64]():
+        return DuckDBType.ubigint
+    elif _type_is_eq[T, Float32]():
+        return DuckDBType.float
+    elif _type_is_eq[T, Float64]():
+        return DuckDBType.double
+    elif _type_is_eq[T, String]():
+        return DuckDBType.varchar
+    elif _type_is_eq[T, Date]():
+        return DuckDBType.date
+    elif _type_is_eq[T, Time]():
+        return DuckDBType.time
+    elif _type_is_eq[T, Timestamp]():
+        return DuckDBType.timestamp
+    elif _type_is_eq[T, Interval]():
+        return DuckDBType.interval
+    else:
+        comptime base_name = get_base_type_name[T]()
+        @parameter
+        if base_name == "List":
+            return DuckDBType.list
+        else:
+            return DuckDBType.struct_t
+
+
+fn mojo_logical_type[T: Copyable & Movable]() -> MojoType:
+    """Build a pure-Mojo MojoType descriptor from a Mojo type parameter.
+
+    For scalar types this returns a leaf MojoType.
+    For List types it returns `MojoType.list_of(...)`.
+    For user-defined structs it reflects over fields and returns a
+    `MojoType.struct_of(...)` with recursive child types.
+
+    Parameters:
+        T: The Mojo type to describe.
+
+    Returns:
+        A MojoType descriptor.
+    """
+    @parameter
+    if _is_known_scalar_type[T]():
+        return MojoType(mojo_type_to_duckdb_type[T]())
+    else:
+        comptime base_name = get_base_type_name[T]()
+        @parameter
+        if base_name == "List":
+            # We know it's a list but can't yet extract T from List[T]
+            # automatically. Return a bare list descriptor.
+            # Users can call MojoType.list_of() directly for full precision.
+            return MojoType(DuckDBType.list)
+        else:
+            # User-defined struct — reflect over fields
+            comptime field_count = struct_field_count[T]()
+            comptime field_type_arr = struct_field_types[T]()
+
+            var names = List[String]()
+            var types = List[MojoType]()
+
+            @parameter
+            for idx in range(field_count):
+                # Extract individual field name at compile time (avoids
+                # materialising the whole InlineArray[StaticString, N])
+                comptime field_name = struct_field_names[T]()[idx]
+                names.append(String(field_name))
+                comptime ft = field_type_arr[idx]
+                types.append(MojoType(_scalar_type_to_duckdb[ft]()))
+
+            return MojoType.struct_of(names^, types^)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Deserialization — scalar
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raises -> T:
+    """Deserialize a scalar value from a vector.
+
+    Parameters:
+        T: The scalar type to deserialize.
+
+    Args:
+        vector: The vector to read from.
+        offset: The offset in the vector.
+
+    Returns:
+        The deserialized scalar value.
+    """
+    comptime expected_type = mojo_type_to_duckdb_type[T]()
+
+    @parameter
+    if expected_type == DuckDBType.varchar:
+        var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+        var string_length = Int(data_str_ptr[offset].length)
+
+        var result: String
+        if data_str_ptr[offset].length <= 12:
+            var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
+            var ptr = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+            result = String(unsafe_uninit_length=string_length)
+            memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
+        else:
+            var ptr = data_str_ptr[offset].ptr.bitcast[UInt8]()
+            result = String(unsafe_uninit_length=string_length)
+            memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
+
+        return rebind_var[T](result^)
+    else:
+        var data_ptr = vector.get_data().bitcast[T]()
+        return data_ptr[offset].copy()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Deserialization — struct (reflection-based)
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _is_valid(validity_mask: UnsafePointer[UInt64, MutAnyOrigin], idx: Int) -> Bool:
+    """Check if a value at idx is valid (non-NULL) given a validity mask.
+
+    If the mask is null, all values are valid.
+    """
+    if not validity_mask:
+        return True
+    var entry_idx = idx // 64
+    var idx_in_entry = idx % 64
+    return Bool(validity_mask[entry_idx] & UInt64(1 << idx_in_entry))
+
+
+fn _deserialize_struct_field[
+    FieldType: Copyable & Movable
+](child_vector: Vector, offset: Int) raises -> FieldType:
+    """Deserialize a single field value from a struct child vector.
+
+    Parameters:
+        FieldType: The Mojo type of the field.
+
+    Args:
+        child_vector: The child vector for this struct field.
+        offset: Row offset.
+
+    Returns:
+        The deserialized field value.
+    """
+    comptime db_type = mojo_type_to_duckdb_type[FieldType]()
+
+    @parameter
+    if db_type == DuckDBType.struct_t:
+        # Nested struct — recurse
+        return _deserialize_struct_row[FieldType](child_vector, offset)
+    else:
+        # Scalar field
+        return _deserialize_scalar[FieldType](child_vector, offset)
+
+
+fn _deserialize_struct_row[
+    T: Copyable & Movable
+](vector: Vector, offset: Int) raises -> T:
+    """Deserialize a single DuckDB STRUCT row into a Mojo struct T.
+
+    Uses compile-time reflection to iterate over T's fields and read
+    each one from the corresponding DuckDB struct child vector.
+
+    Parameters:
+        T: A Mojo struct whose fields map to DuckDB struct children by position.
+
+    Args:
+        vector: The struct vector.
+        offset: Row index.
+
+    Returns:
+        An instance of T populated from the vector.
+    """
+    comptime field_count = struct_field_count[T]()
+
+    # Allocate uninitialised memory — we fill every field below.
+    var ptr = alloc[T](1)
+
+    @parameter
+    for idx in range(field_count):
+        var child_vec = vector.struct_get_child(idx_t(idx))
+        comptime FieldType = struct_field_types[T]()[idx]
+        comptime db_type = _scalar_type_to_duckdb[FieldType]()
+
+        # Get raw pointer to the field's memory slot
+        var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
+
+        @parameter
+        if db_type == DuckDBType.varchar:
+            # String requires special construction
+            var data_str_ptr = child_vec.get_data().bitcast[duckdb_string_t_pointer]()
+            var string_length = Int(data_str_ptr[offset].length)
+            var result: String
+            if data_str_ptr[offset].length <= 12:
+                var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
+                var p = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+                result = String(unsafe_uninit_length=string_length)
+                memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
+            else:
+                var p = data_str_ptr[offset].ptr.bitcast[UInt8]()
+                result = String(unsafe_uninit_length=string_length)
+                memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
+            dst.bitcast[String]().init_pointee_move(result^)
+        else:
+            # Fixed-size type: bitwise copy from the vector data
+            comptime field_size = size_of[FieldType]()
+            var src = child_vec.get_data().bitcast[Byte]() + offset * field_size
+            memcpy(dest=dst.bitcast[Byte](), src=src, count=field_size)
+
+    var result = ptr.take_pointee()
+    ptr.free()
+    return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# List type decomposition — traits + extensions for recursive types
+# ──────────────────────────────────────────────────────────────────
+#
+# Problem: inside a generic `fn foo[T: Copyable & Movable]()` we
+# cannot access `T.T` to decompose `List[Optional[X]]` into X.
+#
+# Solution (inspired by EmberJson): use `__extension` blocks where
+# `Self` IS the concrete type, so `Self.T` resolves to the actual
+# parameter.  Two extensions cooperate:
+#
+#   Optional._deser_as_list_elements  — unwraps Optional and calls
+#       _deserialize_list with the leaf type.
+#
+#   List._from_list_child  — delegates to Optional's method if the
+#       element type conforms, otherwise strips Optional from the
+#       result of _deserialize_list for plain element types.
+#
+# The mutual recursion terminates when the leaf type is a non-list
+# scalar and _deserialize_list handles it directly.
+# ──────────────────────────────────────────────────────────────────
+
+comptime _DBase = Copyable & Movable
+
+
+trait _InnerListDeserializer(_DBase):
+    """For Optional[X]: deserialize child-vector elements as List[Self].
+
+    Since _deserialize_list[X] returns List[Optional[X]] and
+    Self = Optional[X], the result type List[Optional[X]] = List[Self].
+    """
+
+    @staticmethod
+    fn _deser_as_list_elements(
+        child_vector: Vector, length: Int, offset: Int
+    ) raises -> List[Self]:
+        ...
+
+
+__extension Optional(_InnerListDeserializer):
+    @staticmethod
+    fn _deser_as_list_elements(
+        child_vector: Vector, length: Int, offset: Int
+    ) raises -> List[Self]:
+        # Self = Optional[X],  Self.T = X
+        # _deserialize_list[X] returns List[Optional[X]] == List[Self]
+        var inner = _deserialize_list[downcast[Self.T, _DBase]](
+            child_vector, length, offset
+        )
+        return rebind_var[List[Self]](inner^)
+
+
+trait _VectorListConstructible(_DBase):
+    """Construct a List value from a DuckDB child-vector region.
+
+    Implemented via `__extension` for `List`.  Enables arbitrary
+    nesting: List[Optional[List[Optional[Int32]]]], etc.
+    """
+
+    @staticmethod
+    fn _from_list_child(
+        child_vector: Vector, length: Int, offset: Int
+    ) raises -> Self:
+        """Construct one Self from a child-vector region."""
+        ...
+
+
+__extension List(_VectorListConstructible):
+    @staticmethod
+    fn _from_list_child(
+        child_vector: Vector, length: Int, offset: Int
+    ) raises -> Self:
+        # If Self.T conforms to _InnerListDeserializer (i.e. it is Optional),
+        # delegate to its _deser_as_list_elements which returns List[Self.T] = Self.
+        comptime if conforms_to(Self.T, _InnerListDeserializer):
+            var inner = downcast[
+                Self.T, _InnerListDeserializer
+            ]._deser_as_list_elements(
+                child_vector, length, offset
+            )
+            return rebind_var[Self](inner^)
+        else:
+            # Self = List[X] where X is NOT Optional.
+            # Deserialize as List[Optional[X]] then unwrap, raising on NULLs.
+            var deserialized = _deserialize_list[downcast[Self.T, _DBase]](
+                child_vector, length, offset
+            )
+            var result = Self(capacity=length)
+            for i in range(len(deserialized)):
+                if deserialized[i]:
+                    result.append(
+                        rebind_var[Self.T](deserialized[i].value().copy())
+                    )
+                else:
+                    raise Error(
+                        "NULL in DuckDB list but target element type is not"
+                        " Optional. Use List[Optional[...]] to handle NULLs."
+                    )
+            return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# Deserialization — list elements
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _deserialize_list[
+    ElementType: Copyable & Movable
+](vector: Vector, length: Int, offset: Int) raises -> List[Optional[ElementType]]:
+    """Deserialize list elements from a vector.
+
+    Parameters:
+        ElementType: The type of list elements.
+
+    Args:
+        vector: The vector to read from.
+        length: Number of elements.
+        offset: Starting offset.
+
+    Returns:
+        A list of optional element values.
+    """
+    comptime element_db_type = mojo_type_to_duckdb_type[ElementType]()
+
+    var result = List[Optional[ElementType]](capacity=length)
+    var validity_mask = vector.get_validity()
+
+    @parameter
+    if element_db_type == DuckDBType.struct_t:
+        for idx in range(length):
+            if _is_valid(validity_mask, offset + idx):
+                result.append(
+                    Optional(
+                        _deserialize_struct_row[ElementType](vector, offset + idx)
+                    )
+                )
+            else:
+                result.append(None)
+    elif element_db_type.is_fixed_size():
+        var data_ptr = vector.get_data().bitcast[ElementType]()
+        if not validity_mask:
+            for idx in range(length):
+                result.append(Optional(data_ptr[offset + idx].copy()))
+        else:
+            for idx in range(length):
+                if _is_valid(validity_mask, offset + idx):
+                    result.append(Optional(data_ptr[offset + idx].copy()))
+                else:
+                    result.append(None)
+    elif element_db_type == DuckDBType.varchar:
+        if not validity_mask:
+            for idx in range(length):
+                result.append(
+                    Optional(_deserialize_scalar[ElementType](vector, offset + idx))
+                )
+        else:
+            for idx in range(length):
+                if _is_valid(validity_mask, offset + idx):
+                    result.append(
+                        Optional(
+                            _deserialize_scalar[ElementType](vector, offset + idx)
+                        )
+                    )
+                else:
+                    result.append(None)
+    elif element_db_type == DuckDBType.list:
+        # Nested list — use the _VectorListConstructible extension to
+        # decompose ElementType (a List[...]) and recurse.
+        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var child_vec = vector.list_get_child()
+        if not validity_mask:
+            for idx in range(length):
+                var entry = list_entries[offset + idx]
+                var inner = downcast[
+                    ElementType, _VectorListConstructible
+                ]._from_list_child(
+                    child_vec, Int(entry.length), Int(entry.offset)
+                )
+                result.append(Optional(rebind_var[ElementType](inner^)))
+        else:
+            for idx in range(length):
+                if _is_valid(validity_mask, offset + idx):
+                    var entry = list_entries[offset + idx]
+                    var inner = downcast[
+                        ElementType, _VectorListConstructible
+                    ]._from_list_child(
+                        child_vec, Int(entry.length), Int(entry.offset)
+                    )
+                    result.append(Optional(rebind_var[ElementType](inner^)))
+                else:
+                    result.append(None)
+    else:
+        raise Error("Unsupported list element type: " + String(element_db_type))
+
+    return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# List column deserialization
+# ──────────────────────────────────────────────────────────────────
+
+
+fn deserialize_list_column[
+    ElementType: Copyable & Movable
+](
+    vector: Vector, length: Int, offset: Int = 0
+) raises -> List[Optional[List[Optional[ElementType]]]]:
+    """Deserialize a LIST column from a DuckDB vector.
+
+    Each row in the column is a variable-length list of `ElementType` values.
+    Uses `_deserialize_list` internally — a column *is* essentially a list,
+    so nested lists reuse the same machinery.
+
+    Parameters:
+        ElementType: The element type inside each list
+                     (e.g., `Int32` for a `LIST(INTEGER)` column).
+
+    Args:
+        vector: The DuckDB list vector to read from.
+        length: Number of rows to read.
+        offset: Starting row offset (default 0).
+
+    Returns:
+        A list of optional lists, one per row.  Each inner list contains
+        `Optional[ElementType]` to represent per-element NULLs.
+
+    Example:
+        ```mojo
+        # For a column created as LIST(INTEGER):
+        var lists = deserialize_list_column[Int32](vector, row_count)
+        for row in lists:
+            if row[]:
+                for elem in row[].value():
+                    if elem[]:
+                        print(elem[].value())
+        ```
+    """
+    var actual_type = vector.get_column_type().get_type_id()
+    if actual_type != DuckDBType.list:
+        raise Error(
+            "Type mismatch: expected LIST column but got "
+            + String(actual_type)
+        )
+
+    var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+    var child_vec = vector.list_get_child()
+    var result = List[Optional[List[Optional[ElementType]]]](capacity=length)
+    var validity_mask = vector.get_validity()
+
+    for idx in range(length):
+        if _is_valid(validity_mask, offset + idx):
+            var entry = list_entries[offset + idx]
+            var inner = _deserialize_list[ElementType](
+                child_vec, Int(entry.length), Int(entry.offset)
+            )
+            result.append(Optional(inner^))
+        else:
+            result.append(None)
+
+    return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# Table-to-struct field deserialization
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _deserialize_table_field[
+    T: Copyable & Movable
+](vector: Vector, row: Int) raises -> T:
+    """Deserialize a single non-null value from a column vector at a given row.
+
+    Handles scalars, strings, lists, and nested structs. Used for
+    table-to-struct deserialization where each column maps to a struct field.
+
+    Parameters:
+        T: The Mojo type to deserialize.
+
+    Args:
+        vector: The DuckDB column vector.
+        row: Row index.
+
+    Returns:
+        The deserialized value.
+    """
+    comptime db_type = mojo_type_to_duckdb_type[T]()
+    comptime base_name = get_base_type_name[T]()
+
+    @parameter
+    if base_name == "List":
+        # List field — read list entry and construct from child vector
+        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entry = list_entries[row]
+        var child_vec = vector.list_get_child()
+        var inner = downcast[
+            T, _VectorListConstructible
+        ]._from_list_child(
+            child_vec, Int(entry.length), Int(entry.offset)
+        )
+        return rebind_var[T](inner^)
+    elif db_type == DuckDBType.struct_t:
+        # Nested struct — use existing struct deserialization
+        return _deserialize_struct_row[T](vector, row)
+    else:
+        # Scalar (including String) — use existing scalar deserialization
+        return _deserialize_scalar[T](vector, row)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Main entry point
+# ──────────────────────────────────────────────────────────────────
+
+
+fn deserialize_from_vector[
+    T: Copyable & Movable
+](vector: Vector, length: Int, offset: Int = 0) raises -> List[Optional[T]]:
+    """Deserialize values from a DuckDB vector into native Mojo types.
+
+    Handles scalar types, List[T], and user-defined structs (via reflection).
+
+    Parameters:
+        T: The target Mojo type.
+
+    Args:
+        vector: The DuckDB vector to read from.
+        length: Number of elements to read.
+        offset: Starting offset (default 0).
+
+    Returns:
+        A list of optional values of type T.
+
+    Example:
+        ```mojo
+        var ints = deserialize_from_vector[Int64](vector, 100)
+        var strings = deserialize_from_vector[String](vector, 50)
+        var points = deserialize_from_vector[Point](vector, 10)
+        ```
+    """
+    comptime db_type = mojo_type_to_duckdb_type[T]()
+    comptime base_name = get_base_type_name[T]()
+
+    @parameter
+    if base_name == "List":
+        # List deserialization — use the _VectorListConstructible extension
+        # to decompose T (a List[...]) and build each row's list.
+        var actual_type = vector.get_column_type().get_type_id()
+        if actual_type != DuckDBType.list:
+            raise Error(
+                "Type mismatch: Expected type list but got "
+                + String(actual_type)
+            )
+        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var child_vec = vector.list_get_child()
+        var result = List[Optional[T]](capacity=length)
+        var validity_mask = vector.get_validity()
+        for idx in range(length):
+            if _is_valid(validity_mask, offset + idx):
+                var entry = list_entries[offset + idx]
+                var inner = downcast[
+                    T, _VectorListConstructible
+                ]._from_list_child(
+                    child_vec, Int(entry.length), Int(entry.offset)
+                )
+                result.append(Optional(rebind_var[T](inner^)))
+            else:
+                result.append(None)
+        return result^
+
+    @parameter
+    if db_type == DuckDBType.struct_t:
+        # Struct deserialization via reflection
+        var actual_type = vector.get_column_type().get_type_id()
+        if actual_type != DuckDBType.struct_t:
+            raise Error(
+                "Type mismatch: Expected type struct but got "
+                + String(actual_type)
+            )
+        var result = List[Optional[T]](capacity=length)
+        var validity_mask = vector.get_validity()
+        for idx in range(length):
+            if _is_valid(validity_mask, offset + idx):
+                result.append(
+                    Optional(
+                        _deserialize_struct_row[T](vector, offset + idx)
+                    )
+                )
+            else:
+                result.append(None)
+        return result^
+
+    # Scalar types
+    var actual_type = vector.get_column_type().get_type_id()
+    if actual_type != db_type:
+        raise Error(
+            "Type mismatch: Expected type " + String(db_type) + " but got "
+            + String(actual_type)
+        )
+
+    var result = List[Optional[T]](capacity=length)
+    var validity_mask = vector.get_validity()
+
+    if not validity_mask:
+        for idx in range(length):
+            result.append(
+                Optional(_deserialize_scalar[T](vector, offset + idx))
+            )
+    else:
+        for idx in range(length):
+            if _is_valid(validity_mask, offset + idx):
+                result.append(
+                    Optional(_deserialize_scalar[T](vector, offset + idx))
+                )
+            else:
+                result.append(None)
+
+    return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# Nullable column support — Optional[T] extension
+# ──────────────────────────────────────────────────────────────────
+#
+# These types allow `get[Optional[T]]` to return None for NULL values
+# instead of raising a runtime error.  Without Optional, a NULL triggers
+# an error — making null-avoidance the default.
+#
+#   get[Int64](col=0, row=0)            → Int64          (raises on NULL)
+#   get[Optional[Int64]](col=0, row=0)  → Optional[Int64] (None on NULL)
+# ──────────────────────────────────────────────────────────────────
+
+
+trait _NullableColumn(_DBase):
+    """Marker for types that accept NULL as None (i.e., Optional[T])."""
+
+    @staticmethod
+    fn _expected_duckdb_type() -> DuckDBType:
+        """DuckDB type of the wrapped inner type."""
+        ...
+
+    @staticmethod
+    fn _deserialize_single_nullable(
+        vector: Vector, row: Int, is_null: Bool
+    ) raises -> Self:
+        """Deserialize one value, returning None when is_null is True."""
+        ...
+
+    @staticmethod
+    fn _deserialize_column_nullable(
+        vector: Vector, count: Int, offset: Int
+    ) raises -> List[Self]:
+        """Deserialize a full column with None for NULL entries."""
+        ...
+
+
+__extension Optional(_NullableColumn):
+    @staticmethod
+    fn _expected_duckdb_type() -> DuckDBType:
+        return mojo_type_to_duckdb_type[downcast[Self.T, _DBase]]()
+
+    @staticmethod
+    fn _deserialize_single_nullable(
+        vector: Vector, row: Int, is_null: Bool
+    ) raises -> Self:
+        if is_null:
+            return None
+        var val = _deserialize_table_field[downcast[Self.T, _DBase]](
+            vector, row
+        )
+        return rebind_var[Self](Optional(val^))
+
+    @staticmethod
+    fn _deserialize_column_nullable(
+        vector: Vector, count: Int, offset: Int
+    ) raises -> List[Self]:
+        var inner = deserialize_from_vector[downcast[Self.T, _DBase]](
+            vector, count, offset
+        )
+        return rebind_var[List[Self]](inner^)

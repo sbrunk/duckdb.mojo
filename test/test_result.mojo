@@ -203,7 +203,7 @@ def test_result_fetch_chunk():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
 def test_result_fetch_all():
@@ -211,7 +211,7 @@ def test_result_fetch_all():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(10))").fetch_all()
     for i in range(10):
-        assert_equal(result.get(bigint, col=0, row=i).value(), Int64(i))
+        assert_equal(result.get[Int64](col=0, row=i), Int64(i))
 
 
 def test_result_iteration():
@@ -223,7 +223,7 @@ def test_result_iteration():
     while iter.__has_next__():
         var chunk = iter.__next__()
         for i in range(len(chunk)):
-            assert_equal(chunk.get(bigint, col=0, row=i).value(), Int64(count))
+            assert_equal(chunk.get[Int64](col=0, row=i), Int64(count))
             count += 1
     assert_equal(count, 5)
 
@@ -262,9 +262,9 @@ def test_result_with_null_values():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(v)")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 1)
-    assert_false(chunk.get(integer, col=0, row=1))
-    assert_equal(chunk.get(integer, col=0, row=2).value(), 3)
+    assert_equal(chunk.get[Int32](col=0, row=0), 1)
+    assert_false(chunk.get[Optional[Int32]](col=0, row=1))
+    assert_equal(chunk.get[Int32](col=0, row=2), 3)
 
 
 def test_result_mixed_types():
@@ -272,10 +272,10 @@ def test_result_mixed_types():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42::INTEGER, 3.14::DOUBLE, 'hello'::VARCHAR, TRUE::BOOLEAN")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), 42)
-    assert_equal(chunk.get(double, col=1, row=0).value(), 3.14)
-    assert_equal(chunk.get(varchar, col=2, row=0).value(), "hello")
-    assert_equal(chunk.get(boolean, col=3, row=0).value(), True)
+    assert_equal(chunk.get[Int32](col=0, row=0), 42)
+    assert_equal(chunk.get[Float64](col=1, row=0), 3.14)
+    assert_equal(chunk.get[String](col=2, row=0), "hello")
+    assert_equal(chunk.get[Bool](col=3, row=0), True)
 
 
 def test_result_empty_table():
@@ -292,7 +292,7 @@ def test_result_large_integers():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 9223372036854775807::BIGINT")  # Max BIGINT
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(bigint, col=0, row=0).value(), 9223372036854775807)
+    assert_equal(chunk.get[Int64](col=0, row=0), 9223372036854775807)
 
 
 def test_result_negative_integers():
@@ -300,8 +300,8 @@ def test_result_negative_integers():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT -42::INTEGER, -123456789::BIGINT")
     var chunk = result.fetch_chunk()
-    assert_equal(chunk.get(integer, col=0, row=0).value(), -42)
-    assert_equal(chunk.get(bigint, col=1, row=0).value(), -123456789)
+    assert_equal(chunk.get[Int32](col=0, row=0), -42)
+    assert_equal(chunk.get[Int64](col=1, row=0), -123456789)
 
 
 def test_result_floating_point_precision():
@@ -309,7 +309,7 @@ def test_result_floating_point_precision():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 3.14159265359::DOUBLE")
     var chunk = result.fetch_chunk()
-    var value = chunk.get(double, col=0, row=0).value()
+    var value = chunk.get[Float64](col=0, row=0)
     assert_almost_equal(value, 3.14159265359)
 
 
