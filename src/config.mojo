@@ -96,6 +96,13 @@ struct Config(Movable):
         """Return all available configuration options as ``{name: description}``.
 
         This queries the DuckDB library for every known startup flag.
+
+        Example:
+        ```mojo
+        from duckdb import Config
+        for entry in Config.available_options().items():
+            print(entry.key, "-", entry.value)
+        ```
         """
         ref libduckdb = DuckDB().libduckdb()
         var count = libduckdb.duckdb_config_count()
