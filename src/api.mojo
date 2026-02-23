@@ -126,3 +126,26 @@ struct DuckDB(ImplicitlyCopyable):
     @staticmethod
     fn connect(db_path: String) raises -> Connection:
         return Connection(db_path)
+
+    @staticmethod
+    fn connect(db_path: String, config: Config) raises -> Connection:
+        """Open a connection with startup configuration.
+
+        Args:
+            db_path: Database path (e.g. ``:memory:``).
+            config: Startup configuration (borrowed; DuckDB copies it internally).
+        """
+        return Connection(db_path, config)
+
+    @staticmethod
+    fn connect(
+        db_path: String, *, config: Dict[String, String]
+    ) raises -> Connection:
+        """Open a connection with configuration from a dictionary.
+
+        Args:
+            db_path: Database path (e.g. ``":memory:"``)..
+            config: Dictionary mapping option names to values.
+        """
+        var cfg = Config(config)
+        return Connection(db_path, cfg)

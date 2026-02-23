@@ -1,5 +1,6 @@
 from duckdb.api import DuckDB
 from duckdb.api_level import ApiLevel
+from duckdb.config import Config
 from duckdb.duckdb_type import *
 from duckdb.typed_columns import *
 from duckdb.connection import Connection

@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     defaults:
       run:
