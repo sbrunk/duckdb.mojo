@@ -63,7 +63,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
         Args:
             path: Database path (e.g. ``":memory:"`` or a file path).
-            config: Startup configuration (borrowed; DuckDB copies it internally).
+            config: Startup configuration.
         """
         self._db = Database(path, config)
         self._conn = UnsafePointer[

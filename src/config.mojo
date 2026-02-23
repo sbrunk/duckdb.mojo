@@ -6,8 +6,7 @@ from duckdb.api import DuckDB
 
 struct Config(Movable):
     """A `Config` holds startup options that are passed to `duckdb_open_ext`
-    when creating a `Database`.  All values are strings, matching the C API
-    convention.
+    when creating a `Database`.
 
     Create a `Config`, call `set()` for each option, then pass it to
     ``Database()`` or ``DuckDB.connect()``.  DuckDB copies the config
@@ -125,7 +124,7 @@ struct Config(Movable):
     fn _handle(self) -> duckdb_config:
         """Return the underlying duckdb_config handle.
 
-        The Config retains ownership — the handle is only borrowed.
+        The Config instance retains ownership — the handle is only borrowed.
         DuckDB copies its contents during ``duckdb_open_ext``.
         """
         return self._config

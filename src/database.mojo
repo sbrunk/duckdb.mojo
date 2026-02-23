@@ -25,9 +25,6 @@ struct Database(Movable):
     fn __init__(out self, path: Optional[String], config: Config) raises:
         """Create a database with startup configuration options.
 
-        DuckDB copies the configuration internally, so ``config`` is only
-        borrowed and will be cleaned up by its own destructor.
-
         Args:
             path: Database file path, or None / ":memory:" for in-memory.
             config: Startup configuration.
