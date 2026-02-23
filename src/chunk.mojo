@@ -2,10 +2,22 @@ from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.duckdb_type import *
 from duckdb.logical_type import LogicalType
-from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector, deserialize_list_column
+from duckdb.typed_api import (
+    mojo_type_to_duckdb_type,
+    deserialize_from_vector,
+    deserialize_list_column,
+    _deserialize_table_field,
+)
 from collections import Optional
 from memory import UnsafePointer
 from memory.unsafe_pointer import alloc
+from reflection import (
+    struct_field_count,
+    struct_field_types,
+    struct_field_names,
+    get_type_name,
+)
+from std.builtin.rebind import downcast
 
 
 struct Chunk[is_owned: Bool](Movable, Sized):
@@ -237,7 +249,124 @@ struct Chunk[is_owned: Bool](Movable, Sized):
         self._check_bounds(col)
         return deserialize_from_vector[T](self.get_vector(col), len(self), 0)
 
-    # TODO remaining types
+    fn get[
+        T: Copyable & Movable
+    ](self, *, row: Int) raises -> Optional[T]:
+        """Deserialize a table row into a Mojo struct.
+
+        Maps each column in the chunk to a field in T by position.
+        Returns None if any column value is NULL for this row.
+
+        Parameters:
+            T: A Mojo struct whose fields correspond to table columns by position.
+
+        Args:
+            row: Row index.
+
+        Returns:
+            Optional[T] — the deserialized struct, or None if any field is NULL.
+
+        Example:
+            ```mojo
+            @fieldwise_init
+            struct User(Copyable, Movable):
+                var name: String
+                var age: Int64
+
+            var user = chunk.get[User](row=0)
+            ```
+        """
+        constrained[
+            mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t,
+            "get[T](row=) is for struct types. For scalar/list values, use get[T](col=, row=).",
+        ]()
+
+        if row < 0 or row >= len(self):
+            raise Error(String("Row {} out of bounds.").format(row))
+
+        comptime field_count_ = struct_field_count[T]()
+
+        # Validate column count matches field count
+        if self.column_count() != field_count_:
+            raise Error(
+                "Column count mismatch: struct "
+                + String(get_type_name[T]())
+                + " has "
+                + String(field_count_)
+                + " fields but chunk has "
+                + String(self.column_count())
+                + " columns"
+            )
+
+        # Validate column types match field types
+        @parameter
+        for idx in range(field_count_):
+            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FT = downcast[FieldType, Copyable & Movable]
+            comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
+            var actual_type = self.type(idx)
+            if actual_type != expected_db_type:
+                comptime field_name = struct_field_names[T]()[idx]
+                raise Error(
+                    "Type mismatch for field '"
+                    + String(field_name)
+                    + "': expected "
+                    + String(expected_db_type)
+                    + " but column has "
+                    + String(actual_type)
+                )
+
+        # Check for any NULL in this row — return None
+        for col_idx in range(self.column_count()):
+            if self.is_null(col=col_idx, row=row):
+                return None
+
+        # Deserialize each field from its column vector
+        var ptr = alloc[T](1)
+
+        @parameter
+        for idx in range(field_count_):
+            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FT = downcast[FieldType, Copyable & Movable]
+            var vector = self.get_vector(idx)
+            var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
+            var val = _deserialize_table_field[FT](vector, row)
+            dst.bitcast[FT]().init_pointee_move(val^)
+
+        var result = ptr.take_pointee()
+        ptr.free()
+        return Optional(result^)
+
+    fn get[
+        T: Copyable & Movable
+    ](self) raises -> List[Optional[T]]:
+        """Deserialize all table rows into Mojo structs.
+
+        Parameters:
+            T: A Mojo struct whose fields correspond to table columns by position.
+
+        Returns:
+            List[Optional[T]] — one struct per row, None for rows with any NULL field.
+
+        Example:
+            ```mojo
+            @fieldwise_init
+            struct User(Copyable, Movable):
+                var name: String
+                var age: Int64
+
+            var users = chunk.get[User]()
+            ```
+        """
+        constrained[
+            mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t,
+            "get[T]() is for struct types. For column values, use get[T](col=).",
+        ]()
+
+        var result = List[Optional[T]](capacity=len(self))
+        for row in range(len(self)):
+            result.append(self.get[T](row=row))
+        return result^
 
 
 struct _ChunkIter[lifetime: ImmutOrigin]:

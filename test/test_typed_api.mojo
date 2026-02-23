@@ -206,6 +206,28 @@ struct IntPair(Copyable, Movable):
     var b: Int64
 
 
+@fieldwise_init
+struct UserRecord(Copyable, Movable):
+    """A user record for table-to-struct tests."""
+    var name: String
+    var age: Int64
+    var active: Bool
+
+
+@fieldwise_init
+struct RecordWithList(Copyable, Movable):
+    """A record with a list field for table-to-struct tests."""
+    var name: String
+    var scores: List[Float64]
+
+
+@fieldwise_init
+struct LabeledPoint(Copyable, Movable):
+    """A labeled point for nested-struct table tests."""
+    var label: String
+    var pt: Point
+
+
 # ──────────────────────────────────────────────────────────────────
 # MojoType descriptor tests
 # ──────────────────────────────────────────────────────────────────
@@ -640,6 +662,219 @@ def test_nested_list_with_nulls():
 
     # Row 1: NULL row
     assert_false(lists[1])
+
+
+# ──────────────────────────────────────────────────────────────────
+# Table-to-struct deserialization tests
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_table_struct_single_row():
+    """Deserialize a single table row into a struct."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES ('Bob', 25, false)")
+    var result = con.execute("SELECT name, age, active FROM users")
+    var chunk = result.fetch_chunk()
+
+    var user = chunk.get[UserRecord](row=0)
+    assert_true(user)
+    assert_equal(user.value().name, "Alice")
+    assert_equal(user.value().age, 30)
+    assert_equal(user.value().active, True)
+
+    var user2 = chunk.get[UserRecord](row=1)
+    assert_true(user2)
+    assert_equal(user2.value().name, "Bob")
+    assert_equal(user2.value().age, 25)
+    assert_equal(user2.value().active, False)
+
+
+def test_table_struct_all_rows():
+    """Deserialize all table rows into structs."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES ('Bob', 25, false)")
+    _ = con.execute("INSERT INTO users VALUES ('Charlie', 35, true)")
+    var result = con.execute("SELECT name, age, active FROM users")
+    var chunk = result.fetch_chunk()
+
+    var users = chunk.get[UserRecord]()
+    assert_equal(len(users), 3)
+
+    assert_true(users[0])
+    assert_equal(users[0].value().name, "Alice")
+    assert_equal(users[0].value().age, 30)
+
+    assert_true(users[1])
+    assert_equal(users[1].value().name, "Bob")
+    assert_equal(users[1].value().age, 25)
+
+    assert_true(users[2])
+    assert_equal(users[2].value().name, "Charlie")
+    assert_equal(users[2].value().age, 35)
+    assert_equal(users[2].value().active, True)
+
+
+def test_table_struct_with_nulls():
+    """Rows with any NULL column value return None."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES (NULL, 25, false)")
+    _ = con.execute("INSERT INTO users VALUES ('Charlie', NULL, true)")
+    var result = con.execute("SELECT name, age, active FROM users")
+    var chunk = result.fetch_chunk()
+
+    # Row 0: all non-null → Some
+    var user0 = chunk.get[UserRecord](row=0)
+    assert_true(user0)
+    assert_equal(user0.value().name, "Alice")
+
+    # Row 1: name is NULL → None
+    var user1 = chunk.get[UserRecord](row=1)
+    assert_false(user1)
+
+    # Row 2: age is NULL → None
+    var user2 = chunk.get[UserRecord](row=2)
+    assert_false(user2)
+
+
+def test_table_struct_all_rows_with_nulls():
+    """All-rows get with some NULL rows returns None entries."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES (NULL, 25, false)")
+    _ = con.execute("INSERT INTO users VALUES ('Charlie', 35, true)")
+    var result = con.execute("SELECT name, age, active FROM users")
+    var chunk = result.fetch_chunk()
+
+    var users = chunk.get[UserRecord]()
+    assert_equal(len(users), 3)
+    assert_true(users[0])
+    assert_false(users[1])  # NULL name
+    assert_true(users[2])
+    assert_equal(users[2].value().name, "Charlie")
+
+
+def test_table_struct_column_count_mismatch():
+    """Error when column count doesn't match struct field count."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT)")
+    _ = con.execute("INSERT INTO t VALUES ('Alice', 30)")
+    var result = con.execute("SELECT name, age FROM t")
+    var chunk = result.fetch_chunk()
+
+    # UserRecord has 3 fields but the query returns 2 columns
+    var raised = False
+    try:
+        _ = chunk.get[UserRecord](row=0)
+    except e:
+        raised = True
+        assert_true("Column count mismatch" in String(e))
+    assert_true(raised)
+
+
+def test_table_struct_type_mismatch():
+    """Error when a column type doesn't match the struct field type."""
+    con = DuckDB.connect(":memory:")
+    # age should be BIGINT but we use VARCHAR
+    _ = con.execute(
+        "CREATE TABLE t (name VARCHAR, age VARCHAR, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO t VALUES ('Alice', '30', true)")
+    var result = con.execute("SELECT name, age, active FROM t")
+    var chunk = result.fetch_chunk()
+
+    var raised = False
+    try:
+        _ = chunk.get[UserRecord](row=0)
+    except e:
+        raised = True
+        assert_true("Type mismatch" in String(e))
+        assert_true("age" in String(e))
+    assert_true(raised)
+
+
+def test_table_struct_row_out_of_bounds():
+    """Error when row index is out of bounds."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE t (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO t VALUES ('Alice', 30, true)")
+    var result = con.execute("SELECT name, age, active FROM t")
+    var chunk = result.fetch_chunk()
+
+    var raised = False
+    try:
+        _ = chunk.get[UserRecord](row=5)
+    except e:
+        raised = True
+        assert_true("out of bounds" in String(e))
+    assert_true(raised)
+
+
+def test_table_struct_with_list_field():
+    """Deserialize a table row with a List field."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
+    _ = con.execute(
+        "INSERT INTO t VALUES ('Alice', [90.0, 95.0, 100.0])"
+    )
+    _ = con.execute("INSERT INTO t VALUES ('Bob', [80.0, 85.0])")
+    var result = con.execute("SELECT name, scores FROM t")
+    var chunk = result.fetch_chunk()
+
+    var rec = chunk.get[RecordWithList](row=0)
+    assert_true(rec)
+    assert_equal(rec.value().name, "Alice")
+    assert_equal(len(rec.value().scores), 3)
+    assert_equal(rec.value().scores[0], 90.0)
+    assert_equal(rec.value().scores[1], 95.0)
+    assert_equal(rec.value().scores[2], 100.0)
+
+    var rec2 = chunk.get[RecordWithList](row=1)
+    assert_true(rec2)
+    assert_equal(rec2.value().name, "Bob")
+    assert_equal(len(rec2.value().scores), 2)
+
+
+def test_table_struct_with_nested_struct():
+    """Deserialize a table row where a column is a DuckDB STRUCT."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE t (label VARCHAR, pt STRUCT(x DOUBLE, y DOUBLE))"
+    )
+    _ = con.execute("INSERT INTO t VALUES ('origin', {'x': 0.0, 'y': 0.0})")
+    _ = con.execute(
+        "INSERT INTO t VALUES ('offset', {'x': 1.5, 'y': 2.5})"
+    )
+    var result = con.execute("SELECT label, pt FROM t")
+    var chunk = result.fetch_chunk()
+
+    var row0 = chunk.get[LabeledPoint](row=0)
+    assert_true(row0)
+    assert_equal(row0.value().label, "origin")
+    assert_equal(row0.value().pt.x, 0.0)
+    assert_equal(row0.value().pt.y, 0.0)
+
+    var row1 = chunk.get[LabeledPoint](row=1)
+    assert_true(row1)
+    assert_equal(row1.value().label, "offset")
+    assert_equal(row1.value().pt.x, 1.5)
+    assert_equal(row1.value().pt.y, 2.5)
 
 
 def main():

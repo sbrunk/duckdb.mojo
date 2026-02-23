@@ -738,6 +738,52 @@ fn deserialize_list_column[
 
 
 # ──────────────────────────────────────────────────────────────────
+# Table-to-struct field deserialization
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _deserialize_table_field[
+    T: Copyable & Movable
+](vector: Vector, row: Int) raises -> T:
+    """Deserialize a single non-null value from a column vector at a given row.
+
+    Handles scalars, strings, lists, and nested structs. Used for
+    table-to-struct deserialization where each column maps to a struct field.
+
+    Parameters:
+        T: The Mojo type to deserialize.
+
+    Args:
+        vector: The DuckDB column vector.
+        row: Row index.
+
+    Returns:
+        The deserialized value.
+    """
+    comptime db_type = mojo_type_to_duckdb_type[T]()
+    comptime base_name = get_base_type_name[T]()
+
+    @parameter
+    if base_name == "List":
+        # List field — read list entry and construct from child vector
+        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entry = list_entries[row]
+        var child_vec = vector.list_get_child()
+        var inner = downcast[
+            T, _VectorListConstructible
+        ]._from_list_child(
+            child_vec, Int(entry.length), Int(entry.offset)
+        )
+        return rebind_var[T](inner^)
+    elif db_type == DuckDBType.struct_t:
+        # Nested struct — use existing struct deserialization
+        return _deserialize_struct_row[T](vector, row)
+    else:
+        # Scalar (including String) — use existing scalar deserialization
+        return _deserialize_scalar[T](vector, row)
+
+
+# ──────────────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────────────
 
