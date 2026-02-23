@@ -37,15 +37,12 @@ struct Config(Movable):
     """
 
     var _config: duckdb_config
-    var _is_alive: Bool
 
     fn __init__(out self) raises:
         """Create an empty configuration."""
         self._config = duckdb_config()
-        self._is_alive = True
         ref libduckdb = DuckDB().libduckdb()
         if libduckdb.duckdb_create_config(UnsafePointer(to=self._config)) == DuckDBError:
-            self._is_alive = False
             raise Error("Failed to create DuckDB config")
 
     fn __init__(out self, options: Dict[String, String]) raises:
@@ -61,11 +58,8 @@ struct Config(Movable):
 
     fn __moveinit__(out self, deinit take: Self):
         self._config = take._config
-        self._is_alive = take._is_alive
 
     fn __del__(deinit self):
-        if not self._is_alive:
-            return
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_config(UnsafePointer(to=self._config))
 
