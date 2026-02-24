@@ -749,13 +749,8 @@ def test_table_struct_column_count_mismatch():
     var chunk = result.fetch_chunk()
 
     # UserRecord has 3 fields but the query returns 2 columns
-    var raised = False
-    try:
+    with assert_raises(contains="Column count mismatch"):
         _ = chunk.get[UserRecord](row=0)
-    except e:
-        raised = True
-        assert_true("Column count mismatch" in String(e))
-    assert_true(raised)
 
 
 def test_table_struct_type_mismatch():
@@ -769,14 +764,8 @@ def test_table_struct_type_mismatch():
     var result = con.execute("SELECT name, age, active FROM t")
     var chunk = result.fetch_chunk()
 
-    var raised = False
-    try:
+    with assert_raises(contains="Type mismatch"):
         _ = chunk.get[UserRecord](row=0)
-    except e:
-        raised = True
-        assert_true("Type mismatch" in String(e))
-        assert_true("age" in String(e))
-    assert_true(raised)
 
 
 def test_table_struct_row_out_of_bounds():
@@ -789,13 +778,8 @@ def test_table_struct_row_out_of_bounds():
     var result = con.execute("SELECT name, age, active FROM t")
     var chunk = result.fetch_chunk()
 
-    var raised = False
-    try:
+    with assert_raises(contains="out of bounds"):
         _ = chunk.get[UserRecord](row=5)
-    except e:
-        raised = True
-        assert_true("out of bounds" in String(e))
-    assert_true(raised)
 
 
 def test_table_struct_with_list_field():
@@ -843,6 +827,226 @@ def test_table_struct_with_nested_struct():
     assert_equal(row1.label, "offset")
     assert_equal(row1.pt.x, 1.5)
     assert_equal(row1.pt.y, 2.5)
+
+
+# ──────────────────────────────────────────────────────────────────
+# MaterializedResult struct deserialization
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_materialized_struct_single_row():
+    """Deserialize a single row from a MaterializedResult into a struct."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES ('Bob', 25, false)")
+    var result = con.execute("SELECT name, age, active FROM users").fetchall()
+
+    var user0 = result.get[UserRecord](row=0)
+    assert_equal(user0.name, "Alice")
+    assert_equal(user0.age, 30)
+    assert_equal(user0.active, True)
+
+    var user1 = result.get[UserRecord](row=1)
+    assert_equal(user1.name, "Bob")
+    assert_equal(user1.age, 25)
+    assert_equal(user1.active, False)
+
+
+def test_materialized_struct_all_rows():
+    """Deserialize all rows from a MaterializedResult into structs."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES ('Bob', 25, false)")
+    _ = con.execute("INSERT INTO users VALUES ('Charlie', 35, true)")
+    var result = con.execute("SELECT name, age, active FROM users").fetchall()
+
+    var users = result.get[UserRecord]()
+    assert_equal(len(users), 3)
+
+    assert_equal(users[0].name, "Alice")
+    assert_equal(users[0].age, 30)
+    assert_equal(users[0].active, True)
+
+    assert_equal(users[1].name, "Bob")
+    assert_equal(users[1].age, 25)
+    assert_equal(users[1].active, False)
+
+    assert_equal(users[2].name, "Charlie")
+    assert_equal(users[2].age, 35)
+    assert_equal(users[2].active, True)
+
+
+def test_materialized_struct_with_nulls_raises():
+    """MaterializedResult.get[T]() raises when non-Optional field is NULL."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute(
+        "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
+    )
+    _ = con.execute("INSERT INTO users VALUES ('Alice', 30, true)")
+    _ = con.execute("INSERT INTO users VALUES (NULL, 25, false)")
+    var result = con.execute("SELECT name, age, active FROM users").fetchall()
+
+    # Row 0 works fine
+    var user = result.get[UserRecord](row=0)
+    assert_equal(user.name, "Alice")
+
+    # Row 1 has NULL name → raises
+    with assert_raises():
+        _ = result.get[UserRecord](row=1)
+
+    # get all rows also raises
+    with assert_raises():
+        _ = result.get[UserRecord]()
+
+
+def test_materialized_struct_row_out_of_bounds():
+    """MaterializedResult.get[T](row=) raises on out-of-bounds row."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT, active BOOLEAN)")
+    _ = con.execute("INSERT INTO t VALUES ('Alice', 30, true)")
+    var result = con.execute("SELECT * FROM t").fetchall()
+
+    with assert_raises():
+        _ = result.get[UserRecord](row=5)
+
+
+def test_materialized_struct_with_list_field():
+    """MaterializedResult struct deserialization with a List field."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
+    _ = con.execute("INSERT INTO t VALUES ('Alice', [90.0, 95.0])")
+    _ = con.execute("INSERT INTO t VALUES ('Bob', [80.0])")
+    var result = con.execute("SELECT name, scores FROM t").fetchall()
+
+    var all = result.get[RecordWithList]()
+    assert_equal(len(all), 2)
+    assert_equal(all[0].name, "Alice")
+    assert_equal(len(all[0].scores), 2)
+    assert_equal(all[0].scores[0], 90.0)
+    assert_equal(all[1].name, "Bob")
+    assert_equal(len(all[1].scores), 1)
+
+    var rec = result.get[RecordWithList](row=0)
+    assert_equal(rec.name, "Alice")
+    assert_equal(rec.scores[1], 95.0)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Tuple deserialization
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_tuple_basic():
+    """Deserialize a row into a Tuple of basic types."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT 42::INTEGER, 3.14::DOUBLE, 'hello'::VARCHAR"
+    var chunk = conn.execute(query).fetch_chunk()
+    var t = chunk.get_tuple[Int32, Float64, String](row=0)
+    assert_equal(t[0], 42)
+    assert_equal(t[1], 3.14)
+    assert_equal(t[2], "hello")
+
+
+def test_tuple_all_rows():
+    """Deserialize all rows into a List of Tuples."""
+    var conn = DuckDB.connect(":memory:")
+    var query = (
+        "SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) AS t(id, name)"
+    )
+    var chunk = conn.execute(query).fetch_chunk()
+    var rows = chunk.get_tuple[Int32, String]()
+    assert_equal(len(rows), 3)
+    assert_equal(rows[0][0], 1)
+    assert_equal(rows[0][1], "a")
+    assert_equal(rows[1][0], 2)
+    assert_equal(rows[1][1], "b")
+    assert_equal(rows[2][0], 3)
+    assert_equal(rows[2][1], "c")
+
+
+def test_tuple_nullable():
+    """Deserialize a Tuple with Optional elements for NULL handling."""
+    var conn = DuckDB.connect(":memory:")
+    var query = (
+        "SELECT * FROM (VALUES (1, 'a'), (NULL, 'b'), (3, NULL))"
+        " AS t(id, name)"
+    )
+    var chunk = conn.execute(query).fetch_chunk()
+
+    var t0 = chunk.get_tuple[Optional[Int32], Optional[String]](row=0)
+    assert_equal(t0[0].value(), 1)
+    assert_equal(t0[1].value(), "a")
+
+    var t1 = chunk.get_tuple[Optional[Int32], Optional[String]](row=1)
+    assert_false(t1[0])
+    assert_equal(t1[1].value(), "b")
+
+    var t2 = chunk.get_tuple[Optional[Int32], Optional[String]](row=2)
+    assert_equal(t2[0].value(), 3)
+    assert_false(t2[1])
+
+
+def test_tuple_from_row():
+    """Deserialize a Tuple via Row.get_tuple inside a for loop."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT * FROM (VALUES (0, 'x'), (1, 'y'), (2, 'z')) AS t(id, label)"
+    var expected_labels = ["x", "y", "z"]
+    var idx = 0
+    for row in conn.execute(query):
+        var t = row.get_tuple[Int32, String]()
+        assert_equal(t[0], Int32(idx))
+        assert_equal(t[1], expected_labels[idx])
+        idx += 1
+    assert_equal(idx, 3)
+
+
+def test_tuple_bigint_types():
+    """Deserialize a Tuple with various integer widths."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT 1::TINYINT, 2::SMALLINT, 3::INTEGER, 4::BIGINT"
+    var chunk = conn.execute(query).fetch_chunk()
+    var t = chunk.get_tuple[Int8, Int16, Int32, Int64](row=0)
+    assert_equal(t[0], Int8(1))
+    assert_equal(t[1], Int16(2))
+    assert_equal(t[2], Int32(3))
+    assert_equal(t[3], Int64(4))
+
+
+def test_tuple_boolean():
+    """Deserialize a Tuple containing Bool values."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT TRUE::BOOLEAN, FALSE::BOOLEAN"
+    var chunk = conn.execute(query).fetch_chunk()
+    var t = chunk.get_tuple[Bool, Bool](row=0)
+    assert_true(t[0])
+    assert_false(t[1])
+
+
+def test_tuple_column_count_mismatch():
+    """Error when Tuple element count doesn't match column count."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT 1::INT, 2::INT, 3::INT"
+    var chunk = conn.execute(query).fetch_chunk()
+    
+    # 2 elements for 3 columns
+    with assert_raises():
+        _ = chunk.get_tuple[Int32, Int32](row=0)
+
+
+def test_tuple_null_non_optional_raises():
+    """Error when NULL encountered for non-Optional Tuple element."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT NULL::INTEGER"
+    var chunk = conn.execute(query).fetch_chunk()
+    
+    with assert_raises():
+        _ = chunk.get_tuple[Int32](row=0)
 
 
 def main():

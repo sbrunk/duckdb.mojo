@@ -4,8 +4,8 @@ from duckdb.config import Config
 from duckdb.duckdb_type import *
 from duckdb.typed_api import mojo_type_to_duckdb_type, mojo_logical_type, deserialize_from_vector, deserialize_list_column, MojoType
 from duckdb.connection import Connection
-from duckdb.chunk import Chunk
-from duckdb.result import Column, Result, MaterializedResult, ResultType, ErrorType, StatementType, ResultError
+from duckdb.chunk import Chunk, Row
+from duckdb.result import Column, Result, MaterializedResult, ResultType, ErrorType, StatementType, ResultError, ChunkIter, RowIter
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo, FunctionInfo
 from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet, AggregateFunctionInfo, AggregateState, AggregateStateArray

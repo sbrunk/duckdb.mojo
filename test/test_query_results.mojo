@@ -17,7 +17,7 @@ def test_range():
 
 def test_materialized_result():
     con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT unnest(range(10))").fetch_all()
+    result = con.execute("SELECT unnest(range(10))").fetchall()
     for i in range(10):
         assert_equal(result.get[Int64](col=0, row=i), Int64(i))
 

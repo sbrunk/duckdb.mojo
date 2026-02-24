@@ -145,7 +145,7 @@ def test_rows_changed_create():
 def test_result_materialized_length():
     """Test len() on materialized result returns correct number of rows."""
     var conn = DuckDB.connect(":memory:")
-    var result = conn.execute("SELECT unnest(range(5))").fetch_all()
+    var result = conn.execute("SELECT unnest(range(5))").fetchall()
     assert_equal(len(result), 5)
 
 
@@ -153,7 +153,7 @@ def test_result_materialized_length_empty():
     """Test len() on materialized result returns 0 for empty result."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
-    var result = conn.execute("SELECT * FROM test").fetch_all()
+    var result = conn.execute("SELECT * FROM test").fetchall()
     assert_equal(len(result), 0)
 
 
@@ -206,10 +206,10 @@ def test_result_fetch_chunk():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_result_fetch_all():
-    """Test fetch_all materializes all results."""
+def test_result_fetchall():
+    """Test fetchall materializes all results."""
     var conn = DuckDB.connect(":memory:")
-    var result = conn.execute("SELECT unnest(range(10))").fetch_all()
+    var result = conn.execute("SELECT unnest(range(10))").fetchall()
     for i in range(10):
         assert_equal(result.get[Int64](col=0, row=i), Int64(i))
 
@@ -219,9 +219,7 @@ def test_result_iteration():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(5))")
     var count = 0
-    var iter = result.chunk_iterator()
-    while iter.__has_next__():
-        var chunk = iter.__next__()
+    for chunk in result.chunks():
         for i in range(len(chunk)):
             assert_equal(chunk.get[Int64](col=0, row=i), Int64(count))
             count += 1
@@ -234,9 +232,7 @@ def test_result_multiple_chunks():
     # Create a result that will span multiple chunks (DuckDB uses 2048 rows per chunk by default)
     var result = conn.execute("SELECT unnest(range(5000))")
     var total_rows = 0
-    var iter = result.chunk_iterator()
-    while iter.__has_next__():
-        var chunk = iter.__next__()
+    for chunk in result.chunks():
         total_rows += len(chunk)
     assert_equal(total_rows, 5000)
 
@@ -282,7 +278,7 @@ def test_result_empty_table():
     """Test result from empty table."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT, name VARCHAR)")
-    var result = conn.execute("SELECT * FROM test").fetch_all()
+    var result = conn.execute("SELECT * FROM test").fetchall()
     assert_equal(len(result), 0)
     assert_equal(result.column_count(), 2)
 
@@ -311,6 +307,147 @@ def test_result_floating_point_precision():
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float64](col=0, row=0)
     assert_almost_equal(value, 3.14159265359)
+
+
+# ──────────────────────────────────────────────────────────────────
+# For-loop iteration tests
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_for_chunks_iteration():
+    """Test iterating over chunks with a for loop."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT unnest(range(10)) AS id"
+    var count = 0
+    for chunk in conn.execute(query).chunks():
+        for i in range(len(chunk)):
+            assert_equal(chunk.get[Int64](col=0, row=i), Int64(count))
+            count += 1
+    assert_equal(count, 10)
+
+
+def test_for_rows_iteration():
+    """Test iterating over rows directly from a result (via __iter__)."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT unnest(range(10)) AS id"
+    var count = 0
+    for row in conn.execute(query):
+        assert_equal(row.get[Int64](col=0), Int64(count))
+        count += 1
+    assert_equal(count, 10)
+
+
+def test_for_rows_in_chunk():
+    """Test iterating over rows within a chunk using for-in."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT * FROM (VALUES (0, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e')) AS t(id, name)"
+    var result = conn.execute(query)
+    var chunk = result.fetch_chunk()
+    var idx = 0
+    for row in chunk:
+        assert_equal(row.get[Int32](col=0), Int32(idx))
+        idx += 1
+    assert_equal(idx, 5)
+
+
+def test_for_rows_multi_column():
+    """Test row iteration with multiple typed columns."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT 42::INTEGER AS i, 3.14::DOUBLE AS d, 'hello'::VARCHAR AS s, TRUE::BOOLEAN AS b"
+    for row in conn.execute(query):
+        assert_equal(row.get[Int32](col=0), 42)
+        assert_equal(row.get[Float64](col=1), 3.14)
+        assert_equal(row.get[String](col=2), "hello")
+        assert_equal(row.get[Bool](col=3), True)
+
+
+def test_for_rows_with_nulls():
+    """Test row iteration with NULL values using Optional."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT * FROM (VALUES (1, 'a'), (NULL, 'b'), (3, NULL)) AS t(id, name)"
+    var idx = 0
+    for row in conn.execute(query).rows():
+        if idx == 0:
+            assert_equal(row.get[Optional[Int32]](col=0).value(), 1)
+            assert_equal(row.get[String](col=1), "a")
+        elif idx == 1:
+            assert_false(row.get[Optional[Int32]](col=0))
+            assert_equal(row.get[String](col=1), "b")
+        else:
+            assert_equal(row.get[Optional[Int32]](col=0).value(), 3)
+            assert_false(row.get[Optional[String]](col=1))
+        idx += 1
+    assert_equal(idx, 3)
+
+
+def test_for_rows_multi_chunk():
+    """Test row iteration spanning multiple chunks (>2048 rows)."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT unnest(range(5000)) AS id"
+    var count = 0
+    for row in conn.execute(query):
+        assert_equal(row.get[Int64](col=0), Int64(count))
+        count += 1
+    assert_equal(count, 5000)
+
+
+def test_for_chunks_multi_chunk():
+    """Test chunk iteration over large dataset, verify chunk sizes."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT unnest(range(5000)) AS id"
+    var chunk_count = 0
+    var total_rows = 0
+    for chunk in conn.execute(query).chunks():
+        chunk_count += 1
+        total_rows += len(chunk)
+        assert_true(len(chunk) > 0, "chunk should not be empty")
+    assert_equal(total_rows, 5000)
+    assert_true(chunk_count > 1, "expected multiple chunks for 5000 rows")
+
+
+def test_for_rows_empty_result():
+    """Test row iteration over empty result produces no iterations."""
+    var conn = DuckDB.connect(":memory:")
+    _ = conn.execute("CREATE TABLE empty_tbl (id INT)")
+    var query = "SELECT * FROM empty_tbl"
+    var count = 0
+    for row in conn.execute(query):
+        count += 1
+    assert_equal(count, 0)
+
+
+def test_rows_explicit_spelling():
+    """Test .rows() as explicit spelling of __iter__."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT unnest(range(5)) AS id"
+    var count = 0
+    for row in conn.execute(query).rows():
+        assert_equal(row.get[Int64](col=0), Int64(count))
+        count += 1
+    assert_equal(count, 5)
+
+
+def test_row_column_count():
+    """Test Row.column_count() inside iteration."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT 1::INT, 2::INT, 3::INT"
+    for row in conn.execute(query).rows():
+        assert_equal(row.column_count(), 3)
+
+
+def test_row_is_null_in_loop():
+    """Test Row.is_null() inside a for loop."""
+    var conn = DuckDB.connect(":memory:")
+    var query = "SELECT * FROM (VALUES (1, NULL), (NULL, 'b')) AS t(id, name)"
+    var idx = 0
+    for row in conn.execute(query).rows():
+        if idx == 0:
+            assert_false(row.is_null(col=0))
+            assert_true(row.is_null(col=1))
+        else:
+            assert_true(row.is_null(col=0))
+            assert_false(row.is_null(col=1))
+        idx += 1
 
 
 def main():
