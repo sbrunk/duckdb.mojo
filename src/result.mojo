@@ -1,8 +1,9 @@
 from duckdb._libduckdb import *
-from duckdb.chunk import Chunk, _ChunkIter
+from duckdb.chunk import Chunk, Row
 from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector
 from collections import Optional
 from std.builtin.error import StackTrace
+from std.iter import Iterator, Iterable, StopIteration
 
 
 @fieldwise_init
@@ -566,7 +567,23 @@ struct Column(Movable & Copyable & Stringable & Writable):
 
 
 
-struct Result(Writable, Stringable):
+struct Result(Writable, Stringable, Iterable):
+    """A streaming query result.
+
+    Iterating a ``Result`` yields ``Row`` proxies — the most ergonomic
+    way to consume query output:
+
+        for row in conn.execute("SELECT name, age FROM users"):
+            print(row.get[String](col=0), row.get[Int64](col=1))
+
+    Use ``.chunks()`` when you need batch / columnar access.
+    """
+
+    comptime Element = Row
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = RowIter[ImmutOrigin(iterable_origin)]
+
     var _result: duckdb_result
     var columns: List[Column]
 
@@ -635,25 +652,72 @@ struct Result(Writable, Stringable):
     fn __str__(self) -> String:
         return String.write(self)
 
-    # fn __iter__(self) -> ResultIterator:
-    #     return ResultIterator(self)
+    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        """Iterate over rows in this result.
+
+        Example:
+            ```mojo
+            for row in conn.execute("SELECT name, age FROM users"):
+                print(row.get[String](col=0), row.get[Int64](col=1))
+            ```
+        """
+        return RowIter(Pointer(to=self))
 
     fn fetch_chunk(self) raises -> Chunk[is_owned=True]:
-        """Fetches a data chunk from the result.
-        
-        The returned chunk is owned and will be automatically destroyed when it goes out of scope.
-        Per DuckDB C API: "The result must be destroyed with duckdb_destroy_data_chunk."
-        
+        """Fetch the next data chunk from the streaming result.
+
+        Raises when no more chunks remain.  The returned chunk is owned
+        and destroyed automatically when it goes out of scope.
+
         Returns:
-            An owned Chunk that will be automatically destroyed.
+            An owned Chunk.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Chunk[is_owned=True](libduckdb.duckdb_fetch_chunk(self._result))
+        var raw = libduckdb.duckdb_fetch_chunk(self._result)
+        if not raw:
+            raise Error("No more chunks available")
+        return Chunk[is_owned=True](raw)
 
-    fn chunk_iterator(self) raises -> _ChunkIter[origin_of(self)]:
-        return _ChunkIter(self)
+    fn chunks(ref self) -> ChunkIter[ImmutOrigin(origin_of(self))]:
+        """Iterate over data chunks in this result.
 
-    fn fetch_all(var self) raises -> MaterializedResult:
+        Returns:
+            A ``ChunkIter`` that yields owned ``Chunk`` objects.
+
+        Example:
+            ```mojo
+            for chunk in result.chunks():
+                var users = chunk.get[User]()
+            ```
+        """
+        return ChunkIter(Pointer(to=self))
+
+    fn rows(ref self) -> RowIter[ImmutOrigin(origin_of(self))]:
+        """Iterate over rows — explicit spelling of ``__iter__``.
+
+        Equivalent to ``for row in result``, provided for
+        discoverability.
+
+        Returns:
+            A ``RowIter`` that yields ``Row`` proxies.
+
+        Example:
+            ```mojo
+            for row in result.rows():
+                var name = row.get[String](col=0)
+                var age = row.get[Int64](col=1)
+            ```
+        """
+        return RowIter(Pointer(to=self))
+
+    fn fetchall(var self) raises -> MaterializedResult:
+        """Fetch all chunks into memory and return a MaterializedResult.
+
+        Consumes this Result (streaming is exhausted).
+
+        Returns:
+            A MaterializedResult holding all rows.
+        """
         return MaterializedResult(self^)
 
     fn __del__(deinit self):
@@ -789,13 +853,15 @@ struct MaterializedResult(Sized, Movable):
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]()
         self.size = 0
-        var iter = self.result.chunk_iterator()
-        while iter.__has_next__():
-            var chunk = iter.__next__()
-            self.size += len(chunk)
-            var chunk_ptr = alloc[Chunk[is_owned=True]](1)
-            chunk_ptr.init_pointee_move(chunk^)
-            self.chunks.append(chunk_ptr)
+        while True:
+            try:
+                var chunk = self.result.fetch_chunk()
+                self.size += len(chunk)
+                var chunk_ptr = alloc[Chunk[is_owned=True]](1)
+                chunk_ptr.init_pointee_move(chunk^)
+                self.chunks.append(chunk_ptr)
+            except StopIteration:
+                break
 
     fn column_count(self) -> Int:
         return self.result.column_count()
@@ -834,7 +900,7 @@ struct MaterializedResult(Sized, Movable):
 
         Example:
             ```mojo
-            var result = con.execute("SELECT * FROM table").materialize()
+            var result = con.execute("SELECT * FROM table").fetchall()
             var int_values = result.get[Int64](col=0)
             var nullable = result.get[Optional[String]](col=1)
             ```
@@ -867,7 +933,7 @@ struct MaterializedResult(Sized, Movable):
 
         Example:
             ```mojo
-            var result = con.execute("SELECT * FROM table").materialize()
+            var result = con.execute("SELECT * FROM table").fetchall()
             var value = result.get[Int64](col=0, row=5)
             ```
         """
@@ -878,7 +944,179 @@ struct MaterializedResult(Sized, Movable):
         var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
         return self.chunks[chunk_idx][].get[T](col=col, row=chunk_offset)
 
+    fn get[
+        T: Copyable & Movable
+    ](self, *, row: Int) raises -> T:
+        """Deserialize a table row into a Mojo struct.
+
+        Maps each column to a field in T by position.
+        Non-Optional fields raise on NULL; Optional fields become None.
+
+        Parameters:
+            T: A Mojo struct whose fields correspond to table columns.
+
+        Args:
+            row: Row index (global, across all chunks).
+
+        Returns:
+            The deserialized struct.
+
+        Example:
+            ```mojo
+            var result = con.execute("SELECT * FROM users").fetchall()
+            var user = result.get[User](row=0)
+            ```
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        if row < 0 or row >= self.size:
+            raise Error("Row index out of bounds")
+        var chunk_idx = Int(UInt64(row) // libduckdb.duckdb_vector_size())
+        var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
+        return self.chunks[chunk_idx][].get[T](row=chunk_offset)
+
+    fn get[
+        T: Copyable & Movable
+    ](self) raises -> List[T]:
+        """Deserialize all rows into a list of Mojo structs.
+
+        Parameters:
+            T: A Mojo struct whose fields correspond to table columns.
+
+        Returns:
+            List[T] — one struct per row across all chunks.
+
+        Example:
+            ```mojo
+            var result = con.execute("SELECT * FROM users").fetchall()
+            var users = result.get[User]()
+            ```
+        """
+        var result = List[T](capacity=self.size)
+        for chunk_ptr in self.chunks:
+            result.extend(chunk_ptr[].get[T]())
+        return result^
+
     fn __del__(deinit self):
         for chunk_ptr in self.chunks:
             chunk_ptr.destroy_pointee()
             chunk_ptr.free()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Chunk-level iterator — streams chunks from a Result
+# ──────────────────────────────────────────────────────────────────
+
+
+@fieldwise_init
+struct ChunkIter[
+    origin: ImmutOrigin
+](ImplicitlyCopyable, Iterable, Iterator):
+    """Streams data chunks from a Result.
+
+    Created by ``Result.chunks()``.  Each ``__next__`` call fetches and
+    returns the next ``Chunk`` from DuckDB's streaming result.
+
+    Example:
+        ```mojo
+        for chunk in result.chunks():
+            var users = chunk.get[User]()
+        ```
+    """
+
+    comptime Element = Chunk[is_owned=True]
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = Self
+
+    var _result: Pointer[Result, Self.origin]
+
+    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        return self.copy()
+
+    fn __next__(mut self) raises StopIteration -> Chunk[is_owned=True]:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = libduckdb.duckdb_fetch_chunk(self._result[]._result)
+        if not raw:
+            raise StopIteration()
+        return Chunk[is_owned=True](raw)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Cross-chunk row iterator — streams Row proxies across chunks
+# ──────────────────────────────────────────────────────────────────
+
+
+struct RowIter[
+    origin: ImmutOrigin
+](ImplicitlyCopyable, Iterable, Iterator):
+    """Streams Row proxies from a Result, transparently fetching chunks.
+
+    Returned by ``Result.__iter__`` (i.e. ``for row in result``) and
+    by ``Result.rows()``.  Internally fetches chunks one at a time and
+    yields one ``Row`` per call to ``__next__``.
+
+    Example:
+        ```mojo
+        for row in result:
+            var name = row.get[String](col=0)
+            var age = row.get[Int64](col=1)
+        ```
+    """
+
+    comptime Element = Row
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = Self
+
+    var _result: Pointer[Result, Self.origin]
+    var _raw_chunk: duckdb_data_chunk
+    var _num_cols: Int
+    var _chunk_row: Int
+    var _chunk_size: Int
+    var _exhausted: Bool
+
+    fn __init__(out self, result_ptr: Pointer[Result, Self.origin]):
+        self._result = result_ptr
+        self._raw_chunk = duckdb_data_chunk()
+        self._num_cols = 0
+        self._chunk_row = 0
+        self._chunk_size = 0
+        self._exhausted = False
+
+    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        return self.copy()
+
+    fn _destroy_current_chunk(mut self):
+        """Destroy the current chunk if it exists."""
+        if self._raw_chunk:
+            ref libduckdb = DuckDB().libduckdb()
+            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._raw_chunk))
+            self._raw_chunk = duckdb_data_chunk()
+
+    fn __next__(mut self) raises StopIteration -> Row:
+        # Advance to next chunk if current one is exhausted
+        while self._chunk_row >= self._chunk_size:
+            if self._exhausted:
+                raise StopIteration()
+            self._destroy_current_chunk()
+            ref libduckdb = DuckDB().libduckdb()
+            var raw = libduckdb.duckdb_fetch_chunk(self._result[]._result)
+            if not raw:
+                self._exhausted = True
+                raise StopIteration()
+            self._raw_chunk = raw
+            self._num_cols = Int(
+                libduckdb.duckdb_data_chunk_get_column_count(raw)
+            )
+            self._chunk_row = 0
+            self._chunk_size = Int(
+                libduckdb.duckdb_data_chunk_get_size(raw)
+            )
+
+        var row = Row(
+            self._raw_chunk,
+            self._chunk_row,
+            self._num_cols,
+        )
+        self._chunk_row += 1
+        return row^

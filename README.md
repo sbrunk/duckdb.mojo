@@ -26,19 +26,14 @@ struct StationCount(Writable, Copyable, Movable):
     var station: String
     var num_services: Int64
 
-    fn write_to[W: Writer](self, mut writer: W):
-        writer.write(self.station, ": ", self.num_services)
-
 def main():
     var con = DuckDB.connect(":memory:")
-
     _ = con.execute("""
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
-    """
-    )
+    """)
 
-    var result = con.execute("""
+    var query = """
     -- Get the top-3 busiest train stations
     SELECT "Stop:Station name", count(*) AS num_services
     FROM train_services
@@ -46,22 +41,26 @@ def main():
     ORDER BY num_services DESC
     LIMIT 3;
     """
-    )
-    var chunk = result.fetch_chunk()
 
-    # --- Per-column typed access ---
-    for row in range(len(chunk)):
-        print(
-            chunk.get[String](col=0, row=row),
-            " ",
-            chunk.get[Int64](col=1, row=row),
-        )
+    # Iterate over rows directly
+    for row in con.execute(query):
+        print(row.get[String](col=0), " ", row.get[Int64](col=1))
 
-    # --- Typed struct access — deserialize whole rows at once ---
-    var stations = chunk.get[StationCount]()
+    # Iterate over chunks, then rows within each chunk
+    for chunk in con.execute(query).chunks():
+        for row in chunk:
+            print(row.get[String](col=0), " ", row.get[Int64](col=1))
 
+    # Decode directly into tuples
+    for row in con.execute(query):
+        var t = row.get_tuple[String, Int64]()
+        print(t[0], ": ", t[1])
+
+    # Typed struct access
+    var result = con.execute(query).fetchall()
+    var stations: List[StationCount] = result.get[StationCount]()
     for i in range(len(stations)):
-        print(stations[i])  # "Utrecht Centraal: 39363"
+        print(stations[i])
 ```
 
 ### Extension

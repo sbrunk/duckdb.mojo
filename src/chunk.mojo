@@ -18,10 +18,11 @@ from reflection import (
     struct_field_names,
     get_type_name,
 )
-from std.builtin.rebind import downcast
+from std.builtin.rebind import downcast, rebind_var
+from std.iter import Iterator, Iterable, StopIteration
 
 
-struct Chunk[is_owned: Bool](Movable, Sized):
+struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
     """Represents a DuckDB data chunk.
     
     Data chunks represent a horizontal slice of a table. They hold a number of vectors,
@@ -35,6 +36,10 @@ struct Chunk[is_owned: Bool](Movable, Sized):
     Parameters:
         is_owned: Whether this Chunk owns its pointer and should destroy it (required).
     """
+
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = _ChunkRowIter[Self.is_owned, ImmutOrigin(iterable_origin)]
 
     var _chunk: duckdb_data_chunk
 
@@ -95,6 +100,20 @@ struct Chunk[is_owned: Bool](Movable, Sized):
 
     fn __moveinit__(out self, deinit take: Self):
         self._chunk = take._chunk
+
+    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        """Iterate over rows in this chunk.
+        
+        Returns:
+            An iterator yielding `Row` proxies for each row.
+        
+        Example:
+            ```mojo
+            for row in chunk:
+                var name = row.get[String](col=0)
+            ```
+        """
+        return _ChunkRowIter(0, Pointer(to=self))
 
     fn __len__(self) -> Int:
         """Returns the current number of tuples (rows) in the data chunk.
@@ -458,7 +477,7 @@ struct Chunk[is_owned: Bool](Movable, Sized):
                 dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
             else:
                 var val = _deserialize_table_field[FT](vector, row)
-                dst.bitcast[FT]().init_pointee_move(val^)
+                dst.bitcast[FT]().init_pointee_move(val)
 
         var result = ptr.take_pointee()
         ptr.free()
@@ -495,66 +514,255 @@ struct Chunk[is_owned: Bool](Movable, Sized):
             result.append(self.get[T](row=row))
         return result^
 
+    fn get_tuple[
+        *Ts: Copyable & Movable
+    ](self, *, row: Int) raises -> Tuple[*Ts]:
+        """Deserialize a table row into a Mojo Tuple.
 
-struct _ChunkIter[lifetime: ImmutOrigin]:
-    var _result: Pointer[Result, Self.lifetime]
-    var _next_chunk: duckdb_data_chunk
+        Maps each column to the corresponding Tuple element by position.
+        Non-Optional elements raise on NULL; Optional elements become None.
 
-    fn __init__(out self, ref [Self.lifetime]result: Result) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        self._result = Pointer(to=result)
-        self._next_chunk = libduckdb.duckdb_fetch_chunk(self._result[]._result)
+        Parameters:
+            Ts: The Mojo types for each column.
 
-    fn __del__(deinit self):
-        """Destroys the pending chunk if one exists."""
-        if self._next_chunk:
-            # Create an owned Chunk to properly destroy it
-            _ = Chunk[is_owned=True](self._next_chunk)
+        Args:
+            row: Row index.
 
-    fn __moveinit__(out self, deinit take: Self):
-        self._result = take._result
-        self._next_chunk = take._next_chunk
+        Returns:
+            A Tuple whose elements are deserialized from the columns.
 
-    fn __iter__(var self) -> Self:
-        return self^
-
-    fn __next__(mut self) raises -> Chunk[is_owned=True]:
-        """Returns the next owned chunk from the result set.
-        
-        The returned chunk must be destroyed (automatically via __del__).
-        Per DuckDB C API: chunks from duckdb_fetch_chunk must be destroyed.
+        Example:
+            ```mojo
+            var t = chunk.get_tuple[String, Int64](row=0)
+            print(t[0], t[1])
+            ```
         """
-        if self._next_chunk:
-            var current = self._next_chunk
-            ref libduckdb = DuckDB().libduckdb()
-            var next = libduckdb.duckdb_fetch_chunk(self._result[]._result)
-            self._next_chunk = next
-            return Chunk[is_owned=True](current)
-        else:
-            raise Error("No more elements")
+        comptime T = Tuple[*Ts]
+        comptime n = T.__len__()
 
-    @always_inline
-    fn __has_next__(self) -> Bool:
-        if self._next_chunk:
-            return True
-        else:
-            return False
+        if row < 0 or row >= len(self):
+            raise Error(String("Row {} out of bounds.").format(row))
+
+        if self.column_count() != n:
+            raise Error(
+                "Column count mismatch: tuple has "
+                + String(n)
+                + " elements but chunk has "
+                + String(self.column_count())
+                + " columns"
+            )
+
+        # Validate types and NULL constraints
+        @parameter
+        for idx in range(n):
+            comptime ET = T.element_types[idx]
+            comptime ETC = downcast[ET, Copyable & Movable]
+            var actual_type = self.type(idx)
+
+            @parameter
+            if conforms_to(ETC, _NullableColumn):
+                var expected = downcast[
+                    ETC, _NullableColumn
+                ]._expected_duckdb_type()
+                if actual_type != expected:
+                    raise Error(
+                        "Type mismatch for tuple element "
+                        + String(idx)
+                        + ": expected "
+                        + String(expected)
+                        + " but column has "
+                        + String(actual_type)
+                    )
+            else:
+                comptime expected_db_type = mojo_type_to_duckdb_type[ETC]()
+                if actual_type != expected_db_type:
+                    raise Error(
+                        "Type mismatch for tuple element "
+                        + String(idx)
+                        + ": expected "
+                        + String(expected_db_type)
+                        + " but column has "
+                        + String(actual_type)
+                    )
+                if self.is_null(col=idx, row=row):
+                    raise Error(
+                        "NULL value for non-optional tuple element "
+                        + String(idx)
+                        + ". Use Optional["
+                        + String(get_type_name[ETC]())
+                        + "] to handle NULLs."
+                    )
+
+        # Construct the tuple element by element
+        var ptr = alloc[T](1)
+        __mlir_op.`lit.ownership.mark_initialized`(
+            __get_mvalue_as_litref(ptr[]._mlir_value)
+        )
+
+        @parameter
+        for idx in range(n):
+            comptime ET = T.element_types[idx]
+            comptime ETC = downcast[ET, Copyable & Movable]
+            var vector = self.get_vector(idx)
+
+            @parameter
+            if conforms_to(ETC, _NullableColumn):
+                var val = downcast[
+                    ETC, _NullableColumn
+                ]._deserialize_single_nullable(
+                    vector, row, self.is_null(col=idx, row=row)
+                )
+                UnsafePointer(to=ptr[][idx]).init_pointee_move(
+                    rebind_var[ET](val^)
+                )
+            else:
+                var val = _deserialize_table_field[ETC](vector, row)
+                UnsafePointer(to=ptr[][idx]).init_pointee_move(
+                    rebind_var[ET](val^)
+                )
+
+        var result = ptr.take_pointee()
+        ptr.free()
+        return result^
+
+    fn get_tuple[
+        *Ts: Copyable & Movable
+    ](self) raises -> List[Tuple[*Ts]]:
+        """Deserialize all rows into Mojo Tuples.
+
+        Parameters:
+            Ts: The Mojo types for each column.
+
+        Returns:
+            List[Tuple[*Ts]] — one tuple per row.
+
+        Example:
+            ```mojo
+            var rows = chunk.get_tuple[String, Int64]()
+            for i in range(len(rows)):
+                print(rows[i][0], rows[i][1])
+            ```
+        """
+        var result = List[Tuple[*Ts]](capacity=len(self))
+        for row in range(len(self)):
+            result.append(self.get_tuple[*Ts](row=row))
+        return result^
 
 
-# struct ResultIterator:
-#     var result: Result
-#     var index: Int
+# ──────────────────────────────────────────────────────────────────
+# Row proxy
+# ──────────────────────────────────────────────────────────────────
 
-#     fn __init__(out self, result: Result):
-#         self.index = 0
-#         self.result = result
 
-#     # fn __index__(self) -> UInt64:
-#     #     return self.index
+struct Row(Movable, Copyable):
+    """A lightweight proxy for accessing a single row in a chunk.
 
-#     # fn __len__(self) -> Int:
-#     #     return Int(self.result.rows - self.index)  # TODO could overflow
+    Row does not own the underlying data — it holds a raw pointer to the
+    chunk's memory and a row index.  It is only valid while the chunk it
+    was created from is alive (guaranteed by the ``for`` loop contract).
+    """
 
-#     fn __next__(out self) -> String:
-#         self.index += 1
-#         return String(self.index)
+    var _chunk_ptr: duckdb_data_chunk
+    var _row: Int
+    var _num_cols: Int
+
+    fn __init__(out self, chunk_ptr: duckdb_data_chunk, row: Int, num_cols: Int):
+        self._chunk_ptr = chunk_ptr
+        self._row = row
+        self._num_cols = num_cols
+
+    fn get[T: Copyable & Movable](self, *, col: Int) raises -> T:
+        """Get a typed value from this row.
+
+        Parameters:
+            T: The Mojo type to deserialize.
+
+        Args:
+            col: Column index.
+
+        Returns:
+            The deserialized value.
+
+        Example:
+            ```mojo
+            for row in chunk:
+                var name = row.get[String](col=0)
+                var age = row.get[Int64](col=1)
+            ```
+        """
+        var chunk = Chunk[is_owned=False](self._chunk_ptr)
+        return chunk.get[T](col=col, row=self._row)
+
+    fn is_null(self, *, col: Int) -> Bool:
+        """Check whether the value at the given column is NULL.
+
+        Args:
+            col: Column index.
+        """
+        var chunk = Chunk[is_owned=False](self._chunk_ptr)
+        return chunk.is_null(col=col, row=self._row)
+
+    fn column_count(self) -> Int:
+        """Returns the number of columns."""
+        return self._num_cols
+
+    fn row_index(self) -> Int:
+        """Returns the row index within the chunk."""
+        return self._row
+
+    fn get_tuple[
+        *Ts: Copyable & Movable
+    ](self) raises -> Tuple[*Ts]:
+        """Deserialize this row into a Mojo Tuple.
+
+        Parameters:
+            Ts: The Mojo types for each column.
+
+        Returns:
+            A Tuple whose elements are deserialized from the columns.
+
+        Example:
+            ```mojo
+            for row in chunk:
+                var t = row.get_tuple[String, Int64]()
+                print(t[0], t[1])
+            ```
+        """
+        var chunk = Chunk[is_owned=False](self._chunk_ptr)
+        return chunk.get_tuple[*Ts](row=self._row)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Chunk row iterator — makes Chunk iterable over Row proxies
+# ──────────────────────────────────────────────────────────────────
+
+
+@fieldwise_init
+struct _ChunkRowIter[
+    is_owned: Bool, origin: ImmutOrigin
+](ImplicitlyCopyable, Iterable, Iterator):
+    """Iterates over rows within a single Chunk, yielding Row proxies."""
+
+    comptime Element = Row
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = Self
+
+    var _index: Int
+    var _chunk: Pointer[Chunk[Self.is_owned], Self.origin]
+
+    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        return self.copy()
+
+    fn __next__(mut self) raises StopIteration -> Row:
+        if self._index >= len(self._chunk[]):
+            raise StopIteration()
+        var row = Row(self._chunk[]._chunk, self._index, self._chunk[].column_count())
+        self._index += 1
+        return row^
+
+    fn bounds(self) -> Tuple[Int, Optional[Int]]:
+        var remaining = len(self._chunk[]) - self._index
+        return (remaining, {remaining})
+
+

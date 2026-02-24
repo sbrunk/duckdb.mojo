@@ -277,9 +277,10 @@ def test_table_function_execute_counter_zero():
     func.set_function[counter_function]()
     func.register(conn)
 
-    var result = conn.execute("SELECT * FROM counter(0)")
-    var chunk = result.fetch_chunk()
-    assert_equal(len(chunk), 0)
+    var count = 0
+    for row in conn.execute("SELECT * FROM counter(0)"):
+        count += 1
+    assert_equal(count, 0)
 
 
 def test_table_function_execute_counter_single():
@@ -525,9 +526,7 @@ def test_table_function_large_result():
     # 5000 rows should span multiple chunks (default vector size is 2048)
     var result = conn.execute("SELECT * FROM counter(5000)")
     var total_rows = 0
-    var iter = result.chunk_iterator()
-    while iter.__has_next__():
-        var chunk = iter.__next__()
+    for chunk in result.chunks():
         total_rows += len(chunk)
     assert_true(
         total_rows == 5000, "expected 5000 total rows across all chunks"
