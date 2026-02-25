@@ -1,5 +1,6 @@
 from duckdb.api import DuckDB
 from duckdb.api_level import ApiLevel
+from duckdb.appender import Appender, Appendable
 from duckdb.config import Config
 from duckdb.duckdb_type import *
 from duckdb.typed_api import mojo_type_to_duckdb_type, mojo_logical_type, deserialize_from_vector, deserialize_list_column, MojoType

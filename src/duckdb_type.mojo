@@ -426,7 +426,6 @@ struct Interval(TrivialRegisterPassable, Equatable, Stringable, Representable):
         )
 
 
-
 # Int128 and UInt128 are builtin types in Mojo.
 
 struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
