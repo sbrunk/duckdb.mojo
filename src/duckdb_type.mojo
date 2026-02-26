@@ -1,5 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.vector import Vector
+from duckdb.api import DuckDB
 from collections import Set
 from hashlib.hasher import Hasher
 from sys.intrinsics import _type_is_eq
@@ -114,8 +115,8 @@ struct DuckDBType(
             DuckDBType.timestamp_ms,
             DuckDBType.timestamp_ns,
             DuckDBType.time_tz,
-            DuckDBType.timestamp_tz
-            # TODO what else?
+            DuckDBType.timestamp_tz,
+            DuckDBType.uuid,
         )
 
     fn is_nested(self) -> Bool:
@@ -343,6 +344,10 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
     fn __repr__(self) -> String:
         return "Time(" + String(self.micros) + ")"
 
+    fn to_seconds(self) -> Float64:
+        """Convert to seconds since midnight as a Float64."""
+        return self.micros.cast[DType.float64]() / 1_000_000.0
+
     fn __eq__(self, other: Time) -> Bool:
         return self.micros == other.micros
 
@@ -391,6 +396,30 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
     fn __repr__(self) -> String:
         return "Timestamp(" + String(self.micros) + ")"
 
+    fn to_seconds(self) -> Float64:
+        """Convert to seconds since epoch as a Float64."""
+        return self.micros.cast[DType.float64]() / 1_000_000.0
+
+    fn __init__(out self, *, seconds: Float64):
+        """Create a Timestamp from seconds since epoch.
+
+        Args:
+            seconds: Seconds since 1970-01-01 00:00:00.
+        """
+        self.micros = (seconds * 1_000_000.0).cast[DType.int64]()
+
+    fn to_timestamp_s(self) -> TimestampS:
+        """Convert to second-precision timestamp (truncates sub-second part)."""
+        return TimestampS(self.micros // 1_000_000)
+
+    fn to_timestamp_ms(self) -> TimestampMS:
+        """Convert to millisecond-precision timestamp (truncates sub-ms part)."""
+        return TimestampMS(self.micros // 1_000)
+
+    fn to_timestamp_ns(self) -> TimestampNS:
+        """Convert to nanosecond-precision timestamp."""
+        return TimestampNS(self.micros * 1_000)
+
     # fn date(self) -> Date:
     #     return duckdb_to_date(duckdb_from_timestamp(self).date)
 
@@ -399,20 +428,230 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
 
 @fieldwise_init
-struct Interval(TrivialRegisterPassable, Equatable, Stringable, Representable):
+struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Timestamps with second precision, stored as seconds since 1970-01-01."""
+
+    var seconds: Int64
+
+    fn __str__(self) -> String:
+        return String(self.seconds)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.seconds)
+
+    fn __eq__(self, other: TimestampS) -> Bool:
+        return self.seconds == other.seconds
+
+    fn __ne__(self, other: TimestampS) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimestampS(" + String(self.seconds) + ")"
+
+    fn to_timestamp(self) -> Timestamp:
+        """Convert to microsecond-precision Timestamp."""
+        return Timestamp(self.seconds * 1_000_000)
+
+
+@fieldwise_init
+struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Timestamps with millisecond precision, stored as milliseconds since 1970-01-01."""
+
+    var millis: Int64
+
+    fn __str__(self) -> String:
+        return String(self.millis)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.millis)
+
+    fn __eq__(self, other: TimestampMS) -> Bool:
+        return self.millis == other.millis
+
+    fn __ne__(self, other: TimestampMS) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimestampMS(" + String(self.millis) + ")"
+
+    fn to_timestamp(self) -> Timestamp:
+        """Convert to microsecond-precision Timestamp."""
+        return Timestamp(self.millis * 1_000)
+
+
+@fieldwise_init
+struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Timestamps with nanosecond precision, stored as nanoseconds since 1970-01-01."""
+
+    var nanos: Int64
+
+    fn __str__(self) -> String:
+        return String(self.nanos)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.nanos)
+
+    fn __eq__(self, other: TimestampNS) -> Bool:
+        return self.nanos == other.nanos
+
+    fn __ne__(self, other: TimestampNS) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimestampNS(" + String(self.nanos) + ")"
+
+    fn to_timestamp(self) -> Timestamp:
+        """Convert to microsecond-precision Timestamp (truncates sub-microsecond part)."""
+        return Timestamp(self.nanos // 1_000)
+
+
+@fieldwise_init
+struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Timestamps with timezone, stored as microseconds since 1970-01-01 (UTC)."""
+
+    var micros: Int64
+
+    fn __str__(self) -> String:
+        return String(self.micros)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.micros)
+
+    fn __eq__(self, other: TimestampTZ) -> Bool:
+        return self.micros == other.micros
+
+    fn __ne__(self, other: TimestampTZ) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimestampTZ(" + String(self.micros) + ")"
+
+    fn to_timestamp(self) -> Timestamp:
+        """Convert to a plain Timestamp (discards timezone semantics)."""
+        return Timestamp(self.micros)
+
+
+@fieldwise_init
+struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Time with timezone, stored as 40 bits for microseconds and 24 bits for UTC offset.
+
+    Use ``TimeTZ(micros=..., offset=...)`` to create from components.
+    """
+
+    var bits: UInt64
+
+    fn __init__(out self, *, micros: Int64, offset: Int32):
+        """Create a TimeTZ from microseconds since midnight and UTC offset in seconds.
+
+        Args:
+            micros: Microseconds since 00:00:00.
+            offset: UTC offset in seconds.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = libduckdb.duckdb_create_time_tz(micros, offset)
+        self.bits = raw.bits
+
+    fn __str__(self) -> String:
+        return String(self.bits)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.bits)
+
+    fn __eq__(self, other: TimeTZ) -> Bool:
+        return self.bits == other.bits
+
+    fn __ne__(self, other: TimeTZ) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimeTZ(" + String(self.bits) + ")"
+
+
+@fieldwise_init
+struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """UUID stored as a UInt128.
+
+    In DuckDB vectors, UUIDs are stored as Int128 with a special encoding
+    (upper 64 bits offset by ``INT64_MAX + 1``).  The ``UUID`` struct stores
+    the canonical unsigned representation as used by the DuckDB value API
+    (``duckdb_create_uuid`` / ``duckdb_get_uuid``).
+    """
+
+    var value: UInt128
+
+    fn __str__(self) -> String:
+        return String(self.value)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.value)
+
+    fn __eq__(self, other: UUID) -> Bool:
+        return self.value == other.value
+
+    fn __ne__(self, other: UUID) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "UUID(" + String(self.value) + ")"
+
+    fn __init__(out self, *, internal: Int128):
+        """Create a UUID from DuckDB's internal hugeint representation.
+
+        In vectors, UUIDs are stored as Int128 with ``upper`` offset
+        by ``INT64_MAX + 1``.
+
+        Args:
+            internal: The raw Int128 value from a DuckDB vector.
+        """
+        var lower = internal.cast[DType.uint64]()
+        var upper_signed = (internal >> 64).cast[DType.int64]()
+        var upper: UInt64
+        if upper_signed >= 0:
+            upper = upper_signed.cast[DType.uint64]() + UInt64(Int64.MAX) + 1
+        else:
+            upper = (upper_signed + Int64.MAX + 1).cast[DType.uint64]()
+        self.value = upper.cast[DType.uint128]() << 64 | lower.cast[DType.uint128]()
+
+    fn _to_internal(self) -> Int128:
+        """Convert from UUID to DuckDB's internal hugeint representation."""
+        var lower = self.value.cast[DType.uint64]()
+        var upper = (self.value >> 64).cast[DType.uint64]()
+        var upper_signed: Int64
+        if upper > UInt64(Int64.MAX):
+            upper_signed = (upper - UInt64(Int64.MAX) - 1).cast[DType.int64]()
+        else:
+            upper_signed = upper.cast[DType.int64]() - Int64.MAX - 1
+        return upper_signed.cast[DType.int128]() << 64 | lower.cast[DType.int128]()
+
+
+@fieldwise_init
+struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """An interval with months, days, and microseconds components."""
+
     var months: Int32
     var days: Int32
     var micros: Int64
 
     fn __str__(self) -> String:
-        return (
-            "months: "
-            + String(self.months)
-            + ", days: "
-            + String(self.days)
-            + ", micros: "
-            + String(self.micros)
+        return String.write(self)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "months: ",
+            self.months,
+            ", days: ",
+            self.days,
+            ", micros: ",
+            self.micros,
         )
+
+    fn to_total_seconds(self) -> Float64:
+        """Approximate total seconds, assuming 30-day months.
+
+        Note: This is an approximation since month length varies.
+        """
+        var total_days = Int64(self.months) * 30 + Int64(self.days)
+        return (total_days * 86_400_000_000 + self.micros).cast[DType.float64]() / 1_000_000.0
 
     fn __repr__(self) -> String:
         return (
@@ -428,7 +667,7 @@ struct Interval(TrivialRegisterPassable, Equatable, Stringable, Representable):
 
 # Int128 and UInt128 are builtin types in Mojo.
 
-struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Stringable, Representable):
     """Decimals are composed of a width and a scale, and are stored in a hugeint.
     """
 
@@ -487,6 +726,69 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Stringable,
             + String(self.value())
             + ")"
         )
+
+    fn __eq__(self, other: Decimal) -> Bool:
+        return (
+            self.width == other.width
+            and self.scale == other.scale
+            and self.value() == other.value()
+        )
+
+    fn __ne__(self, other: Decimal) -> Bool:
+        return not self == other
+
+    fn to_float64(self) -> Float64:
+        """Convert this Decimal to a Float64.
+
+        Note: This may lose precision for large values or high scales.
+        """
+        var v = self.value()
+        var divisor = Int128(1)
+        for _ in range(Int(self.scale)):
+            divisor *= 10
+        # Split into integer and fractional parts to preserve precision
+        var int_part = v // divisor
+        var frac_part = v % divisor
+        return int_part.cast[DType.float64]() + frac_part.cast[DType.float64]() / divisor.cast[DType.float64]()
+
+    fn to_float32(self) -> Float32:
+        """Convert this Decimal to a Float32.
+
+        Note: This may lose precision for large values or high scales.
+        """
+        return self.to_float64().cast[DType.float32]()
+
+    fn __init__(out self, width: UInt8, scale: UInt8, value: Float64):
+        """Create a Decimal from a Float64 with the given width and scale.
+
+        The float is multiplied by 10^scale and rounded to the nearest integer.
+
+        Args:
+            width: The total number of decimal digits.
+            scale: The number of digits after the decimal point.
+            value: The floating-point value to convert.
+        """
+        var multiplier = Float64(1.0)
+        for _ in range(Int(scale)):
+            multiplier *= 10.0
+        var scaled = value * multiplier
+        # Round to nearest integer
+        var rounded: Int128
+        if scaled >= 0:
+            rounded = (scaled + 0.5).cast[DType.int128]()
+        else:
+            rounded = (scaled - 0.5).cast[DType.int128]()
+        self = Decimal(width, scale, rounded)
+
+    fn __init__(out self, width: UInt8, scale: UInt8, value: Float32):
+        """Create a Decimal from a Float32 with the given width and scale.
+
+        Args:
+            width: The total number of decimal digits.
+            scale: The number of digits after the decimal point.
+            value: The floating-point value to convert.
+        """
+        self = Decimal(width, scale, value.cast[DType.float64]())
 
 
 fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:

@@ -160,6 +160,10 @@ __extension SIMD(Appendable):
             appender._check(libduckdb.duckdb_append_float(raw, rebind_var[Float32](self)))
         elif _type_is_eq[Self, Float64]():
             appender._check(libduckdb.duckdb_append_double(raw, rebind_var[Float64](self)))
+        elif _type_is_eq[Self, Int128]():
+            appender._check(libduckdb.duckdb_append_hugeint(raw, rebind_var[Int128](self)))
+        elif _type_is_eq[Self, UInt128]():
+            appender._check(libduckdb.duckdb_append_uhugeint(raw, rebind_var[UInt128](self)))
         else:
             constrained[False, "Unsupported SIMD DType for appender"]()
 
@@ -207,6 +211,90 @@ __extension Interval(Appendable):
                 UnsafePointer(to=self).bitcast[duckdb_interval]()[],
             ),
         )
+
+
+__extension Decimal(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        # No dedicated duckdb_append_decimal — use value-based appending.
+        var val = libduckdb.duckdb_create_decimal(self)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension TimestampS(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_timestamp_s(self.seconds)
+        var val = libduckdb.duckdb_create_timestamp_s(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension TimestampMS(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_timestamp_ms(self.millis)
+        var val = libduckdb.duckdb_create_timestamp_ms(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension TimestampNS(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_timestamp_ns(self.nanos)
+        var val = libduckdb.duckdb_create_timestamp_ns(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension TimestampTZ(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var ts = Timestamp(self.micros)
+        var val = libduckdb.duckdb_create_timestamp_tz(ts)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension TimeTZ(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_time_tz(self.bits)
+        var val = libduckdb.duckdb_create_time_tz_value(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension UUID(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var val = libduckdb.duckdb_create_uuid(self.value)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension List(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        @parameter
+        if _type_is_eq[Self.T, UInt8]():
+            ref libduckdb = DuckDB().libduckdb()
+            # Access the underlying data pointer directly via UnsafePointer
+            # to avoid copying the list.
+            var src_ptr = UnsafePointer(to=self).bitcast[List[UInt8]]()
+            appender._check(
+                libduckdb.duckdb_append_blob(
+                    appender._appender,
+                    src_ptr[].unsafe_ptr().bitcast[NoneType](),
+                    idx_t(len(src_ptr[])),
+                ),
+            )
+        else:
+            raise Error(
+                "Only List[UInt8] (BLOB) can be appended. For LIST columns,"
+                " use a different approach."
+            )
 
 
 __extension Optional(Appendable):

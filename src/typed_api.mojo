@@ -42,6 +42,7 @@ from memory import alloc, memcpy
 from std.builtin.rebind import downcast
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
+from duckdb.api import DuckDB
 from duckdb.vector import Vector
 from duckdb.logical_type import LogicalType, struct_type
 
@@ -164,6 +165,15 @@ fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
         or _type_is_eq[T, Time]()
         or _type_is_eq[T, Timestamp]()
         or _type_is_eq[T, Interval]()
+        or _type_is_eq[T, Int128]()
+        or _type_is_eq[T, UInt128]()
+        or _type_is_eq[T, Decimal]()
+        or _type_is_eq[T, TimestampS]()
+        or _type_is_eq[T, TimestampMS]()
+        or _type_is_eq[T, TimestampNS]()
+        or _type_is_eq[T, TimestampTZ]()
+        or _type_is_eq[T, TimeTZ]()
+        or _type_is_eq[T, UUID]()
     ):
         return True
     else:
@@ -215,6 +225,24 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
         return DuckDBType.timestamp
     elif _type_is_eq[T, Interval]():
         return DuckDBType.interval
+    elif _type_is_eq[T, Int128]():
+        return DuckDBType.hugeint
+    elif _type_is_eq[T, UInt128]():
+        return DuckDBType.uhugeint
+    elif _type_is_eq[T, Decimal]():
+        return DuckDBType.decimal
+    elif _type_is_eq[T, TimestampS]():
+        return DuckDBType.timestamp_s
+    elif _type_is_eq[T, TimestampMS]():
+        return DuckDBType.timestamp_ms
+    elif _type_is_eq[T, TimestampNS]():
+        return DuckDBType.timestamp_ns
+    elif _type_is_eq[T, TimestampTZ]():
+        return DuckDBType.timestamp_tz
+    elif _type_is_eq[T, TimeTZ]():
+        return DuckDBType.time_tz
+    elif _type_is_eq[T, UUID]():
+        return DuckDBType.uuid
     else:
         comptime base_name = get_base_type_name[T]()
         @parameter
@@ -277,6 +305,24 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
         return DuckDBType.timestamp
     elif _type_is_eq[T, Interval]():
         return DuckDBType.interval
+    elif _type_is_eq[T, Int128]():
+        return DuckDBType.hugeint
+    elif _type_is_eq[T, UInt128]():
+        return DuckDBType.uhugeint
+    elif _type_is_eq[T, Decimal]():
+        return DuckDBType.decimal
+    elif _type_is_eq[T, TimestampS]():
+        return DuckDBType.timestamp_s
+    elif _type_is_eq[T, TimestampMS]():
+        return DuckDBType.timestamp_ms
+    elif _type_is_eq[T, TimestampNS]():
+        return DuckDBType.timestamp_ns
+    elif _type_is_eq[T, TimestampTZ]():
+        return DuckDBType.timestamp_tz
+    elif _type_is_eq[T, TimeTZ]():
+        return DuckDBType.time_tz
+    elif _type_is_eq[T, UUID]():
+        return DuckDBType.uuid
     else:
         comptime base_name = get_base_type_name[T]()
         @parameter
@@ -368,6 +414,36 @@ fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raise
             memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
 
         return rebind_var[T](result^)
+    elif expected_type == DuckDBType.decimal:
+        # Decimal values are stored as their internal integer representation
+        # (Int16/Int32/Int64/Int128) depending on the DECIMAL width.
+        # We must read the width/scale from the logical type and reconstruct
+        # the Decimal struct.
+        ref libduckdb = DuckDB().libduckdb()
+        var col_type = vector.get_column_type()
+        var width = libduckdb.duckdb_decimal_width(col_type.internal_ptr())
+        var scale = libduckdb.duckdb_decimal_scale(col_type.internal_ptr())
+        var internal = libduckdb.duckdb_decimal_internal_type(col_type.internal_ptr())
+
+        var value: Int128
+        if internal == DuckDBType.smallint.value:
+            value = vector.get_data().bitcast[Int16]()[offset].cast[DType.int128]()
+        elif internal == DuckDBType.integer.value:
+            value = vector.get_data().bitcast[Int32]()[offset].cast[DType.int128]()
+        elif internal == DuckDBType.bigint.value:
+            value = vector.get_data().bitcast[Int64]()[offset].cast[DType.int128]()
+        else:
+            # hugeint (width > 18)
+            value = vector.get_data().bitcast[Int128]()[offset]
+
+        var dec = Decimal(width, scale, value)
+        return rebind_var[T](dec)
+    elif expected_type == DuckDBType.uuid:
+        # UUIDs are stored as Int128 in vectors with a special encoding.
+        # Convert from internal format to canonical UInt128.
+        var raw = vector.get_data().bitcast[Int128]()[offset]
+        var uuid = UUID(internal=raw)
+        return rebind_var[T](uuid)
     else:
         var data_ptr = vector.get_data().bitcast[T]()
         return data_ptr[offset].copy()

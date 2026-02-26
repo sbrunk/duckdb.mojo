@@ -104,6 +104,170 @@ def test_date_time_types_new_api():
     assert_equal(time_val, Time(41400123456))
 
 
+def test_timestamp_variants_typed_api():
+    """Test TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    # TIMESTAMP_S
+    result = con.execute("SELECT TIMESTAMP_S '2021-01-01 00:00:00'")
+    var chunk = result.fetch_chunk()
+    var ts_s = chunk.get[TimestampS](col=0, row=0)
+    assert_equal(ts_s, TimestampS(1609459200))
+
+    # TIMESTAMP_MS
+    result = con.execute("SELECT TIMESTAMP_MS '2021-01-01 00:00:00'")
+    chunk = result.fetch_chunk()
+    var ts_ms = chunk.get[TimestampMS](col=0, row=0)
+    assert_equal(ts_ms, TimestampMS(1609459200000))
+
+    # TIMESTAMP_NS
+    result = con.execute("SELECT TIMESTAMP_NS '2021-01-01 00:00:00'")
+    chunk = result.fetch_chunk()
+    var ts_ns = chunk.get[TimestampNS](col=0, row=0)
+    assert_equal(ts_ns, TimestampNS(1609459200000000000))
+
+
+def test_timestamp_tz_typed_api():
+    """Test TIMESTAMPTZ with get[T]."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("SET TimeZone = 'UTC'")
+
+    result = con.execute("SELECT TIMESTAMPTZ '2021-01-01 00:00:00+00'")
+    var chunk = result.fetch_chunk()
+    var ts_tz = chunk.get[TimestampTZ](col=0, row=0)
+    assert_equal(ts_tz, TimestampTZ(1609459200000000))
+
+
+def test_time_tz_typed_api():
+    """Test TIMETZ with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    result = con.execute("SELECT TIMETZ '12:30:00+02:00'")
+    var chunk = result.fetch_chunk()
+    var ttz = chunk.get[TimeTZ](col=0, row=0)
+
+    # Build the expected value using the same helper
+    var expected = TimeTZ(
+        micros=Int64(12) * 3600 * 1_000_000 + Int64(30) * 60 * 1_000_000,
+        offset=Int32(7200),
+    )
+    assert_equal(ttz, expected)
+
+
+def test_uuid_typed_api():
+    """Test UUID with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    result = con.execute("SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID")
+    var chunk = result.fetch_chunk()
+    var uuid = chunk.get[UUID](col=0, row=0)
+
+    # Verify round-trip: read UUID, cast back to string via SQL
+    _ = con.execute("CREATE TABLE t (id UUID)")
+    var appender = Appender(con, "t")
+    appender.append_value(uuid)
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT id::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(
+        chunk.get[String](col=0, row=0),
+        "550e8400-e29b-41d4-a716-446655440000",
+    )
+
+
+def test_uuid_zero_typed_api():
+    """Test UUID zero value with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    result = con.execute("SELECT '00000000-0000-0000-0000-000000000000'::UUID")
+    var chunk = result.fetch_chunk()
+    var uuid = chunk.get[UUID](col=0, row=0)
+    assert_equal(uuid, UUID(UInt128(0)))
+
+
+def test_hugeint_typed_api():
+    """Test HUGEINT (Int128) with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    result = con.execute("SELECT 123456789012345::HUGEINT")
+    var chunk = result.fetch_chunk()
+    var val = chunk.get[Int128](col=0, row=0)
+    assert_equal(val, Int128(123456789012345))
+
+    # Negative value
+    result = con.execute("SELECT (-42)::HUGEINT")
+    chunk = result.fetch_chunk()
+    var neg = chunk.get[Int128](col=0, row=0)
+    assert_equal(neg, Int128(-42))
+
+    # Zero
+    result = con.execute("SELECT 0::HUGEINT")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int128](col=0, row=0), Int128(0))
+
+
+def test_uhugeint_typed_api():
+    """Test UHUGEINT (UInt128) with get[T]."""
+    con = DuckDB.connect(":memory:")
+
+    result = con.execute("SELECT 999999999999999::UHUGEINT")
+    var chunk = result.fetch_chunk()
+    var val = chunk.get[UInt128](col=0, row=0)
+    assert_equal(val, UInt128(999999999999999))
+
+    # Zero
+    result = con.execute("SELECT 0::UHUGEINT")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[UInt128](col=0, row=0), UInt128(0))
+
+
+def test_decimal_typed_api():
+    """Test DECIMAL with get[T]."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE d (val DECIMAL(10, 2))")
+    _ = con.execute("INSERT INTO d VALUES (123.45)")
+    _ = con.execute("INSERT INTO d VALUES (-99.99)")
+
+    result = con.execute("SELECT val FROM d ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+
+    var d1 = chunk.get[Decimal](col=0, row=0)
+    assert_equal(d1.width, UInt8(10))
+    assert_equal(d1.scale, UInt8(2))
+    assert_equal(d1.value(), Int128(12345))
+
+    var d2 = chunk.get[Decimal](col=0, row=1)
+    assert_equal(d2.value(), Int128(-9999))
+
+
+def test_timestamp_variants_column_api():
+    """Test fetching a full column of timestamp variants."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE ts (a TIMESTAMP_S, b TIMESTAMP_MS, c TIMESTAMP_NS)")
+    _ = con.execute("INSERT INTO ts VALUES (TIMESTAMP_S '2021-01-01', TIMESTAMP_MS '2021-01-01', TIMESTAMP_NS '2021-01-01')")
+    _ = con.execute("INSERT INTO ts VALUES (TIMESTAMP_S '1970-01-01', TIMESTAMP_MS '1970-01-01', TIMESTAMP_NS '1970-01-01')")
+
+    result = con.execute("SELECT a, b, c FROM ts ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+
+    var col_s = chunk.get[TimestampS](col=0)
+    assert_equal(len(col_s), 2)
+    assert_equal(col_s[0], TimestampS(1609459200))
+    assert_equal(col_s[1], TimestampS(0))
+
+    var col_ms = chunk.get[TimestampMS](col=1)
+    assert_equal(len(col_ms), 2)
+    assert_equal(col_ms[0], TimestampMS(1609459200000))
+    assert_equal(col_ms[1], TimestampMS(0))
+
+    var col_ns = chunk.get[TimestampNS](col=2)
+    assert_equal(len(col_ns), 2)
+    assert_equal(col_ns[0], TimestampNS(1609459200000000000))
+    assert_equal(col_ns[1], TimestampNS(0))
+
+
 def test_null_handling_new_api():
     """Test NULL handling with the new API."""
     con = DuckDB.connect(":memory:")
