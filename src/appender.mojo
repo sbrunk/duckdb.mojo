@@ -57,6 +57,33 @@ var appender = Appender(con, "people")
 appender.append_row(PersonOpt(1, String("Mark")))
 appender.append_row(PersonOpt(2, None))
 ```
+
+Example — appending a List column:
+```mojo
+_ = con.execute("CREATE TABLE t (tags LIST(VARCHAR))")
+var appender = Appender(con, "t")
+appender.append_value(List[String]("a", "b", "c"))
+appender.end_row()
+```
+
+Example — appending a Dict as a MAP column:
+```mojo
+_ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
+var appender = Appender(con, "t")
+var d: Dict[String, Int32] = {'key1': 10, 'key2': 20}
+appender.append_value(d)
+appender.end_row()
+```
+
+Example — appending a Variant as a UNION column:
+```mojo
+_ = con.execute("CREATE TABLE t (u UNION(i INTEGER, s VARCHAR))")
+var appender = Appender(con, "t")
+appender.append_value(Variant[Int32, String](Int32(42)))
+appender.end_row()
+appender.append_value(Variant[Int32, String](String("hello")))
+appender.end_row()
+```
 """
 
 from sys.intrinsics import _type_is_eq

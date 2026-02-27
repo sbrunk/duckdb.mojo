@@ -1,30 +1,70 @@
 """Typed API for converting DuckDB results to native Mojo types.
 
-This module provides a type-safe API for extracting typed data from DuckDB results:
+This module provides a type-safe API for extracting typed data from DuckDB
+results. Calling ``chunk.get[T](col, row)`` returns a single value, while
+``chunk.get[T](col)`` returns the entire column.
 
+Scalar types:
 ```mojo
-# Direct type specification — scalars
-var value = chunk.get[Int64](col=0, row=0)  # Optional[Int64]
-var values = chunk.get[Int64](col=0)  # List[Optional[Int64]]
+var val = chunk.get[Int64](col=0, row=0)   # Optional[Int64]
+var col = chunk.get[Int64](col=0)          # List[Optional[Int64]]
+```
 
-# Lists
-var list_values = chunk.get[List[String]](col=0)
+Mojo native Int and UInt (platform-dependent width):
+```mojo
+result = con.execute("SELECT 42::BIGINT")
+var chunk = result.fetch_chunk()
+var v = chunk.get[Int](col=0, row=0)       # works on 64-bit platforms
+```
 
-# Structs — uses reflection to map fields from DuckDB STRUCT to Mojo struct
+Lists (DuckDB ``LIST``):
+```mojo
+result = con.execute("SELECT [1, 2, 3]::LIST(INTEGER)")
+var chunk = result.fetch_chunk()
+var lst = chunk.get[List[Int32]](col=0, row=0)
+```
+
+Structs — uses reflection to map fields from DuckDB ``STRUCT`` to Mojo struct:
+```mojo
 @fieldwise_init
 struct Point(Copyable, Movable):
     var x: Float64
     var y: Float64
 
-var points = chunk.get[Point](col=0)
+result = con.execute("SELECT {'x': 1.0, 'y': 2.0}::STRUCT(x DOUBLE, y DOUBLE)")
+var chunk = result.fetch_chunk()
+var pt = chunk.get[Point](col=0, row=0)
+```
+
+Arrays (DuckDB ``ARRAY`` — fixed-size lists):
+```mojo
+result = con.execute("SELECT [1, 2, 3]::INTEGER[3]")
+var chunk = result.fetch_chunk()
+var arr = chunk.get[List[Int32]](col=0, row=0)  # read as List
+```
+
+MAPs as Dict:
+```mojo
+result = con.execute("SELECT MAP {'a': 1, 'b': 2}")
+var chunk = result.fetch_chunk()
+var d = chunk.get[Dict[String, Int32]](col=0, row=0)
+# d["a"] == 1, d["b"] == 2
+```
+
+UNIONs as Variant:
+```mojo
+result = con.execute("SELECT union_value(i := 42)::UNION(i INTEGER, s VARCHAR)")
+var chunk = result.fetch_chunk()
+var v = chunk.get[Variant[Int32, String]](col=0, row=0)
+# v[Int32] == 42
 ```
 
 Key features:
 - Compile-time type mapping from Mojo types to DuckDB types
 - Automatic null handling with Optional types
-- Support for nested types (List[T], user-defined structs)
+- Support for nested types (List, Dict, Variant, user-defined structs)
 - Reflection-based struct deserialization
-- Pure Mojo `MojoType` descriptor that mirrors DuckDB's LogicalType
+- Pure Mojo ``MojoType`` descriptor that mirrors DuckDB's LogicalType
 """
 
 from sys.intrinsics import _type_is_eq
