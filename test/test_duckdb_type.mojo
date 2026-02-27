@@ -13,7 +13,7 @@ from duckdb.duckdb_type import (
     Decimal,
     UUID,
 )
-from testing import assert_equal, assert_true, assert_false
+from testing import assert_equal, assert_true, assert_false, assert_almost_equal
 from testing.suite import TestSuite
 from math import abs as math_abs
 
@@ -26,28 +26,28 @@ def test_decimal_to_float64():
     # 12345 with scale=2 → 123.45
     var d = Decimal(10, 2, Int128(12345))
     var f = d.to_float64()
-    assert_true(math_abs(f - 123.45) < 1e-10)
+    assert_almost_equal(f, 123.45, atol=1e-10)
 
 
 def test_decimal_to_float64_negative():
     """Decimal.to_float64() handles negative values."""
     var d = Decimal(10, 3, Int128(-9876))
     var f = d.to_float64()
-    assert_true(math_abs(f - (-9.876)) < 1e-10)
+    assert_almost_equal(f, -9.876, atol=1e-10)
 
 
 def test_decimal_to_float64_zero_scale():
     """Decimal.to_float64() with scale=0 returns integer value."""
     var d = Decimal(10, 0, Int128(42))
     var f = d.to_float64()
-    assert_true(math_abs(f - 42.0) < 1e-10)
+    assert_almost_equal(f, 42.0, atol=1e-10)
 
 
 def test_decimal_to_float32():
     """Decimal.to_float32() converts correctly."""
     var d = Decimal(10, 2, Int128(12345))
     var f = d.to_float32()
-    assert_true(math_abs(Float64(f) - 123.45) < 1e-4)
+    assert_almost_equal(f, 123.45, atol=1e-4)
 
 
 def test_decimal_from_float64():
@@ -99,7 +99,7 @@ def test_timestamp_to_seconds():
     """Timestamp.to_seconds() converts micros to seconds."""
     var ts = Timestamp(1_500_000)  # 1.5 seconds
     var s = ts.to_seconds()
-    assert_true(math_abs(s - 1.5) < 1e-10)
+    assert_almost_equal(s, 1.5, atol=1e-10)
 
 
 def test_timestamp_from_seconds():
@@ -194,14 +194,14 @@ def test_time_to_seconds():
     # 1 hour = 3_600_000_000 micros
     var t = Time(3_600_000_000)
     var s = t.to_seconds()
-    assert_true(math_abs(s - 3600.0) < 1e-10)
+    assert_almost_equal(s, 3600.0, atol=1e-10)
 
 
 def test_time_to_seconds_fractional():
     """Time.to_seconds() handles fractional seconds."""
     var t = Time(1_500_000)  # 1.5 seconds
     var s = t.to_seconds()
-    assert_true(math_abs(s - 1.5) < 1e-10)
+    assert_almost_equal(s, 1.5, atol=1e-10)
 
 
 # ─── Interval conversions ────────────────────────────────────────
@@ -212,7 +212,7 @@ def test_interval_to_total_seconds():
     # 1 day = 86400 seconds
     var iv = Interval(0, 1, 0)
     var s = iv.to_total_seconds()
-    assert_true(math_abs(s - 86400.0) < 1e-6)
+    assert_almost_equal(s, 86400.0, atol=1e-6)
 
 
 def test_interval_to_total_seconds_with_months():
@@ -220,7 +220,7 @@ def test_interval_to_total_seconds_with_months():
     # 1 month ≈ 30 days = 2_592_000 seconds
     var iv = Interval(1, 0, 0)
     var s = iv.to_total_seconds()
-    assert_true(math_abs(s - 2_592_000.0) < 1e-6)
+    assert_almost_equal(s, 2_592_000.0, atol=1e-6)
 
 
 def test_interval_to_total_seconds_combined():
@@ -229,7 +229,7 @@ def test_interval_to_total_seconds_combined():
     var iv = Interval(1, 2, 500_000)
     var expected = (30.0 + 2.0) * 86400.0 + 0.5
     var s = iv.to_total_seconds()
-    assert_true(math_abs(s - expected) < 1e-6)
+    assert_almost_equal(s, expected, atol=1e-6)
 
 
 def test_interval_writable():

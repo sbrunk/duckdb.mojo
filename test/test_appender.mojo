@@ -4,7 +4,7 @@ from duckdb import *
 from duckdb.duckdb_type import Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID
 from collections import Optional, Dict
 from utils import Variant
-from testing import assert_equal, assert_true, assert_raises
+from testing import assert_equal, assert_true, assert_raises, assert_almost_equal
 from testing.suite import TestSuite
 
 
@@ -201,8 +201,8 @@ def test_appender_float_types():
     # Float comparison with tolerance
     var a = chunk.get[Float32](col=0, row=0)
     var b = chunk.get[Float64](col=1, row=0)
-    assert_true(abs(Float64(a) - 3.14) < 0.001, "Float32 value mismatch")
-    assert_true(abs(b - 2.71828) < 0.00001, "Float64 value mismatch")
+    assert_almost_equal(a, 3.14, atol=0.001, msg="Float32 value mismatch")
+    assert_almost_equal(b, 2.71828, atol=0.00001, msg="Float64 value mismatch")
 
 
 def test_appender_bool_type():

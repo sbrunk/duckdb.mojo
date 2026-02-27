@@ -305,7 +305,7 @@ def test_scalar_function_float_type():
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float32](col=0, row=0)
     # Use approximate equality for floats
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_scalar_function_register_error():
@@ -423,7 +423,7 @@ def test_scalar_function_set_multiple_overloads():
     var result2 = conn.execute("SELECT my_add(20.5::FLOAT, 21.5::FLOAT) as answer")
     var chunk2 = result2.fetch_chunk()
     var value = chunk2.get[Float32](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_scalar_function_set_duplicate_overload():
@@ -690,7 +690,7 @@ def test_from_function_unary_float():
     var result = conn.execute("SELECT ff_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float32](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_from_function_binary():
@@ -711,7 +711,7 @@ def test_from_function_binary_float():
     var result = conn.execute("SELECT ff_add_f64(20.5, 21.5) as answer")
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float64](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_from_function_on_table():
