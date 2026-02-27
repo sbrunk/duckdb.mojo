@@ -52,6 +52,7 @@ test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 libduckdb-devel = "=1.4"
 duckdb-cli = "=1.4"
 mojo = "=0.26.2.0.dev2026022005"
+mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 "duckdb.mojo" = { path = "." }
 
