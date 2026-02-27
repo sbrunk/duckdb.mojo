@@ -3,6 +3,7 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo
 from duckdb._libduckdb import *
 from testing import *
 from testing.suite import TestSuite
+from sys.info import size_of
 import math
 
 
@@ -938,6 +939,15 @@ def test_mojo_to_duckdb_type():
     assert_equal(mojo_to_duckdb_type[UInt64](), DuckDBType.ubigint)
     assert_equal(mojo_to_duckdb_type[Float32](), DuckDBType.float)
     assert_equal(mojo_to_duckdb_type[Float64](), DuckDBType.double)
+
+    # Mojo native Int/UInt (platform-dependent width)
+    @parameter
+    if size_of[Int]() == 4:
+        assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.integer)
+        assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.uinteger)
+    else:
+        assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.bigint)
+        assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.ubigint)
 
 
 def main():

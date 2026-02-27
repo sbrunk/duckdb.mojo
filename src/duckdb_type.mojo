@@ -4,6 +4,7 @@ from duckdb.api import DuckDB
 from collections import Set
 from hashlib.hasher import Hasher
 from sys.intrinsics import _type_is_eq
+from sys.info import size_of
 
 
 @fieldwise_init
@@ -841,7 +842,7 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     """Maps a Mojo scalar type to its corresponding DuckDB type at compile time.
 
     Supports: Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-    Float32, Float64.
+    Float32, Float64, Int, UInt.
 
     Parameters:
         T: The Mojo scalar type to map.
@@ -878,6 +879,18 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
         return DuckDBType.float
     elif _type_is_eq[T, Float64]():
         return DuckDBType.double
+    elif _type_is_eq[T, Int]():
+        @parameter
+        if size_of[Int]() == 4:
+            return DuckDBType.integer
+        else:
+            return DuckDBType.bigint
+    elif _type_is_eq[T, UInt]():
+        @parameter
+        if size_of[UInt]() == 4:
+            return DuckDBType.uinteger
+        else:
+            return DuckDBType.ubigint
     else:
         constrained[False, "Unsupported Mojo type for DuckDB mapping"]()
         return DuckDBType.invalid

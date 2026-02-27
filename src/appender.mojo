@@ -69,17 +69,137 @@ from reflection import (
     struct_field_names,
     struct_field_types,
 )
-from collections import Optional, List
+from collections import Optional, List, Dict
+from utils import Variant
+from builtin.variadics import Variadic
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
+from memory.unsafe_pointer import alloc
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface
 from duckdb.connection import Connection
+from duckdb.logical_type import LogicalType
 from duckdb.typed_api import (
     mojo_type_to_duckdb_type,
     _is_known_scalar_type,
     _scalar_type_to_duckdb,
 )
+
+
+# ──────────────────────────────────────────────────────────────────
+# Value conversion — create duckdb_value from Mojo types
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
+    """Convert a Mojo value to a duckdb_value.
+
+    Supports scalar types (Bool, integers, floats, String),
+    Date/Time/Timestamp/Interval, Decimal, UUID, and timestamp variants.
+
+    The caller is responsible for calling `duckdb_destroy_value` on the result.
+
+    Parameters:
+        T: The Mojo type of the value.
+
+    Args:
+        value: The value to convert.
+
+    Returns:
+        A new duckdb_value that must be destroyed by the caller.
+    """
+    ref libduckdb = DuckDB().libduckdb()
+    # Use UnsafePointer.bitcast to reinterpret ref value as the concrete
+    # type without requiring ImplicitlyCopyable.
+    var vp = UnsafePointer(to=value)
+
+    @parameter
+    if _type_is_eq[T, Bool]():
+        return libduckdb.duckdb_create_bool(vp.bitcast[Bool]()[])
+    elif _type_is_eq[T, Int8]():
+        return libduckdb.duckdb_create_int8(vp.bitcast[Int8]()[])
+    elif _type_is_eq[T, Int16]():
+        return libduckdb.duckdb_create_int16(vp.bitcast[Int16]()[])
+    elif _type_is_eq[T, Int32]():
+        return libduckdb.duckdb_create_int32(vp.bitcast[Int32]()[])
+    elif _type_is_eq[T, Int64]():
+        return libduckdb.duckdb_create_int64(vp.bitcast[Int64]()[])
+    elif _type_is_eq[T, Int]():
+        # Int is platform-dependent: cast to the appropriate fixed-width type
+        @parameter
+        if size_of[Int]() == 4:
+            return libduckdb.duckdb_create_int32(
+                Int32(vp.bitcast[Int]()[])
+            )
+        else:
+            return libduckdb.duckdb_create_int64(
+                Int64(vp.bitcast[Int]()[])
+            )
+    elif _type_is_eq[T, UInt8]():
+        return libduckdb.duckdb_create_uint8(vp.bitcast[UInt8]()[])
+    elif _type_is_eq[T, UInt16]():
+        return libduckdb.duckdb_create_uint16(vp.bitcast[UInt16]()[])
+    elif _type_is_eq[T, UInt32]():
+        return libduckdb.duckdb_create_uint32(vp.bitcast[UInt32]()[])
+    elif _type_is_eq[T, UInt64]():
+        return libduckdb.duckdb_create_uint64(vp.bitcast[UInt64]()[])
+    elif _type_is_eq[T, UInt]():
+        @parameter
+        if size_of[UInt]() == 4:
+            return libduckdb.duckdb_create_uint32(
+                UInt32(vp.bitcast[UInt]()[])
+            )
+        else:
+            return libduckdb.duckdb_create_uint64(
+                UInt64(vp.bitcast[UInt]()[])
+            )
+    elif _type_is_eq[T, Float32]():
+        return libduckdb.duckdb_create_float(vp.bitcast[Float32]()[])
+    elif _type_is_eq[T, Float64]():
+        return libduckdb.duckdb_create_double(vp.bitcast[Float64]()[])
+    elif _type_is_eq[T, Int128]():
+        return libduckdb.duckdb_create_hugeint(vp.bitcast[Int128]()[])
+    elif _type_is_eq[T, UInt128]():
+        return libduckdb.duckdb_create_uhugeint(vp.bitcast[UInt128]()[])
+    elif _type_is_eq[T, String]():
+        var s = String(vp.bitcast[String]()[])
+        return libduckdb.duckdb_create_varchar_length(
+            s.as_c_string_slice().unsafe_ptr(), idx_t(len(s))
+        )
+    elif _type_is_eq[T, Date]():
+        return libduckdb.duckdb_create_date(vp.bitcast[Date]()[])
+    elif _type_is_eq[T, Time]():
+        return libduckdb.duckdb_create_time(vp.bitcast[Time]()[])
+    elif _type_is_eq[T, Timestamp]():
+        return libduckdb.duckdb_create_timestamp(vp.bitcast[Timestamp]()[])
+    elif _type_is_eq[T, Interval]():
+        return libduckdb.duckdb_create_interval(
+            vp.bitcast[duckdb_interval]()[]
+        )
+    elif _type_is_eq[T, Decimal]():
+        return libduckdb.duckdb_create_decimal(vp.bitcast[Decimal]()[])
+    elif _type_is_eq[T, TimestampS]():
+        var raw = duckdb_timestamp_s(vp.bitcast[TimestampS]()[].seconds)
+        return libduckdb.duckdb_create_timestamp_s(raw)
+    elif _type_is_eq[T, TimestampMS]():
+        var raw = duckdb_timestamp_ms(vp.bitcast[TimestampMS]()[].millis)
+        return libduckdb.duckdb_create_timestamp_ms(raw)
+    elif _type_is_eq[T, TimestampNS]():
+        var raw = duckdb_timestamp_ns(vp.bitcast[TimestampNS]()[].nanos)
+        return libduckdb.duckdb_create_timestamp_ns(raw)
+    elif _type_is_eq[T, TimestampTZ]():
+        var ts = Timestamp(vp.bitcast[TimestampTZ]()[].micros)
+        return libduckdb.duckdb_create_timestamp_tz(ts)
+    elif _type_is_eq[T, TimeTZ]():
+        var raw = duckdb_time_tz(vp.bitcast[TimeTZ]()[].bits)
+        return libduckdb.duckdb_create_time_tz_value(raw)
+    elif _type_is_eq[T, UUID]():
+        return libduckdb.duckdb_create_uuid(vp.bitcast[UUID]()[].value)
+    else:
+        raise Error(
+            "Unsupported type for value creation: "
+            + String(get_type_name[T]())
+        )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -166,6 +286,19 @@ __extension SIMD(Appendable):
             appender._check(libduckdb.duckdb_append_uhugeint(raw, rebind_var[UInt128](self)))
         else:
             constrained[False, "Unsupported SIMD DType for appender"]()
+
+
+# Mojo's native Int/UInt are __mlir_type.index, not SIMD — need separate extensions.
+__extension Int(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = appender._appender
+
+        @parameter
+        if size_of[Int]() == 4:
+            appender._check(libduckdb.duckdb_append_int32(raw, Int32(self)))
+        else:
+            appender._check(libduckdb.duckdb_append_int64(raw, Int64(self)))
 
 
 __extension String(Appendable):
@@ -290,10 +423,41 @@ __extension List(Appendable):
                     idx_t(len(src_ptr[])),
                 ),
             )
+        elif _is_known_scalar_type[Self.T]():
+            # General list of known scalars — create a list value
+            ref libduckdb = DuckDB().libduckdb()
+            var src_ptr = UnsafePointer(to=self).bitcast[List[Self.T]]()
+            var n = len(src_ptr[])
+
+            # Create duckdb_values for each element
+            var values = alloc[duckdb_value](n)
+            for i in range(n):
+                values[i] = _to_duckdb_value(src_ptr[][i])
+
+            # Create the element logical type and list value
+            var elem_type = LogicalType[True, MutExternalOrigin](
+                mojo_type_to_duckdb_type[Self.T]()
+            )
+            var val = libduckdb.duckdb_create_list_value(
+                elem_type.internal_ptr(),
+                values.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
+                idx_t(n),
+            )
+            appender._check(
+                libduckdb.duckdb_append_value(appender._appender, val)
+            )
+
+            # Clean up
+            for i in range(n):
+                libduckdb.duckdb_destroy_value(
+                    UnsafePointer(to=values[i])
+                )
+            values.free()
+            libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
         else:
             raise Error(
-                "Only List[UInt8] (BLOB) can be appended. For LIST columns,"
-                " use a different approach."
+                "Only List[UInt8] (BLOB) and List[scalar] can be appended."
+                " For complex nested types, use a different approach."
             )
 
 
@@ -309,6 +473,93 @@ __extension Optional(Appendable):
                 )
         else:
             appender.append_null()
+
+
+__extension Dict(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        """Append a Dict value to a MAP column.
+
+        The MAP logical type is obtained from the target table's column
+        schema via ``duckdb_appender_column_type``.  Each Dict entry
+        becomes a key/value pair in the MAP.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+
+        # Get the MAP logical type from the target column
+        var col_type = libduckdb.duckdb_appender_column_type(
+            appender._appender, idx_t(appender._current_col)
+        )
+
+        var n = len(self)
+        var keys = alloc[duckdb_value](n)
+        var vals = alloc[duckdb_value](n)
+
+        var i = 0
+        for item in self.items():
+            keys[i] = _to_duckdb_value(item.key)
+            vals[i] = _to_duckdb_value(item.value)
+            i += 1
+
+        var map_val = libduckdb.duckdb_create_map_value(
+            col_type,
+            keys.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
+            vals.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
+            idx_t(n),
+        )
+        appender._check(
+            libduckdb.duckdb_append_value(appender._appender, map_val)
+        )
+
+        # Clean up
+        for j in range(n):
+            libduckdb.duckdb_destroy_value(UnsafePointer(to=keys[j]))
+            libduckdb.duckdb_destroy_value(UnsafePointer(to=vals[j]))
+        keys.free()
+        vals.free()
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=map_val))
+        libduckdb.duckdb_destroy_logical_type(UnsafePointer(to=col_type))
+
+
+__extension Variant(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        """Append a Variant value to a UNION column.
+
+        The UNION logical type (including member names) is obtained from the
+        target table's column schema via ``duckdb_appender_column_type``.
+        The Variant's discriminant maps to the UNION tag index and the active
+        value is converted to a ``duckdb_value``.
+
+        Positional mapping: ``Variant`` type index ``i`` corresponds to UNION
+        member ``i``.  Member names are not required from the Mojo side.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        var tag = Int(self._get_discr())
+
+        # Get the UNION logical type from the target column's schema
+        var col_type = libduckdb.duckdb_appender_column_type(
+            appender._appender, idx_t(appender._current_col)
+        )
+
+        # Create the member value by matching the tag at runtime
+        var member_val = duckdb_value()
+        comptime for i in range(Variadic.size(Self.Ts)):
+            if tag == i:
+                comptime MemberType = Self.Ts[i]
+                comptime MT = downcast[MemberType, Copyable & Movable]
+                member_val = _to_duckdb_value(self.unsafe_get[MT]())
+
+        # Create the union value and append it
+        var union_val = libduckdb.duckdb_create_union_value(
+            col_type, idx_t(tag), member_val
+        )
+        appender._check(
+            libduckdb.duckdb_append_value(appender._appender, union_val)
+        )
+
+        # Clean up
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=member_val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=union_val))
+        libduckdb.duckdb_destroy_logical_type(UnsafePointer(to=col_type))
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -330,6 +581,12 @@ struct Appender(Movable):
     """
 
     var _appender: duckdb_appender
+    var _current_col: Int
+    """Tracks the current column index for value-level appending.
+
+    Used internally by `Variant(Appendable)` to query the target column's
+    UNION logical type from the table schema.
+    """
 
     # ── Construction / Destruction ────────────────────────────────
 
@@ -342,6 +599,7 @@ struct Appender(Movable):
             schema: The schema name (empty string for default schema).
         """
         self._appender = duckdb_appender()
+        self._current_col = 0
         var _table = table.copy()
         ref libduckdb = DuckDB().libduckdb()
 
@@ -369,6 +627,7 @@ struct Appender(Movable):
 
     fn __moveinit__(out self, deinit take: Self):
         self._appender = take._appender
+        self._current_col = take._current_col
 
     fn __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
@@ -388,11 +647,13 @@ struct Appender(Movable):
         """Append a NULL value for the current column."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_append_null(self._appender))
+        self._current_col += 1
 
     fn append_default(mut self) raises:
         """Append the DEFAULT value for the current column."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_append_default(self._appender))
+        self._current_col += 1
 
     fn append_value[T: Copyable & Movable](mut self, value: T) raises:
         """Append a single typed value to the current row.
@@ -407,8 +668,26 @@ struct Appender(Movable):
             value: The value to append.
         """
         @parameter
-        if conforms_to(T, Appendable):
+        if _type_is_eq[T, UInt]():
+            # UInt is a type alias, not a struct, so it can't have an
+            # __extension Appendable.  Handle it inline instead.
+            ref libduckdb = DuckDB().libduckdb()
+            var raw = self._appender
+            var vp = UnsafePointer(to=value).bitcast[UInt]()
+
+            @parameter
+            if size_of[UInt]() == 4:
+                self._check(
+                    libduckdb.duckdb_append_uint32(raw, UInt32(vp[]))
+                )
+            else:
+                self._check(
+                    libduckdb.duckdb_append_uint64(raw, UInt64(vp[]))
+                )
+            self._current_col += 1
+        elif conforms_to(T, Appendable):
             trait_downcast[Appendable](value).append(self)
+            self._current_col += 1
         else:
             raise Error(
                 "Unsupported type for appender: "
@@ -421,11 +700,13 @@ struct Appender(Movable):
         """Finish the current row and advance to the next."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_end_row(self._appender))
+        self._current_col = 0
 
     fn begin_row(mut self) raises:
         """Begin a new row (optional — rows begin automatically)."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_begin_row(self._appender))
+        self._current_col = 0
 
     fn append_row[T: Copyable & Movable](mut self, row: T) raises:
         """Append a struct as a complete table row.
@@ -469,6 +750,7 @@ struct Appender(Movable):
                 trait_downcast[Appendable](
                     __struct_field_ref(idx, row)
                 ).append(self)
+                self._current_col += 1
             else:
                 comptime field_name = struct_field_names[T]()[idx]
                 raise Error(
@@ -512,6 +794,7 @@ struct Appender(Movable):
                 trait_downcast[Appendable](row[idx]).append(
                     self
                 )
+                self._current_col += 1
             else:
                 raise Error(
                     "Unsupported tuple element type at index "

@@ -8,6 +8,7 @@ from duckdb.typed_api import (
     deserialize_list_column,
     _deserialize_table_field,
     _NullableColumn,
+    _is_list_compatible_type,
 )
 from collections import Optional
 from memory import UnsafePointer
@@ -251,12 +252,29 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 T, _NullableColumn
             ]._expected_duckdb_type()
             if actual_type != expected:
-                raise Error(
-                    "Type mismatch: expected "
-                    + String(expected)
-                    + " but column has "
-                    + String(actual_type)
-                )
+                # Allow array/map when expected is list
+                if expected == DuckDBType.list:
+                    if not _is_list_compatible_type(actual_type):
+                        raise Error(
+                            "Type mismatch: expected list, array, or map"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                # Allow union when expected is struct
+                elif expected == DuckDBType.struct_t:
+                    if actual_type != DuckDBType.union:
+                        raise Error(
+                            "Type mismatch: expected struct or union"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                else:
+                    raise Error(
+                        "Type mismatch: expected "
+                        + String(expected)
+                        + " but column has "
+                        + String(actual_type)
+                    )
             var val = downcast[
                 T, _NullableColumn
             ]._deserialize_single_nullable(
@@ -265,13 +283,31 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return rebind_var[T](val^)
         else:
             comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            if actual_type != expected_db_type:
-                raise Error(
-                    "Type mismatch: expected "
-                    + String(expected_db_type)
-                    + " but column has "
-                    + String(actual_type)
-                )
+            @parameter
+            if expected_db_type == DuckDBType.list:
+                if not _is_list_compatible_type(actual_type):
+                    raise Error(
+                        "Type mismatch: expected list, array, or map"
+                        " but column has "
+                        + String(actual_type)
+                    )
+            else:
+                if actual_type != expected_db_type:
+                    @parameter
+                    if expected_db_type == DuckDBType.struct_t:
+                        if actual_type != DuckDBType.union:
+                            raise Error(
+                                "Type mismatch: expected struct or union"
+                                " but column has "
+                                + String(actual_type)
+                            )
+                    else:
+                        raise Error(
+                            "Type mismatch: expected "
+                            + String(expected_db_type)
+                            + " but column has "
+                            + String(actual_type)
+                        )
             if self.is_null(col=col, row=row):
                 raise Error(
                     "NULL value at col="
@@ -318,12 +354,29 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 T, _NullableColumn
             ]._expected_duckdb_type()
             if actual_type != expected:
-                raise Error(
-                    "Type mismatch: expected "
-                    + String(expected)
-                    + " but column has "
-                    + String(actual_type)
-                )
+                # Allow array/map when expected is list
+                if expected == DuckDBType.list:
+                    if not _is_list_compatible_type(actual_type):
+                        raise Error(
+                            "Type mismatch: expected list, array, or map"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                # Allow union when expected is struct
+                elif expected == DuckDBType.struct_t:
+                    if actual_type != DuckDBType.union:
+                        raise Error(
+                            "Type mismatch: expected struct or union"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                else:
+                    raise Error(
+                        "Type mismatch: expected "
+                        + String(expected)
+                        + " but column has "
+                        + String(actual_type)
+                    )
             var result = downcast[
                 T, _NullableColumn
             ]._deserialize_column_nullable(
@@ -332,13 +385,31 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return rebind_var[List[T]](result^)
         else:
             comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            if actual_type != expected_db_type:
-                raise Error(
-                    "Type mismatch: expected "
-                    + String(expected_db_type)
-                    + " but column has "
-                    + String(actual_type)
-                )
+            @parameter
+            if expected_db_type == DuckDBType.list:
+                if not _is_list_compatible_type(actual_type):
+                    raise Error(
+                        "Type mismatch: expected list, array, or map"
+                        " but column has "
+                        + String(actual_type)
+                    )
+            else:
+                if actual_type != expected_db_type:
+                    @parameter
+                    if expected_db_type == DuckDBType.struct_t:
+                        if actual_type != DuckDBType.union:
+                            raise Error(
+                                "Type mismatch: expected struct or union"
+                                " but column has "
+                                + String(actual_type)
+                            )
+                    else:
+                        raise Error(
+                            "Type mismatch: expected "
+                            + String(expected_db_type)
+                            + " but column has "
+                            + String(actual_type)
+                        )
             var opt_result = deserialize_from_vector[T](
                 self.get_vector(col), len(self), 0
             )
@@ -428,16 +499,40 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
             else:
                 comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
-                if actual_type != expected_db_type:
-                    comptime field_name = struct_field_names[T]()[idx]
-                    raise Error(
-                        "Type mismatch for field '"
-                        + String(field_name)
-                        + "': expected "
-                        + String(expected_db_type)
-                        + " but column has "
-                        + String(actual_type)
-                    )
+                @parameter
+                if expected_db_type == DuckDBType.list:
+                    if not _is_list_compatible_type(actual_type):
+                        comptime field_name = struct_field_names[T]()[idx]
+                        raise Error(
+                            "Type mismatch for field '"
+                            + String(field_name)
+                            + "': expected list, array, or map"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                else:
+                    if actual_type != expected_db_type:
+                        @parameter
+                        if expected_db_type == DuckDBType.struct_t:
+                            if actual_type != DuckDBType.union:
+                                comptime field_name = struct_field_names[T]()[idx]
+                                raise Error(
+                                    "Type mismatch for field '"
+                                    + String(field_name)
+                                    + "': expected struct or union"
+                                    " but column has "
+                                    + String(actual_type)
+                                )
+                        else:
+                            comptime field_name = struct_field_names[T]()[idx]
+                            raise Error(
+                                "Type mismatch for field '"
+                                + String(field_name)
+                                + "': expected "
+                                + String(expected_db_type)
+                                + " but column has "
+                                + String(actual_type)
+                            )
 
         # Check non-Optional fields for NULL before allocating
         @parameter
@@ -575,15 +670,37 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
             else:
                 comptime expected_db_type = mojo_type_to_duckdb_type[ETC]()
-                if actual_type != expected_db_type:
-                    raise Error(
-                        "Type mismatch for tuple element "
-                        + String(idx)
-                        + ": expected "
-                        + String(expected_db_type)
-                        + " but column has "
-                        + String(actual_type)
-                    )
+                @parameter
+                if expected_db_type == DuckDBType.list:
+                    if not _is_list_compatible_type(actual_type):
+                        raise Error(
+                            "Type mismatch for tuple element "
+                            + String(idx)
+                            + ": expected list, array, or map"
+                            " but column has "
+                            + String(actual_type)
+                        )
+                else:
+                    if actual_type != expected_db_type:
+                        @parameter
+                        if expected_db_type == DuckDBType.struct_t:
+                            if actual_type != DuckDBType.union:
+                                raise Error(
+                                    "Type mismatch for tuple element "
+                                    + String(idx)
+                                    + ": expected struct or union"
+                                    " but column has "
+                                    + String(actual_type)
+                                )
+                        else:
+                            raise Error(
+                                "Type mismatch for tuple element "
+                                + String(idx)
+                                + ": expected "
+                                + String(expected_db_type)
+                                + " but column has "
+                                + String(actual_type)
+                            )
                 if self.is_null(col=idx, row=row):
                     raise Error(
                         "NULL value for non-optional tuple element "
