@@ -1702,5 +1702,67 @@ def test_variant_union_with_null():
     assert_equal(vals[2].value()[String], "three")
 
 
+def test_blob_deserialize():
+    """Read BLOB column as List[UInt8] via typed API."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BLOB)")
+    _ = con.execute("INSERT INTO t VALUES ('\\x01\\x02\\x03'::BLOB), ('\\xDE\\xAD'::BLOB)")
+    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var row0 = chunk.get[List[UInt8]](col=0, row=0)
+    assert_equal(len(row0), 3)
+    assert_equal(row0[0], 1)
+    assert_equal(row0[1], 2)
+    assert_equal(row0[2], 3)
+    var row1 = chunk.get[List[UInt8]](col=0, row=1)
+    assert_equal(len(row1), 2)
+    assert_equal(row1[0], 0xDE)
+    assert_equal(row1[1], 0xAD)
+
+
+def test_blob_deserialize_column():
+    """Read BLOB column as full column of List[UInt8]."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BLOB)")
+    _ = con.execute("INSERT INTO t VALUES ('\\x01\\x02'::BLOB), (NULL)")
+    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var vals = chunk.get[Optional[List[UInt8]]](col=0)
+    assert_equal(len(vals), 2)
+    assert_true(vals[0])
+    assert_equal(len(vals[0].value()), 2)
+    assert_false(vals[1])
+
+
+def test_enum_deserialize():
+    """Read ENUM column as String via typed API."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral')")
+    _ = con.execute("CREATE TABLE t (m mood)")
+    _ = con.execute("INSERT INTO t VALUES ('happy'), ('sad'), ('neutral')")
+    result = con.execute("SELECT m FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "happy")
+    assert_equal(chunk.get[String](col=0, row=1), "sad")
+    assert_equal(chunk.get[String](col=0, row=2), "neutral")
+
+
+def test_enum_deserialize_with_null():
+    """Read ENUM column with NULL values as Optional[String]."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
+    _ = con.execute("CREATE TABLE t (c color)")
+    _ = con.execute("INSERT INTO t VALUES ('red'), (NULL), ('blue')")
+    result = con.execute("SELECT c FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var vals = chunk.get[Optional[String]](col=0)
+    assert_equal(len(vals), 3)
+    assert_true(vals[0])
+    assert_equal(vals[0].value(), "red")
+    assert_false(vals[1])
+    assert_true(vals[2])
+    assert_equal(vals[2].value(), "blue")
+
+
 def main():
     TestSuite.discover_tests[__functions_in_module()]().run()

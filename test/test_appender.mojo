@@ -1,7 +1,7 @@
 """Tests for the Appender API."""
 
 from duckdb import *
-from duckdb.duckdb_type import Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID
+from duckdb.duckdb_type import Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID, TimeNS
 from collections import Optional, Dict
 from utils import Variant
 from testing import assert_equal, assert_true, assert_raises, assert_almost_equal
@@ -1112,6 +1112,65 @@ def test_appender_mojo_uint():
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[UInt](col=0, row=0), 100)
     assert_equal(chunk.get[UInt](col=0, row=1), 200)
+
+
+def test_appender_time_ns():
+    """Append and read back TIME_NS values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (t TIME_NS)")
+    var appender = Appender(con, "t")
+    appender.append_value(TimeNS(0))
+    appender.end_row()
+    appender.append_value(TimeNS(3_600_000_000_000))  # 1 hour
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT t::VARCHAR FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "00:00:00")
+    assert_equal(chunk.get[String](col=0, row=1), "01:00:00")
+
+
+def test_appender_array_int32():
+    """Append List[Int32] to an ARRAY column."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (arr INTEGER[3])")
+    var appender = Appender(con, "t")
+    var l1: List[Int32] = [1, 2, 3]
+    appender.append_value(l1)
+    appender.end_row()
+    var l2: List[Int32] = [4, 5, 6]
+    appender.append_value(l2)
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT arr FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var row0 = chunk.get[List[Optional[Int32]]](col=0, row=0)
+    assert_equal(len(row0), 3)
+    assert_equal(row0[0].value(), 1)
+    assert_equal(row0[1].value(), 2)
+    assert_equal(row0[2].value(), 3)
+    var row1 = chunk.get[List[Optional[Int32]]](col=0, row=1)
+    assert_equal(row1[0].value(), 4)
+
+
+def test_appender_array_varchar():
+    """Append List[String] to an ARRAY(VARCHAR) column."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (arr VARCHAR[2])")
+    var appender = Appender(con, "t")
+    var l: List[String] = ["hello", "world"]
+    appender.append_value(l)
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT arr FROM t")
+    var chunk = result.fetch_chunk()
+    var row0 = chunk.get[List[Optional[String]]](col=0, row=0)
+    assert_equal(len(row0), 2)
+    assert_equal(row0[0].value(), "hello")
+    assert_equal(row0[1].value(), "world")
 
 
 def main():

@@ -222,6 +222,9 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
         return libduckdb.duckdb_create_time_tz_value(raw)
     elif _type_is_eq[T, UUID]():
         return libduckdb.duckdb_create_uuid(vp.bitcast[UUID]()[].value)
+    elif _type_is_eq[T, TimeNS]():
+        var raw = duckdb_time_ns(vp.bitcast[TimeNS]()[].nanos)
+        return libduckdb.duckdb_create_time_ns(raw)
     else:
         raise Error(
             "Unsupported type for value creation: "
@@ -435,6 +438,15 @@ __extension UUID(Appendable):
         libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
 
 
+__extension TimeNS(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_time_ns(self.nanos)
+        var val = libduckdb.duckdb_create_time_ns(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
 __extension List(Appendable):
     fn append(ref self, mut appender: Appender) raises:
         @parameter
@@ -451,7 +463,7 @@ __extension List(Appendable):
                 ),
             )
         elif _is_known_scalar_type[Self.T]():
-            # General list of known scalars — create a list value
+            # General list of known scalars — create a list or array value
             ref libduckdb = DuckDB().libduckdb()
             var src_ptr = UnsafePointer(to=self).bitcast[List[Self.T]]()
             var n = len(src_ptr[])
@@ -461,15 +473,35 @@ __extension List(Appendable):
             for i in range(n):
                 values[i] = _to_duckdb_value(src_ptr[][i])
 
-            # Create the element logical type and list value
-            var elem_type = LogicalType[True, MutExternalOrigin](
-                mojo_type_to_duckdb_type[Self.T]()
+            # Check target column type to decide LIST vs ARRAY
+            var col_type = libduckdb.duckdb_appender_column_type(
+                appender._appender, idx_t(appender._current_col)
             )
-            var val = libduckdb.duckdb_create_list_value(
-                elem_type.internal_ptr(),
-                values.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
-                idx_t(n),
+            var col_type_id = DuckDBType(
+                libduckdb.duckdb_get_type_id(col_type)
             )
+
+            var val: duckdb_value
+            if col_type_id == DuckDBType.array:
+                # ARRAY: need the element type from the column's logical type
+                var child_type = libduckdb.duckdb_array_type_child_type(col_type)
+                val = libduckdb.duckdb_create_array_value(
+                    child_type,
+                    values.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
+                    idx_t(n),
+                )
+                libduckdb.duckdb_destroy_logical_type(UnsafePointer(to=child_type))
+            else:
+                # LIST (default)
+                var elem_type = LogicalType[True, MutExternalOrigin](
+                    mojo_type_to_duckdb_type[Self.T]()
+                )
+                val = libduckdb.duckdb_create_list_value(
+                    elem_type.internal_ptr(),
+                    values.as_immutable().unsafe_origin_cast[ImmutAnyOrigin](),
+                    idx_t(n),
+                )
+
             appender._check(
                 libduckdb.duckdb_append_value(appender._appender, val)
             )
@@ -481,6 +513,7 @@ __extension List(Appendable):
                 )
             values.free()
             libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+            libduckdb.duckdb_destroy_logical_type(UnsafePointer(to=col_type))
         else:
             raise Error(
                 "Only List[UInt8] (BLOB) and List[scalar] can be appended."

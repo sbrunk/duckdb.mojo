@@ -88,6 +88,8 @@ struct DuckDBType(
     """DuckDB type: TIME_TZ."""
     comptime timestamp_tz = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ)
     """DuckDB type: TIMESTAMP_TZ."""
+    comptime time_ns = DuckDBType(DUCKDB_TYPE_TIME_NS)
+    """DuckDB type: TIME_NS, time in nanoseconds."""
 
     # fn __init__(out self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""
@@ -118,6 +120,7 @@ struct DuckDBType(
             DuckDBType.time_tz,
             DuckDBType.timestamp_tz,
             DuckDBType.uuid,
+            DuckDBType.time_ns,
         )
 
     fn is_nested(self) -> Bool:
@@ -218,6 +221,8 @@ struct DuckDBType(
             return writer.write("time_tz")
         if self == DuckDBType.timestamp_tz:
             return writer.write("timestamp_tz")
+        if self == DuckDBType.time_ns:
+            return writer.write("time_ns")
         return writer.write("<<unknown>>")
 
     fn __eq__(self, rhs: DuckDBType) -> Bool:
@@ -504,6 +509,36 @@ struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     fn to_timestamp(self) -> Timestamp:
         """Convert to microsecond-precision Timestamp (truncates sub-microsecond part)."""
         return Timestamp(self.nanos // 1_000)
+
+
+@fieldwise_init
+struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+    """Time with nanosecond precision, stored as nanoseconds since midnight."""
+
+    var nanos: Int64
+
+    fn __str__(self) -> String:
+        return String(self.nanos)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.nanos)
+
+    fn __eq__(self, other: TimeNS) -> Bool:
+        return self.nanos == other.nanos
+
+    fn __ne__(self, other: TimeNS) -> Bool:
+        return not self == other
+
+    fn __repr__(self) -> String:
+        return "TimeNS(" + String(self.nanos) + ")"
+
+    fn to_seconds(self) -> Float64:
+        """Convert to seconds since midnight as a Float64."""
+        return self.nanos.cast[DType.float64]() / 1_000_000_000.0
+
+    fn to_time(self) -> Time:
+        """Convert to microsecond-precision Time (truncates sub-microsecond part)."""
+        return Time(self.nanos // 1_000)
 
 
 @fieldwise_init
@@ -841,8 +876,9 @@ fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
 fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     """Maps a Mojo scalar type to its corresponding DuckDB type at compile time.
 
-    Supports: Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-    Float32, Float64, Int, UInt.
+    Supports: Bool, Int8–Int64, UInt8–UInt64, Float32, Float64, Int, UInt,
+    Int128, UInt128, String, Date, Time, TimeNS, Timestamp, TimestampS,
+    TimestampMS, TimestampNS, TimestampTZ, TimeTZ, Interval, Decimal, UUID.
 
     Parameters:
         T: The Mojo scalar type to map.
@@ -879,6 +915,36 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
         return DuckDBType.float
     elif _type_is_eq[T, Float64]():
         return DuckDBType.double
+    elif _type_is_eq[T, Int128]():
+        return DuckDBType.hugeint
+    elif _type_is_eq[T, UInt128]():
+        return DuckDBType.uhugeint
+    elif _type_is_eq[T, String]():
+        return DuckDBType.varchar
+    elif _type_is_eq[T, Date]():
+        return DuckDBType.date
+    elif _type_is_eq[T, Time]():
+        return DuckDBType.time
+    elif _type_is_eq[T, TimeNS]():
+        return DuckDBType.time_ns
+    elif _type_is_eq[T, Timestamp]():
+        return DuckDBType.timestamp
+    elif _type_is_eq[T, TimestampS]():
+        return DuckDBType.timestamp_s
+    elif _type_is_eq[T, TimestampMS]():
+        return DuckDBType.timestamp_ms
+    elif _type_is_eq[T, TimestampNS]():
+        return DuckDBType.timestamp_ns
+    elif _type_is_eq[T, TimestampTZ]():
+        return DuckDBType.timestamp_tz
+    elif _type_is_eq[T, TimeTZ]():
+        return DuckDBType.time_tz
+    elif _type_is_eq[T, Interval]():
+        return DuckDBType.interval
+    elif _type_is_eq[T, Decimal]():
+        return DuckDBType.decimal
+    elif _type_is_eq[T, UUID]():
+        return DuckDBType.uuid
     elif _type_is_eq[T, Int]():
         @parameter
         if size_of[Int]() == 4:

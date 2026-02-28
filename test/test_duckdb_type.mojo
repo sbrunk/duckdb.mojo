@@ -12,6 +12,7 @@ from duckdb.duckdb_type import (
     Interval,
     Decimal,
     UUID,
+    TimeNS,
 )
 from testing import assert_equal, assert_true, assert_false, assert_almost_equal
 from testing.suite import TestSuite
@@ -276,6 +277,36 @@ def test_uuid_equatable():
     var c = UUID(UInt128(99))
     assert_true(a == b)
     assert_true(a != c)
+
+
+# ─── TimeNS conversions ──────────────────────────────────────────
+
+
+def test_time_ns_to_seconds():
+    """TimeNS.to_seconds() converts correctly."""
+    var t = TimeNS(1_500_000_000)  # 1.5 seconds
+    assert_almost_equal(t.to_seconds(), 1.5)
+
+
+def test_time_ns_to_time():
+    """TimeNS.to_time() converts to microseconds."""
+    var t = TimeNS(1_500_000_000)  # 1.5 seconds = 1_500_000 micros
+    assert_equal(t.to_time(), Time(1_500_000))
+
+
+def test_time_ns_equatable():
+    """TimeNS equality."""
+    var a = TimeNS(42)
+    var b = TimeNS(42)
+    var c = TimeNS(99)
+    assert_true(a == b)
+    assert_true(a != c)
+
+
+def test_time_ns_repr():
+    """TimeNS repr."""
+    var t = TimeNS(12345)
+    assert_equal(repr(t), "TimeNS(12345)")
 
 
 # ─── run_suite ────────────────────────────────────────────────────
