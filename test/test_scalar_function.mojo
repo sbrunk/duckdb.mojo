@@ -3,6 +3,7 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo
 from duckdb._libduckdb import *
 from testing import *
 from testing.suite import TestSuite
+from sys.info import size_of
 import math
 
 
@@ -304,7 +305,7 @@ def test_scalar_function_float_type():
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float32](col=0, row=0)
     # Use approximate equality for floats
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_scalar_function_register_error():
@@ -422,7 +423,7 @@ def test_scalar_function_set_multiple_overloads():
     var result2 = conn.execute("SELECT my_add(20.5::FLOAT, 21.5::FLOAT) as answer")
     var chunk2 = result2.fetch_chunk()
     var value = chunk2.get[Float32](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_scalar_function_set_duplicate_overload():
@@ -689,7 +690,7 @@ def test_from_function_unary_float():
     var result = conn.execute("SELECT ff_double(21.0::FLOAT) as answer")
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float32](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_from_function_binary():
@@ -710,7 +711,7 @@ def test_from_function_binary_float():
     var result = conn.execute("SELECT ff_add_f64(20.5, 21.5) as answer")
     var chunk = result.fetch_chunk()
     var value = chunk.get[Float64](col=0, row=0)
-    assert_true(abs(value - 42.0) < 0.001)
+    assert_almost_equal(value, 42.0, atol=0.001)
 
 
 def test_from_function_on_table():
@@ -938,6 +939,15 @@ def test_mojo_to_duckdb_type():
     assert_equal(mojo_to_duckdb_type[UInt64](), DuckDBType.ubigint)
     assert_equal(mojo_to_duckdb_type[Float32](), DuckDBType.float)
     assert_equal(mojo_to_duckdb_type[Float64](), DuckDBType.double)
+
+    # Mojo native Int/UInt (platform-dependent width)
+    @parameter
+    if size_of[Int]() == 4:
+        assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.integer)
+        assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.uinteger)
+    else:
+        assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.bigint)
+        assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.ubigint)
 
 
 def main():

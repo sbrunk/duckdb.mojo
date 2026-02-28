@@ -5450,7 +5450,7 @@ struct LibDuckDB(Movable):
         NOTE: Mojo cannot return duckdb_decimal by value correctly over the C ABI.
         We therefore call a workaround function that returns via pointer instead.
         """
-        var result = duckdb_decimal(width=0, scale=0, value=0)
+        var result = duckdb_decimal(width=0, scale=0, value=Int128(0))
         self._workaround_get_decimal_ptr(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())
         return result
 
