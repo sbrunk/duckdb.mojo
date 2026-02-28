@@ -1764,5 +1764,38 @@ def test_enum_deserialize_with_null():
     assert_equal(vals[2].value(), "blue")
 
 
+def test_bit_deserialize():
+    """Read BIT column as Bit."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    _ = con.execute("INSERT INTO t VALUES ('10110'::BIT), ('0'::BIT), ('11111111'::BIT)")
+    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var b0 = chunk.get[Bit](col=0, row=0)
+    assert_equal(String(b0), "10110")
+    assert_equal(len(b0), 5)
+    var b1 = chunk.get[Bit](col=0, row=1)
+    assert_equal(String(b1), "0")
+    var b2 = chunk.get[Bit](col=0, row=2)
+    assert_equal(String(b2), "11111111")
+    assert_equal(len(b2), 8)
+
+
+def test_bit_deserialize_column():
+    """Read entire BIT column as List[Optional[Bit]]."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    _ = con.execute("INSERT INTO t VALUES ('101'::BIT), (NULL), ('0'::BIT)")
+    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    var vals = chunk.get[Optional[Bit]](col=0)
+    assert_equal(len(vals), 3)
+    assert_true(vals[0])
+    assert_equal(String(vals[0].value()), "101")
+    assert_false(vals[1])
+    assert_true(vals[2])
+    assert_equal(String(vals[2].value()), "0")
+
+
 def main():
     TestSuite.discover_tests[__functions_in_module()]().run()

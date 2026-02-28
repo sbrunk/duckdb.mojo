@@ -1,6 +1,7 @@
 """Tests for duckdb_type conversions."""
 
 from duckdb.duckdb_type import (
+    Bit,
     Date,
     Time,
     Timestamp,
@@ -307,6 +308,154 @@ def test_time_ns_repr():
     """TimeNS repr."""
     var t = TimeNS(12345)
     assert_equal(repr(t), "TimeNS(12345)")
+
+
+# ─── Bit conversions ──────────────────────────────────────────────
+
+
+def test_bit_from_string():
+    """Bit(string) round-trips through __str__."""
+    var b = Bit("10110")
+    assert_equal(String(b), "10110")
+
+
+def test_bit_from_string_single():
+    """Bit(string) works with a single bit."""
+    assert_equal(String(Bit("0")), "0")
+    assert_equal(String(Bit("1")), "1")
+
+
+def test_bit_from_string_byte_aligned():
+    """Bit(string) works when length is a multiple of 8."""
+    var b = Bit("10101010")
+    assert_equal(String(b), "10101010")
+    assert_equal(len(b), 8)
+
+
+def test_bit_len():
+    """Bit.__len__() returns the number of bits."""
+    var b = Bit("10110")
+    assert_equal(len(b), 5)
+
+
+def test_bit_getitem():
+    """Bit.__getitem__() returns individual bits."""
+    var b = Bit("10110")
+    assert_true(b[0])   # 1
+    assert_false(b[1])   # 0
+    assert_true(b[2])   # 1
+    assert_true(b[3])   # 1
+    assert_false(b[4])   # 0
+
+
+def test_bit_equatable():
+    """Bit equality."""
+    var a = Bit("101")
+    var b = Bit("101")
+    var c = Bit("110")
+    var d = Bit("10")
+    assert_true(a == b)
+    assert_true(a != c)
+    assert_true(a != d)
+
+
+def test_bit_repr():
+    """Bit repr."""
+    var b = Bit("10110")
+    assert_equal(repr(b), 'Bit("10110")')
+
+
+def test_bit_from_int32():
+    """Bit(Int32) matches DuckDB's INTEGER::BITSTRING cast."""
+    # SELECT 123::INTEGER::BITSTRING → 00000000000000000000000001111011
+    var b = Bit(Int32(123))
+    assert_equal(len(b), 32)
+    assert_equal(String(b), "00000000000000000000000001111011")
+
+
+def test_bit_from_int32_negative():
+    """Bit(Int32) with negative value gives two's complement."""
+    # SELECT (-1)::INTEGER::BITSTRING → 11111111111111111111111111111111
+    var b = Bit(Int32(-1))
+    assert_equal(len(b), 32)
+    assert_equal(String(b), "11111111111111111111111111111111")
+
+
+def test_bit_from_int8():
+    """Bit(Int8) gives 8-bit two's complement."""
+    var b = Bit(Int8(0))
+    assert_equal(len(b), 8)
+    assert_equal(String(b), "00000000")
+
+    var b2 = Bit(Int8(-128))
+    assert_equal(String(b2), "10000000")
+
+    var b3 = Bit(Int8(127))
+    assert_equal(String(b3), "01111111")
+
+
+def test_bit_from_uint8():
+    """Bit(UInt8) gives 8-bit unsigned."""
+    var b = Bit(UInt8(255))
+    assert_equal(len(b), 8)
+    assert_equal(String(b), "11111111")
+
+    var b2 = Bit(UInt8(0))
+    assert_equal(String(b2), "00000000")
+
+
+def test_bit_from_int16():
+    """Bit(Int16) gives 16-bit two's complement."""
+    var b = Bit(Int16(256))
+    assert_equal(len(b), 16)
+    assert_equal(String(b), "0000000100000000")
+
+
+def test_bit_from_uint16():
+    """Bit(UInt16) gives 16-bit unsigned."""
+    var b = Bit(UInt16(65535))
+    assert_equal(len(b), 16)
+    assert_equal(String(b), "1111111111111111")
+
+
+def test_bit_from_uint32():
+    """Bit(UInt32) gives 32-bit unsigned."""
+    var b = Bit(UInt32(1))
+    assert_equal(len(b), 32)
+    assert_equal(String(b), "00000000000000000000000000000001")
+
+
+def test_bit_from_int64():
+    """Bit(Int64) gives 64-bit two's complement."""
+    var b = Bit(Int64(1))
+    assert_equal(len(b), 64)
+    assert_equal(
+        String(b), "0000000000000000000000000000000000000000000000000000000000000001"
+    )
+
+
+def test_bit_from_uint64():
+    """Bit(UInt64) gives 64-bit unsigned."""
+    var b = Bit(UInt64(0))
+    assert_equal(len(b), 64)
+    assert_equal(
+        String(b), "0000000000000000000000000000000000000000000000000000000000000000"
+    )
+
+    var b2 = Bit(UInt64(18446744073709551615))
+    assert_equal(
+        String(b2),
+        "1111111111111111111111111111111111111111111111111111111111111111",
+    )
+
+
+def test_bit_from_int():
+    """Bit(Int) gives 64-bit representation."""
+    var b = Bit(123)
+    assert_equal(len(b), 64)
+    assert_equal(
+        String(b), "0000000000000000000000000000000000000000000000000000000001111011"
+    )
 
 
 # ─── run_suite ────────────────────────────────────────────────────

@@ -541,6 +541,183 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
         return Time(self.nanos // 1_000)
 
 
+struct Bit(Copyable, Movable, Equatable, Writable, Stringable, Representable, Sized):
+    """A DuckDB BIT (bitstring) value stored as packed bytes.
+
+    Internally uses DuckDB's packed format: a padding byte followed by
+    ceil(n/8) data bytes with bits packed MSB-first.  The padding byte
+    indicates how many leading bits in the first data byte are unused.
+
+    Construct from a binary string, an integer, or raw packed data:
+
+    .. code-block:: mojo
+
+        var a = Bit("10110")         # from binary string
+        var b = Bit(Int32(123))      # 32-bit: 00000000000000000000000001111011
+        var c = Bit(UInt8(255))      # 8-bit:  11111111
+    """
+
+    var _data: List[UInt8]
+    """Padding byte + packed data bytes."""
+    var _size: Int
+    """Number of bits."""
+
+    fn __init__(out self, var data: List[UInt8], size: Int):
+        """Create a Bit from raw packed data and bit count.
+
+        Args:
+            data: Padding byte followed by packed data bytes.
+            size: Number of bits.
+        """
+        self._data = data^
+        self._size = size
+
+    fn __init__(out self, s: StringSlice):
+        """Create a Bit from a binary string like ``"10110"``.
+
+        Args:
+            s: A string of '0' and '1' characters.
+        """
+        var n = len(s)
+        var padding = (8 - (n % 8)) % 8
+        var num_data_bytes = (n + 7) // 8
+        var data = List[UInt8](capacity=num_data_bytes + 1)
+        data.append(UInt8(padding))
+        var src = s.as_bytes()
+        for byte_i in range(num_data_bytes):
+            var byte_val: UInt8 = 0
+            for bit_i in range(8):
+                var src_idx = byte_i * 8 + bit_i - padding
+                if 0 <= src_idx < n:
+                    if src[src_idx] == UInt8(ord("1")):
+                        byte_val |= UInt8(1 << (7 - bit_i))
+            data.append(byte_val)
+        self._data = data^
+        self._size = n
+
+    @staticmethod
+    fn _pack_bytes(v: UInt64, num_bytes: Int) -> List[UInt8]:
+        """Pack an integer value into big-endian bytes with padding byte prefix."""
+        var data = List[UInt8](capacity=num_bytes + 1)
+        data.append(UInt8(0))  # no padding — all widths are multiples of 8
+        for i in range(num_bytes):
+            var shift = UInt64((num_bytes - 1 - i) * 8)
+            data.append(((v >> shift) & UInt64(0xFF)).cast[DType.uint8]())
+        return data^
+
+    fn __init__(out self, value: Int8):
+        """Create a Bit from an Int8 (8-bit two's complement).
+
+        Matches DuckDB's ``value::TINYINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint8]().cast[DType.uint64](), 1)
+        self._size = 8
+
+    fn __init__(out self, value: UInt8):
+        """Create a Bit from a UInt8 (8-bit unsigned).
+
+        Matches DuckDB's ``value::UTINYINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint64](), 1)
+        self._size = 8
+
+    fn __init__(out self, value: Int16):
+        """Create a Bit from an Int16 (16-bit two's complement).
+
+        Matches DuckDB's ``value::SMALLINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint16]().cast[DType.uint64](), 2)
+        self._size = 16
+
+    fn __init__(out self, value: UInt16):
+        """Create a Bit from a UInt16 (16-bit unsigned).
+
+        Matches DuckDB's ``value::USMALLINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint64](), 2)
+        self._size = 16
+
+    fn __init__(out self, value: Int32):
+        """Create a Bit from an Int32 (32-bit two's complement).
+
+        Matches DuckDB's ``value::INTEGER::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint32]().cast[DType.uint64](), 4)
+        self._size = 32
+
+    fn __init__(out self, value: UInt32):
+        """Create a Bit from a UInt32 (32-bit unsigned).
+
+        Matches DuckDB's ``value::UINTEGER::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint64](), 4)
+        self._size = 32
+
+    fn __init__(out self, value: Int64):
+        """Create a Bit from an Int64 (64-bit two's complement).
+
+        Matches DuckDB's ``value::BIGINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value.cast[DType.uint64](), 8)
+        self._size = 64
+
+    fn __init__(out self, value: UInt64):
+        """Create a Bit from a UInt64 (64-bit unsigned).
+
+        Matches DuckDB's ``value::UBIGINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(value, 8)
+        self._size = 64
+
+    fn __init__(out self, value: Int):
+        """Create a Bit from an Int (64-bit, same as BIGINT).
+
+        Matches DuckDB's ``value::BIGINT::BITSTRING`` cast.
+        """
+        self._data = Self._pack_bytes(UInt64(value), 8)
+        self._size = 64
+
+    fn __len__(self) -> Int:
+        """Return the number of bits."""
+        return self._size
+
+    fn __getitem__(self, idx: Int) -> Bool:
+        """Get the bit at the given index (0-based, left-to-right).
+
+        Args:
+            idx: Bit index.
+
+        Returns:
+            True if the bit is set, False otherwise.
+        """
+        var padding = Int(self._data[0])
+        var bit_pos = padding + idx
+        var byte_idx = bit_pos // 8 + 1  # +1 to skip padding byte
+        var bit_in_byte = UInt8(7 - (bit_pos % 8))
+        return (self._data[byte_idx] >> bit_in_byte) & 1 == 1
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        for i in range(self._size):
+            writer.write("1" if self[i] else "0")
+
+    fn __repr__(self) -> String:
+        return 'Bit("' + String(self) + '")'
+
+    fn __eq__(self, other: Bit) -> Bool:
+        if self._size != other._size:
+            return False
+        for i in range(self._size):
+            if self[i] != other[i]:
+                return False
+        return True
+
+    fn __ne__(self, other: Bit) -> Bool:
+        return not self == other
+
+
 @fieldwise_init
 struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
     """Timestamps with timezone, stored as microseconds since 1970-01-01 (UTC)."""
@@ -945,6 +1122,8 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
         return DuckDBType.decimal
     elif _type_is_eq[T, UUID]():
         return DuckDBType.uuid
+    elif _type_is_eq[T, Bit]():
+        return DuckDBType.bit
     elif _type_is_eq[T, Int]():
         @parameter
         if size_of[Int]() == 4:

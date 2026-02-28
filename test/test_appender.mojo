@@ -1,7 +1,7 @@
 """Tests for the Appender API."""
 
 from duckdb import *
-from duckdb.duckdb_type import Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID, TimeNS
+from duckdb.duckdb_type import Bit, Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID, TimeNS
 from collections import Optional, Dict
 from utils import Variant
 from testing import assert_equal, assert_true, assert_raises, assert_almost_equal
@@ -1171,6 +1171,62 @@ def test_appender_array_varchar():
     assert_equal(len(row0), 2)
     assert_equal(row0[0].value(), "hello")
     assert_equal(row0[1].value(), "world")
+
+
+def test_appender_bit():
+    """Test appending Bit values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit("10110"))
+    appender.end_row()
+    appender.append_value(Bit("0"))
+    appender.end_row()
+    appender.close()
+
+    # Read back as VARCHAR to verify
+    result = con.execute("SELECT b::VARCHAR FROM t ORDER BY rowid")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "10110")
+    assert_equal(chunk.get[String](col=0, row=1), "0")
+
+
+def test_appender_bit_round_trip():
+    """Test round-trip of BIT through appender and typed API."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit("10110"))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT b FROM t")
+    chunk = result.fetch_chunk()
+    var val = chunk.get[Bit](col=0, row=0)
+    assert_equal(String(val), "10110")
+    assert_equal(len(val), 5)
+
+
+def test_appender_bit_from_int32():
+    """Test appending Bit constructed from Int32 matches DuckDB cast."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit(Int32(123)))
+    appender.end_row()
+    appender.close()
+
+    # Read back the appended value
+    result = con.execute("SELECT b::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    var appended = chunk.get[String](col=0, row=0)
+
+    # Compare with DuckDB's own cast
+    result2 = con.execute("SELECT (123::INTEGER::BITSTRING)::VARCHAR")
+    chunk2 = result2.fetch_chunk()
+    var duckdb_cast = chunk2.get[String](col=0, row=0)
+
+    assert_equal(appended, duckdb_cast)
 
 
 def main():

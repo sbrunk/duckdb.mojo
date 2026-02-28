@@ -225,6 +225,16 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     elif _type_is_eq[T, TimeNS]():
         var raw = duckdb_time_ns(vp.bitcast[TimeNS]()[].nanos)
         return libduckdb.duckdb_create_time_ns(raw)
+    elif _type_is_eq[T, Bit]():
+        var bit_ref = vp.bitcast[Bit]()[].copy()
+        # Allocate temp buffer for duckdb_bit.data — padding byte + bit bytes
+        var buf = alloc[UInt8](len(bit_ref._data))
+        for i in range(len(bit_ref._data)):
+            buf[i] = bit_ref._data[i]
+        var raw = duckdb_bit(buf, idx_t(len(bit_ref._data)))
+        var val = libduckdb.duckdb_create_bit(raw)
+        buf.free()
+        return val
     else:
         raise Error(
             "Unsupported type for value creation: "
@@ -443,6 +453,19 @@ __extension TimeNS(Appendable):
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_time_ns(self.nanos)
         var val = libduckdb.duckdb_create_time_ns(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
+
+
+__extension Bit(Appendable):
+    fn append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var buf = alloc[UInt8](len(self._data))
+        for i in range(len(self._data)):
+            buf[i] = self._data[i]
+        var raw = duckdb_bit(buf, idx_t(len(self._data)))
+        var val = libduckdb.duckdb_create_bit(raw)
+        buf.free()
         appender._check(libduckdb.duckdb_append_value(appender._appender, val))
         libduckdb.duckdb_destroy_value(UnsafePointer(to=val))
 

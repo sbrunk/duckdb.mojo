@@ -289,6 +289,7 @@ fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
         or _type_is_eq[T, TimeTZ]()
         or _type_is_eq[T, UUID]()
         or _type_is_eq[T, TimeNS]()
+        or _type_is_eq[T, Bit]()
     ):
         return True
     else:
@@ -374,6 +375,8 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
         return DuckDBType.uuid
     elif _type_is_eq[T, TimeNS]():
         return DuckDBType.time_ns
+    elif _type_is_eq[T, Bit]():
+        return DuckDBType.bit
     else:
         comptime base_name = get_base_type_name[T]()
         @parameter
@@ -472,6 +475,8 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
         return DuckDBType.uuid
     elif _type_is_eq[T, TimeNS]():
         return DuckDBType.time_ns
+    elif _type_is_eq[T, Bit]():
+        return DuckDBType.bit
     else:
         comptime base_name = get_base_type_name[T]()
         @parameter
@@ -601,6 +606,10 @@ fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raise
         var raw = vector.get_data().bitcast[Int128]()[offset]
         var uuid = UUID(internal=raw)
         return rebind_var[T](uuid)
+    elif expected_type == DuckDBType.bit:
+        # BIT values use duckdb_string_t storage (like VARCHAR/BLOB).
+        var bit = _deserialize_bit(vector, offset)
+        return rebind_var[T](bit^)
     elif _type_is_eq[T, Int]():
         # Int is platform-dependent — read the matching fixed-width type
         @parameter
@@ -656,6 +665,46 @@ fn _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
             result.append(ptr[i])
 
     return result^
+
+
+# ──────────────────────────────────────────────────────────────────
+# Deserialization — BIT
+# ──────────────────────────────────────────────────────────────────
+
+
+fn _deserialize_bit(vector: Vector, offset: Int) -> Bit:
+    """Deserialize a BIT value from a vector into a Bit.
+
+    BIT values are stored using the same duckdb_string_t inline/pointer
+    format as VARCHAR.  The raw bytes contain a padding byte followed
+    by packed bit data (MSB-first).
+
+    Args:
+        vector: The BIT vector.
+        offset: Row offset.
+
+    Returns:
+        A Bit value.
+    """
+    var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+    var byte_count = Int(data_str_ptr[offset].length)
+    var raw = List[UInt8](capacity=byte_count)
+
+    if data_str_ptr[offset].length <= 12:
+        var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
+        var ptr = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8]()
+        for i in range(byte_count):
+            raw.append(ptr[i])
+    else:
+        var ptr = data_str_ptr[offset].ptr.bitcast[UInt8]()
+        for i in range(byte_count):
+            raw.append(ptr[i])
+
+    # First byte is padding count: unused bits at the start of the first
+    # data byte.  Total bits = (data_bytes) * 8 - padding.
+    var padding = Int(raw[0]) if byte_count > 0 else 0
+    var size = (byte_count - 1) * 8 - padding if byte_count > 0 else 0
+    return Bit(raw^, size)
 
 
 # ──────────────────────────────────────────────────────────────────
