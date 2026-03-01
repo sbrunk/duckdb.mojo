@@ -94,8 +94,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         
         This uses compile-time conditional logic to only destroy owned chunks.
         """
-        @parameter
-        if Self.is_owned:
+        comptime if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
 
@@ -246,8 +245,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate column type matches expected Mojo type
         var actual_type = self.type(col)
 
-        @parameter
-        if conforms_to(T, _NullableColumn):
+        comptime if conforms_to(T, _NullableColumn):
             var expected = downcast[
                 T, _NullableColumn
             ]._expected_duckdb_type()
@@ -292,8 +290,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return rebind_var[T](val^)
         else:
             comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            @parameter
-            if expected_db_type == DuckDBType.list:
+            comptime if expected_db_type == DuckDBType.list:
                 if not _is_list_compatible_type(actual_type):
                     raise Error(
                         "Type mismatch: expected list, array, or map"
@@ -302,8 +299,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
             else:
                 if actual_type != expected_db_type:
-                    @parameter
-                    if expected_db_type == DuckDBType.struct_t:
+                    comptime if expected_db_type == DuckDBType.struct_t:
                         if actual_type != DuckDBType.union:
                             raise Error(
                                 "Type mismatch: expected struct or union"
@@ -365,8 +361,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate column type matches expected Mojo type
         var actual_type = self.type(col)
 
-        @parameter
-        if conforms_to(T, _NullableColumn):
+        comptime if conforms_to(T, _NullableColumn):
             var expected = downcast[
                 T, _NullableColumn
             ]._expected_duckdb_type()
@@ -411,8 +406,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return rebind_var[List[T]](result^)
         else:
             comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            @parameter
-            if expected_db_type == DuckDBType.list:
+            comptime if expected_db_type == DuckDBType.list:
                 if not _is_list_compatible_type(actual_type):
                     raise Error(
                         "Type mismatch: expected list, array, or map"
@@ -421,8 +415,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
             else:
                 if actual_type != expected_db_type:
-                    @parameter
-                    if expected_db_type == DuckDBType.struct_t:
+                    comptime if expected_db_type == DuckDBType.struct_t:
                         if actual_type != DuckDBType.union:
                             raise Error(
                                 "Type mismatch: expected struct or union"
@@ -487,10 +480,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             var user = chunk.get[User](row=0)
             ```
         """
-        constrained[
-            mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t,
-            "get[T](row=) is for struct types. For scalar/list values, use get[T](col=, row=).",
-        ]()
+        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "get[T](row=) is for struct types. For scalar/list values, use get[T](col=, row=)."
 
         if row < 0 or row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
@@ -510,14 +500,12 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             )
 
         # Validate column types match field types
-        @parameter
-        for idx in range(field_count_):
+        comptime for idx in range(field_count_):
             comptime FieldType = struct_field_types[T]()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
             var actual_type = self.type(idx)
 
-            @parameter
-            if conforms_to(FT, _NullableColumn):
+            comptime if conforms_to(FT, _NullableColumn):
                 var expected = downcast[
                     FT, _NullableColumn
                 ]._expected_duckdb_type()
@@ -565,8 +553,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         )
             else:
                 comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
-                @parameter
-                if expected_db_type == DuckDBType.list:
+                comptime if expected_db_type == DuckDBType.list:
                     if not _is_list_compatible_type(actual_type):
                         comptime field_name = struct_field_names[T]()[idx]
                         raise Error(
@@ -578,8 +565,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         )
                 else:
                     if actual_type != expected_db_type:
-                        @parameter
-                        if expected_db_type == DuckDBType.struct_t:
+                        comptime if expected_db_type == DuckDBType.struct_t:
                             if actual_type != DuckDBType.union:
                                 comptime field_name = struct_field_names[T]()[idx]
                                 raise Error(
@@ -612,13 +598,11 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                             )
 
         # Check non-Optional fields for NULL before allocating
-        @parameter
-        for idx in range(field_count_):
+        comptime for idx in range(field_count_):
             comptime FieldType = struct_field_types[T]()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
 
-            @parameter
-            if not conforms_to(FT, _NullableColumn):
+            comptime if not conforms_to(FT, _NullableColumn):
                 if self.is_null(col=idx, row=row):
                     comptime field_name = struct_field_names[T]()[idx]
                     raise Error(
@@ -632,15 +616,13 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Deserialize each field from its column vector
         var ptr = alloc[T](1)
 
-        @parameter
-        for idx in range(field_count_):
+        comptime for idx in range(field_count_):
             comptime FieldType = struct_field_types[T]()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
             var vector = self.get_vector(idx)
             var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
 
-            @parameter
-            if conforms_to(FT, _NullableColumn):
+            comptime if conforms_to(FT, _NullableColumn):
                 var val = downcast[
                     FT, _NullableColumn
                 ]._deserialize_single_nullable(
@@ -676,10 +658,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             var users = chunk.get[User]()
             ```
         """
-        constrained[
-            mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t,
-            "get[T]() is for struct types. For column values, use get[T](col=).",
-        ]()
+        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "get[T]() is for struct types. For column values, use get[T](col=)."
 
         var result = List[T](capacity=len(self))
         for row in range(len(self)):
@@ -725,14 +704,12 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             )
 
         # Validate types and NULL constraints
-        @parameter
-        for idx in range(n):
+        comptime for idx in range(n):
             comptime ET = T.element_types[idx]
             comptime ETC = downcast[ET, Copyable & Movable]
             var actual_type = self.type(idx)
 
-            @parameter
-            if conforms_to(ETC, _NullableColumn):
+            comptime if conforms_to(ETC, _NullableColumn):
                 var expected = downcast[
                     ETC, _NullableColumn
                 ]._expected_duckdb_type()
@@ -776,8 +753,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         )
             else:
                 comptime expected_db_type = mojo_type_to_duckdb_type[ETC]()
-                @parameter
-                if expected_db_type == DuckDBType.list:
+                comptime if expected_db_type == DuckDBType.list:
                     if not _is_list_compatible_type(actual_type):
                         raise Error(
                             "Type mismatch for tuple element "
@@ -788,8 +764,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         )
                 else:
                     if actual_type != expected_db_type:
-                        @parameter
-                        if expected_db_type == DuckDBType.struct_t:
+                        comptime if expected_db_type == DuckDBType.struct_t:
                             if actual_type != DuckDBType.union:
                                 raise Error(
                                     "Type mismatch for tuple element "
@@ -832,14 +807,12 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             __get_mvalue_as_litref(ptr[]._mlir_value)
         )
 
-        @parameter
-        for idx in range(n):
+        comptime for idx in range(n):
             comptime ET = T.element_types[idx]
             comptime ETC = downcast[ET, Copyable & Movable]
             var vector = self.get_vector(idx)
 
-            @parameter
-            if conforms_to(ETC, _NullableColumn):
+            comptime if conforms_to(ETC, _NullableColumn):
                 var val = downcast[
                     ETC, _NullableColumn
                 ]._deserialize_single_nullable(

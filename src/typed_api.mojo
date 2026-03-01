@@ -259,8 +259,7 @@ fn _is_list_compatible_type(actual: DuckDBType) -> Bool:
 
 fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
     """Returns True if T is one of the known DuckDB-mappable scalar types."""
-    @parameter
-    if (
+    comptime if (
         _type_is_eq[T, Bool]()
         or _type_is_eq[T, Int8]()
         or _type_is_eq[T, Int16]()
@@ -308,8 +307,7 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
     Returns:
         The corresponding DuckDBType.
     """
-    @parameter
-    if _type_is_eq[T, Bool]():
+    comptime if _type_is_eq[T, Bool]():
         return DuckDBType.boolean
     elif _type_is_eq[T, Int8]():
         return DuckDBType.tinyint
@@ -321,8 +319,7 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
         return DuckDBType.bigint
     elif _type_is_eq[T, Int]():
         # Int is platform-dependent: 32-bit or 64-bit
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
@@ -336,8 +333,7 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
         return DuckDBType.ubigint
     elif _type_is_eq[T, UInt]():
         # UInt is platform-dependent: 32-bit or 64-bit
-        @parameter
-        if size_of[UInt]() == 4:
+        comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:
             return DuckDBType.ubigint
@@ -379,20 +375,14 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
         return DuckDBType.bit
     else:
         comptime base_name = get_base_type_name[T]()
-        @parameter
-        if base_name == "List":
+        comptime if base_name == "List":
             return DuckDBType.list
         elif base_name == "Dict":
             return DuckDBType.map
         elif base_name == "Variant":
             return DuckDBType.union
         elif base_name == "Optional":
-            constrained[
-                False,
-                "Optional types should be unwrapped before mapping."
-                " Use the element type directly.",
-            ]()
-            return DuckDBType.invalid
+            comptime assert False, "Optional types should be unwrapped before mapping. Use the element type directly."
         else:
             # Treat any remaining struct type as DuckDB STRUCT
             return DuckDBType.struct_t
@@ -410,8 +400,7 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     Returns:
         The DuckDBType for this field.
     """
-    @parameter
-    if _type_is_eq[T, Bool]():
+    comptime if _type_is_eq[T, Bool]():
         return DuckDBType.boolean
     elif _type_is_eq[T, Int8]():
         return DuckDBType.tinyint
@@ -422,8 +411,7 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     elif _type_is_eq[T, Int64]():
         return DuckDBType.bigint
     elif _type_is_eq[T, Int]():
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
@@ -436,8 +424,7 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     elif _type_is_eq[T, UInt64]():
         return DuckDBType.ubigint
     elif _type_is_eq[T, UInt]():
-        @parameter
-        if size_of[UInt]() == 4:
+        comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:
             return DuckDBType.ubigint
@@ -479,8 +466,7 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
         return DuckDBType.bit
     else:
         comptime base_name = get_base_type_name[T]()
-        @parameter
-        if base_name == "List":
+        comptime if base_name == "List":
             return DuckDBType.list
         elif base_name == "Dict":
             return DuckDBType.map
@@ -504,13 +490,11 @@ fn mojo_logical_type[T: Copyable & Movable]() -> MojoType:
     Returns:
         A MojoType descriptor.
     """
-    @parameter
-    if _is_known_scalar_type[T]():
+    comptime if _is_known_scalar_type[T]():
         return MojoType(mojo_type_to_duckdb_type[T]())
     else:
         comptime base_name = get_base_type_name[T]()
-        @parameter
-        if base_name == "List":
+        comptime if base_name == "List":
             # We know it's a list but can't yet extract T from List[T]
             # automatically. Return a bare list descriptor.
             # Users can call MojoType.list_of() directly for full precision.
@@ -527,8 +511,7 @@ fn mojo_logical_type[T: Copyable & Movable]() -> MojoType:
             var names = List[String]()
             var types = List[MojoType]()
 
-            @parameter
-            for idx in range(field_count):
+            comptime for idx in range(field_count):
                 # Extract individual field name at compile time (avoids
                 # materialising the whole InlineArray[StaticString, N])
                 comptime field_name = struct_field_names[T]()[idx]
@@ -559,8 +542,7 @@ fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raise
     """
     comptime expected_type = mojo_type_to_duckdb_type[T]()
 
-    @parameter
-    if expected_type == DuckDBType.varchar:
+    comptime if expected_type == DuckDBType.varchar:
         var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
         var string_length = Int(data_str_ptr[offset].length)
 
@@ -612,16 +594,14 @@ fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raise
         return rebind_var[T](bit^)
     elif _type_is_eq[T, Int]():
         # Int is platform-dependent — read the matching fixed-width type
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             var val = Int(vector.get_data().bitcast[Int32]()[offset])
             return rebind_var[T](val)
         else:
             var val = Int(vector.get_data().bitcast[Int64]()[offset])
             return rebind_var[T](val)
     elif _type_is_eq[T, UInt]():
-        @parameter
-        if size_of[UInt]() == 4:
+        comptime if size_of[UInt]() == 4:
             var val = UInt(vector.get_data().bitcast[UInt32]()[offset])
             return rebind_var[T](val)
         else:
@@ -809,8 +789,7 @@ fn _deserialize_struct_field[
     """
     comptime db_type = mojo_type_to_duckdb_type[FieldType]()
 
-    @parameter
-    if db_type == DuckDBType.struct_t:
+    comptime if db_type == DuckDBType.struct_t:
         # Nested struct — recurse
         return _deserialize_struct_row[FieldType](child_vector, offset)
     else:
@@ -841,8 +820,7 @@ fn _deserialize_struct_row[
     # Allocate uninitialised memory — we fill every field below.
     var ptr = alloc[T](1)
 
-    @parameter
-    for idx in range(field_count):
+    comptime for idx in range(field_count):
         var child_vec = vector.struct_get_child(idx_t(idx))
         comptime FieldType = struct_field_types[T]()[idx]
         comptime FT = downcast[FieldType, Copyable & Movable]
@@ -850,8 +828,7 @@ fn _deserialize_struct_row[
         # Get raw pointer to the field's memory slot
         var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
 
-        @parameter
-        if conforms_to(FT, _NullableColumn):
+        comptime if conforms_to(FT, _NullableColumn):
             # Optional field — check child vector validity for this row
             var child_validity = child_vec.get_validity()
             var is_null = not _is_valid(child_validity, offset)
@@ -862,8 +839,7 @@ fn _deserialize_struct_row[
         else:
             comptime db_type = _scalar_type_to_duckdb[FieldType]()
 
-            @parameter
-            if db_type == DuckDBType.varchar:
+            comptime if db_type == DuckDBType.varchar:
                 # String requires special construction
                 var data_str_ptr = child_vec.get_data().bitcast[duckdb_string_t_pointer]()
                 var string_length = Int(data_str_ptr[offset].length)
@@ -938,8 +914,7 @@ fn _deserialize_union_row[
     # Allocate uninitialised memory — we fill every field
     var ptr = alloc[T](1)
 
-    @parameter
-    for idx in range(field_count):
+    comptime for idx in range(field_count):
         var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
         comptime FieldType = struct_field_types[T]()[idx]
         comptime FT = downcast[FieldType, Copyable & Movable]
@@ -950,8 +925,7 @@ fn _deserialize_union_row[
             # Active member — deserialize from child vector (idx + 1)
             var child_vec = vector.struct_get_child(idx_t(idx + 1))
 
-            @parameter
-            if conforms_to(FT, _NullableColumn):
+            comptime if conforms_to(FT, _NullableColumn):
                 var child_validity = child_vec.get_validity()
                 var is_null = not _is_valid(child_validity, offset)
                 var val = downcast[
@@ -964,8 +938,7 @@ fn _deserialize_union_row[
                 dst.bitcast[FT]().init_pointee_move(val)
         else:
             # Inactive member — set to None if Optional
-            @parameter
-            if conforms_to(FT, _NullableColumn):
+            comptime if conforms_to(FT, _NullableColumn):
                 # Initialize as None by re-using the nullable deserializer
                 var child_vec = vector.struct_get_child(idx_t(idx + 1))
                 var val = downcast[
@@ -1186,8 +1159,7 @@ __extension Dict(_DictMapDeserializable):
         for i in range(length):
             var is_null = not _is_valid(val_validity, offset + i)
 
-            @parameter
-            if conforms_to(VT, _NullableColumn):
+            comptime if conforms_to(VT, _NullableColumn):
                 var key = _deserialize_scalar[KT](key_vec, offset + i)
                 var val = downcast[
                     VT, _NullableColumn
@@ -1241,8 +1213,7 @@ fn _deserialize_list[
     var result = List[Optional[ElementType]](capacity=length)
     var validity_mask = vector.get_validity()
 
-    @parameter
-    if element_db_type == DuckDBType.struct_t:
+    comptime if element_db_type == DuckDBType.struct_t:
         for idx in range(length):
             if _is_valid(validity_mask, offset + idx):
                 result.append(
@@ -1434,8 +1405,7 @@ fn _deserialize_table_field[
     comptime db_type = mojo_type_to_duckdb_type[T]()
     comptime base_name = get_base_type_name[T]()
 
-    @parameter
-    if base_name == "List":
+    comptime if base_name == "List":
         # List/Array/Map field — dispatch by actual vector type
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type == DuckDBType.blob:
@@ -1490,8 +1460,7 @@ fn _deserialize_table_field[
     else:
         # Scalar (including String) — use existing scalar deserialization
         # ENUM columns can be deserialized as String
-        @parameter
-        if db_type == DuckDBType.varchar:
+        comptime if db_type == DuckDBType.varchar:
             var actual_type = vector.get_column_type().get_type_id()
             if actual_type == DuckDBType.enum:
                 var s = _deserialize_enum_value(vector, row)
@@ -1532,8 +1501,7 @@ fn deserialize_from_vector[
     comptime db_type = mojo_type_to_duckdb_type[T]()
     comptime base_name = get_base_type_name[T]()
 
-    @parameter
-    if base_name == "List":
+    comptime if base_name == "List":
         # List/Array/Map deserialization — use the _VectorListConstructible
         # extension to decompose T (a List[...]) and build each row's list.
         var actual_type = vector.get_column_type().get_type_id()
@@ -1596,8 +1564,7 @@ fn deserialize_from_vector[
                 result.append(None)
         return result^
 
-    @parameter
-    if base_name == "Dict":
+    comptime if base_name == "Dict":
         # MAP column → Dict[K, V]
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type != DuckDBType.map:
@@ -1622,8 +1589,7 @@ fn deserialize_from_vector[
                 result.append(None)
         return result^
 
-    @parameter
-    if db_type == DuckDBType.union:
+    comptime if db_type == DuckDBType.union:
         # Variant union deserialization
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type != DuckDBType.union:
@@ -1643,8 +1609,7 @@ fn deserialize_from_vector[
                 result.append(None)
         return result^
 
-    @parameter
-    if db_type == DuckDBType.struct_t:
+    comptime if db_type == DuckDBType.struct_t:
         # Struct or Union deserialization via reflection
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type == DuckDBType.union:
@@ -1683,8 +1648,7 @@ fn deserialize_from_vector[
     var actual_type = vector.get_column_type().get_type_id()
     if actual_type != db_type:
         # ENUM columns can be deserialized to String
-        @parameter
-        if db_type == DuckDBType.varchar:
+        comptime if db_type == DuckDBType.varchar:
             if actual_type == DuckDBType.enum:
                 return _deserialize_enum_column[T](vector, length, offset)
         raise Error(

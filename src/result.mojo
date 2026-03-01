@@ -567,7 +567,7 @@ struct Column(Movable & Copyable & Stringable & Writable):
 
 
 
-struct Result(Writable, Stringable, Iterable):
+struct Result(Writable, Stringable, Iterable, Movable):
     """A streaming query result.
 
     Iterating a ``Result`` yields ``Row`` proxies — the most ergonomic

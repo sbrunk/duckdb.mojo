@@ -140,8 +140,7 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     # type without requiring ImplicitlyCopyable.
     var vp = UnsafePointer(to=value)
 
-    @parameter
-    if _type_is_eq[T, Bool]():
+    comptime if _type_is_eq[T, Bool]():
         return libduckdb.duckdb_create_bool(vp.bitcast[Bool]()[])
     elif _type_is_eq[T, Int8]():
         return libduckdb.duckdb_create_int8(vp.bitcast[Int8]()[])
@@ -153,8 +152,7 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
         return libduckdb.duckdb_create_int64(vp.bitcast[Int64]()[])
     elif _type_is_eq[T, Int]():
         # Int is platform-dependent: cast to the appropriate fixed-width type
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             return libduckdb.duckdb_create_int32(
                 Int32(vp.bitcast[Int]()[])
             )
@@ -171,8 +169,7 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     elif _type_is_eq[T, UInt64]():
         return libduckdb.duckdb_create_uint64(vp.bitcast[UInt64]()[])
     elif _type_is_eq[T, UInt]():
-        @parameter
-        if size_of[UInt]() == 4:
+        comptime if size_of[UInt]() == 4:
             return libduckdb.duckdb_create_uint32(
                 UInt32(vp.bitcast[UInt]()[])
             )
@@ -295,12 +292,11 @@ __extension Bool(Appendable):
 # Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64
 __extension SIMD(Appendable):
     fn append(ref self, mut appender: Appender) raises:
-        constrained[size == 1, "Only scalar SIMD (size=1) can be appended"]()
+        comptime assert size == 1, "Only scalar SIMD (size=1) can be appended"
         ref libduckdb = DuckDB().libduckdb()
         var raw = appender._appender
 
-        @parameter
-        if _type_is_eq[Self, Int8]():
+        comptime if _type_is_eq[Self, Int8]():
             appender._check(libduckdb.duckdb_append_int8(raw, rebind_var[Int8](self)))
         elif _type_is_eq[Self, Int16]():
             appender._check(libduckdb.duckdb_append_int16(raw, rebind_var[Int16](self)))
@@ -325,7 +321,7 @@ __extension SIMD(Appendable):
         elif _type_is_eq[Self, UInt128]():
             appender._check(libduckdb.duckdb_append_uhugeint(raw, rebind_var[UInt128](self)))
         else:
-            constrained[False, "Unsupported SIMD DType for appender"]()
+            comptime assert False, "Unsupported SIMD DType for appender"
 
 
 # Mojo's native Int/UInt are __mlir_type.index, not SIMD — need separate extensions.
@@ -334,8 +330,7 @@ __extension Int(Appendable):
         ref libduckdb = DuckDB().libduckdb()
         var raw = appender._appender
 
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             appender._check(libduckdb.duckdb_append_int32(raw, Int32(self)))
         else:
             appender._check(libduckdb.duckdb_append_int64(raw, Int64(self)))
@@ -472,8 +467,7 @@ __extension Bit(Appendable):
 
 __extension List(Appendable):
     fn append(ref self, mut appender: Appender) raises:
-        @parameter
-        if _type_is_eq[Self.T, UInt8]():
+        comptime if _type_is_eq[Self.T, UInt8]():
             ref libduckdb = DuckDB().libduckdb()
             # Access the underlying data pointer directly via UnsafePointer
             # to avoid copying the list.
@@ -547,8 +541,7 @@ __extension List(Appendable):
 __extension Optional(Appendable):
     fn append(ref self, mut appender: Appender) raises:
         if self:
-            @parameter
-            if conforms_to(Self.T, Appendable):
+            comptime if conforms_to(Self.T, Appendable):
                 trait_downcast[Appendable](self.value()).append(appender)
             else:
                 raise Error(
@@ -750,16 +743,14 @@ struct Appender(Movable):
         Args:
             value: The value to append.
         """
-        @parameter
-        if _type_is_eq[T, UInt]():
+        comptime if _type_is_eq[T, UInt]():
             # UInt is a type alias, not a struct, so it can't have an
             # __extension Appendable.  Handle it inline instead.
             ref libduckdb = DuckDB().libduckdb()
             var raw = self._appender
             var vp = UnsafePointer(to=value).bitcast[UInt]()
 
-            @parameter
-            if size_of[UInt]() == 4:
+            comptime if size_of[UInt]() == 4:
                 self._check(
                     libduckdb.duckdb_append_uint32(raw, UInt32(vp[]))
                 )
@@ -813,10 +804,8 @@ struct Appender(Movable):
             appender.append_row(Person(1, "Mark"))
             ```
         """
-        constrained[
-            mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t,
-            "append_row[T] requires a struct type. For scalar values use append_value.",
-        ]()
+        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "append_row[T] requires a struct type. For scalar values use append_value."
+
         self._append_struct_fields(row)
         self.end_row()
 
@@ -824,12 +813,10 @@ struct Appender(Movable):
         """Append all fields of a struct as values in the current row."""
         comptime field_count = struct_field_count[T]()
 
-        @parameter
-        for idx in range(field_count):
+        comptime for idx in range(field_count):
             comptime FieldType = struct_field_types[T]()[idx]
 
-            @parameter
-            if conforms_to(FieldType, Appendable):
+            comptime if conforms_to(FieldType, Appendable):
                 trait_downcast[Appendable](
                     __struct_field_ref(idx, row)
                 ).append(self)
@@ -868,12 +855,10 @@ struct Appender(Movable):
         comptime T = Tuple[*Ts]
         comptime n = T.__len__()
 
-        @parameter
-        for idx in range(n):
+        comptime for idx in range(n):
             comptime ET = T.element_types[idx]
 
-            @parameter
-            if conforms_to(ET, Appendable):
+            comptime if conforms_to(ET, Appendable):
                 trait_downcast[Appendable](row[idx]).append(
                     self
                 )

@@ -1022,8 +1022,7 @@ fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
     # duckdb_int == DuckDBType.integer
     ```
     """
-    @parameter
-    if dt == DType.bool:
+    comptime if dt == DType.bool:
         return DuckDBType.boolean
     elif dt == DType.int8:
         return DuckDBType.tinyint
@@ -1046,8 +1045,7 @@ fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
     elif dt == DType.float64:
         return DuckDBType.double
     else:
-        constrained[False, "Unsupported DType for DuckDB mapping"]()
-        return DuckDBType.invalid
+        comptime assert False, "Unsupported DType for DuckDB mapping"
 
 
 fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
@@ -1069,8 +1067,7 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     # duckdb_int == DuckDBType.integer
     ```
     """
-    @parameter
-    if _type_is_eq[T, Bool]():
+    comptime if _type_is_eq[T, Bool]():
         return DuckDBType.boolean
     elif _type_is_eq[T, Int8]():
         return DuckDBType.tinyint
@@ -1125,17 +1122,14 @@ fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     elif _type_is_eq[T, Bit]():
         return DuckDBType.bit
     elif _type_is_eq[T, Int]():
-        @parameter
-        if size_of[Int]() == 4:
+        comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
     elif _type_is_eq[T, UInt]():
-        @parameter
-        if size_of[UInt]() == 4:
+        comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:
             return DuckDBType.ubigint
     else:
-        constrained[False, "Unsupported Mojo type for DuckDB mapping"]()
-        return DuckDBType.invalid
+        comptime assert False, "Unsupported Mojo type for DuckDB mapping"

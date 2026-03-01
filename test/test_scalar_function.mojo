@@ -941,8 +941,7 @@ def test_mojo_to_duckdb_type():
     assert_equal(mojo_to_duckdb_type[Float64](), DuckDBType.double)
 
     # Mojo native Int/UInt (platform-dependent width)
-    @parameter
-    if size_of[Int]() == 4:
+    comptime if size_of[Int]() == 4:
         assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.integer)
         assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.uinteger)
     else:

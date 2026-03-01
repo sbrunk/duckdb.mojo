@@ -236,10 +236,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
         * bind: The bind function callback.
         """
-        constrained[
-            Self.api_level.includes_unstable(),
-            "ScalarFunction.set_bind requires the unstable API or client mode",
-        ]()
+        comptime assert Self.api_level.includes_unstable(), "ScalarFunction.set_bind requires the unstable API or client mode"
+        
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 

@@ -214,8 +214,7 @@ fn main() raises:
     var kernel = ctx.compile_function_unchecked[compute_and_reduce_kernel]()
 
     fn gpu_aggregate() capturing raises:
-        @parameter
-        if not has_accelerator():
+        comptime if not has_accelerator():
             print("GPU not available")
             return
         
@@ -289,8 +288,7 @@ fn main() raises:
     print("\nAggregate function (accumulate all, then compute):")
     benchmark.run[aggregate](max_iters=10).print(unit="ms")
     
-    @parameter
-    if has_accelerator():
+    comptime if has_accelerator():
         print("\nGPU aggregate function (parallel GPU computation):")
         benchmark.run[gpu_aggregate](max_iters=10).print(unit="ms")
     

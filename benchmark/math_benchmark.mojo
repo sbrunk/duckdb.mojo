@@ -32,8 +32,7 @@ comptime F = DType.float32
 # Derive SQL type name from F at comptime.
 fn sql_type() -> String:
     """Returns the SQL type name corresponding to F."""
-    @parameter
-    if F == DType.float64:
+    comptime if F == DType.float64:
         return "DOUBLE"
     else:
         return "FLOAT"
@@ -205,8 +204,7 @@ fn main() raises:
     )
     var ck = check.fetch_chunk()
 
-    @parameter
-    if F == DType.float64:
+    comptime if F == DType.float64:
         print(
             "  sqrt: std="
             + String(ck.get[Float64](col=0, row=0))
@@ -235,8 +233,7 @@ fn main() raises:
 
     # Quick numeric check on aggregate — use wider tolerance for float32
     fn agg_tol() -> String:
-        @parameter
-        if F == DType.float64:
+        comptime if F == DType.float64:
             return "0.001"
         else:
             return "100.0"
