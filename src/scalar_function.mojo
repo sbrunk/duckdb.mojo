@@ -502,7 +502,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         * raises: Error if the registration was unsuccessful.
         """
         ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
+        var state = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
+        if state == DuckDBError:
+            raise Error("Failed to register scalar function. Ensure the function has a name, a callback, valid parameter types, and a valid return type (not INVALID or ANY).")
 
     # ===--------------------------------------------------------------------===#
     # Convenience factory methods
