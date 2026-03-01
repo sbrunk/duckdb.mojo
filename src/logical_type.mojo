@@ -54,6 +54,14 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took
                 list_type._logical_type = duckdb_logical_type()
+            elif copy.get_type_id() == DuckDBType.array:
+                # Deep copy array type: recreate from child type and size
+                var child = copy.array_type_child_type()
+                var size = copy.array_type_array_size()
+                ref libduckdb = DuckDB().libduckdb()
+                self._logical_type = libduckdb.duckdb_create_array_type(
+                    child.internal_ptr(), size
+                )
             elif copy.get_type_id() == DuckDBType.struct_t:
                 # Deep copy struct type: recreate from children
                 var child_count = Int(copy.struct_type_child_count())
@@ -136,6 +144,18 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         """
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_map_type_value_type(self._logical_type))
+
+    fn array_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+        """Retrieves the child type of the given array type.
+
+        The returned type is owned and must be destroyed.
+
+        * returns: The child element logical type (owned).
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return LogicalType[is_owned=True, origin=MutExternalOrigin](
+            libduckdb.duckdb_array_type_child_type(self._logical_type)
+        )
 
     fn array_type_array_size(self) -> idx_t:
         """Retrieves the array size of the given array type.
