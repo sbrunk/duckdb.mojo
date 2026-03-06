@@ -532,6 +532,9 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
     fn __repr__(self) -> String:
         return "TimeNS(" + String(self.nanos) + ")"
 
+    fn write_repr_to[W: Writer](self, mut writer: W):
+        writer.write("TimeNS(", self.nanos, ")")
+
     fn to_seconds(self) -> Float64:
         """Convert to seconds since midnight as a Float64."""
         return self.nanos.cast[DType.float64]() / 1_000_000_000.0
@@ -705,6 +708,11 @@ struct Bit(Copyable, Movable, Equatable, Writable, Stringable, Representable, Si
 
     fn __repr__(self) -> String:
         return 'Bit("' + String(self) + '")'
+
+    fn write_repr_to[W: Writer](self, mut writer: W):
+        writer.write('Bit("')
+        self.write_to(writer)
+        writer.write('")')
 
     fn __eq__(self, other: Bit) -> Bool:
         if self._size != other._size:
