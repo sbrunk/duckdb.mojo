@@ -9,7 +9,7 @@ jobs:
         include:
           - { target: linux-64, os: ubuntu-22.04 }
           - { target: linux-aarch64, os: ubuntu-22.04 }
-          - { target: osx-arm64, os: macos-14 }
+          - { target: osx-arm64, os: macos-15 }
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
@@ -22,6 +22,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Add swap space
+        if: runner.os == 'Linux'
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
 
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.4
@@ -36,4 +42,3 @@ jobs:
           pixi build
           pixi run mojo run example.mojo
           pixi run test
-
