@@ -1,6 +1,6 @@
 from duckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
 def test_result_statement_type_select():
@@ -250,7 +250,7 @@ def test_result_column_type():
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42::INTEGER")
     var col_type = result.column_type(0)
-    assert_equal(col_type.get_type_id().value, duckdb_type.DUCKDB_TYPE_INTEGER)
+    assert_equal(col_type.get_type_id(), DuckDBType.integer)
 
 
 def test_result_with_null_values():
@@ -411,7 +411,7 @@ def test_for_rows_empty_result():
     _ = conn.execute("CREATE TABLE empty_tbl (id INT)")
     var query = "SELECT * FROM empty_tbl"
     var count = 0
-    for row in conn.execute(query):
+    for _ in conn.execute(query):
         count += 1
     assert_equal(count, 0)
 

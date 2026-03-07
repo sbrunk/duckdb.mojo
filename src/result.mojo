@@ -1,7 +1,7 @@
 from duckdb._libduckdb import *
 from duckdb.chunk import Chunk, Row
 from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector
-from collections import Optional
+from std.collections import Optional
 from std.builtin.error import StackTrace
 from std.iter import Iterator, Iterable, StopIteration
 

@@ -1,6 +1,6 @@
 from duckdb import *
-from testing import assert_equal, assert_true
-from testing.suite import TestSuite
+from std.testing import assert_equal, assert_true
+from std.testing.suite import TestSuite
 
 
 def test_range():

@@ -1,10 +1,10 @@
 from duckdb import *
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
-from sys.info import size_of
-import math
+from std.testing import assert_equal, assert_true, assert_false, assert_almost_equal, assert_raises
+from std.testing.suite import TestSuite
+from std.sys.info import size_of
+import std.math
 
 
 # ===--------------------------------------------------------------------===#
@@ -309,17 +309,17 @@ def test_scalar_function_float_type():
 
 
 def test_scalar_function_register_error():
-    """Test that registering an incomplete function doesn't crash.""" 
+    """Test that registering an incomplete function raises an error."""
     var conn = DuckDB.connect(":memory:")
-    
+
     # Create incomplete function (no return type, no function implementation)
     var func = ScalarFunction()
     func.set_name("incomplete_func")
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
-    
-    # Registration won't validate, but SQL execution will fail
-    func.register(conn)
+
+    with assert_raises():
+        func.register(conn)
 
 
 # ===--------------------------------------------------------------------===#
@@ -551,28 +551,25 @@ def test_function_reuse_across_queries():
 
 
 def test_function_outlives_connection():
-    """Test that a ScalarFunction stays valid after a connection it was registered on is dropped.
-    
-    DuckDB copies function handles during registration, so the original handle is
-    independent. We should be able to register the same function on a second connection
-    after the first connection goes out of scope.
+    """Test that a registered function is available on new connections to the same database.
+
+    DuckDB registers functions in the database catalog, so they are accessible
+    from any connection to the same database — no re-registration needed.
     """
     var db = Database(":memory:")
     var func = ScalarFunction.from_function[
         "outlive_test", DType.int32, DType.int32, simple_add_one
     ]()
 
-    # Register on first connection, use it, then let the connection go out of scope
+    # Register on first connection
     var conn1 = Connection(db)
     func.register(conn1)
     var result1 = conn1.execute("SELECT outlive_test(41) as val")
     var chunk1 = result1.fetch_chunk()
     assert_equal(chunk1.get[Int32](col=0, row=0), 42)
-    # conn1 is still alive here but will go out of scope when reassigned below
 
-    # Register the same function handle on a second connection
+    # Function is available on a second connection without re-registering
     var conn2 = Connection(db)
-    func.register(conn2)
     var result2 = conn2.execute("SELECT outlive_test(99) as val")
     var chunk2 = result2.fetch_chunk()
     assert_equal(chunk2.get[Int32](col=0, row=0), 100)

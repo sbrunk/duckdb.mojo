@@ -2,10 +2,10 @@
 
 from duckdb import *
 from duckdb.duckdb_type import Bit, Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID, TimeNS
-from collections import Optional, Dict
-from utils import Variant
-from testing import assert_equal, assert_true, assert_raises, assert_almost_equal
-from testing.suite import TestSuite
+from std.collections import Optional, Dict
+from std.utils import Variant
+from std.testing import assert_equal, assert_true, assert_raises, assert_almost_equal
+from std.testing.suite import TestSuite
 
 
 # ─── Helper structs ──────────────────────────────────────────────

@@ -10,8 +10,8 @@ Tests load the test extension shared library into DuckDB and verify:
 """
 
 from duckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 comptime EXT_PATH = "test-extension/build/mojo.duckdb_extension"
 

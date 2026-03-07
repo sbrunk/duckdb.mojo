@@ -17,8 +17,8 @@ Usage:
 from duckdb import *
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionInfo
 from duckdb._libduckdb import *
-from sys import simd_width_of
-import benchmark
+from std.sys import simd_width_of
+import std.benchmark
 
 
 # ===--------------------------------------------------------------------===#

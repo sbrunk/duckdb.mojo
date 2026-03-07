@@ -1,9 +1,9 @@
 from duckdb import *
 from duckdb._libduckdb import *
-import benchmark
-import math
-from memory import UnsafePointer, memcpy
-from sys import has_accelerator
+import std.benchmark
+import std.math
+from std.memory import UnsafePointer, memcpy
+from std.sys import has_accelerator
 
 # GPU imports
 from gpu.host import DeviceContext

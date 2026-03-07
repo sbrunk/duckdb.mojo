@@ -1,6 +1,6 @@
 from duckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
 def test_vector_get_column_type():
@@ -511,7 +511,7 @@ def test_vector_lifetime():
     result = con.execute("SELECT 1, 2, 3")
 
     var chunk = result.fetch_chunk()
-    var vec = chunk.get_vector(0)
+    _ = chunk.get_vector(0)
     var value = chunk.get[Int32](col=0, row=0)
     assert_equal(value, 1)
 

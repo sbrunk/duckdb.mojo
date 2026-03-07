@@ -1,4 +1,4 @@
-from ffi import _Global, external_call
+from std.ffi import _Global, external_call
 
 comptime _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
 

@@ -4,8 +4,8 @@ from duckdb.api_level import ApiLevel
 from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
-from algorithm.functional import vectorize
-from sys import simd_width_of
+from std.algorithm.functional import vectorize
+from std.sys import simd_width_of
 
 
 struct FunctionInfo:

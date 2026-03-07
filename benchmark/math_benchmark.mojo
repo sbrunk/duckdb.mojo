@@ -17,9 +17,9 @@ from duckdb import *
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, FunctionInfo
 from duckdb.logical_type import LogicalType
 from duckdb._libduckdb import *
-from sys import simd_width_of
-import math
-import benchmark
+from std.sys import simd_width_of
+import std.math
+import std.benchmark
 
 
 # ===--------------------------------------------------------------------===#

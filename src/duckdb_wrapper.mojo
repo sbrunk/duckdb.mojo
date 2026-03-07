@@ -1,7 +1,7 @@
 from duckdb.vector import Vector
-from collections import Dict, Optional
-from collections.string import StringSlice, StaticString
-from memory import memcpy
+from std.collections import Dict, Optional
+from std.collections.string import StringSlice, StaticString
+from std.memory import memcpy
 
 
 trait DuckDBWrapper(Copyable & Movable & Stringable):

@@ -1,5 +1,5 @@
 from duckdb._libduckdb import *
-from collections import List
+from std.collections import List
 
 
 

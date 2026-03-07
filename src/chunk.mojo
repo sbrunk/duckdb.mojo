@@ -10,10 +10,10 @@ from duckdb.typed_api import (
     _NullableColumn,
     _is_list_compatible_type,
 )
-from collections import Optional
-from memory import UnsafePointer
-from memory.unsafe_pointer import alloc
-from reflection import (
+from std.collections import Optional
+from std.memory import UnsafePointer
+from std.memory.unsafe_pointer import alloc
+from std.reflection import (
     struct_field_count,
     struct_field_types,
     struct_field_names,

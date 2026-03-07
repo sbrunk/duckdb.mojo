@@ -19,7 +19,7 @@ from duckdb import *
 from duckdb.api import DuckDB
 from duckdb._libduckdb import *
 from operator_replacement import OperatorReplacementLib
-import benchmark
+import std.benchmark
 
 
 # ===--------------------------------------------------------------------===#

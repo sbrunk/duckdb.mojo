@@ -1,10 +1,10 @@
 from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.api import DuckDB
-from collections import Set
-from hashlib.hasher import Hasher
-from sys.intrinsics import _type_is_eq
-from sys.info import size_of
+from std.collections import Set
+from std.hashlib.hasher import Hasher
+from std.sys.intrinsics import _type_is_eq
+from std.sys.info import size_of
 
 
 @fieldwise_init

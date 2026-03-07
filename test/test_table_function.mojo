@@ -6,9 +6,9 @@ from duckdb.table_function import (
     TableInitInfo,
 )
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
-from memory.unsafe_pointer import alloc
+from std.testing import *
+from std.testing.suite import TestSuite
+from std.memory.unsafe_pointer import alloc
 
 
 # ===--------------------------------------------------------------------===#
@@ -278,7 +278,7 @@ def test_table_function_execute_counter_zero():
     func.register(conn)
 
     var count = 0
-    for row in conn.execute("SELECT * FROM counter(0)"):
+    for _ in conn.execute("SELECT * FROM counter(0)"):
         count += 1
     assert_equal(count, 0)
 

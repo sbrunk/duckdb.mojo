@@ -86,9 +86,9 @@ appender.end_row()
 ```
 """
 
-from sys.intrinsics import _type_is_eq
-from sys.info import size_of
-from reflection import (
+from std.sys.intrinsics import _type_is_eq
+from std.sys.info import size_of
+from std.reflection import (
     get_base_type_name,
     get_type_name,
     is_struct_type,
@@ -96,11 +96,11 @@ from reflection import (
     struct_field_names,
     struct_field_types,
 )
-from collections import Optional, List, Dict
-from utils import Variant
-from builtin.variadics import Variadic
+from std.collections import Optional, List, Dict
+from std.utils import Variant
+from std.builtin.variadics import Variadic
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
-from memory.unsafe_pointer import alloc
+from std.memory.unsafe_pointer import alloc
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface

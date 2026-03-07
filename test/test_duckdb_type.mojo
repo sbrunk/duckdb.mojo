@@ -15,9 +15,9 @@ from duckdb.duckdb_type import (
     UUID,
     TimeNS,
 )
-from testing import assert_equal, assert_true, assert_false, assert_almost_equal
-from testing.suite import TestSuite
-from math import abs as math_abs
+from std.testing import assert_equal, assert_true, assert_false, assert_almost_equal
+from std.testing.suite import TestSuite
+from std.math import abs as math_abs
 
 
 # ─── Decimal conversions ─────────────────────────────────────────

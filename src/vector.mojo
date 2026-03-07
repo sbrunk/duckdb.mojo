@@ -2,9 +2,9 @@ from duckdb._libduckdb import *
 from duckdb.logical_type import *
 from duckdb.duckdb_wrapper import *
 from duckdb.api_level import ApiLevel
-from collections import Optional
+from std.collections import Optional
 
-from sys.intrinsics import _type_is_eq
+from std.sys.intrinsics import _type_is_eq
 
 
 struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLevel.CLIENT]:

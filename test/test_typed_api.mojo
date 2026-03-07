@@ -1,11 +1,11 @@
 """Tests for the new typed API."""
 
 from duckdb import *
-from utils import Variant
-from collections import Dict
-from testing import assert_equal, assert_false, assert_raises, assert_true
-from testing.suite import TestSuite
-from reflection import struct_field_count
+from std.utils import Variant
+from std.collections import Dict
+from std.testing import assert_equal, assert_false, assert_raises, assert_true
+from std.testing.suite import TestSuite
+from std.reflection import struct_field_count
 
 
 def test_scalar_types_new_api():

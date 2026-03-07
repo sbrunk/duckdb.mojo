@@ -1,4 +1,4 @@
-from sys.info import size_of
+from std.sys.info import size_of
 
 from duckdb import *
 from duckdb.aggregate_function import (
@@ -9,8 +9,8 @@ from duckdb.aggregate_function import (
     AggregateStateArray,
 )
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
 # ===--------------------------------------------------------------------===#

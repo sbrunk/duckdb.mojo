@@ -1,9 +1,9 @@
 from duckdb import *
 from duckdb.database import Database
-from testing import *
-from testing.suite import TestSuite
-from pathlib import Path
-import os
+from std.testing import *
+from std.testing.suite import TestSuite
+from std.pathlib import Path
+import std.os
 
 
 def test_database_in_memory_default():

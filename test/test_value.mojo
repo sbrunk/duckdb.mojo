@@ -1,10 +1,10 @@
-from testing import assert_equal, assert_true, assert_false
+from std.testing import assert_equal, assert_true, assert_false
 from duckdb import DuckDBValue
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import Decimal
-from math import isnan
-from testing.suite import TestSuite
-from collections import List
+from std.math import isnan
+from std.testing.suite import TestSuite
+from std.collections import List
 from duckdb.logical_type import enum_type
 
 

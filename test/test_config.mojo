@@ -1,8 +1,8 @@
 from duckdb import *
 from duckdb.config import Config
 from duckdb.database import Database
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
 def test_config_create():
