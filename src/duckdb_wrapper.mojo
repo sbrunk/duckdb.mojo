@@ -4,7 +4,7 @@ from std.collections.string import StringSlice, StaticString
 from std.memory import memcpy
 
 
-trait DuckDBWrapper(Copyable & Movable & Stringable):
+trait DuckDBWrapper(Copyable & Movable & Writable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
@@ -25,8 +25,8 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & Trivial
 
     var value: Scalar[Self.Type.to_dtype()]
 
-    fn __str__(self) -> String:
-        return self.value.__str__()
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.value)
 
     fn __hash__[H: Hasher](self, mut hasher: H):
         hasher.update(self.value)
@@ -60,16 +60,13 @@ comptime Float64Val = DTypeValue[DuckDBType.double]
 
 @fieldwise_init
 struct FixedSizeValue[
-    duckdb_type: DuckDBType, underlying: Stringable & Writable & ImplicitlyCopyable & Movable
+    duckdb_type: DuckDBType, underlying: Writable & ImplicitlyCopyable & Movable
 ](DuckDBWrapper & ImplicitlyCopyable):
     comptime Type = Self.duckdb_type
     var value: Self.underlying
 
     fn write_to[W: Writer](self, mut writer: W):
         self.value.write_to(writer)
-
-    fn __str__(self) -> String:
-        return String(self.value)
 
     # fn __hash__(self) -> UInt:
     #     return self.value.__hash__()
@@ -123,8 +120,8 @@ struct DuckDBString(DuckDBWrapper):
             self.value = String(unsafe_uninit_length=string_length)
             memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
 
-    fn __str__(self) -> String:
-        return self.value
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(self.value)
 
 
 @fieldwise_init
@@ -135,8 +132,8 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
     comptime expected_element_type = Self.T.Type
     var value: List[Optional[Self.T]]
 
-    fn __str__(self) -> String:
-        return "DuckDBList"  # TODO
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write("DuckDBList")  # TODO
 
     fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()

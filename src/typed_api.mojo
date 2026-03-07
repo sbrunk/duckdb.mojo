@@ -94,7 +94,7 @@ from duckdb.logical_type import LogicalType, struct_type
 # ──────────────────────────────────────────────────────────────────
 
 
-struct MojoType(Copyable, Movable, Writable, Stringable):
+struct MojoType(Copyable, Movable, Writable):
     """A pure-Mojo descriptor that mirrors DuckDB's LogicalType.
 
     This allows representing DuckDB types (including nested ones like LIST

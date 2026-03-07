@@ -17,7 +17,7 @@ Three levels are defined:
 
 
 @fieldwise_init
-struct ApiLevel(Equatable, Writable, Stringable, ImplicitlyCopyable):
+struct ApiLevel(Equatable, Writable, ImplicitlyCopyable):
     """Compile-time tag indicating which DuckDB C API surface is available.
 
     Used as a parameter on ``Connection``, ``Vector``, ``ScalarFunction``,

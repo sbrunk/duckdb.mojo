@@ -10,7 +10,6 @@ from std.iter import Iterator, Iterable, StopIteration
 struct ResultType(
     Comparable,
     ImplicitlyCopyable,
-    Stringable,
     Writable,
 ):
     """Represents DuckDB result types.
@@ -100,7 +99,6 @@ struct ResultType(
 struct ErrorType(
     Comparable,
     ImplicitlyCopyable,
-    Stringable,
     Writable,
 ):
     """Represents DuckDB error types.
@@ -385,7 +383,6 @@ struct ErrorType(
 struct StatementType(
     Comparable,
     ImplicitlyCopyable,
-    Stringable,
     Writable,
 ):
     """Represents DuckDB statement types.
@@ -552,7 +549,7 @@ struct StatementType(
 
 
 @fieldwise_init
-struct Column(Movable & Copyable & Stringable & Writable):
+struct Column(Movable & Copyable & Writable):
     var index: Int
     var name: String
     var type: LogicalType[is_owned=True, origin=MutExternalOrigin]
@@ -567,7 +564,7 @@ struct Column(Movable & Copyable & Stringable & Writable):
 
 
 
-struct Result(Writable, Stringable, Iterable, Movable):
+struct Result(Writable, Iterable, Movable):
     """A streaming query result.
 
     Iterating a ``Result`` yields ``Row`` proxies — the most ergonomic
@@ -730,7 +727,7 @@ struct Result(Writable, Stringable, Iterable, Movable):
 
 
 @fieldwise_init
-struct ResultError(Stringable, Writable):
+struct ResultError(Writable):
     var message: String
     var type: ErrorType
 

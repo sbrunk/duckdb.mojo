@@ -11,7 +11,6 @@ from std.sys.info import size_of
 struct DuckDBType(
     TrivialRegisterPassable,
     Hashable,
-    Stringable,
     Writable,
     Equatable,
     KeyElement,
@@ -287,7 +286,7 @@ struct DuckDBType(
 
 
 @fieldwise_init
-struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable, Representable, Stringable):
+struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
     """Days are stored as days since 1970-01-01.
 
     TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
@@ -325,7 +324,7 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
 
 @fieldwise_init
-struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable, Representable, Stringable):
+struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
     """Time is stored as microseconds since 00:00:00.
 
     TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
@@ -374,7 +373,7 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
 
 @fieldwise_init
-struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Timestamps are stored as microseconds since 1970-01-01."""
 
     var micros: Int64
@@ -434,7 +433,7 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
 
 @fieldwise_init
-struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Timestamps with second precision, stored as seconds since 1970-01-01."""
 
     var seconds: Int64
@@ -460,7 +459,7 @@ struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyab
 
 
 @fieldwise_init
-struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Timestamps with millisecond precision, stored as milliseconds since 1970-01-01."""
 
     var millis: Int64
@@ -486,7 +485,7 @@ struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
 
 @fieldwise_init
-struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Timestamps with nanosecond precision, stored as nanoseconds since 1970-01-01."""
 
     var nanos: Int64
@@ -512,7 +511,7 @@ struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
 
 @fieldwise_init
-struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Time with nanosecond precision, stored as nanoseconds since midnight."""
 
     var nanos: Int64
@@ -544,7 +543,7 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
         return Time(self.nanos // 1_000)
 
 
-struct Bit(Copyable, Movable, Equatable, Writable, Stringable, Representable, Sized):
+struct Bit(Copyable, Movable, Equatable, Writable, Sized):
     """A DuckDB BIT (bitstring) value stored as packed bytes.
 
     Internally uses DuckDB's packed format: a padding byte followed by
@@ -727,7 +726,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Stringable, Representable, Si
 
 
 @fieldwise_init
-struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Timestamps with timezone, stored as microseconds since 1970-01-01 (UTC)."""
 
     var micros: Int64
@@ -753,7 +752,7 @@ struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
 
 @fieldwise_init
-struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Time with timezone, stored as 40 bits for microseconds and 24 bits for UTC offset.
 
     Use ``TimeTZ(micros=..., offset=...)`` to create from components.
@@ -789,7 +788,7 @@ struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
 
 
 @fieldwise_init
-struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """UUID stored as a UInt128.
 
     In DuckDB vectors, UUIDs are stored as Int128 with a special encoding
@@ -846,7 +845,7 @@ struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Mo
 
 
 @fieldwise_init
-struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable, Stringable, Representable):
+struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """An interval with months, days, and microseconds components."""
 
     var months: Int32
@@ -888,7 +887,7 @@ struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable
 
 # Int128 and UInt128 are builtin types in Mojo.
 
-struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Stringable, Representable):
+struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
     """Decimals are composed of a width and a scale, and are stored in a hugeint.
     """
 
@@ -927,25 +926,11 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
         var u = self.upper.cast[DType.int128]() 
         return (u << 64) | l
 
-    fn __str__(self) -> String:
-        return (
-            "width: "
-            + String(self.width)
-            + ", scale: "
-            + String(self.scale)
-            + ", value: "
-            + String(self.value())
-        )
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write("width: ", self.width, ", scale: ", self.scale, ", value: ", self.value())
 
-    fn __repr__(self) -> String:
-        return (
-            "Decimal("
-            + String(self.width)
-            + ", "
-            + String(self.scale)
-            + ", "
-            + String(self.value())
-            + ")"
+    fn write_repr_to[W: Writer](self, mut writer: W):
+        writer.write("Decimal(", self.width, ", ", self.scale, ", ", self.value(), ")"
         )
 
     fn __eq__(self, other: Decimal) -> Bool:

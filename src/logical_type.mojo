@@ -3,7 +3,7 @@ from std.collections import List
 
 
 
-struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Movable & Equatable & Writable & Stringable):
+struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Movable & Equatable & Writable):
     """Represents a potentially nested DuckDB type.
     
     LogicalTypes can be borrowed from DuckDB structures or owned standalone. Ownership
