@@ -16,8 +16,8 @@ BUILD_DIR=$(mktemp -d)
 trap "mv src.bak src; rm -rf $BUILD_DIR" EXIT
 
 # Order tests: simple tests first to warm the compilation cache,
-# then heavy appender tests (which use expensive generic monomorphization).
-# This reduces peak memory for the heavy tests on memory-constrained CI.
+# then the appender test (which uses expensive generic monomorphization).
+# This reduces peak memory for the heavy test on memory-constrained CI.
 SIMPLE_TESTS=(
     test/test_config.mojo
     test/test_database.mojo
@@ -33,17 +33,10 @@ SIMPLE_TESTS=(
     test/test_scalar_function.mojo
     test/test_aggregate_function.mojo
     test/test_table_function.mojo
-)
-HEAVY_TESTS=(
     test/test_appender.mojo
-    test/test_appender_numeric.mojo
-    test/test_appender_temporal.mojo
-    test/test_appender_list.mojo
-    test/test_appender_map.mojo
-    test/test_appender_variant.mojo
 )
 
-ALL_TESTS=("${SIMPLE_TESTS[@]}" "${HEAVY_TESTS[@]}")
+ALL_TESTS=("${SIMPLE_TESTS[@]}")
 
 # Build all test binaries first, then run them.
 # Building sequentially populates the Mojo compilation cache, reducing

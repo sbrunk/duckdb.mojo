@@ -33,7 +33,7 @@ name = "duckdb"
 
 [tasks]
 build = "pixi run mojo package src -o duckdb.mojopkg"
-test-library = { cmd = "sh scripts/run_tests.sh", depends-on = ["build"] }
+test-library = { cmd = "bash scripts/run_tests.sh", depends-on = ["build"] }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
 generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckdb-src --output src/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
 
