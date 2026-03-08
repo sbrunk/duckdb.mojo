@@ -15,10 +15,8 @@ mv src src.bak
 BUILD_DIR=$(mktemp -d)
 trap "mv src.bak src; rm -rf $BUILD_DIR" EXIT
 
-# Order tests: simple tests first to warm the compilation cache,
-# then the appender test (which uses expensive generic monomorphization).
-# This reduces peak memory for the heavy test on memory-constrained CI.
-SIMPLE_TESTS=(
+# Tests that compile quickly (no heavy generic monomorphization)
+TESTS=(
     test/test_config.mojo
     test/test_database.mojo
     test/test_connection.mojo
@@ -29,25 +27,38 @@ SIMPLE_TESTS=(
     test/test_chunk.mojo
     test/test_result.mojo
     test/test_query_results.mojo
-    test/test_typed_api.mojo
     test/test_scalar_function.mojo
     test/test_aggregate_function.mojo
     test/test_table_function.mojo
+)
+
+# Heavy tests use Dict/List/Variant generics that require expensive
+# monomorphization (10+ min compile, 17+ GB RAM). Only run on linux-64
+# where we have swap space and native execution (not QEMU emulation).
+# Set DUCKDB_MOJO_HEAVY_TESTS=1 to force-enable them on any platform.
+HEAVY_TESTS=(
+    test/test_typed_api.mojo
     test/test_appender.mojo
 )
 
-ALL_TESTS=("${SIMPLE_TESTS[@]}")
+if [[ "${DUCKDB_MOJO_HEAVY_TESTS:-}" == "1" ]] || [[ "$(uname -m)" == "x86_64" && "$(uname)" == "Linux" ]]; then
+    TESTS+=("${HEAVY_TESTS[@]}")
+else
+    echo "*** Skipping heavy tests on $(uname) $(uname -m) (requires 17+ GB RAM) ***"
+    echo "*** Skipped: ${HEAVY_TESTS[*]} ***"
+    echo "*** Set DUCKDB_MOJO_HEAVY_TESTS=1 to force ***"
+fi
 
 # Build all test binaries first, then run them.
 # Building sequentially populates the Mojo compilation cache, reducing
 # peak memory for subsequent compilations.
-for f in "${ALL_TESTS[@]}"; do
+for f in "${TESTS[@]}"; do
     name=$(basename "$f" .mojo)
     echo "--- Building: $f ---"
     mojo build "$f" -o "$BUILD_DIR/$name"
 done
 
-for f in "${ALL_TESTS[@]}"; do
+for f in "${TESTS[@]}"; do
     name=$(basename "$f" .mojo)
     echo "--- Running: $name ---"
     "$BUILD_DIR/$name"
