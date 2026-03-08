@@ -669,7 +669,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: fn (Scalar[In1]) -> Scalar[Out],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a simple row-at-a-time function.
 
         Automatically generates a vectorized wrapper that loops over chunk rows,
@@ -744,7 +744,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a simple row-at-a-time function.
 
         Returns the configured ScalarFunction without registering it.
@@ -823,7 +823,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -887,7 +887,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -955,7 +955,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a unary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
@@ -1016,7 +1016,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.

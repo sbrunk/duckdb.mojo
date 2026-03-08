@@ -609,19 +609,20 @@ __extension Variant(Appendable):
         member ``i``.  Member names are not required from the Mojo side.
         """
         ref libduckdb = DuckDB().libduckdb()
-        var tag = Int(self._get_discr())
 
         # Get the UNION logical type from the target column's schema
         var col_type = libduckdb.duckdb_appender_column_type(
             appender._appender, idx_t(appender._current_col)
         )
 
-        # Create the member value by matching the tag at runtime
+        # Find the active member using isa[] and create the member value
+        var tag = 0
         var member_val = duckdb_value()
         comptime for i in range(Variadic.size(Self.Ts)):
-            if tag == i:
-                comptime MemberType = Self.Ts[i]
-                comptime MT = downcast[MemberType, Copyable & Movable]
+            comptime MemberType = Self.Ts[i]
+            comptime MT = downcast[MemberType, Copyable & Movable]
+            if self.isa[MT]():
+                tag = i
                 member_val = _to_duckdb_value(self.unsafe_get[MT]())
 
         # Create the union value and append it

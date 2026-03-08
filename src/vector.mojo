@@ -219,9 +219,11 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_slice_vector(self._vector, sel, len)
 
-    fn copy_sel(
+    fn copy_sel[
+        dst_owned: Bool, dst_origin: ImmutOrigin, dst_api: ApiLevel,
+    ](
         self,
-        dst: Vector[_],
+        dst: Vector[dst_owned, dst_origin, dst_api],
         sel: duckdb_selection_vector,
         src_count: idx_t,
         src_offset: idx_t,
@@ -258,7 +260,9 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_value(self._vector, value)
 
-    fn reference_vector(self, from_vector: Vector[_]) -> NoneType:
+    fn reference_vector[
+        from_owned: Bool, from_origin: ImmutOrigin, from_api: ApiLevel,
+    ](self, from_vector: Vector[from_owned, from_origin, from_api]) -> NoneType:
         """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
 
         **Requires unstable API** — blocked at compile time for

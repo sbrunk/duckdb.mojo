@@ -124,11 +124,11 @@ struct DuckDB(ImplicitlyCopyable):
         return self._impl[]
 
     @staticmethod
-    fn connect(db_path: String) raises -> Connection:
+    fn connect(db_path: String) raises -> Connection[ApiLevel.CLIENT]:
         return Connection(db_path)
 
     @staticmethod
-    fn connect(db_path: String, config: Config) raises -> Connection:
+    fn connect(db_path: String, config: Config) raises -> Connection[ApiLevel.CLIENT]:
         """Open a connection with startup configuration.
 
         Args:
@@ -140,7 +140,7 @@ struct DuckDB(ImplicitlyCopyable):
     @staticmethod
     fn connect(
         db_path: String, *, config: Dict[String, String]
-    ) raises -> Connection:
+    ) raises -> Connection[ApiLevel.CLIENT]:
         """Open a connection with configuration from a dictionary.
 
         Args:
