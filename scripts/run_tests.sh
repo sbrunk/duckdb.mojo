@@ -32,23 +32,24 @@ TESTS=(
     test/test_appender.mojo
 )
 
-# Generic tests require expensive monomorphization and need more memory
-# than macOS CI runners provide (7 GB, no swap). These only run on Linux
-# which has 7 GB RAM + 14 GB swap = 21 GB total.
-#
-# Light generic tests: pass with -j 2 on all Linux runners
-LIGHT_GENERIC_TESTS=(
+# Generic tests require expensive monomorphization. The lightest ones
+# (scalars, tuples) can run on Linux CI with -j 2. The heavier ones
+# (struct/list/dict/variant generics) need >21 GB peak memory during
+# compilation and must be run locally. macOS CI (7 GB, no swap) cannot
+# run any generic tests.
+GENERIC_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
 )
-# Heavy generic tests: need -j 1 to stay within 21 GB (7 GB RAM + 14 GB swap)
-HEAVY_TESTS=(
-    test/test_appender_list.mojo
-    test/test_appender_map_variant.mojo
-    test/test_typed_api_mojo_type.mojo
-    test/test_typed_api_table_structs.mojo
-    test/test_typed_api_collections.mojo
-)
+# These tests need too much memory for CI runners (>21 GB peak).
+# Run locally with: pixi run mojo run test/test_<name>.mojo
+# LOCAL_ONLY_TESTS=(
+#     test/test_typed_api_mojo_type.mojo
+#     test/test_typed_api_table_structs.mojo
+#     test/test_typed_api_collections.mojo
+#     test/test_appender_list.mojo
+#     test/test_appender_map_variant.mojo
+# )
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
@@ -56,13 +57,9 @@ for f in "${TESTS[@]}"; do
 done
 
 if [[ "$(uname)" == "Linux" ]]; then
-    for f in "${LIGHT_GENERIC_TESTS[@]}"; do
+    for f in "${GENERIC_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"
         mojo run -j 2 "$f"
-    done
-    for f in "${HEAVY_TESTS[@]}"; do
-        echo "--- Running (-j 1): $f ---"
-        mojo run -j 1 "$f"
     done
 else
     echo "--- Skipping generic tests on $(uname) (insufficient RAM) ---"
