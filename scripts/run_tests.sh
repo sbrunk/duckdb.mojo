@@ -29,6 +29,7 @@ TESTS=(
     test/test_scalar_function.mojo
     test/test_aggregate_function.mojo
     test/test_table_function.mojo
+    test/test_appender.mojo
 )
 
 # Heavy tests use Dict/List/Variant generics that require expensive
@@ -36,8 +37,11 @@ TESTS=(
 # reduce peak memory usage so they can run on CI runners with ~17 GB
 # (7 GB RAM + 10 GB swap).
 HEAVY_TESTS=(
-    test/test_typed_api.mojo
-    test/test_appender.mojo
+    test/test_typed_api_scalars.mojo
+    test/test_typed_api_structs.mojo
+    test/test_typed_api_collections.mojo
+    test/test_appender_list.mojo
+    test/test_appender_map_variant.mojo
 )
 
 for f in "${TESTS[@]}"; do
