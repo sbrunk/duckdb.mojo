@@ -25,7 +25,7 @@ fn _open_unsigned() raises -> Database:
     return Database(":memory:", config)
 
 
-fn _connect() raises -> Connection:
+fn _connect() raises -> Connection[ApiLevel.CLIENT]:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()
