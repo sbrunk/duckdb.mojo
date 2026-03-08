@@ -53,9 +53,11 @@ for f in "${TESTS[@]}"; do
 done
 
 if [[ "$(uname)" == "Linux" ]]; then
+    # Linux CI has 7 GB RAM + 10 GB swap = 17 GB total. Use -j 2 to
+    # stay within memory while keeping compilation reasonably fast.
     for f in "${HEAVY_TESTS[@]}"; do
-        echo "--- Running (-j 1): $f ---"
-        mojo run -j 1 "$f"
+        echo "--- Running (-j 2): $f ---"
+        mojo run -j 2 "$f"
     done
 else
     echo "--- Skipping heavy tests on $(uname) (insufficient RAM) ---"
