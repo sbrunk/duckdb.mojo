@@ -24,8 +24,22 @@ trap "rm -f ./duckdb.mojopkg; [ -d src.bak ] && mv src.bak src" EXIT
 mv src src.bak
 
 echo "Using mojopkg: $(ls -la ./duckdb.mojopkg)"
+echo "CWD: $(pwd)"
+echo "mojo: $(which mojo)"
+mojo --version
+
+# List all test files
+echo "=== Test files ==="
+ls -1 test/test_*.mojo
+echo "=== End test files ==="
+
+# Check there's no duckdb source directory
+echo "=== Directories that might be duckdb source ==="
+ls -d */ 2>/dev/null || true
+echo "==="
 
 for f in test/test_*.mojo; do
-    echo "--- Running: $f ---"
-    mojo run "$f"
+    echo "--- Running: $f ($(date)) ---"
+    mojo run -I . "$f"
+    echo "--- Completed: $f ($(date)) ---"
 done
