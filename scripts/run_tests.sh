@@ -12,8 +12,7 @@ fi
 
 # Hide src/ so mojo uses the pre-built mojopkg
 mv src src.bak
-BUILD_DIR=$(mktemp -d)
-trap "mv src.bak src; rm -rf $BUILD_DIR" EXIT
+trap "mv src.bak src" EXIT
 
 # Tests that compile quickly (no heavy generic monomorphization)
 TESTS=(
@@ -49,17 +48,7 @@ else
     echo "*** Set DUCKDB_MOJO_HEAVY_TESTS=1 to force ***"
 fi
 
-# Build all test binaries first, then run them.
-# Building sequentially populates the Mojo compilation cache, reducing
-# peak memory for subsequent compilations.
 for f in "${TESTS[@]}"; do
-    name=$(basename "$f" .mojo)
-    echo "--- Building: $f ---"
-    mojo build "$f" -o "$BUILD_DIR/$name"
-done
-
-for f in "${TESTS[@]}"; do
-    name=$(basename "$f" .mojo)
-    echo "--- Running: $name ---"
-    "$BUILD_DIR/$name"
+    echo "--- Running: $f ---"
+    mojo run "$f"
 done
