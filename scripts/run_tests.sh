@@ -4,19 +4,25 @@
 # where the Mojo compiler's monomorphization can exceed 7GB RAM.
 set -e
 
+PROJDIR="$(pwd)"
 WORKDIR=$(mktemp -d)
 trap "rm -rf $WORKDIR" EXIT
 
 # Build the package once from source
 mojo package src -o "$WORKDIR/duckdb.mojopkg"
 
-# Copy test files to a clean directory (no src/ to shadow the mojopkg)
+# Copy test files to the work directory
 cp -r test "$WORKDIR/test"
 
-# Compile and run each test file using the pre-built package
-for f in "$WORKDIR"/test/test_*.mojo; do
+# Get the absolute path to mojo so we can call it from the work directory
+MOJO="$(which mojo)"
+
+# Run from the work directory so mojo doesn't find src/ and recompile
+cd "$WORKDIR"
+
+for f in test/test_*.mojo; do
     bin=$(mktemp)
-    mojo build "$f" -I "$WORKDIR" -o "$bin"
+    "$MOJO" build "$f" -I "$WORKDIR" -o "$bin"
     "$bin"
     s=$?
     rm -f "$bin"
