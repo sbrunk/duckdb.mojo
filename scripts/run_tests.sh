@@ -36,15 +36,15 @@ TESTS=(
 # than macOS CI runners provide (7 GB, no swap). These only run on Linux
 # which has 7 GB RAM + 14 GB swap = 21 GB total.
 #
-# Medium tests: simpler generics, fit with -j 2
-MEDIUM_TESTS=(
+# Light generic tests: pass with -j 2 on all Linux runners
+LIGHT_GENERIC_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
+)
+# Heavy generic tests: need -j 1 to stay within 21 GB (7 GB RAM + 14 GB swap)
+HEAVY_TESTS=(
     test/test_appender_list.mojo
     test/test_appender_map_variant.mojo
-)
-# Heavy tests: struct/collection generics, need -j 1 to stay in memory
-HEAVY_TESTS=(
     test/test_typed_api_mojo_type.mojo
     test/test_typed_api_table_structs.mojo
     test/test_typed_api_collections.mojo
@@ -56,7 +56,7 @@ for f in "${TESTS[@]}"; do
 done
 
 if [[ "$(uname)" == "Linux" ]]; then
-    for f in "${MEDIUM_TESTS[@]}"; do
+    for f in "${LIGHT_GENERIC_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"
         mojo run -j 2 "$f"
     done
