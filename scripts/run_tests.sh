@@ -11,8 +11,6 @@ MOJOPKG="$IMPORT_PATH/duckdb.mojopkg"
 
 if [ ! -f "$MOJOPKG" ]; then
     echo "ERROR: duckdb.mojopkg not found at $MOJOPKG"
-    echo "IMPORT_PATH=$IMPORT_PATH"
-    echo "MODULAR_HOME=$MODULAR_HOME"
     exit 1
 fi
 
@@ -24,22 +22,19 @@ trap "rm -f ./duckdb.mojopkg; [ -d src.bak ] && mv src.bak src" EXIT
 mv src src.bak
 
 echo "Using mojopkg: $(ls -la ./duckdb.mojopkg)"
-echo "CWD: $(pwd)"
-echo "mojo: $(which mojo)"
-mojo --version
 
-# List all test files
-echo "=== Test files ==="
-ls -1 test/test_*.mojo
-echo "=== End test files ==="
-
-# Check there's no duckdb source directory
-echo "=== Directories that might be duckdb source ==="
-ls -d */ 2>/dev/null || true
+# Dump all mojo-related env vars for debugging
+echo "=== Environment ==="
+env | grep -iE "mojo|modular|import|path" | sort
 echo "==="
+
+# Try a quick compile to test mojopkg works
+echo "=== Quick compile test ==="
+time mojo run -I . test/test_config.mojo 2>&1 | tail -3
+echo "=== End quick test ==="
 
 for f in test/test_*.mojo; do
     echo "--- Running: $f ($(date)) ---"
-    mojo run -I . "$f"
+    time mojo run -I . "$f"
     echo "--- Completed: $f ($(date)) ---"
 done
