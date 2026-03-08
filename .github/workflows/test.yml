@@ -27,7 +27,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 10
+          swap-size-gb: 14
 
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.4

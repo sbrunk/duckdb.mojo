@@ -32,19 +32,22 @@ TESTS=(
     test/test_appender.mojo
 )
 
-# Heavy tests use generic types (structs, lists, dicts, variants) that
-# require expensive monomorphization. We compile them with -j 1 (single
-# thread) to minimize peak memory. These need >7 GB so they only run on
-# Linux (which has swap space). macOS runners have 7 GB RAM with no swap
-# and OOM-kill even with -j 1.
-HEAVY_TESTS=(
+# Generic tests require expensive monomorphization and need more memory
+# than macOS CI runners provide (7 GB, no swap). These only run on Linux
+# which has 7 GB RAM + 14 GB swap = 21 GB total.
+#
+# Medium tests: simpler generics, fit with -j 2
+MEDIUM_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
+    test/test_appender_list.mojo
+    test/test_appender_map_variant.mojo
+)
+# Heavy tests: struct/collection generics, need -j 1 to stay in memory
+HEAVY_TESTS=(
     test/test_typed_api_mojo_type.mojo
     test/test_typed_api_table_structs.mojo
     test/test_typed_api_collections.mojo
-    test/test_appender_list.mojo
-    test/test_appender_map_variant.mojo
 )
 
 for f in "${TESTS[@]}"; do
@@ -53,12 +56,14 @@ for f in "${TESTS[@]}"; do
 done
 
 if [[ "$(uname)" == "Linux" ]]; then
-    # Linux CI has 7 GB RAM + 10 GB swap = 17 GB total. Use -j 2 to
-    # stay within memory while keeping compilation reasonably fast.
-    for f in "${HEAVY_TESTS[@]}"; do
+    for f in "${MEDIUM_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"
         mojo run -j 2 "$f"
     done
+    for f in "${HEAVY_TESTS[@]}"; do
+        echo "--- Running (-j 1): $f ---"
+        mojo run -j 1 "$f"
+    done
 else
-    echo "--- Skipping heavy tests on $(uname) (insufficient RAM) ---"
+    echo "--- Skipping generic tests on $(uname) (insufficient RAM) ---"
 fi
