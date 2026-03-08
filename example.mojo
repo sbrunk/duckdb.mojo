@@ -6,7 +6,7 @@ struct StationCount(Writable, Copyable, Movable):
     var station: String
     var num_services: Int64
 
-def main():
+def main() raises:
     var con = DuckDB.connect(":memory:")
     _ = con.execute("""
     SET autoinstall_known_extensions=1;

@@ -23,7 +23,7 @@ from std.math import abs as math_abs
 # ─── Decimal conversions ─────────────────────────────────────────
 
 
-def test_decimal_to_float64():
+def test_decimal_to_float64() raises:
     """Decimal.to_float64() converts correctly."""
     # 12345 with scale=2 → 123.45
     var d = Decimal(10, 2, Int128(12345))
@@ -31,28 +31,28 @@ def test_decimal_to_float64():
     assert_almost_equal(f, 123.45, atol=1e-10)
 
 
-def test_decimal_to_float64_negative():
+def test_decimal_to_float64_negative() raises:
     """Decimal.to_float64() handles negative values."""
     var d = Decimal(10, 3, Int128(-9876))
     var f = d.to_float64()
     assert_almost_equal(f, -9.876, atol=1e-10)
 
 
-def test_decimal_to_float64_zero_scale():
+def test_decimal_to_float64_zero_scale() raises:
     """Decimal.to_float64() with scale=0 returns integer value."""
     var d = Decimal(10, 0, Int128(42))
     var f = d.to_float64()
     assert_almost_equal(f, 42.0, atol=1e-10)
 
 
-def test_decimal_to_float32():
+def test_decimal_to_float32() raises:
     """Decimal.to_float32() converts correctly."""
     var d = Decimal(10, 2, Int128(12345))
     var f = d.to_float32()
     assert_almost_equal(f, 123.45, atol=1e-4)
 
 
-def test_decimal_from_float64():
+def test_decimal_from_float64() raises:
     """Decimal(width, scale, Float64) encodes correctly."""
     var d = Decimal(10, 2, Float64(123.45))
     assert_equal(d.width, UInt8(10))
@@ -60,13 +60,13 @@ def test_decimal_from_float64():
     assert_equal(d.value(), Int128(12345))
 
 
-def test_decimal_from_float64_negative():
+def test_decimal_from_float64_negative() raises:
     """Decimal(width, scale, Float64) handles negative values."""
     var d = Decimal(10, 3, Float64(-9.876))
     assert_equal(d.value(), Int128(-9876))
 
 
-def test_decimal_from_float32():
+def test_decimal_from_float32() raises:
     """Decimal(width, scale, Float32) encodes correctly."""
     var d = Decimal(10, 2, Float32(123.45))
     assert_equal(d.width, UInt8(10))
@@ -74,7 +74,7 @@ def test_decimal_from_float32():
     assert_equal(d.value(), Int128(12345))
 
 
-def test_decimal_roundtrip_float64():
+def test_decimal_roundtrip_float64() raises:
     """Decimal → Float64 → Decimal round-trips."""
     var original = Decimal(18, 4, Int128(123456789))
     var f = original.to_float64()
@@ -82,7 +82,7 @@ def test_decimal_roundtrip_float64():
     assert_equal(original.value(), restored.value())
 
 
-def test_decimal_equatable():
+def test_decimal_equatable() raises:
     """Decimal equality and inequality."""
     var a = Decimal(10, 2, Int128(12345))
     var b = Decimal(10, 2, Int128(12345))
@@ -97,20 +97,20 @@ def test_decimal_equatable():
 # ─── Timestamp conversions ───────────────────────────────────────
 
 
-def test_timestamp_to_seconds():
+def test_timestamp_to_seconds() raises:
     """Timestamp.to_seconds() converts micros to seconds."""
     var ts = Timestamp(1_500_000)  # 1.5 seconds
     var s = ts.to_seconds()
     assert_almost_equal(s, 1.5, atol=1e-10)
 
 
-def test_timestamp_from_seconds():
+def test_timestamp_from_seconds() raises:
     """Timestamp(seconds=) converts seconds to micros."""
     var ts = Timestamp(seconds=1.5)
     assert_equal(ts.micros, Int64(1_500_000))
 
 
-def test_timestamp_to_from_seconds_roundtrip():
+def test_timestamp_to_from_seconds_roundtrip() raises:
     """Timestamp → seconds → Timestamp round-trips."""
     var original = Timestamp(1_234_567_890)
     var seconds = original.to_seconds()
@@ -118,70 +118,70 @@ def test_timestamp_to_from_seconds_roundtrip():
     assert_equal(original.micros, restored.micros)
 
 
-def test_timestamp_to_timestamp_s():
+def test_timestamp_to_timestamp_s() raises:
     """Timestamp.to_timestamp_s() truncates to seconds."""
     var ts = Timestamp(2_500_000)  # 2.5 seconds → 2 seconds
     var ts_s = ts.to_timestamp_s()
     assert_equal(ts_s.seconds, Int64(2))
 
 
-def test_timestamp_to_timestamp_ms():
+def test_timestamp_to_timestamp_ms() raises:
     """Timestamp.to_timestamp_ms() truncates to milliseconds."""
     var ts = Timestamp(2_500_000)  # 2500 ms
     var ts_ms = ts.to_timestamp_ms()
     assert_equal(ts_ms.millis, Int64(2500))
 
 
-def test_timestamp_to_timestamp_ns():
+def test_timestamp_to_timestamp_ns() raises:
     """Timestamp.to_timestamp_ns() multiplies to nanoseconds."""
     var ts = Timestamp(2_500_000)
     var ts_ns = ts.to_timestamp_ns()
     assert_equal(ts_ns.nanos, Int64(2_500_000_000))
 
 
-def test_timestamp_s_to_timestamp():
+def test_timestamp_s_to_timestamp() raises:
     """TimestampS.to_timestamp() converts to micros."""
     var ts_s = TimestampS(5)
     var ts = ts_s.to_timestamp()
     assert_equal(ts.micros, Int64(5_000_000))
 
 
-def test_timestamp_ms_to_timestamp():
+def test_timestamp_ms_to_timestamp() raises:
     """TimestampMS.to_timestamp() converts to micros."""
     var ts_ms = TimestampMS(1500)
     var ts = ts_ms.to_timestamp()
     assert_equal(ts.micros, Int64(1_500_000))
 
 
-def test_timestamp_ns_to_timestamp():
+def test_timestamp_ns_to_timestamp() raises:
     """TimestampNS.to_timestamp() converts to micros (truncates)."""
     var ts_ns = TimestampNS(1_500_999)
     var ts = ts_ns.to_timestamp()
     assert_equal(ts.micros, Int64(1500))  # 1_500_999 // 1000 = 1500
 
 
-def test_timestamp_tz_to_timestamp():
+def test_timestamp_tz_to_timestamp() raises:
     """TimestampTZ.to_timestamp() converts to plain Timestamp."""
     var ts_tz = TimestampTZ(9_999_999)
     var ts = ts_tz.to_timestamp()
     assert_equal(ts.micros, Int64(9_999_999))
 
 
-def test_timestamp_cross_conversion_roundtrip():
+def test_timestamp_cross_conversion_roundtrip() raises:
     """Timestamp → TimestampS → Timestamp preserves seconds."""
     var original = Timestamp(3_000_000)  # exactly 3 seconds
     var via_s = original.to_timestamp_s().to_timestamp()
     assert_equal(original.micros, via_s.micros)
 
 
-def test_timestamp_cross_conversion_ms_roundtrip():
+def test_timestamp_cross_conversion_ms_roundtrip() raises:
     """Timestamp → TimestampMS → Timestamp preserves milliseconds."""
     var original = Timestamp(3_500_000)  # exactly 3500 ms
     var via_ms = original.to_timestamp_ms().to_timestamp()
     assert_equal(original.micros, via_ms.micros)
 
 
-def test_timestamp_cross_conversion_ns_roundtrip():
+def test_timestamp_cross_conversion_ns_roundtrip() raises:
     """Timestamp → TimestampNS → Timestamp preserves microseconds."""
     var original = Timestamp(3_500_000)
     var via_ns = original.to_timestamp_ns().to_timestamp()
@@ -191,7 +191,7 @@ def test_timestamp_cross_conversion_ns_roundtrip():
 # ─── Time conversions ────────────────────────────────────────────
 
 
-def test_time_to_seconds():
+def test_time_to_seconds() raises:
     """Time.to_seconds() converts micros since midnight to seconds."""
     # 1 hour = 3_600_000_000 micros
     var t = Time(3_600_000_000)
@@ -199,7 +199,7 @@ def test_time_to_seconds():
     assert_almost_equal(s, 3600.0, atol=1e-10)
 
 
-def test_time_to_seconds_fractional():
+def test_time_to_seconds_fractional() raises:
     """Time.to_seconds() handles fractional seconds."""
     var t = Time(1_500_000)  # 1.5 seconds
     var s = t.to_seconds()
@@ -209,7 +209,7 @@ def test_time_to_seconds_fractional():
 # ─── Interval conversions ────────────────────────────────────────
 
 
-def test_interval_to_total_seconds():
+def test_interval_to_total_seconds() raises:
     """Interval.to_total_seconds() approximates total seconds."""
     # 1 day = 86400 seconds
     var iv = Interval(0, 1, 0)
@@ -217,7 +217,7 @@ def test_interval_to_total_seconds():
     assert_almost_equal(s, 86400.0, atol=1e-6)
 
 
-def test_interval_to_total_seconds_with_months():
+def test_interval_to_total_seconds_with_months() raises:
     """Interval.to_total_seconds() uses 30-day month approximation."""
     # 1 month ≈ 30 days = 2_592_000 seconds
     var iv = Interval(1, 0, 0)
@@ -225,7 +225,7 @@ def test_interval_to_total_seconds_with_months():
     assert_almost_equal(s, 2_592_000.0, atol=1e-6)
 
 
-def test_interval_to_total_seconds_combined():
+def test_interval_to_total_seconds_combined() raises:
     """Interval.to_total_seconds() with months, days, and micros."""
     # 1 month + 2 days + 500_000 micros (0.5 seconds)
     var iv = Interval(1, 2, 500_000)
@@ -234,7 +234,7 @@ def test_interval_to_total_seconds_combined():
     assert_almost_equal(s, expected, atol=1e-6)
 
 
-def test_interval_writable():
+def test_interval_writable() raises:
     """Interval is Writable via String.write()."""
     var iv = Interval(1, 2, 3)
     var s = String.write(iv)
@@ -243,7 +243,7 @@ def test_interval_writable():
     assert_true("micros: 3" in s)
 
 
-def test_interval_equatable():
+def test_interval_equatable() raises:
     """Interval equality."""
     var a = Interval(1, 2, 3)
     var b = Interval(1, 2, 3)
@@ -255,7 +255,7 @@ def test_interval_equatable():
 # ─── UUID internals ──────────────────────────────────────────────
 
 
-def test_uuid_internal_roundtrip():
+def test_uuid_internal_roundtrip() raises:
     """UUID → internal → UUID roundtrip."""
     var u = UUID(UInt128(0x0123456789ABCDEF))
     var internal = u._to_internal()
@@ -263,7 +263,7 @@ def test_uuid_internal_roundtrip():
     assert_equal(u.value, restored.value)
 
 
-def test_uuid_internal_roundtrip_large():
+def test_uuid_internal_roundtrip_large() raises:
     """UUID → internal → UUID roundtrip with large value."""
     var u = UUID(UInt128(340282366920938463463374607431768211455))  # max UInt128
     var internal = u._to_internal()
@@ -271,7 +271,7 @@ def test_uuid_internal_roundtrip_large():
     assert_equal(u.value, restored.value)
 
 
-def test_uuid_equatable():
+def test_uuid_equatable() raises:
     """UUID equality."""
     var a = UUID(UInt128(42))
     var b = UUID(UInt128(42))
@@ -283,19 +283,19 @@ def test_uuid_equatable():
 # ─── TimeNS conversions ──────────────────────────────────────────
 
 
-def test_time_ns_to_seconds():
+def test_time_ns_to_seconds() raises:
     """TimeNS.to_seconds() converts correctly."""
     var t = TimeNS(1_500_000_000)  # 1.5 seconds
     assert_almost_equal(t.to_seconds(), 1.5)
 
 
-def test_time_ns_to_time():
+def test_time_ns_to_time() raises:
     """TimeNS.to_time() converts to microseconds."""
     var t = TimeNS(1_500_000_000)  # 1.5 seconds = 1_500_000 micros
     assert_equal(t.to_time(), Time(1_500_000))
 
 
-def test_time_ns_equatable():
+def test_time_ns_equatable() raises:
     """TimeNS equality."""
     var a = TimeNS(42)
     var b = TimeNS(42)
@@ -304,7 +304,7 @@ def test_time_ns_equatable():
     assert_true(a != c)
 
 
-def test_time_ns_repr():
+def test_time_ns_repr() raises:
     """TimeNS repr."""
     var t = TimeNS(12345)
     assert_equal(repr(t), "TimeNS(12345)")
@@ -313,32 +313,32 @@ def test_time_ns_repr():
 # ─── Bit conversions ──────────────────────────────────────────────
 
 
-def test_bit_from_string():
+def test_bit_from_string() raises:
     """Bit(string) round-trips through __str__."""
     var b = Bit("10110")
     assert_equal(String(b), "10110")
 
 
-def test_bit_from_string_single():
+def test_bit_from_string_single() raises:
     """Bit(string) works with a single bit."""
     assert_equal(String(Bit("0")), "0")
     assert_equal(String(Bit("1")), "1")
 
 
-def test_bit_from_string_byte_aligned():
+def test_bit_from_string_byte_aligned() raises:
     """Bit(string) works when length is a multiple of 8."""
     var b = Bit("10101010")
     assert_equal(String(b), "10101010")
     assert_equal(len(b), 8)
 
 
-def test_bit_len():
+def test_bit_len() raises:
     """Bit.__len__() returns the number of bits."""
     var b = Bit("10110")
     assert_equal(len(b), 5)
 
 
-def test_bit_getitem():
+def test_bit_getitem() raises:
     """Bit.__getitem__() returns individual bits."""
     var b = Bit("10110")
     assert_true(b[0])   # 1
@@ -348,7 +348,7 @@ def test_bit_getitem():
     assert_false(b[4])   # 0
 
 
-def test_bit_equatable():
+def test_bit_equatable() raises:
     """Bit equality."""
     var a = Bit("101")
     var b = Bit("101")
@@ -359,13 +359,13 @@ def test_bit_equatable():
     assert_true(a != d)
 
 
-def test_bit_repr():
+def test_bit_repr() raises:
     """Bit repr."""
     var b = Bit("10110")
     assert_equal(repr(b), 'Bit("10110")')
 
 
-def test_bit_from_int32():
+def test_bit_from_int32() raises:
     """Bit(Int32) matches DuckDB's INTEGER::BITSTRING cast."""
     # SELECT 123::INTEGER::BITSTRING → 00000000000000000000000001111011
     var b = Bit(Int32(123))
@@ -373,7 +373,7 @@ def test_bit_from_int32():
     assert_equal(String(b), "00000000000000000000000001111011")
 
 
-def test_bit_from_int32_negative():
+def test_bit_from_int32_negative() raises:
     """Bit(Int32) with negative value gives two's complement."""
     # SELECT (-1)::INTEGER::BITSTRING → 11111111111111111111111111111111
     var b = Bit(Int32(-1))
@@ -381,7 +381,7 @@ def test_bit_from_int32_negative():
     assert_equal(String(b), "11111111111111111111111111111111")
 
 
-def test_bit_from_int8():
+def test_bit_from_int8() raises:
     """Bit(Int8) gives 8-bit two's complement."""
     var b = Bit(Int8(0))
     assert_equal(len(b), 8)
@@ -394,7 +394,7 @@ def test_bit_from_int8():
     assert_equal(String(b3), "01111111")
 
 
-def test_bit_from_uint8():
+def test_bit_from_uint8() raises:
     """Bit(UInt8) gives 8-bit unsigned."""
     var b = Bit(UInt8(255))
     assert_equal(len(b), 8)
@@ -404,28 +404,28 @@ def test_bit_from_uint8():
     assert_equal(String(b2), "00000000")
 
 
-def test_bit_from_int16():
+def test_bit_from_int16() raises:
     """Bit(Int16) gives 16-bit two's complement."""
     var b = Bit(Int16(256))
     assert_equal(len(b), 16)
     assert_equal(String(b), "0000000100000000")
 
 
-def test_bit_from_uint16():
+def test_bit_from_uint16() raises:
     """Bit(UInt16) gives 16-bit unsigned."""
     var b = Bit(UInt16(65535))
     assert_equal(len(b), 16)
     assert_equal(String(b), "1111111111111111")
 
 
-def test_bit_from_uint32():
+def test_bit_from_uint32() raises:
     """Bit(UInt32) gives 32-bit unsigned."""
     var b = Bit(UInt32(1))
     assert_equal(len(b), 32)
     assert_equal(String(b), "00000000000000000000000000000001")
 
 
-def test_bit_from_int64():
+def test_bit_from_int64() raises:
     """Bit(Int64) gives 64-bit two's complement."""
     var b = Bit(Int64(1))
     assert_equal(len(b), 64)
@@ -434,7 +434,7 @@ def test_bit_from_int64():
     )
 
 
-def test_bit_from_uint64():
+def test_bit_from_uint64() raises:
     """Bit(UInt64) gives 64-bit unsigned."""
     var b = Bit(UInt64(0))
     assert_equal(len(b), 64)
@@ -449,7 +449,7 @@ def test_bit_from_uint64():
     )
 
 
-def test_bit_from_int():
+def test_bit_from_int() raises:
     """Bit(Int) gives 64-bit representation."""
     var b = Bit(123)
     assert_equal(len(b), 64)
@@ -461,5 +461,5 @@ def test_bit_from_int():
 # ─── run_suite ────────────────────────────────────────────────────
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

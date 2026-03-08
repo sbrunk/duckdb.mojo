@@ -3,7 +3,7 @@ from std.testing import *
 from std.testing.suite import TestSuite
 
 
-def test_vector_get_column_type():
+def test_vector_get_column_type() raises:
     """Test getting the column type from a vector."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 42 as num, 'hello' as text, 3.14 as pi")
@@ -22,7 +22,7 @@ def test_vector_get_column_type():
     assert_equal(int_data[0], 42)
 
 
-def test_vector_create_standalone():
+def test_vector_create_standalone() raises:
     """Test creating a standalone vector."""
     var int_type = LogicalType(DuckDBType.integer)
     var vec = Vector(int_type, 10)
@@ -30,7 +30,7 @@ def test_vector_create_standalone():
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.integer)
 
 
-def test_vector_create_varchar_standalone():
+def test_vector_create_varchar_standalone() raises:
     """Test creating a standalone VARCHAR vector."""
     var varchar_type = LogicalType(DuckDBType.varchar)
     var vec = Vector(varchar_type, 5)
@@ -38,7 +38,7 @@ def test_vector_create_varchar_standalone():
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
 
-def test_vector_assign_string_element():
+def test_vector_assign_string_element() raises:
     """Test assigning string elements to a vector."""
     var varchar_type = LogicalType(DuckDBType.varchar)
     var vec = Vector(varchar_type, 3)
@@ -52,7 +52,7 @@ def test_vector_assign_string_element():
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
 
-def test_vector_assign_string_element_len():
+def test_vector_assign_string_element_len() raises:
     """Test assigning string elements with explicit length."""
     var varchar_type = LogicalType(DuckDBType.varchar)
     var vec = Vector(varchar_type, 2)
@@ -64,7 +64,7 @@ def test_vector_assign_string_element_len():
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
 
-def test_vector_get_data():
+def test_vector_get_data() raises:
     """Test getting the data pointer from a vector."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 1, 2, 3")
@@ -80,7 +80,7 @@ def test_vector_get_data():
     assert_equal(int_data[0], 1)
 
 
-def test_vector_get_validity():
+def test_vector_get_validity() raises:
     """Test getting the validity mask from a vector."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
@@ -101,7 +101,7 @@ def test_vector_get_validity():
     assert_equal(data_ptr[2], 3)
 
 
-def test_vector_ensure_validity_writable():
+def test_vector_ensure_validity_writable() raises:
     """Test ensuring validity mask is writable."""
     var int_type = LogicalType(DuckDBType.integer)
     var vec = Vector(int_type, 5)
@@ -114,7 +114,7 @@ def test_vector_ensure_validity_writable():
     assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
 
 
-def test_vector_list_operations():
+def test_vector_list_operations() raises:
     """Test list vector operations."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT [1, 2, 3] as list_col")
@@ -140,7 +140,7 @@ def test_vector_list_operations():
     assert_equal(int_data[2], 3)
 
 
-def test_vector_list_nested():
+def test_vector_list_nested() raises:
     """Test nested list vector operations."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT [[1, 2], [3, 4, 5]] as nested_list")
@@ -177,7 +177,7 @@ def test_vector_list_nested():
     assert_equal(int_data[4], 5)
 
 
-def test_vector_struct_operations():
+def test_vector_struct_operations() raises:
     """Test struct vector operations."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT {'a': 1, 'b': 'hello'} as struct_col")
@@ -202,7 +202,7 @@ def test_vector_struct_operations():
     assert_equal(int_data[0], 1)
 
 
-def test_vector_array_operations():
+def test_vector_array_operations() raises:
     """Test array vector operations."""
     con = DuckDB.connect(":memory:")
     # Create an array with fixed size
@@ -227,7 +227,7 @@ def test_vector_array_operations():
     assert_equal(data_ptr[2], 3)
 
 
-def test_vector_array_multiple_rows():
+def test_vector_array_multiple_rows() raises:
     """Test array vector with multiple rows."""
     con = DuckDB.connect(":memory:")
     # Create multiple arrays with fixed size
@@ -254,7 +254,7 @@ def test_vector_array_multiple_rows():
     assert_equal(data_ptr[3], 4)
 
 
-def test_vector_types_boolean():
+def test_vector_types_boolean() raises:
     """Test vector with boolean type."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT TRUE, FALSE, TRUE")
@@ -269,7 +269,7 @@ def test_vector_types_boolean():
     assert_true(bool_data[0])
 
 
-def test_vector_types_integers():
+def test_vector_types_integers() raises:
     """Test vector with various integer types."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -300,7 +300,7 @@ def test_vector_types_integers():
     assert_equal(bi_data[0], 4)
 
 
-def test_vector_types_unsigned_integers():
+def test_vector_types_unsigned_integers() raises:
     """Test vector with unsigned integer types."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -331,7 +331,7 @@ def test_vector_types_unsigned_integers():
     assert_equal(ubi_data[0], 4)
 
 
-def test_vector_types_floats():
+def test_vector_types_floats() raises:
     """Test vector with float and double types."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 1.5::FLOAT as f, 2.5::DOUBLE as d")
@@ -351,7 +351,7 @@ def test_vector_types_floats():
     assert_equal(d_data[0], 2.5)
 
 
-def test_vector_types_temporal():
+def test_vector_types_temporal() raises:
     """Test vector with temporal types."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -370,7 +370,7 @@ def test_vector_types_temporal():
     assert_equal(vec_ts.get_column_type().get_type_id(), DuckDBType.timestamp)
 
 
-def test_vector_null_values():
+def test_vector_null_values() raises:
     """Test vector with NULL values."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -387,7 +387,7 @@ def test_vector_null_values():
     assert_equal(vec_str.get_column_type().get_type_id(), DuckDBType.varchar)
 
 
-def test_vector_mixed_nulls():
+def test_vector_mixed_nulls() raises:
     """Test vector with mixed NULL and non-NULL values."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
@@ -414,7 +414,7 @@ def test_vector_mixed_nulls():
     assert_equal(data_ptr[2], 3)
 
 
-def test_vector_empty_list():
+def test_vector_empty_list() raises:
     """Test vector with empty list."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT []::INT[] as empty_list")
@@ -432,7 +432,7 @@ def test_vector_empty_list():
     assert_equal(list_data[0].length, 0)
 
 
-def test_vector_map_type():
+def test_vector_map_type() raises:
     """Test vector with map type."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT MAP([1, 2], ['a', 'b']) as map_col")
@@ -444,7 +444,7 @@ def test_vector_map_type():
     assert_equal(map_vec.get_column_type().get_type_id(), DuckDBType.map)
 
 
-def test_vector_chunk_size():
+def test_vector_chunk_size() raises:
     """Test that chunk size is correct for vectors."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT * FROM range(100)")
@@ -457,7 +457,7 @@ def test_vector_chunk_size():
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.bigint)
 
 
-def test_vector_multiple_chunks():
+def test_vector_multiple_chunks() raises:
     """Test vectors across multiple chunks."""
     con = DuckDB.connect(":memory:")
     # Generate more rows than fit in one chunk (typically 2048)
@@ -492,7 +492,7 @@ def test_vector_multiple_chunks():
     assert_equal(total_rows, 5000)
 
 
-def test_vector_varchar_strings():
+def test_vector_varchar_strings() raises:
     """Test vector with various string values."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -506,7 +506,7 @@ def test_vector_varchar_strings():
     var vec = chunk.get_vector(0)
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
-def test_vector_lifetime():
+def test_vector_lifetime() raises:
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 1, 2, 3")
 
@@ -516,5 +516,5 @@ def test_vector_lifetime():
     assert_equal(value, 1)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

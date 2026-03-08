@@ -3,14 +3,14 @@ from std.testing import *
 from std.testing.suite import TestSuite
 
 
-def test_result_statement_type_select():
+def test_result_statement_type_select() raises:
     """Test statement_type returns SELECT for SELECT statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1")
     assert_equal(result.statement_type(), StatementType.SELECT)
 
 
-def test_result_statement_type_insert():
+def test_result_statement_type_insert() raises:
     """Test statement_type returns INSERT for INSERT statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -18,7 +18,7 @@ def test_result_statement_type_insert():
     assert_equal(result.statement_type(), StatementType.INSERT)
 
 
-def test_result_statement_type_update():
+def test_result_statement_type_update() raises:
     """Test statement_type returns UPDATE for UPDATE statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -27,7 +27,7 @@ def test_result_statement_type_update():
     assert_equal(result.statement_type(), StatementType.UPDATE)
 
 
-def test_result_statement_type_delete():
+def test_result_statement_type_delete() raises:
     """Test statement_type returns DELETE for DELETE statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -36,14 +36,14 @@ def test_result_statement_type_delete():
     assert_equal(result.statement_type(), StatementType.DELETE)
 
 
-def test_result_statement_type_create():
+def test_result_statement_type_create() raises:
     """Test statement_type returns CREATE for CREATE statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("CREATE TABLE test (id INT)")
     assert_equal(result.statement_type(), StatementType.CREATE)
 
 
-def test_result_statement_type_drop():
+def test_result_statement_type_drop() raises:
     """Test statement_type returns DROP for DROP statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -51,7 +51,7 @@ def test_result_statement_type_drop():
     assert_equal(result.statement_type(), StatementType.DROP)
 
 
-def test_result_statement_type_alter():
+def test_result_statement_type_alter() raises:
     """Test statement_type returns ALTER for ALTER statements."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -59,7 +59,7 @@ def test_result_statement_type_alter():
     assert_equal(result.statement_type(), StatementType.ALTER)
 
 
-def test_rows_changed_insert_single():
+def test_rows_changed_insert_single() raises:
     """Test rows_changed returns 1 for single row INSERT."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -67,7 +67,7 @@ def test_rows_changed_insert_single():
     assert_equal(result.rows_changed(), 1)
 
 
-def test_rows_changed_insert_multiple():
+def test_rows_changed_insert_multiple() raises:
     """Test rows_changed returns correct count for multiple row INSERT."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -75,7 +75,7 @@ def test_rows_changed_insert_multiple():
     assert_equal(result.rows_changed(), 5)
 
 
-def test_rows_changed_update_all():
+def test_rows_changed_update_all() raises:
     """Test rows_changed returns correct count for UPDATE affecting all rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -84,7 +84,7 @@ def test_rows_changed_update_all():
     assert_equal(result.rows_changed(), 3)
 
 
-def test_rows_changed_update_partial():
+def test_rows_changed_update_partial() raises:
     """Test rows_changed returns correct count for UPDATE affecting some rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -93,7 +93,7 @@ def test_rows_changed_update_partial():
     assert_equal(result.rows_changed(), 2)
 
 
-def test_rows_changed_update_none():
+def test_rows_changed_update_none() raises:
     """Test rows_changed returns 0 for UPDATE matching no rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -102,7 +102,7 @@ def test_rows_changed_update_none():
     assert_equal(result.rows_changed(), 0)
 
 
-def test_rows_changed_delete_all():
+def test_rows_changed_delete_all() raises:
     """Test rows_changed returns correct count for DELETE removing all rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -111,7 +111,7 @@ def test_rows_changed_delete_all():
     assert_equal(result.rows_changed(), 4)
 
 
-def test_rows_changed_delete_partial():
+def test_rows_changed_delete_partial() raises:
     """Test rows_changed returns correct count for DELETE removing some rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -120,7 +120,7 @@ def test_rows_changed_delete_partial():
     assert_equal(result.rows_changed(), 2)
 
 
-def test_rows_changed_delete_none():
+def test_rows_changed_delete_none() raises:
     """Test rows_changed returns 0 for DELETE matching no rows."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -129,27 +129,27 @@ def test_rows_changed_delete_none():
     assert_equal(result.rows_changed(), 0)
 
 
-def test_rows_changed_select():
+def test_rows_changed_select() raises:
     """Test rows_changed returns 0 for SELECT statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1, 2, 3")
     assert_equal(result.rows_changed(), 0)
 
 
-def test_rows_changed_create():
+def test_rows_changed_create() raises:
     """Test rows_changed returns 0 for CREATE statements."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("CREATE TABLE test (id INT)")
     assert_equal(result.rows_changed(), 0)
 
-def test_result_materialized_length():
+def test_result_materialized_length() raises:
     """Test len() on materialized result returns correct number of rows."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(5))").fetchall()
     assert_equal(len(result), 5)
 
 
-def test_result_materialized_length_empty():
+def test_result_materialized_length_empty() raises:
     """Test len() on materialized result returns 0 for empty result."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT)")
@@ -157,28 +157,28 @@ def test_result_materialized_length_empty():
     assert_equal(len(result), 0)
 
 
-def test_result_column_count():
+def test_result_column_count() raises:
     """Test column_count returns correct number of columns."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1, 2, 3, 4, 5")
     assert_equal(result.column_count(), 5)
 
 
-def test_result_column_count_single():
+def test_result_column_count_single() raises:
     """Test column_count returns 1 for single column."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42")
     assert_equal(result.column_count(), 1)
 
 
-def test_result_column_name():
+def test_result_column_name() raises:
     """Test column_name returns correct column name."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42 AS answer")
     assert_equal(result.column_name(0), "answer")
 
 
-def test_result_column_name_multiple():
+def test_result_column_name_multiple() raises:
     """Test column_name for multiple columns."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1 AS a, 2 AS b, 3 AS c")
@@ -187,7 +187,7 @@ def test_result_column_name_multiple():
     assert_equal(result.column_name(2), "c")
 
 
-def test_result_column_name_unnamed():
+def test_result_column_name_unnamed() raises:
     """Test column_name for unnamed columns."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1, 2")
@@ -198,7 +198,7 @@ def test_result_column_name_unnamed():
     assert_true(len(name1) > 0)
 
 
-def test_result_fetch_chunk():
+def test_result_fetch_chunk() raises:
     """Test fetch_chunk returns data correctly."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42")
@@ -206,7 +206,7 @@ def test_result_fetch_chunk():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_result_fetchall():
+def test_result_fetchall() raises:
     """Test fetchall materializes all results."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(10))").fetchall()
@@ -214,7 +214,7 @@ def test_result_fetchall():
         assert_equal(result.get[Int64](col=0, row=i), Int64(i))
 
 
-def test_result_iteration():
+def test_result_iteration() raises:
     """Test iterating over result chunks."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT unnest(range(5))")
@@ -226,7 +226,7 @@ def test_result_iteration():
     assert_equal(count, 5)
 
 
-def test_result_multiple_chunks():
+def test_result_multiple_chunks() raises:
     """Test result with multiple chunks (large dataset)."""
     var conn = DuckDB.connect(":memory:")
     # Create a result that will span multiple chunks (DuckDB uses 2048 rows per chunk by default)
@@ -237,7 +237,7 @@ def test_result_multiple_chunks():
     assert_equal(total_rows, 5000)
 
 
-def test_result_column_types():
+def test_result_column_types() raises:
     """Test column_types returns correct types."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 1::INTEGER, 2.0::DOUBLE, 'test'::VARCHAR")
@@ -245,7 +245,7 @@ def test_result_column_types():
     assert_equal(len(types), 3)
 
 
-def test_result_column_type():
+def test_result_column_type() raises:
     """Test column_type returns correct type for specific column."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42::INTEGER")
@@ -253,7 +253,7 @@ def test_result_column_type():
     assert_equal(col_type.get_type_id(), DuckDBType.integer)
 
 
-def test_result_with_null_values():
+def test_result_with_null_values() raises:
     """Test result handling NULL values."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(v)")
@@ -263,7 +263,7 @@ def test_result_with_null_values():
     assert_equal(chunk.get[Int32](col=0, row=2), 3)
 
 
-def test_result_mixed_types():
+def test_result_mixed_types() raises:
     """Test result with mixed column types."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 42::INTEGER, 3.14::DOUBLE, 'hello'::VARCHAR, TRUE::BOOLEAN")
@@ -274,7 +274,7 @@ def test_result_mixed_types():
     assert_equal(chunk.get[Bool](col=3, row=0), True)
 
 
-def test_result_empty_table():
+def test_result_empty_table() raises:
     """Test result from empty table."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE test (id INT, name VARCHAR)")
@@ -283,7 +283,7 @@ def test_result_empty_table():
     assert_equal(result.column_count(), 2)
 
 
-def test_result_large_integers():
+def test_result_large_integers() raises:
     """Test result with large integer values."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 9223372036854775807::BIGINT")  # Max BIGINT
@@ -291,7 +291,7 @@ def test_result_large_integers():
     assert_equal(chunk.get[Int64](col=0, row=0), 9223372036854775807)
 
 
-def test_result_negative_integers():
+def test_result_negative_integers() raises:
     """Test result with negative integer values."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT -42::INTEGER, -123456789::BIGINT")
@@ -300,7 +300,7 @@ def test_result_negative_integers():
     assert_equal(chunk.get[Int64](col=1, row=0), -123456789)
 
 
-def test_result_floating_point_precision():
+def test_result_floating_point_precision() raises:
     """Test result with floating point values."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT 3.14159265359::DOUBLE")
@@ -314,7 +314,7 @@ def test_result_floating_point_precision():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_for_chunks_iteration():
+def test_for_chunks_iteration() raises:
     """Test iterating over chunks with a for loop."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT unnest(range(10)) AS id"
@@ -326,7 +326,7 @@ def test_for_chunks_iteration():
     assert_equal(count, 10)
 
 
-def test_for_rows_iteration():
+def test_for_rows_iteration() raises:
     """Test iterating over rows directly from a result (via __iter__)."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT unnest(range(10)) AS id"
@@ -337,7 +337,7 @@ def test_for_rows_iteration():
     assert_equal(count, 10)
 
 
-def test_for_rows_in_chunk():
+def test_for_rows_in_chunk() raises:
     """Test iterating over rows within a chunk using for-in."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT * FROM (VALUES (0, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e')) AS t(id, name)"
@@ -350,7 +350,7 @@ def test_for_rows_in_chunk():
     assert_equal(idx, 5)
 
 
-def test_for_rows_multi_column():
+def test_for_rows_multi_column() raises:
     """Test row iteration with multiple typed columns."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT 42::INTEGER AS i, 3.14::DOUBLE AS d, 'hello'::VARCHAR AS s, TRUE::BOOLEAN AS b"
@@ -361,7 +361,7 @@ def test_for_rows_multi_column():
         assert_equal(row.get[Bool](col=3), True)
 
 
-def test_for_rows_with_nulls():
+def test_for_rows_with_nulls() raises:
     """Test row iteration with NULL values using Optional."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT * FROM (VALUES (1, 'a'), (NULL, 'b'), (3, NULL)) AS t(id, name)"
@@ -380,7 +380,7 @@ def test_for_rows_with_nulls():
     assert_equal(idx, 3)
 
 
-def test_for_rows_multi_chunk():
+def test_for_rows_multi_chunk() raises:
     """Test row iteration spanning multiple chunks (>2048 rows)."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT unnest(range(5000)) AS id"
@@ -391,7 +391,7 @@ def test_for_rows_multi_chunk():
     assert_equal(count, 5000)
 
 
-def test_for_chunks_multi_chunk():
+def test_for_chunks_multi_chunk() raises:
     """Test chunk iteration over large dataset, verify chunk sizes."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT unnest(range(5000)) AS id"
@@ -405,7 +405,7 @@ def test_for_chunks_multi_chunk():
     assert_true(chunk_count > 1, "expected multiple chunks for 5000 rows")
 
 
-def test_for_rows_empty_result():
+def test_for_rows_empty_result() raises:
     """Test row iteration over empty result produces no iterations."""
     var conn = DuckDB.connect(":memory:")
     _ = conn.execute("CREATE TABLE empty_tbl (id INT)")
@@ -416,7 +416,7 @@ def test_for_rows_empty_result():
     assert_equal(count, 0)
 
 
-def test_rows_explicit_spelling():
+def test_rows_explicit_spelling() raises:
     """Test .rows() as explicit spelling of __iter__."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT unnest(range(5)) AS id"
@@ -427,7 +427,7 @@ def test_rows_explicit_spelling():
     assert_equal(count, 5)
 
 
-def test_row_column_count():
+def test_row_column_count() raises:
     """Test Row.column_count() inside iteration."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT 1::INT, 2::INT, 3::INT"
@@ -435,7 +435,7 @@ def test_row_column_count():
         assert_equal(row.column_count(), 3)
 
 
-def test_row_is_null_in_loop():
+def test_row_is_null_in_loop() raises:
     """Test Row.is_null() inside a for loop."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT * FROM (VALUES (1, NULL), (NULL, 'b')) AS t(id, name)"
@@ -450,5 +450,5 @@ def test_row_is_null_in_loop():
         idx += 1
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

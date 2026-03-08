@@ -3,7 +3,7 @@ from std.testing import assert_equal, assert_true
 from std.testing.suite import TestSuite
 
 
-def test_range():
+def test_range() raises:
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT unnest(range(10))")
     chunk = result.fetch_chunk()
@@ -15,7 +15,7 @@ def test_range():
         assert_equal(obtained[i], Int64(i))
 
 
-def test_materialized_result():
+def test_materialized_result() raises:
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT unnest(range(10))").fetchall()
     for i in range(10):
@@ -26,5 +26,5 @@ def test_materialized_result():
         assert_equal(obtained[i], Int64(i))
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

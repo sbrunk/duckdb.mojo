@@ -6,7 +6,7 @@ from std.pathlib import Path
 import std.os
 
 
-def test_database_in_memory_default():
+def test_database_in_memory_default() raises:
     """Test creating a database with default settings (in-memory)."""
     # When no path is provided, should create an in-memory database
     var db = Database()
@@ -14,13 +14,13 @@ def test_database_in_memory_default():
     _ = db
 
 
-def test_database_in_memory_explicit():
+def test_database_in_memory_explicit() raises:
     """Test creating an in-memory database explicitly."""
     var db = Database(":memory:")
     _ = db
 
 
-def test_database_with_file_path():
+def test_database_with_file_path() raises:
     """Test creating a database with a file path."""
     var test_db_path = String("test_database.db")
     
@@ -35,7 +35,7 @@ def test_database_with_file_path():
         pass
 
 
-def test_database_with_temp_file():
+def test_database_with_temp_file() raises:
     """Test creating a database with a temporary file path."""
     var temp_db_path = String("/tmp/test_duckdb_temp.db")
     
@@ -52,7 +52,7 @@ def test_database_with_temp_file():
         pass
 
 
-def test_database_invalid_path():
+def test_database_invalid_path() raises:
     """Test creating a database with an invalid path should raise an error."""
     # Try to create a database in a directory that doesn't exist
     var invalid_path = String("/nonexistent/directory/that/does/not/exist/test.db")
@@ -61,13 +61,13 @@ def test_database_invalid_path():
         var db = Database(invalid_path)
 
 
-def test_database_none_path():
+def test_database_none_path() raises:
     """Test creating a database with None path (should default to in-memory)."""
     var db = Database(None)
     _ = db
 
 
-def test_database_multiple_instances():
+def test_database_multiple_instances() raises:
     """Test creating multiple database instances."""
     var db1 = Database(":memory:")
     var db2 = Database(":memory:")
@@ -79,7 +79,7 @@ def test_database_multiple_instances():
     _ = db3
 
 
-def test_database_empty_string_path():
+def test_database_empty_string_path() raises:
     """Test creating a database with an empty string path."""
     # Empty string should be treated as a valid path and create a file
     var empty_path = String("")
@@ -92,5 +92,5 @@ def test_database_empty_string_path():
         pass
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

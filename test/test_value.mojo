@@ -427,5 +427,5 @@ fn test_uuid_values() raises:
     assert_equal(result, uuid_val)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

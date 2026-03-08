@@ -8,7 +8,7 @@ from std.testing.suite import TestSuite
 from std.reflection import struct_field_count
 
 
-def test_scalar_types_new_api():
+def test_scalar_types_new_api() raises:
     """Test scalar types with the new get[T] API."""
     con = DuckDB.connect(":memory:")
 
@@ -95,7 +95,7 @@ def test_scalar_types_new_api():
     assert_equal(mojo_uint_val, 42)
 
 
-def test_date_time_types_new_api():
+def test_date_time_types_new_api() raises:
     """Test date/time types with the new API."""
     con = DuckDB.connect(":memory:")
 
@@ -118,7 +118,7 @@ def test_date_time_types_new_api():
     assert_equal(time_val, Time(41400123456))
 
 
-def test_timestamp_variants_typed_api():
+def test_timestamp_variants_typed_api() raises:
     """Test TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -141,7 +141,7 @@ def test_timestamp_variants_typed_api():
     assert_equal(ts_ns, TimestampNS(1609459200000000000))
 
 
-def test_timestamp_tz_typed_api():
+def test_timestamp_tz_typed_api() raises:
     """Test TIMESTAMPTZ with get[T]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("SET TimeZone = 'UTC'")
@@ -152,7 +152,7 @@ def test_timestamp_tz_typed_api():
     assert_equal(ts_tz, TimestampTZ(1609459200000000))
 
 
-def test_time_tz_typed_api():
+def test_time_tz_typed_api() raises:
     """Test TIMETZ with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -168,7 +168,7 @@ def test_time_tz_typed_api():
     assert_equal(ttz, expected)
 
 
-def test_uuid_typed_api():
+def test_uuid_typed_api() raises:
     """Test UUID with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -191,7 +191,7 @@ def test_uuid_typed_api():
     )
 
 
-def test_uuid_zero_typed_api():
+def test_uuid_zero_typed_api() raises:
     """Test UUID zero value with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -201,7 +201,7 @@ def test_uuid_zero_typed_api():
     assert_equal(uuid, UUID(UInt128(0)))
 
 
-def test_hugeint_typed_api():
+def test_hugeint_typed_api() raises:
     """Test HUGEINT (Int128) with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -222,7 +222,7 @@ def test_hugeint_typed_api():
     assert_equal(chunk.get[Int128](col=0, row=0), Int128(0))
 
 
-def test_uhugeint_typed_api():
+def test_uhugeint_typed_api() raises:
     """Test UHUGEINT (UInt128) with get[T]."""
     con = DuckDB.connect(":memory:")
 
@@ -237,7 +237,7 @@ def test_uhugeint_typed_api():
     assert_equal(chunk.get[UInt128](col=0, row=0), UInt128(0))
 
 
-def test_decimal_typed_api():
+def test_decimal_typed_api() raises:
     """Test DECIMAL with get[T]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE d (val DECIMAL(10, 2))")
@@ -256,7 +256,7 @@ def test_decimal_typed_api():
     assert_equal(d2.value(), Int128(-9999))
 
 
-def test_timestamp_variants_column_api():
+def test_timestamp_variants_column_api() raises:
     """Test fetching a full column of timestamp variants."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE ts (a TIMESTAMP_S, b TIMESTAMP_MS, c TIMESTAMP_NS)")
@@ -282,7 +282,7 @@ def test_timestamp_variants_column_api():
     assert_equal(col_ns[1], TimestampNS(0))
 
 
-def test_null_handling_new_api():
+def test_null_handling_new_api() raises:
     """Test NULL handling with the new API."""
     con = DuckDB.connect(":memory:")
 
@@ -306,7 +306,7 @@ def test_null_handling_new_api():
     assert_equal(val3, 3)
 
 
-def test_column_retrieval_new_api():
+def test_column_retrieval_new_api() raises:
     """Test getting all values from a column."""
     con = DuckDB.connect(":memory:")
 
@@ -319,7 +319,7 @@ def test_column_retrieval_new_api():
         assert_equal(values[i], Int32(i + 1))
 
 
-def test_multiple_columns_new_api():
+def test_multiple_columns_new_api() raises:
     """Test retrieving multiple columns with different types."""
     con = DuckDB.connect(":memory:")
 
@@ -349,7 +349,7 @@ def test_multiple_columns_new_api():
     assert_equal(scores[2], 35.5)
 
 
-def test_type_mismatch_new_api():
+def test_type_mismatch_new_api() raises:
     """Test that type mismatches raise errors."""
     con = DuckDB.connect(":memory:")
 
@@ -429,7 +429,7 @@ struct NumOrStrOrBool(Copyable, Movable):
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_mojo_type_scalar():
+def test_mojo_type_scalar() raises:
     """Test MojoType construction for scalar types."""
     var mt = MojoType(DuckDBType.bigint)
     assert_equal(String(mt), String(DuckDBType.bigint))
@@ -438,7 +438,7 @@ def test_mojo_type_scalar():
     assert_equal(len(mt.field_names), 0)
 
 
-def test_mojo_type_list():
+def test_mojo_type_list() raises:
     """Test MojoType.list_of() construction."""
     var element = MojoType(DuckDBType.integer)
     var list_mt = MojoType.list_of(element^)
@@ -448,7 +448,7 @@ def test_mojo_type_list():
     assert_equal(String(list_mt), "list(integer)")
 
 
-def test_mojo_type_struct():
+def test_mojo_type_struct() raises:
     """Test MojoType.struct_of() construction."""
     var names = List[String]()
     names.append("x")
@@ -465,7 +465,7 @@ def test_mojo_type_struct():
     assert_equal(String(struct_mt), "struct(x double, y double)")
 
 
-def test_mojo_logical_type_scalar():
+def test_mojo_logical_type_scalar() raises:
     """Test mojo_logical_type[T]() for scalar types."""
     var mt_int = mojo_logical_type[Int64]()
     assert_equal(mt_int.type_id, DuckDBType.bigint)
@@ -475,7 +475,7 @@ def test_mojo_logical_type_scalar():
     assert_equal(mt_f64.type_id, DuckDBType.double)
 
 
-def test_mojo_logical_type_struct():
+def test_mojo_logical_type_struct() raises:
     """Test mojo_logical_type[T]() for struct types using reflection."""
     var mt = mojo_logical_type[Point]()
     assert_equal(mt.type_id, DuckDBType.struct_t)
@@ -486,7 +486,7 @@ def test_mojo_logical_type_struct():
     assert_equal(mt.children[1].type_id, DuckDBType.double)
 
 
-def test_mojo_type_to_logical_type():
+def test_mojo_type_to_logical_type() raises:
     """Test MojoType.to_logical_type() conversion to DuckDB runtime type."""
     # Scalar
     var mt = MojoType(DuckDBType.bigint)
@@ -507,7 +507,7 @@ def test_mojo_type_to_logical_type():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_struct_deserialization_numeric():
+def test_struct_deserialization_numeric() raises:
     """Test deserializing DuckDB STRUCT into a Mojo struct with numeric fields."""
     con = DuckDB.connect(":memory:")
 
@@ -520,7 +520,7 @@ def test_struct_deserialization_numeric():
     assert_equal(val.y, 2.5)
 
 
-def test_struct_deserialization_column():
+def test_struct_deserialization_column() raises:
     """Test deserializing a column of DuckDB STRUCTs."""
     con = DuckDB.connect(":memory:")
 
@@ -545,7 +545,7 @@ def test_struct_deserialization_column():
     assert_equal(points[2].y, 4.0)
 
 
-def test_struct_deserialization_mixed_int_types():
+def test_struct_deserialization_mixed_int_types() raises:
     """Test struct with mixed integer types."""
     con = DuckDB.connect(":memory:")
 
@@ -558,7 +558,7 @@ def test_struct_deserialization_mixed_int_types():
     assert_equal(val.b, 20)
 
 
-def test_struct_null_handling():
+def test_struct_null_handling() raises:
     """Test NULL handling for struct columns."""
     con = DuckDB.connect(":memory:")
 
@@ -582,7 +582,7 @@ def test_struct_null_handling():
     assert_equal(points[2].value().x, 3.0)
 
 
-def test_logical_type_struct_creation():
+def test_logical_type_struct_creation() raises:
     """Test creating struct LogicalType via the struct_type() function."""
     var names = List[String]()
     names.append("a")
@@ -604,7 +604,7 @@ def test_logical_type_struct_creation():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_list_column_int32():
+def test_list_column_int32() raises:
     """Deserialize a LIST(INTEGER) column."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
@@ -634,7 +634,7 @@ def test_list_column_int32():
     assert_equal(row2[0].value(), 6)
 
 
-def test_list_column_varchar():
+def test_list_column_varchar() raises:
     """Deserialize a LIST(VARCHAR) column."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (words VARCHAR[])")
@@ -655,7 +655,7 @@ def test_list_column_varchar():
     assert_equal(row1[0].value(), "mojo")
 
 
-def test_list_column_with_nulls():
+def test_list_column_with_nulls() raises:
     """Deserialize a LIST column with NULL rows and NULL elements."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
@@ -684,7 +684,7 @@ def test_list_column_with_nulls():
     assert_equal(lists[2].value().copy()[0].value(), 4)
 
 
-def test_list_column_empty_lists():
+def test_list_column_empty_lists() raises:
     """Deserialize empty lists."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
@@ -702,7 +702,7 @@ def test_list_column_empty_lists():
     assert_equal(lists[1].copy()[0].value(), 42)
 
 
-def test_list_column_float64():
+def test_list_column_float64() raises:
     """Deserialize a LIST(DOUBLE) column."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT [1.5, 2.5, 3.5]::DOUBLE[] AS vals")
@@ -722,7 +722,7 @@ def test_list_column_float64():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_list_via_get():
+def test_list_via_get() raises:
     """Deserialize a LIST(INTEGER) column."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
@@ -745,7 +745,7 @@ def test_list_via_get():
     assert_equal(row1[0].value(), 30)
 
 
-def test_list_via_get_with_nulls():
+def test_list_via_get_with_nulls() raises:
     """LIST(INTEGER) column with NULLs."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
@@ -772,7 +772,7 @@ def test_list_via_get_with_nulls():
     assert_equal(lists[2].value().copy()[0].value(), 4)
 
 
-def test_nested_list():
+def test_nested_list() raises:
     """Deserialize a LIST(LIST(INTEGER)) column — arbitrarily nested."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[][])")
@@ -814,7 +814,7 @@ def test_nested_list():
     assert_equal(inner2[2].value(), 6)
 
 
-def test_nested_list_with_nulls():
+def test_nested_list_with_nulls() raises:
     """Nested LIST(LIST(INTEGER)) with NULLs at various levels."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[][])")
@@ -851,7 +851,7 @@ def test_nested_list_with_nulls():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_table_struct_single_row():
+def test_table_struct_single_row() raises:
     """Deserialize a single table row into a struct."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -873,7 +873,7 @@ def test_table_struct_single_row():
     assert_equal(user2.active, False)
 
 
-def test_table_struct_all_rows():
+def test_table_struct_all_rows() raises:
     """Deserialize all table rows into structs."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -899,7 +899,7 @@ def test_table_struct_all_rows():
     assert_equal(users[2].active, True)
 
 
-def test_table_struct_with_nulls():
+def test_table_struct_with_nulls() raises:
     """Rows with any NULL column value raise an error."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -924,7 +924,7 @@ def test_table_struct_with_nulls():
         _ = chunk.get[UserRecord](row=2)
 
 
-def test_table_struct_all_rows_with_nulls():
+def test_table_struct_all_rows_with_nulls() raises:
     """All-rows get raises when a non-Optional field is NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -940,7 +940,7 @@ def test_table_struct_all_rows_with_nulls():
         _ = chunk.get[UserRecord]()
 
 
-def test_table_struct_column_count_mismatch():
+def test_table_struct_column_count_mismatch() raises:
     """Error when column count doesn't match struct field count."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT)")
@@ -953,7 +953,7 @@ def test_table_struct_column_count_mismatch():
         _ = chunk.get[UserRecord](row=0)
 
 
-def test_table_struct_type_mismatch():
+def test_table_struct_type_mismatch() raises:
     """Error when a column type doesn't match the struct field type."""
     con = DuckDB.connect(":memory:")
     # age should be BIGINT but we use VARCHAR
@@ -968,7 +968,7 @@ def test_table_struct_type_mismatch():
         _ = chunk.get[UserRecord](row=0)
 
 
-def test_table_struct_row_out_of_bounds():
+def test_table_struct_row_out_of_bounds() raises:
     """Error when row index is out of bounds."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -982,7 +982,7 @@ def test_table_struct_row_out_of_bounds():
         _ = chunk.get[UserRecord](row=5)
 
 
-def test_table_struct_with_list_field():
+def test_table_struct_with_list_field() raises:
     """Deserialize a table row with a List field."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
@@ -1005,7 +1005,7 @@ def test_table_struct_with_list_field():
     assert_equal(len(rec2.scores), 2)
 
 
-def test_table_struct_with_nested_struct():
+def test_table_struct_with_nested_struct() raises:
     """Deserialize a table row where a column is a DuckDB STRUCT."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -1034,7 +1034,7 @@ def test_table_struct_with_nested_struct():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_materialized_struct_single_row():
+def test_materialized_struct_single_row() raises:
     """Deserialize a single row from a MaterializedResult into a struct."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -1055,7 +1055,7 @@ def test_materialized_struct_single_row():
     assert_equal(user1.active, False)
 
 
-def test_materialized_struct_all_rows():
+def test_materialized_struct_all_rows() raises:
     """Deserialize all rows from a MaterializedResult into structs."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -1105,7 +1105,7 @@ def test_materialized_struct_with_nulls_raises():
         _ = result.get[UserRecord]()
 
 
-def test_materialized_struct_row_out_of_bounds():
+def test_materialized_struct_row_out_of_bounds() raises:
     """MaterializedResult.get[T](row=) raises on out-of-bounds row."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT, active BOOLEAN)")
@@ -1116,7 +1116,7 @@ def test_materialized_struct_row_out_of_bounds():
         _ = result.get[UserRecord](row=5)
 
 
-def test_materialized_struct_with_list_field():
+def test_materialized_struct_with_list_field() raises:
     """MaterializedResult struct deserialization with a List field."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
@@ -1142,7 +1142,7 @@ def test_materialized_struct_with_list_field():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_tuple_basic():
+def test_tuple_basic() raises:
     """Deserialize a row into a Tuple of basic types."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT 42::INTEGER, 3.14::DOUBLE, 'hello'::VARCHAR"
@@ -1153,7 +1153,7 @@ def test_tuple_basic():
     assert_equal(t[2], "hello")
 
 
-def test_tuple_all_rows():
+def test_tuple_all_rows() raises:
     """Deserialize all rows into a List of Tuples."""
     var conn = DuckDB.connect(":memory:")
     var query = (
@@ -1170,7 +1170,7 @@ def test_tuple_all_rows():
     assert_equal(rows[2][1], "c")
 
 
-def test_tuple_nullable():
+def test_tuple_nullable() raises:
     """Deserialize a Tuple with Optional elements for NULL handling."""
     var conn = DuckDB.connect(":memory:")
     var query = (
@@ -1192,7 +1192,7 @@ def test_tuple_nullable():
     assert_false(t2[1])
 
 
-def test_tuple_from_row():
+def test_tuple_from_row() raises:
     """Deserialize a Tuple via Row.get_tuple inside a for loop."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT * FROM (VALUES (0, 'x'), (1, 'y'), (2, 'z')) AS t(id, label)"
@@ -1206,7 +1206,7 @@ def test_tuple_from_row():
     assert_equal(idx, 3)
 
 
-def test_tuple_bigint_types():
+def test_tuple_bigint_types() raises:
     """Deserialize a Tuple with various integer widths."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT 1::TINYINT, 2::SMALLINT, 3::INTEGER, 4::BIGINT"
@@ -1218,7 +1218,7 @@ def test_tuple_bigint_types():
     assert_equal(t[3], Int64(4))
 
 
-def test_tuple_boolean():
+def test_tuple_boolean() raises:
     """Deserialize a Tuple containing Bool values."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT TRUE::BOOLEAN, FALSE::BOOLEAN"
@@ -1228,7 +1228,7 @@ def test_tuple_boolean():
     assert_false(t[1])
 
 
-def test_tuple_column_count_mismatch():
+def test_tuple_column_count_mismatch() raises:
     """Error when Tuple element count doesn't match column count."""
     var conn = DuckDB.connect(":memory:")
     var query = "SELECT 1::INT, 2::INT, 3::INT"
@@ -1254,7 +1254,7 @@ def test_tuple_null_non_optional_raises():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_array_column_int32():
+def test_array_column_int32() raises:
     """Deserialize an ARRAY column of fixed-size INTEGER[3]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr INTEGER[3])")
@@ -1289,7 +1289,7 @@ def test_array_column_int32():
     assert_equal(row2[2].value(), 9)
 
 
-def test_array_single_row():
+def test_array_single_row() raises:
     """Deserialize a single ARRAY row."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT [10, 20]::INTEGER[2] AS arr")
@@ -1300,7 +1300,7 @@ def test_array_single_row():
     assert_equal(arr[1].value(), 20)
 
 
-def test_array_column_varchar():
+def test_array_column_varchar() raises:
     """Deserialize an ARRAY column of VARCHAR[2]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr VARCHAR[2])")
@@ -1321,7 +1321,7 @@ def test_array_column_varchar():
     assert_equal(row1[1].value(), "bar")
 
 
-def test_array_column_with_null_rows():
+def test_array_column_with_null_rows() raises:
     """Deserialize an ARRAY column where some rows are NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr INTEGER[2])")
@@ -1338,7 +1338,7 @@ def test_array_column_with_null_rows():
     assert_equal(lists[2].value().copy()[0].value(), 3)
 
 
-def test_array_column_float64():
+def test_array_column_float64() raises:
     """Deserialize an ARRAY column of DOUBLE[2]."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -1356,7 +1356,7 @@ def test_array_column_float64():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_map_single_row():
+def test_map_single_row() raises:
     """Deserialize a single MAP(VARCHAR, INTEGER) row as Dict."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT MAP {'a': 1, 'b': 2} AS m")
@@ -1368,7 +1368,7 @@ def test_map_single_row():
     assert_equal(d["b"], 2)
 
 
-def test_map_column():
+def test_map_column() raises:
     """Deserialize a column of MAPs as Dicts."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
@@ -1391,7 +1391,7 @@ def test_map_column():
     assert_equal(d1["z"], 30)
 
 
-def test_map_with_null_values():
+def test_map_with_null_values() raises:
     """Deserialize a MAP where some values are NULL using Optional."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
@@ -1403,7 +1403,7 @@ def test_map_with_null_values():
     assert_false(d["b"])  # NULL value
 
 
-def test_map_with_null_rows():
+def test_map_with_null_rows() raises:
     """Deserialize a MAP column where some rows are NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
@@ -1422,7 +1422,7 @@ def test_map_with_null_rows():
     assert_equal(dicts[2].value()["c"], 3)
 
 
-def test_map_int_keys():
+def test_map_int_keys() raises:
     """Deserialize a MAP with integer keys."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT MAP {1: 'one', 2: 'two'} AS m")
@@ -1434,7 +1434,7 @@ def test_map_int_keys():
     assert_equal(d[Int32(2)], "two")
 
 
-def test_map_with_mojo_int():
+def test_map_with_mojo_int() raises:
     """Deserialize a MAP using Dict[String, Int] — Mojo's native integer type.
 
     Int is platform-dependent (64-bit on most modern systems). DuckDB's
@@ -1450,7 +1450,7 @@ def test_map_with_mojo_int():
     assert_equal(d["b"], 2)
 
 
-def test_map_with_mojo_uint():
+def test_map_with_mojo_uint() raises:
     """Deserialize a MAP using Dict[String, UInt] — Mojo's native unsigned integer.
 
     UInt is platform-dependent (64-bit on most modern systems). Maps to
@@ -1471,7 +1471,7 @@ def test_map_with_mojo_uint():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_map_as_list_struct_single_row():
+def test_map_as_list_struct_single_row() raises:
     """Deserialize a MAP as List[Struct] — the raw DuckDB representation.
 
     DuckDB MAPs are internally LIST(STRUCT(key K, value V)),
@@ -1489,7 +1489,7 @@ def test_map_as_list_struct_single_row():
     assert_equal(entries[1].value.value(), 2)
 
 
-def test_map_as_list_struct_with_nulls():
+def test_map_as_list_struct_with_nulls() raises:
     """Deserialize a MAP as List[Struct] with NULL values."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
@@ -1508,7 +1508,7 @@ def test_map_as_list_struct_with_nulls():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_union_single_int_member():
+def test_union_single_int_member() raises:
     """Deserialize a UNION value where the INTEGER member is active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -1520,7 +1520,7 @@ def test_union_single_int_member():
     assert_false(val.str)  # inactive member is None
 
 
-def test_union_single_str_member():
+def test_union_single_str_member() raises:
     """Deserialize a UNION value where the VARCHAR member is active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -1532,7 +1532,7 @@ def test_union_single_str_member():
     assert_equal(val.str.value(), "hello")
 
 
-def test_union_column():
+def test_union_column() raises:
     """Deserialize a full column of UNION values with mixed active tags."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
@@ -1556,7 +1556,7 @@ def test_union_column():
     assert_false(vals[2].str)
 
 
-def test_union_three_members():
+def test_union_three_members() raises:
     """Deserialize a UNION with three member types."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -1585,7 +1585,7 @@ def test_union_three_members():
     assert_equal(vals[2].flag.value(), True)
 
 
-def test_union_with_null():
+def test_union_with_null() raises:
     """Deserialize a UNION column where some rows are NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
@@ -1607,7 +1607,7 @@ def test_union_with_null():
 # ──────────────────────────────────────────────────────────────────
 
 
-def test_variant_union_int_member():
+def test_variant_union_int_member() raises:
     """Deserialize a UNION value as Variant — INTEGER member active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -1621,7 +1621,7 @@ def test_variant_union_int_member():
     assert_false(val.isa[String]())
 
 
-def test_variant_union_str_member():
+def test_variant_union_str_member() raises:
     """Deserialize a UNION value as Variant — VARCHAR member active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
@@ -1635,7 +1635,7 @@ def test_variant_union_str_member():
     assert_equal(val[String], "hello")
 
 
-def test_variant_union_column():
+def test_variant_union_column() raises:
     """Deserialize a full column of UNION values as Variant."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
@@ -1659,7 +1659,7 @@ def test_variant_union_column():
     assert_equal(vals[2][Int32], 3)
 
 
-def test_variant_union_three_members():
+def test_variant_union_three_members() raises:
     """Deserialize a UNION with three member types as Variant."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -1685,7 +1685,7 @@ def test_variant_union_three_members():
     assert_equal(vals[2][Bool], True)
 
 
-def test_variant_union_with_null():
+def test_variant_union_with_null() raises:
     """Deserialize a UNION column as Optional[Variant] — NULL handling."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
@@ -1702,7 +1702,7 @@ def test_variant_union_with_null():
     assert_equal(vals[2].value()[String], "three")
 
 
-def test_blob_deserialize():
+def test_blob_deserialize() raises:
     """Read BLOB column as List[UInt8] via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BLOB)")
@@ -1720,7 +1720,7 @@ def test_blob_deserialize():
     assert_equal(row1[1], 0xAD)
 
 
-def test_blob_deserialize_column():
+def test_blob_deserialize_column() raises:
     """Read BLOB column as full column of List[UInt8]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BLOB)")
@@ -1734,7 +1734,7 @@ def test_blob_deserialize_column():
     assert_false(vals[1])
 
 
-def test_enum_deserialize():
+def test_enum_deserialize() raises:
     """Read ENUM column as String via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral')")
@@ -1747,7 +1747,7 @@ def test_enum_deserialize():
     assert_equal(chunk.get[String](col=0, row=2), "neutral")
 
 
-def test_enum_deserialize_with_null():
+def test_enum_deserialize_with_null() raises:
     """Read ENUM column with NULL values as Optional[String]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
@@ -1764,7 +1764,7 @@ def test_enum_deserialize_with_null():
     assert_equal(vals[2].value(), "blue")
 
 
-def test_bit_deserialize():
+def test_bit_deserialize() raises:
     """Read BIT column as Bit."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BIT)")
@@ -1781,7 +1781,7 @@ def test_bit_deserialize():
     assert_equal(len(b2), 8)
 
 
-def test_bit_deserialize_column():
+def test_bit_deserialize_column() raises:
     """Read entire BIT column as List[Optional[Bit]]."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BIT)")
@@ -1797,5 +1797,5 @@ def test_bit_deserialize_column():
     assert_equal(String(vals[2].value()), "0")
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
