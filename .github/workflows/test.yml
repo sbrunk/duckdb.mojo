@@ -36,6 +36,14 @@ jobs:
           cache: true
           environments: default
 
+      - name: Cache Mojo compilation artifacts
+        uses: actions/cache@v4
+        with:
+          path: .pixi/envs/default/share/max/cache
+          key: mojo-cache-${{ matrix.target }}-${{ hashFiles('pixi.lock') }}
+          restore-keys: |
+            mojo-cache-${{ matrix.target }}-
+
       - name: Execute tests
         run: |
           source $HOME/.bash_profile
