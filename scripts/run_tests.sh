@@ -32,20 +32,20 @@ TESTS=(
 )
 
 # Heavy tests use Dict/List/Variant generics that require expensive
-# monomorphization (10+ min compile, 17+ GB RAM). Only run on linux-64
-# where we have swap space and native execution (not QEMU emulation).
-# Set DUCKDB_MOJO_HEAVY_TESTS=1 to force-enable them on any platform.
+# monomorphization (17+ GB RAM to compile). These exceed GitHub Actions
+# runner limits (7GB RAM + 10GB swap) and can only run on machines
+# with 32+ GB RAM. Set DUCKDB_MOJO_HEAVY_TESTS=1 to enable them.
 HEAVY_TESTS=(
     test/test_typed_api.mojo
     test/test_appender.mojo
 )
 
-if [[ "${DUCKDB_MOJO_HEAVY_TESTS:-}" == "1" ]] || [[ "$(uname -m)" == "x86_64" && "$(uname)" == "Linux" ]]; then
+if [[ "${DUCKDB_MOJO_HEAVY_TESTS:-}" == "1" ]]; then
     TESTS+=("${HEAVY_TESTS[@]}")
 else
-    echo "*** Skipping heavy tests on $(uname) $(uname -m) (requires 17+ GB RAM) ***"
+    echo "*** Skipping heavy tests (requires 32+ GB RAM to compile) ***"
     echo "*** Skipped: ${HEAVY_TESTS[*]} ***"
-    echo "*** Set DUCKDB_MOJO_HEAVY_TESTS=1 to force ***"
+    echo "*** Set DUCKDB_MOJO_HEAVY_TESTS=1 to enable ***"
 fi
 
 for f in "${TESTS[@]}"; do
