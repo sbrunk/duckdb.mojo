@@ -32,31 +32,22 @@ TESTS=(
     test/test_appender.mojo
 )
 
-# Medium tests use generics but fit in ~17 GB with -j 2.
-MEDIUM_TESTS=(
+# Heavy tests use generic types (structs, lists, dicts, variants) that
+# require expensive monomorphization. We compile them with -j 1 (single
+# thread) to minimize peak memory for CI runners with only 7 GB RAM.
+HEAVY_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
-    test/test_appender_list.mojo
-    test/test_appender_map_variant.mojo
-)
-
-# Heavy tests use struct/collection generics that require expensive
-# monomorphization. We compile them with -j 1 (single thread) to
-# minimize peak memory for CI runners with only 7 GB RAM.
-HEAVY_TESTS=(
     test/test_typed_api_mojo_type.mojo
     test/test_typed_api_table_structs.mojo
     test/test_typed_api_collections.mojo
+    test/test_appender_list.mojo
+    test/test_appender_map_variant.mojo
 )
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
     mojo run "$f"
-done
-
-for f in "${MEDIUM_TESTS[@]}"; do
-    echo "--- Running (-j 2): $f ---"
-    mojo run -j 2 "$f"
 done
 
 for f in "${HEAVY_TESTS[@]}"; do
