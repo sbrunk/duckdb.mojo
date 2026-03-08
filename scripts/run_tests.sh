@@ -34,7 +34,9 @@ TESTS=(
 
 # Heavy tests use generic types (structs, lists, dicts, variants) that
 # require expensive monomorphization. We compile them with -j 1 (single
-# thread) to minimize peak memory for CI runners with only 7 GB RAM.
+# thread) to minimize peak memory. These need >7 GB so they only run on
+# Linux (which has swap space). macOS runners have 7 GB RAM with no swap
+# and OOM-kill even with -j 1.
 HEAVY_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
@@ -50,7 +52,11 @@ for f in "${TESTS[@]}"; do
     mojo run "$f"
 done
 
-for f in "${HEAVY_TESTS[@]}"; do
-    echo "--- Running (-j 1): $f ---"
-    mojo run -j 1 "$f"
-done
+if [[ "$(uname)" == "Linux" ]]; then
+    for f in "${HEAVY_TESTS[@]}"; do
+        echo "--- Running (-j 1): $f ---"
+        mojo run -j 1 "$f"
+    done
+else
+    echo "--- Skipping heavy tests on $(uname) (insufficient RAM) ---"
+fi
