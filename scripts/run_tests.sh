@@ -1,32 +1,14 @@
 #!/bin/bash
-# Build the mojopkg once, then compile each test against it instead of
-# recompiling from source. This drastically reduces peak memory on CI
-# where the Mojo compiler's monomorphization can exceed 7GB RAM.
+# Compile each test against the pre-built mojopkg instead of recompiling
+# from source. The Mojo compiler recompiles the entire duckdb package from
+# the src/ directory for each test file, using 9+GB peak memory.
+# By temporarily hiding src/, we force it to use the pre-built mojopkg.
 set -e
 
-PROJDIR="$(pwd)"
-WORKDIR=$(mktemp -d)
-trap "rm -rf $WORKDIR" EXIT
-
-# Build the package once from source
-mojo package src -o "$WORKDIR/duckdb.mojopkg"
-
-# Copy test files to the work directory
-cp -r test "$WORKDIR/test"
-
-# Get the absolute path to mojo so we can call it from the work directory
-MOJO="$(which mojo)"
-
-# Run from the work directory so mojo doesn't find src/ and recompile
-cd "$WORKDIR"
+# Temporarily hide src/ so mojo uses the pre-built mojopkg
+mv src src.bak
+trap "mv src.bak src" EXIT
 
 for f in test/test_*.mojo; do
-    bin=$(mktemp)
-    "$MOJO" build "$f" -I "$WORKDIR" -o "$bin"
-    "$bin"
-    s=$?
-    rm -f "$bin"
-    if [ $s -ne 0 ]; then
-        exit 1
-    fi
+    mojo run "$f"
 done
