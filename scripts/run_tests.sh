@@ -38,7 +38,9 @@ TESTS=(
 # (7 GB RAM + 10 GB swap).
 HEAVY_TESTS=(
     test/test_typed_api_scalars.mojo
-    test/test_typed_api_structs.mojo
+    test/test_typed_api_mojo_type.mojo
+    test/test_typed_api_table_structs.mojo
+    test/test_typed_api_tuples.mojo
     test/test_typed_api_collections.mojo
     test/test_appender_list.mojo
     test/test_appender_map_variant.mojo
