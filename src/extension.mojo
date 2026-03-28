@@ -150,7 +150,7 @@ struct Extension(Movable):
         var db_ptr = self._access[].get_database(self._info)
         return Database(_handle=db_ptr[])
 
-    fn connect(self) raises -> Connection:
+    fn connect(self) raises -> Connection[ApiLevel.CLIENT]:
         """Create a connection to the extension's database.
 
         Example:

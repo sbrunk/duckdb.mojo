@@ -1,30 +1,30 @@
 from duckdb import *
 from duckdb.config import Config
 from duckdb.database import Database
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
-def test_config_create():
+def test_config_create() raises:
     """Test creating an empty configuration."""
     var config = Config()
     _ = config
 
 
-def test_config_set_option():
+def test_config_set_option() raises:
     """Test setting a configuration option."""
     var config = Config()
     config.set("threads", "2")
 
 
-def test_config_set_multiple_options():
+def test_config_set_multiple_options() raises:
     """Test setting multiple configuration options."""
     var config = Config()
     config.set("threads", "2")
     config.set("memory_limit", "256MB")
 
 
-def test_config_set_invalid_value():
+def test_config_set_invalid_value() raises:
     """Test that setting an invalid value for a valid option raises an error."""
     var config = Config()
     # access_mode only accepts specific values
@@ -32,12 +32,12 @@ def test_config_set_invalid_value():
         config.set("access_mode", "INVALID_MODE")
 
 
-def test_config_from_dict():
+def test_config_from_dict() raises:
     """Test creating a Config from a dictionary."""
     var config = Config({"threads": "2", "memory_limit": "256MB"})
 
 
-def test_config_available_options():
+def test_config_available_options() raises:
     """Test listing available configuration options."""
     var options = Config.available_options()
     # DuckDB should have a substantial number of config options
@@ -52,7 +52,7 @@ def test_config_available_options():
     )
 
 
-def test_database_with_config():
+def test_database_with_config() raises:
     """Test creating a database with a Config."""
     var config = Config()
     config.set("threads", "2")
@@ -60,7 +60,7 @@ def test_database_with_config():
     _ = db
 
 
-def test_connection_with_config():
+def test_connection_with_config() raises:
     """Test creating a Connection with a Config."""
     var config = Config()
     config.set("threads", "2")
@@ -73,7 +73,7 @@ def test_connection_with_config():
     assert_equal(threads_val, "2")
 
 
-def test_connect_with_config():
+def test_connect_with_config() raises:
     """Test DuckDB.connect with a Config object."""
     var config = Config()
     config.set("threads", "1")
@@ -83,7 +83,7 @@ def test_connect_with_config():
     assert_equal(chunk.get[String](col=0, row=0), "1")
 
 
-def test_connect_with_dict():
+def test_connect_with_dict() raises:
     """Test DuckDB.connect with a dictionary config."""
     var con = DuckDB.connect(
         ":memory:", config={"threads": "2", "memory_limit": "256MB"}
@@ -93,7 +93,7 @@ def test_connect_with_dict():
     assert_equal(chunk.get[String](col=0, row=0), "2")
 
 
-def test_config_memory_limit():
+def test_config_memory_limit() raises:
     """Test configuring the memory limit."""
     var config = Config()
     config.set("memory_limit", "100MB")
@@ -107,7 +107,7 @@ def test_config_memory_limit():
     assert_true(len(mem_val) > 0, "memory_limit should be set")
 
 
-def test_config_access_mode_read_write():
+def test_config_access_mode_read_write() raises:
     """Test configuring access mode to read-write."""
     var config = Config()
     config.set("access_mode", "READ_WRITE")
@@ -120,7 +120,7 @@ def test_config_access_mode_read_write():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_config_default_order():
+def test_config_default_order() raises:
     """Test configuring default order."""
     var config = Config()
     config.set("default_order", "DESCENDING")
@@ -132,5 +132,5 @@ def test_config_default_order():
     assert_equal(chunk.get[String](col=0, row=0), "DESC")
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

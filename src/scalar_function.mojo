@@ -4,8 +4,8 @@ from duckdb.api_level import ApiLevel
 from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
-from algorithm.functional import vectorize
-from sys import simd_width_of
+from std.algorithm.functional import vectorize
+from std.sys import simd_width_of
 
 
 struct FunctionInfo:
@@ -236,10 +236,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
         * bind: The bind function callback.
         """
-        constrained[
-            Self.api_level.includes_unstable(),
-            "ScalarFunction.set_bind requires the unstable API or client mode",
-        ]()
+        comptime assert Self.api_level.includes_unstable(), "ScalarFunction.set_bind requires the unstable API or client mode"
+        
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
@@ -502,7 +500,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         * raises: Error if the registration was unsuccessful.
         """
         ref libduckdb = DuckDB().libduckdb()
-        _ = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
+        var state = libduckdb.duckdb_register_scalar_function(conn._conn, self._function)
+        if state == DuckDBError:
+            raise Error("Failed to register scalar function. Ensure the function has a name, a callback, valid parameter types, and a valid return type (not INVALID or ANY).")
 
     # ===--------------------------------------------------------------------===#
     # Convenience factory methods
@@ -669,7 +669,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: fn (Scalar[In1]) -> Scalar[Out],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a simple row-at-a-time function.
 
         Automatically generates a vectorized wrapper that loops over chunk rows,
@@ -744,7 +744,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a simple row-at-a-time function.
 
         Returns the configured ScalarFunction without registering it.
@@ -823,7 +823,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -887,7 +887,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -955,7 +955,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a unary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
@@ -1016,7 +1016,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+    ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.

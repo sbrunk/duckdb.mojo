@@ -1,4 +1,4 @@
-from sys.info import size_of
+from std.sys.info import size_of
 
 from duckdb import *
 from duckdb.aggregate_function import (
@@ -9,8 +9,8 @@ from duckdb.aggregate_function import (
     AggregateStateArray,
 )
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
 # ===--------------------------------------------------------------------===#
@@ -268,20 +268,20 @@ fn sum_double_finalize(
 # ===--------------------------------------------------------------------===#
 
 
-def test_aggregate_function_create():
+def test_aggregate_function_create() raises:
     """Test creating an aggregate function."""
     var func = AggregateFunction()
     _ = func^
 
 
-def test_aggregate_function_set_name():
+def test_aggregate_function_set_name() raises:
     """Test setting the name of an aggregate function."""
     var func = AggregateFunction()
     func.set_name("test_agg")
     _ = func^
 
 
-def test_aggregate_function_add_parameter():
+def test_aggregate_function_add_parameter() raises:
     """Test adding parameters to an aggregate function."""
     var func = AggregateFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -289,7 +289,7 @@ def test_aggregate_function_add_parameter():
     _ = func^
 
 
-def test_aggregate_function_set_return_type():
+def test_aggregate_function_set_return_type() raises:
     """Test setting the return type of an aggregate function."""
     var func = AggregateFunction()
     var bigint_type = LogicalType(DuckDBType.bigint)
@@ -297,14 +297,14 @@ def test_aggregate_function_set_return_type():
     _ = func^
 
 
-def test_aggregate_function_set_special_handling():
+def test_aggregate_function_set_special_handling() raises:
     """Test setting special handling for an aggregate function."""
     var func = AggregateFunction()
     func.set_special_handling()
     _ = func^
 
 
-def test_aggregate_function_register_simple():
+def test_aggregate_function_register_simple() raises:
     """Test registering a simple aggregate function."""
     var conn = DuckDB.connect(":memory:")
 
@@ -323,7 +323,7 @@ def test_aggregate_function_register_simple():
     func.register(conn)
 
 
-def test_aggregate_function_sum_single_value():
+def test_aggregate_function_sum_single_value() raises:
     """Test SUM aggregate with a single value."""
     var conn = DuckDB.connect(":memory:")
 
@@ -346,7 +346,7 @@ def test_aggregate_function_sum_single_value():
     assert_equal(chunk.get[Int64](col=0, row=0), 42)
 
 
-def test_aggregate_function_sum_table():
+def test_aggregate_function_sum_table() raises:
     """Test SUM aggregate over a table of values."""
     var conn = DuckDB.connect(":memory:")
 
@@ -372,7 +372,7 @@ def test_aggregate_function_sum_table():
     assert_equal(chunk.get[Int64](col=0, row=0), 15)
 
 
-def test_aggregate_function_sum_empty_table():
+def test_aggregate_function_sum_empty_table() raises:
     """Test SUM aggregate on an empty table returns initialized state (0)."""
     var conn = DuckDB.connect(":memory:")
 
@@ -397,7 +397,7 @@ def test_aggregate_function_sum_empty_table():
     assert_equal(chunk.get[Int64](col=0, row=0), 0)
 
 
-def test_aggregate_function_sum_with_groups():
+def test_aggregate_function_sum_with_groups() raises:
     """Test SUM aggregate with GROUP BY."""
     var conn = DuckDB.connect(":memory:")
 
@@ -433,7 +433,7 @@ def test_aggregate_function_sum_with_groups():
     assert_equal(chunk.get[Int64](col=1, row=1), 60)
 
 
-def test_aggregate_function_sum_large_input():
+def test_aggregate_function_sum_large_input() raises:
     """Test SUM aggregate with a larger dataset that spans multiple chunks."""
     var conn = DuckDB.connect(":memory:")
 
@@ -459,7 +459,7 @@ def test_aggregate_function_sum_large_input():
     assert_equal(chunk.get[Int64](col=0, row=0), 12502500)
 
 
-def test_aggregate_function_count():
+def test_aggregate_function_count() raises:
     """Test a custom COUNT aggregate."""
     var conn = DuckDB.connect(":memory:")
 
@@ -484,7 +484,7 @@ def test_aggregate_function_count():
     assert_equal(chunk.get[Int64](col=0, row=0), 4)
 
 
-def test_aggregate_function_avg():
+def test_aggregate_function_avg() raises:
     """Test a custom AVG aggregate (DOUBLE input)."""
     var conn = DuckDB.connect(":memory:")
 
@@ -511,7 +511,7 @@ def test_aggregate_function_avg():
     assert_almost_equal(chunk.get[Float64](col=0, row=0), 25.0)
 
 
-def test_aggregate_function_avg_with_groups():
+def test_aggregate_function_avg_with_groups() raises:
     """Test custom AVG aggregate with GROUP BY."""
     var conn = DuckDB.connect(":memory:")
 
@@ -545,7 +545,7 @@ def test_aggregate_function_avg_with_groups():
     assert_almost_equal(chunk.get[Float64](col=1, row=1), 100.0)
 
 
-def test_aggregate_function_in_subquery():
+def test_aggregate_function_in_subquery() raises:
     """Test using aggregate function in a subquery."""
     var conn = DuckDB.connect(":memory:")
 
@@ -575,13 +575,13 @@ def test_aggregate_function_in_subquery():
     assert_equal(chunk.get[Int64](col=0, row=0), 6)
 
 
-def test_aggregate_function_set_create():
+def test_aggregate_function_set_create() raises:
     """Test creating an aggregate function set."""
     var func_set = AggregateFunctionSet("test_agg_set")
     _ = func_set^
 
 
-def test_aggregate_function_set_register():
+def test_aggregate_function_set_register() raises:
     """Test registering an aggregate function set with multiple overloads."""
     var conn = DuckDB.connect(":memory:")
 
@@ -635,7 +635,7 @@ def test_aggregate_function_set_register():
     assert_almost_equal(chunk2.get[Float64](col=0, row=0), 7.0)
 
 
-def test_aggregate_function_sum_negative_values():
+def test_aggregate_function_sum_negative_values() raises:
     """Test SUM aggregate with negative values."""
     var conn = DuckDB.connect(":memory:")
 
@@ -663,7 +663,7 @@ def test_aggregate_function_sum_negative_values():
     assert_equal(chunk.get[Int64](col=0, row=0), 0)
 
 
-def test_aggregate_function_sum_matches_builtin():
+def test_aggregate_function_sum_matches_builtin() raises:
     """Test that our SUM aggregate matches DuckDB's built-in SUM."""
     var conn = DuckDB.connect(":memory:")
 
@@ -697,5 +697,5 @@ def test_aggregate_function_sum_matches_builtin():
     )
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

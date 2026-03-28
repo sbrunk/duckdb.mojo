@@ -1,10 +1,10 @@
 from duckdb import *
 from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
-from sys.info import size_of
-import math
+from std.testing import assert_equal, assert_true, assert_false, assert_almost_equal, assert_raises
+from std.testing.suite import TestSuite
+from std.sys.info import size_of
+import std.math
 
 
 # ===--------------------------------------------------------------------===#
@@ -63,21 +63,21 @@ fn binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
 # ScalarFunction Tests
 # ===--------------------------------------------------------------------===#
 
-def test_scalar_function_create():
+def test_scalar_function_create() raises:
     """Test creating a scalar function."""
     var func = ScalarFunction()
     # If we got here without crashing, the constructor worked
     _ = func^
 
 
-def test_scalar_function_set_name():
+def test_scalar_function_set_name() raises:
     """Test setting the name of a scalar function."""
     var func = ScalarFunction()
     func.set_name("test_func")
     _ = func^
 
 
-def test_scalar_function_add_parameter():
+def test_scalar_function_add_parameter() raises:
     """Test adding parameters to a scalar function."""
     var func = ScalarFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -85,7 +85,7 @@ def test_scalar_function_add_parameter():
     _ = func^
 
 
-def test_scalar_function_set_return_type():
+def test_scalar_function_set_return_type() raises:
     """Test setting the return type of a scalar function."""
     var func = ScalarFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -93,21 +93,21 @@ def test_scalar_function_set_return_type():
     _ = func^
 
 
-def test_scalar_function_set_volatile():
+def test_scalar_function_set_volatile() raises:
     """Test setting a scalar function as volatile."""
     var func = ScalarFunction()
     func.set_volatile()
     _ = func^
 
 
-def test_scalar_function_set_special_handling():
+def test_scalar_function_set_special_handling() raises:
     """Test setting special handling for a scalar function."""
     var func = ScalarFunction()
     func.set_special_handling()
     _ = func^
 
 
-def test_scalar_function_set_varargs():
+def test_scalar_function_set_varargs() raises:
     """Test setting a scalar function to accept varargs."""
     var func = ScalarFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -115,7 +115,7 @@ def test_scalar_function_set_varargs():
     _ = func^
 
 
-def test_scalar_function_register_simple():
+def test_scalar_function_register_simple() raises:
     """Test registering a simple scalar function."""
     var conn = DuckDB.connect(":memory:")
     
@@ -129,7 +129,7 @@ def test_scalar_function_register_simple():
     func.register(conn)  # Consumes func
 
 
-def test_scalar_function_execute_simple():
+def test_scalar_function_execute_simple() raises:
     """Test executing a registered scalar function."""
     var conn = DuckDB.connect(":memory:")
     
@@ -148,7 +148,7 @@ def test_scalar_function_execute_simple():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_scalar_function_highlevel_types():
+def test_scalar_function_highlevel_types() raises:
     """Test executing a scalar function using high-level Chunk and Vector types."""
     var conn = DuckDB.connect(":memory:")
     
@@ -179,7 +179,7 @@ def test_scalar_function_highlevel_types():
     assert_equal(chunk2.get[Int32](col=0, row=4), 6)
 
 
-def test_scalar_function_auto_wrapped():
+def test_scalar_function_auto_wrapped() raises:
     """Test executing a scalar function with automatic high-level wrapping."""
     var conn = DuckDB.connect(":memory:")
     
@@ -209,7 +209,7 @@ def test_scalar_function_auto_wrapped():
     assert_equal(chunk2.get[Int32](col=0, row=2), 31)
 
 
-def test_scalar_function_fully_highlevel():
+def test_scalar_function_fully_highlevel() raises:
     """Test executing a scalar function with fully high-level types."""
     var conn = DuckDB.connect(":memory:")
     
@@ -239,7 +239,7 @@ def test_scalar_function_fully_highlevel():
     assert_equal(chunk2.get[Int32](col=0, row=2), 301)
 
 
-def test_scalar_function_execute_from_table():
+def test_scalar_function_execute_from_table() raises:
     """Test executing a scalar function on table data."""
     var conn = DuckDB.connect(":memory:")
     
@@ -267,7 +267,7 @@ def test_scalar_function_execute_from_table():
     assert_equal(chunk.get[Int32](col=0, row=3), 11)  # 10+1
 
 
-def test_scalar_function_binary_operator():
+def test_scalar_function_binary_operator() raises:
     """Test registering a binary operator function."""
     var conn = DuckDB.connect(":memory:")
     
@@ -287,7 +287,7 @@ def test_scalar_function_binary_operator():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_scalar_function_float_type():
+def test_scalar_function_float_type() raises:
     """Test scalar function with float types."""
     var conn = DuckDB.connect(":memory:")
     
@@ -308,30 +308,30 @@ def test_scalar_function_float_type():
     assert_almost_equal(value, 42.0, atol=0.001)
 
 
-def test_scalar_function_register_error():
-    """Test that registering an incomplete function doesn't crash.""" 
+def test_scalar_function_register_error() raises:
+    """Test that registering an incomplete function raises an error."""
     var conn = DuckDB.connect(":memory:")
-    
+
     # Create incomplete function (no return type, no function implementation)
     var func = ScalarFunction()
     func.set_name("incomplete_func")
     var int_type = LogicalType(DuckDBType.integer)
     func.add_parameter(int_type)
-    
-    # Registration won't validate, but SQL execution will fail
-    func.register(conn)
+
+    with assert_raises():
+        func.register(conn)
 
 
 # ===--------------------------------------------------------------------===#
 # ScalarFunctionSet Tests  
 # ===--------------------------------------------------------------------===#
 
-def test_scalar_function_set_create():
+def test_scalar_function_set_create() raises:
     """Test creating a scalar function set."""
     var _ = ScalarFunctionSet("test_set")
 
 
-def test_scalar_function_set_add_function():
+def test_scalar_function_set_add_function() raises:
     """Test adding a function to a function set."""
     var func_set = ScalarFunctionSet("my_add")
     
@@ -346,7 +346,7 @@ def test_scalar_function_set_add_function():
     func_set.add_function(func1)
 
 
-def test_scalar_function_set_register():
+def test_scalar_function_set_register() raises:
     """Test registering a function set."""
     var conn = DuckDB.connect(":memory:")
     var func_set = ScalarFunctionSet("my_add")
@@ -364,7 +364,7 @@ def test_scalar_function_set_register():
     func_set.register(conn)
 
 
-def test_scalar_function_set_execute():
+def test_scalar_function_set_execute() raises:
     """Test executing functions from a function set."""
     var conn = DuckDB.connect(":memory:")
     var func_set = ScalarFunctionSet("my_add")
@@ -387,7 +387,7 @@ def test_scalar_function_set_execute():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_scalar_function_set_multiple_overloads():
+def test_scalar_function_set_multiple_overloads() raises:
     """Test function set with multiple overloads."""
     var conn = DuckDB.connect(":memory:")
     var func_set = ScalarFunctionSet("my_add")
@@ -426,7 +426,7 @@ def test_scalar_function_set_multiple_overloads():
     assert_almost_equal(value, 42.0, atol=0.001)
 
 
-def test_scalar_function_set_duplicate_overload():
+def test_scalar_function_set_duplicate_overload() raises:
     """Test that adding duplicate overloads is detected."""
     var func_set = ScalarFunctionSet("my_add")
     
@@ -457,7 +457,7 @@ def test_scalar_function_set_duplicate_overload():
 # BindInfo Tests
 # ===--------------------------------------------------------------------===#
 
-def test_bind_info_operations():
+def test_bind_info_operations() raises:
     """Test BindInfo struct creation and basic operations."""
     # Note: BindInfo is typically used inside bind callbacks
     # This test just verifies the struct can be instantiated
@@ -473,7 +473,7 @@ def test_bind_info_operations():
 # Integration Tests
 # ===--------------------------------------------------------------------===#
 
-def test_volatile_function_not_optimized():
+def test_volatile_function_not_optimized() raises:
     """Test that volatile functions can be marked with set_volatile."""
     var conn = DuckDB.connect(":memory:")
     
@@ -493,7 +493,7 @@ def test_volatile_function_not_optimized():
     # If this doesn't crash, volatile flag was accepted
 
 
-def test_multiple_functions_same_connection():
+def test_multiple_functions_same_connection() raises:
     """Test registering multiple different functions on same connection."""
     var conn = DuckDB.connect(":memory:")
     
@@ -524,7 +524,7 @@ def test_multiple_functions_same_connection():
     assert_almost_equal(b_val, 42.0)
 
 
-def test_function_reuse_across_queries():
+def test_function_reuse_across_queries() raises:
     """Test that registered functions persist across multiple queries."""
     var conn = DuckDB.connect(":memory:")
     
@@ -550,35 +550,32 @@ def test_function_reuse_across_queries():
     assert_equal(chunk3.get[Int32](col=0, row=0), 101)
 
 
-def test_function_outlives_connection():
-    """Test that a ScalarFunction stays valid after a connection it was registered on is dropped.
-    
-    DuckDB copies function handles during registration, so the original handle is
-    independent. We should be able to register the same function on a second connection
-    after the first connection goes out of scope.
+def test_function_outlives_connection() raises:
+    """Test that a registered function is available on new connections to the same database.
+
+    DuckDB registers functions in the database catalog, so they are accessible
+    from any connection to the same database — no re-registration needed.
     """
     var db = Database(":memory:")
     var func = ScalarFunction.from_function[
         "outlive_test", DType.int32, DType.int32, simple_add_one
     ]()
 
-    # Register on first connection, use it, then let the connection go out of scope
+    # Register on first connection
     var conn1 = Connection(db)
     func.register(conn1)
     var result1 = conn1.execute("SELECT outlive_test(41) as val")
     var chunk1 = result1.fetch_chunk()
     assert_equal(chunk1.get[Int32](col=0, row=0), 42)
-    # conn1 is still alive here but will go out of scope when reassigned below
 
-    # Register the same function handle on a second connection
+    # Function is available on a second connection without re-registering
     var conn2 = Connection(db)
-    func.register(conn2)
     var result2 = conn2.execute("SELECT outlive_test(99) as val")
     var chunk2 = result2.fetch_chunk()
     assert_equal(chunk2.get[Int32](col=0, row=0), 100)
 
 
-def test_connection_outlives_function():
+def test_connection_outlives_function() raises:
     """Test that a registered function works after the ScalarFunction handle is destroyed.
     
     DuckDB copies function handles during registration, so destroying our handle
@@ -605,7 +602,7 @@ def test_connection_outlives_function():
 # ScalarFunction.create convenience API tests
 # ===--------------------------------------------------------------------===#
 
-def test_create_unary_int():
+def test_create_unary_int() raises:
     """Test ScalarFunction.create with a unary integer function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.create["create_add_one", add_one, DType.int32, DType.int32](conn)
@@ -615,7 +612,7 @@ def test_create_unary_int():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_create_unary_float():
+def test_create_unary_float() raises:
     """Test ScalarFunction.create with a unary float function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.create["create_mul2", multiply_two, DType.float32, DType.float32](conn)
@@ -626,7 +623,7 @@ def test_create_unary_float():
     assert_almost_equal(value, 42.0)
 
 
-def test_create_binary():
+def test_create_binary() raises:
     """Test ScalarFunction.create with a binary function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.create["create_my_add", binary_add, DType.int32, DType.int32, DType.int32](conn)
@@ -636,7 +633,7 @@ def test_create_binary():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_create_on_table():
+def test_create_on_table() raises:
     """Test ScalarFunction.create with table data."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.create["tbl_add_one", add_one, DType.int32, DType.int32](conn)
@@ -672,7 +669,7 @@ fn simple_add_float(a: Float64, b: Float64) -> Float64:
     return a + b
 
 
-def test_from_function_unary_int():
+def test_from_function_unary_int() raises:
     """Test from_function with a simple unary int function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_function["ff_add_one", DType.int32, DType.int32, simple_add_one](conn)
@@ -682,7 +679,7 @@ def test_from_function_unary_int():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_from_function_unary_float():
+def test_from_function_unary_float() raises:
     """Test from_function with a simple unary float function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_function["ff_double", DType.float32, DType.float32, simple_double](conn)
@@ -693,7 +690,7 @@ def test_from_function_unary_float():
     assert_almost_equal(value, 42.0, atol=0.001)
 
 
-def test_from_function_binary():
+def test_from_function_binary() raises:
     """Test from_function with a binary function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_function["ff_add", DType.int32, DType.int32, DType.int32, simple_add](conn)
@@ -703,7 +700,7 @@ def test_from_function_binary():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_from_function_binary_float():
+def test_from_function_binary_float() raises:
     """Test from_function with a binary float function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_function["ff_add_f64", DType.float64, DType.float64, DType.float64, simple_add_float](conn)
@@ -714,7 +711,7 @@ def test_from_function_binary_float():
     assert_almost_equal(value, 42.0, atol=0.001)
 
 
-def test_from_function_on_table():
+def test_from_function_on_table() raises:
     """Test from_function applied to table data."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_function["ff_tbl_add_one", DType.int32, DType.int32, simple_add_one](conn)
@@ -754,7 +751,7 @@ fn simd_add_f64[width: Int](
     return a + b
 
 
-def test_from_simd_function_unary_int():
+def test_from_simd_function_unary_int() raises:
     """Test from_simd_function with a unary SIMD int function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_add_one", DType.int32, DType.int32, simd_add_one](conn)
@@ -764,7 +761,7 @@ def test_from_simd_function_unary_int():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_from_simd_function_unary_float():
+def test_from_simd_function_unary_float() raises:
     """Test from_simd_function with a unary SIMD float function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_double", DType.float32, DType.float32, simd_double](conn)
@@ -775,7 +772,7 @@ def test_from_simd_function_unary_float():
     assert_almost_equal(value, 42.0)
 
 
-def test_from_simd_function_binary_int():
+def test_from_simd_function_binary_int() raises:
     """Test from_simd_function with a binary SIMD int function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_add", DType.int32, DType.int32, DType.int32, simd_add](conn)
@@ -785,7 +782,7 @@ def test_from_simd_function_binary_int():
     assert_equal(chunk.get[Int32](col=0, row=0), 42)
 
 
-def test_from_simd_function_binary_float():
+def test_from_simd_function_binary_float() raises:
     """Test from_simd_function with a binary SIMD float64 function."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_add_f64", DType.float64, DType.float64, DType.float64, simd_add_f64](conn)
@@ -796,7 +793,7 @@ def test_from_simd_function_binary_float():
     assert_almost_equal(value, 42.0)
 
 
-def test_from_simd_function_on_table():
+def test_from_simd_function_on_table() raises:
     """Test from_simd_function applied to table data (exercises SIMD + tail loop)."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_tbl_add_one", DType.int32, DType.int32, simd_add_one](conn)
@@ -815,7 +812,7 @@ def test_from_simd_function_on_table():
     assert_equal(chunk.get[Int32](col=0, row=6), 8)
 
 
-def test_from_simd_function_large_table():
+def test_from_simd_function_large_table() raises:
     """Test from_simd_function on a larger table to exercise multiple SIMD batches."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_big_add", DType.int32, DType.int32, DType.int32, simd_add](conn)
@@ -836,7 +833,7 @@ def test_from_simd_function_large_table():
 # from_simd_function stdlib-compatible overload tests
 # ===--------------------------------------------------------------------===#
 
-def test_from_simd_function_stdlib_unary():
+def test_from_simd_function_stdlib_unary() raises:
     """Test from_simd_function with stdlib math.sqrt passed directly."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_stdlib_sqrt", DType.float64, math.sqrt](conn)
@@ -846,7 +843,7 @@ def test_from_simd_function_stdlib_unary():
     assert_almost_equal(chunk.get[Float64](col=0, row=0), 4.0)
 
 
-def test_from_simd_function_stdlib_sin():
+def test_from_simd_function_stdlib_sin() raises:
     """Test from_simd_function with stdlib math.sin passed directly."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_stdlib_sin", DType.float64, math.sin](conn)
@@ -856,7 +853,7 @@ def test_from_simd_function_stdlib_sin():
     assert_almost_equal(chunk.get[Float64](col=0, row=0), 0.0)
 
 
-def test_from_simd_function_stdlib_binary():
+def test_from_simd_function_stdlib_binary() raises:
     """Test from_simd_function with stdlib math.atan2 passed directly."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_stdlib_atan2", DType.float64, math.atan2](conn)
@@ -866,7 +863,7 @@ def test_from_simd_function_stdlib_binary():
     assert_almost_equal(chunk.get[Float64](col=0, row=0), 0.0)
 
 
-def test_from_simd_function_stdlib_on_table():
+def test_from_simd_function_stdlib_on_table() raises:
     """Test stdlib overload on table data (exercises SIMD vectorization + tail)."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_stdlib_exp", DType.float64, math.exp](conn)
@@ -882,7 +879,7 @@ def test_from_simd_function_stdlib_on_table():
     assert_almost_equal(chunk.get[Float64](col=0, row=0), 1.0)
 
 
-def test_from_simd_function_stdlib_matches_builtin():
+def test_from_simd_function_stdlib_matches_builtin() raises:
     """Test that stdlib overload produces identical results to DuckDB builtins."""
     var conn = DuckDB.connect(":memory:")
     ScalarFunction.from_simd_function["sf_stdlib_log", DType.float64, math.log](conn)
@@ -911,7 +908,7 @@ def test_from_simd_function_stdlib_matches_builtin():
 # dtype_to_duckdb_type / mojo_to_duckdb_type tests
 # ===--------------------------------------------------------------------===#
 
-def test_dtype_to_duckdb_type():
+def test_dtype_to_duckdb_type() raises:
     """Test compile-time DType to DuckDBType mapping."""
     assert_equal(dtype_to_duckdb_type[DType.bool](), DuckDBType.boolean)
     assert_equal(dtype_to_duckdb_type[DType.int8](), DuckDBType.tinyint)
@@ -926,7 +923,7 @@ def test_dtype_to_duckdb_type():
     assert_equal(dtype_to_duckdb_type[DType.float64](), DuckDBType.double)
 
 
-def test_mojo_to_duckdb_type():
+def test_mojo_to_duckdb_type() raises:
     """Test compile-time Mojo type to DuckDBType mapping."""
     assert_equal(mojo_to_duckdb_type[Bool](), DuckDBType.boolean)
     assert_equal(mojo_to_duckdb_type[Int8](), DuckDBType.tinyint)
@@ -941,8 +938,7 @@ def test_mojo_to_duckdb_type():
     assert_equal(mojo_to_duckdb_type[Float64](), DuckDBType.double)
 
     # Mojo native Int/UInt (platform-dependent width)
-    @parameter
-    if size_of[Int]() == 4:
+    comptime if size_of[Int]() == 4:
         assert_equal(mojo_to_duckdb_type[Int](), DuckDBType.integer)
         assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.uinteger)
     else:
@@ -950,5 +946,5 @@ def test_mojo_to_duckdb_type():
         assert_equal(mojo_to_duckdb_type[UInt](), DuckDBType.ubigint)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

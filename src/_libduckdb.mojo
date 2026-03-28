@@ -1,13 +1,13 @@
-from ffi import external_call, c_char
-from utils import StaticTuple
-from collections import InlineArray
+from std.ffi import external_call, c_char
+from std.utils import StaticTuple
+from std.collections import InlineArray
 from duckdb.duckdb_type import *
-from sys.info import CompilationTarget
-from os import abort
-from pathlib import Path
-from ffi import _get_dylib_function as _ffi_get_dylib_function
-from ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
-from memory import UnsafePointer
+from std.sys.info import CompilationTarget
+from std.os import abort
+from std.pathlib import Path
+from std.ffi import _get_dylib_function as _ffi_get_dylib_function
+from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
+from std.memory import UnsafePointer
 
 # ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.

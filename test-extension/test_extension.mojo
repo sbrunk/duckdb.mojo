@@ -10,8 +10,8 @@ Tests load the test extension shared library into DuckDB and verify:
 """
 
 from duckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 comptime EXT_PATH = "test-extension/build/mojo.duckdb_extension"
 
@@ -25,7 +25,7 @@ fn _open_unsigned() raises -> Database:
     return Database(":memory:", config)
 
 
-fn _connect() raises -> Connection:
+fn _connect() raises -> Connection[ApiLevel.CLIENT]:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()
@@ -39,7 +39,7 @@ fn _connect() raises -> Connection:
 # ===--------------------------------------------------------------------===#
 
 
-def test_extension_loads():
+def test_extension_loads() raises:
     """Extension loads without error."""
     var conn = _connect()
     # If we get here, the extension loaded successfully
@@ -48,7 +48,7 @@ def test_extension_loads():
     assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
 
 
-def test_extension_load_idempotent():
+def test_extension_load_idempotent() raises:
     """Loading the same extension twice doesn't error (DuckDB deduplicates)."""
     var db = _open_unsigned()
     var conn = Connection(db^)
@@ -65,7 +65,7 @@ def test_extension_load_idempotent():
 # ===--------------------------------------------------------------------===#
 
 
-def test_get_api_invalid_version_returns_null():
+def test_get_api_invalid_version_returns_null() raises:
     """Calling get_api with an unsupported version prevents extension from loading."""
     var db = _open_unsigned()
     var conn = Connection(db^)
@@ -85,7 +85,7 @@ def test_get_api_invalid_version_returns_null():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_add_basic():
+def test_ext_add_basic() raises:
     """Binary add: basic addition."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(40, 2) AS result")
@@ -93,7 +93,7 @@ def test_ext_add_basic():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
-def test_ext_add_negative():
+def test_ext_add_negative() raises:
     """Binary add: negative numbers."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(-10, 3) AS result")
@@ -101,7 +101,7 @@ def test_ext_add_negative():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(-7))
 
 
-def test_ext_add_zeros():
+def test_ext_add_zeros() raises:
     """Binary add: zero arguments."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_add(0, 0) AS result")
@@ -109,7 +109,7 @@ def test_ext_add_zeros():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(0))
 
 
-def test_ext_add_large():
+def test_ext_add_large() raises:
     """Binary add: large numbers."""
     var conn = _connect()
     var result = conn.execute(
@@ -126,7 +126,7 @@ def test_ext_add_large():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_negate_positive():
+def test_ext_negate_positive() raises:
     """Negate: positive input."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(42) AS result")
@@ -134,7 +134,7 @@ def test_ext_negate_positive():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(-42))
 
 
-def test_ext_negate_negative():
+def test_ext_negate_negative() raises:
     """Negate: negative input (double negation)."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(-7) AS result")
@@ -142,7 +142,7 @@ def test_ext_negate_negative():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(7))
 
 
-def test_ext_negate_zero():
+def test_ext_negate_zero() raises:
     """Negate: zero."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_negate(0) AS result")
@@ -155,7 +155,7 @@ def test_ext_negate_zero():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_multiply_basic():
+def test_ext_multiply_basic() raises:
     """Multiply: basic multiplication."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_multiply(3.0, 7.0) AS result")
@@ -165,7 +165,7 @@ def test_ext_multiply_basic():
     )
 
 
-def test_ext_multiply_fractional():
+def test_ext_multiply_fractional() raises:
     """Multiply: fractional result."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_multiply(0.5, 0.25) AS result")
@@ -175,7 +175,7 @@ def test_ext_multiply_fractional():
     )
 
 
-def test_ext_multiply_negative():
+def test_ext_multiply_negative() raises:
     """Multiply: negative numbers."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_multiply(-2.0, 3.0) AS result")
@@ -190,7 +190,7 @@ def test_ext_multiply_negative():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_double_basic():
+def test_ext_double_basic() raises:
     """Double: basic doubling."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(21) AS result")
@@ -198,7 +198,7 @@ def test_ext_double_basic():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
-def test_ext_double_zero():
+def test_ext_double_zero() raises:
     """Double: zero."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(0) AS result")
@@ -206,7 +206,7 @@ def test_ext_double_zero():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(0))
 
 
-def test_ext_double_negative():
+def test_ext_double_negative() raises:
     """Double: negative input."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_double(-5) AS result")
@@ -219,7 +219,7 @@ def test_ext_double_negative():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_sum_basic():
+def test_ext_sum_basic() raises:
     """Aggregate sum: basic usage."""
     var conn = _connect()
     _ = conn.execute("CREATE TABLE t AS SELECT * FROM range(1, 11) t(x)")
@@ -228,7 +228,7 @@ def test_ext_sum_basic():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(55))
 
 
-def test_ext_sum_single():
+def test_ext_sum_single() raises:
     """Aggregate sum: single value."""
     var conn = _connect()
     var result = conn.execute("SELECT test_ext_sum(x) FROM (VALUES (42)) t(x)")
@@ -236,7 +236,7 @@ def test_ext_sum_single():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
-def test_ext_sum_empty():
+def test_ext_sum_empty() raises:
     """Aggregate sum: empty table returns NULL."""
     var conn = _connect()
     _ = conn.execute("CREATE TABLE empty_t (x BIGINT)")
@@ -253,7 +253,7 @@ def test_ext_sum_empty():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_add_table():
+def test_ext_add_table() raises:
     """Binary add over table data (batch processing)."""
     var conn = _connect()
     _ = conn.execute(
@@ -268,7 +268,7 @@ def test_ext_add_table():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(15150))
 
 
-def test_ext_negate_table():
+def test_ext_negate_table() raises:
     """Negate over table data."""
     var conn = _connect()
     _ = conn.execute("CREATE TABLE nums AS SELECT x FROM range(1, 6) t(x)")
@@ -285,7 +285,7 @@ def test_ext_negate_table():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_composition():
+def test_ext_composition() raises:
     """Extension functions can be composed in a single query."""
     var conn = _connect()
     # negate(add(20, 22)) = negate(42) = -42
@@ -296,7 +296,7 @@ def test_ext_composition():
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(-42))
 
 
-def test_ext_multiple_functions_one_query():
+def test_ext_multiple_functions_one_query() raises:
     """Multiple extension functions in a single SELECT."""
     var conn = _connect()
     var result = conn.execute(
@@ -319,7 +319,7 @@ def test_ext_multiple_functions_one_query():
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_across_connections():
+def test_ext_across_connections() raises:
     """Extension functions accessible from multiple connections."""
     var db = _open_unsigned()
     var conn1 = Connection(db)
@@ -337,5 +337,5 @@ def test_ext_across_connections():
 # ===--------------------------------------------------------------------===#
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

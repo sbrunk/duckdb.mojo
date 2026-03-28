@@ -10,8 +10,8 @@ This example demonstrates how to:
 from duckdb.api import DuckDB
 from duckdb._libduckdb import *
 from operator_replacement import OperatorReplacementLib
-import math
-import benchmark
+import std.math
+import std.benchmark
 
 
 # ===--------------------------------------------------------------------===#

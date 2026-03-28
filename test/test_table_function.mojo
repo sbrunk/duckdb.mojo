@@ -6,9 +6,9 @@ from duckdb.table_function import (
     TableInitInfo,
 )
 from duckdb._libduckdb import *
-from testing import *
-from testing.suite import TestSuite
-from memory.unsafe_pointer import alloc
+from std.testing import *
+from std.testing.suite import TestSuite
+from std.memory.unsafe_pointer import alloc
 
 
 # ===--------------------------------------------------------------------===#
@@ -200,20 +200,20 @@ fn static_function(info: TableFunctionInfo, mut output: Chunk):
 # ===--------------------------------------------------------------------===#
 
 
-def test_table_function_create():
+def test_table_function_create() raises:
     """Test creating a table function."""
     var func = TableFunction()
     _ = func^
 
 
-def test_table_function_set_name():
+def test_table_function_set_name() raises:
     """Test setting the name of a table function."""
     var func = TableFunction()
     func.set_name("test_func")
     _ = func^
 
 
-def test_table_function_add_parameter():
+def test_table_function_add_parameter() raises:
     """Test adding parameters to a table function."""
     var func = TableFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -221,7 +221,7 @@ def test_table_function_add_parameter():
     _ = func^
 
 
-def test_table_function_add_named_parameter():
+def test_table_function_add_named_parameter() raises:
     """Test adding a named parameter to a table function."""
     var func = TableFunction()
     var int_type = LogicalType(DuckDBType.integer)
@@ -229,7 +229,7 @@ def test_table_function_add_named_parameter():
     _ = func^
 
 
-def test_table_function_register_simple():
+def test_table_function_register_simple() raises:
     """Test registering a simple table function."""
     var conn = DuckDB.connect(":memory:")
 
@@ -243,7 +243,7 @@ def test_table_function_register_simple():
     func.register(conn)
 
 
-def test_table_function_execute_counter():
+def test_table_function_execute_counter() raises:
     """Test executing a counting table function that produces 5 rows."""
     var conn = DuckDB.connect(":memory:")
 
@@ -265,7 +265,7 @@ def test_table_function_execute_counter():
     assert_equal(chunk.get[Int32](col=0, row=4), 4)
 
 
-def test_table_function_execute_counter_zero():
+def test_table_function_execute_counter_zero() raises:
     """Test counting table function with limit 0 produces no rows."""
     var conn = DuckDB.connect(":memory:")
 
@@ -278,12 +278,12 @@ def test_table_function_execute_counter_zero():
     func.register(conn)
 
     var count = 0
-    for row in conn.execute("SELECT * FROM counter(0)"):
+    for _ in conn.execute("SELECT * FROM counter(0)"):
         count += 1
     assert_equal(count, 0)
 
 
-def test_table_function_execute_counter_single():
+def test_table_function_execute_counter_single() raises:
     """Test counting table function with limit 1."""
     var conn = DuckDB.connect(":memory:")
 
@@ -301,7 +301,7 @@ def test_table_function_execute_counter_single():
     assert_equal(chunk.get[Int32](col=0, row=0), 0)
 
 
-def test_table_function_with_where_clause():
+def test_table_function_with_where_clause() raises:
     """Test that table functions work with WHERE clauses."""
     var conn = DuckDB.connect(":memory:")
 
@@ -321,7 +321,7 @@ def test_table_function_with_where_clause():
     assert_equal(chunk.get[Int32](col=0, row=2), 9)
 
 
-def test_table_function_with_order_by():
+def test_table_function_with_order_by() raises:
     """Test that table functions work with ORDER BY."""
     var conn = DuckDB.connect(":memory:")
 
@@ -343,7 +343,7 @@ def test_table_function_with_order_by():
     assert_equal(chunk.get[Int32](col=0, row=4), 0)
 
 
-def test_table_function_with_aggregation():
+def test_table_function_with_aggregation() raises:
     """Test that table function output can be aggregated."""
     var conn = DuckDB.connect(":memory:")
 
@@ -361,7 +361,7 @@ def test_table_function_with_aggregation():
     assert_equal(chunk.get[Int64](col=0, row=0), 10)
 
 
-def test_table_function_no_params():
+def test_table_function_no_params() raises:
     """Test a table function with no parameters."""
     var conn = DuckDB.connect(":memory:")
 
@@ -379,7 +379,7 @@ def test_table_function_no_params():
     assert_equal(chunk.get[Int32](col=0, row=1), 200)
 
 
-def test_table_function_multi_column():
+def test_table_function_multi_column() raises:
     """Test a table function that produces multiple columns."""
     var conn = DuckDB.connect(":memory:")
 
@@ -410,7 +410,7 @@ def test_table_function_multi_column():
     assert_equal(chunk.get[Float64](col=2, row=2), 21.0)
 
 
-def test_table_function_multi_column_select_specific():
+def test_table_function_multi_column_select_specific() raises:
     """Test selecting specific columns from a multi-column table function."""
     var conn = DuckDB.connect(":memory:")
 
@@ -430,7 +430,7 @@ def test_table_function_multi_column_select_specific():
     assert_equal(chunk.get[String](col=0, row=1), "carol")
 
 
-def test_table_function_in_join():
+def test_table_function_in_join() raises:
     """Test using a table function in a JOIN."""
     var conn = DuckDB.connect(":memory:")
 
@@ -462,7 +462,7 @@ def test_table_function_in_join():
     assert_equal(chunk.get[String](col=1, row=2), "two")
 
 
-def test_table_function_supports_projection_pushdown():
+def test_table_function_supports_projection_pushdown() raises:
     """Test setting projection pushdown on a table function."""
     var conn = DuckDB.connect(":memory:")
 
@@ -482,7 +482,7 @@ def test_table_function_supports_projection_pushdown():
     assert_equal(chunk.get[Int32](col=0, row=0), 0)
 
 
-def test_table_function_set_cardinality():
+def test_table_function_set_cardinality() raises:
     """Test setting cardinality hint in bind phase."""
     var conn = DuckDB.connect(":memory:")
 
@@ -510,7 +510,7 @@ def test_table_function_set_cardinality():
     assert_equal(chunk.get[Int32](col=0, row=1), 200)
 
 
-def test_table_function_large_result():
+def test_table_function_large_result() raises:
     """Test a table function producing more rows than a single vector (>2048),
     requiring multiple chunks to be produced."""
     var conn = DuckDB.connect(":memory:")
@@ -533,7 +533,7 @@ def test_table_function_large_result():
     )
 
 
-def test_table_function_large_result_correctness():
+def test_table_function_large_result_correctness() raises:
     """Test that values are correct across multiple chunks for a large table function.
     """
     var conn = DuckDB.connect(":memory:")
@@ -558,5 +558,5 @@ def test_table_function_large_result_correctness():
     assert_equal(chunk.get[Int64](col=3, row=0), 4999)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

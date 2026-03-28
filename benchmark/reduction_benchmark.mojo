@@ -17,8 +17,8 @@ Usage:
 from duckdb import *
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionInfo
 from duckdb._libduckdb import *
-from sys import simd_width_of
-import benchmark
+from std.sys import simd_width_of
+import std.benchmark
 
 
 # ===--------------------------------------------------------------------===#
@@ -29,8 +29,7 @@ comptime F = DType.float32
 
 fn sql_type() -> String:
     """Returns the SQL type name corresponding to F."""
-    @parameter
-    if F == DType.float64:
+    comptime if F == DType.float64:
         return "DOUBLE"
     else:
         return "FLOAT"
@@ -165,8 +164,7 @@ fn main() raises:
 
     # Use a tolerance that accommodates float accumulation differences
     fn tol() -> String:
-        @parameter
-        if F == DType.float64:
+        comptime if F == DType.float64:
             return "0.001"
         else:
             return "1000.0"

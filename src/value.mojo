@@ -1,7 +1,7 @@
 from duckdb._libduckdb import *
 from duckdb.logical_type import LogicalType
 from duckdb.api import DuckDB
-from collections import Optional, List
+from std.collections import Optional, List
 
 
 struct DuckDBValue(Movable):
@@ -324,7 +324,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_interval(UnsafePointer(to=value).bitcast[duckdb_interval]()[]))
 
     @staticmethod
-    fn from_blob(data: Span[UInt8, ImmutAnyOrigin]) -> Self:
+    fn from_blob(data: Span[UInt8, _]) -> Self:
         """Creates a value from binary data (BLOB).
 
         Args:
@@ -339,7 +339,7 @@ struct DuckDBValue(Movable):
         ))
 
     @staticmethod
-    fn from_bit(data: Span[UInt8, ImmutAnyOrigin]) -> Self:
+    fn from_bit(data: Span[UInt8, _]) -> Self:
         """Creates a value from a BIT string.
 
         Args:

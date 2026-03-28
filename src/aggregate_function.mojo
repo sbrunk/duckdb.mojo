@@ -1,4 +1,4 @@
-from sys.info import size_of
+from std.sys.info import size_of
 
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface

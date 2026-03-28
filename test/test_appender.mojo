@@ -1,11 +1,11 @@
 """Tests for the Appender API."""
 
 from duckdb import *
-from duckdb.duckdb_type import Date, Time, Timestamp, Interval, Decimal, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID
-from collections import Optional, Dict
-from utils import Variant
-from testing import assert_equal, assert_true, assert_raises, assert_almost_equal
-from testing.suite import TestSuite
+from duckdb.duckdb_type import Bit, Date, Decimal, Time, TimeNS, Timestamp, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID
+from std.collections import Dict, Optional
+from std.testing import assert_almost_equal, assert_equal, assert_raises, assert_true
+from std.testing.suite import TestSuite
+from std.utils import Variant
 
 
 # ─── Helper structs ──────────────────────────────────────────────
@@ -14,6 +14,12 @@ from testing.suite import TestSuite
 struct Person(Copyable, Movable):
     var id: Int32
     var name: String
+
+
+@fieldwise_init
+struct PersonOpt(Copyable, Movable):
+    var id: Int32
+    var name: Optional[String]
 
 
 @fieldwise_init
@@ -39,20 +45,14 @@ struct Floats(Copyable, Movable):
 
 
 @fieldwise_init
-struct PersonOpt(Copyable, Movable):
-    var id: Int32
-    var name: Optional[String]
-
-
-@fieldwise_init
 struct WithBool(Copyable, Movable):
     var flag: Bool
     var value: Int32
 
 
-# ─── Tests ────────────────────────────────────────────────────────
+# ─── Core appender tests ────────────────────────────────────────
 
-def test_appender_scalar_values():
+def test_appender_scalar_values() raises:
     """Test appending individual scalar values and then reading them back."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
@@ -73,7 +73,7 @@ def test_appender_scalar_values():
     assert_equal(chunk.get[String](col=1, row=1), "Bob")
 
 
-def test_appender_struct_row():
+def test_appender_struct_row() raises:
     """Test appending a struct as a complete row."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE people (id INTEGER, name VARCHAR)")
@@ -90,7 +90,7 @@ def test_appender_struct_row():
     assert_equal(chunk.get[String](col=1, row=1), "Hannes")
 
 
-def test_appender_tuple_row():
+def test_appender_tuple_row() raises:
     """Test appending a tuple as a complete row."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
@@ -107,7 +107,7 @@ def test_appender_tuple_row():
     assert_equal(chunk.get[String](col=1, row=1), "Beta")
 
 
-def test_appender_bulk_rows():
+def test_appender_bulk_rows() raises:
     """Test bulk-appending from a List of structs."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE people (id INTEGER, name VARCHAR)")
@@ -130,7 +130,7 @@ def test_appender_bulk_rows():
     assert_equal(chunk.get[String](col=0, row=2), "Cal")
 
 
-def test_appender_optional_null():
+def test_appender_optional_null() raises:
     """Test that Optional[None] maps to SQL NULL."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
@@ -139,25 +139,112 @@ def test_appender_optional_null():
     appender.append_row(PersonOpt(2, None))
     appender.close()
 
-    # The row with None should have NULL in the name column
     result = con.execute("SELECT id, name FROM t ORDER BY id")
     chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
     assert_equal(chunk.get[Int32](col=0, row=1), Int32(2))
     assert_equal(chunk.get[String](col=1, row=0), "Present")
 
-    # Check NULL via SQL
     result = con.execute("SELECT COUNT(*) FROM t WHERE name IS NULL")
     chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(1))
 
 
-def test_appender_all_int_types():
+def test_appender_append_null() raises:
+    """Test low-level append_null method."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
+    var appender = Appender(con, "t")
+    appender.append_value(Int32(1))
+    appender.append_null()
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT COUNT(*) FROM t WHERE name IS NULL")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1))
+
+
+def test_appender_flush() raises:
+    """Test that flush works without error and data is visible."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (id INTEGER)")
+    var appender = Appender(con, "t")
+    appender.append_value(Int32(1))
+    appender.end_row()
+    appender.flush()
+
+    result = con.execute("SELECT COUNT(*) FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1))
+
+    appender.append_value(Int32(2))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT COUNT(*) FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(2))
+
+
+def test_appender_column_count() raises:
+    """Test column_count metadata method."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (a INTEGER, b VARCHAR, c DOUBLE)")
+    var appender = Appender(con, "t")
+    assert_equal(appender.column_count(), 3)
+    appender.close()
+
+
+def test_appender_many_rows() raises:
+    """Test appending a larger number of rows."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (id INTEGER, val DOUBLE)")
+
+    var appender = Appender(con, "t")
+    for i in range(1000):
+        appender.append_value(Int32(i))
+        appender.append_value(Float64(i) * 1.5)
+        appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT COUNT(*) FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1000))
+
+    result = con.execute("SELECT SUM(id)::BIGINT FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(499500))
+
+
+def test_appender_auto_destroy() raises:
+    """Test that appender auto-flushes on destruction (scope exit)."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (id INTEGER)")
+
+    var appender = Appender(con, "t")
+    appender.append_value(Int32(42))
+    appender.end_row()
+    appender^.__del__()
+
+    result = con.execute("SELECT id FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int32](col=0, row=0), Int32(42))
+
+
+def test_appender_invalid_table() raises:
+    """Test that creating an appender for a non-existent table raises."""
+    con = DuckDB.connect(":memory:")
+    with assert_raises():
+        var appender = Appender(con, "nonexistent_table")
+
+
+# ─── Numeric type tests ─────────────────────────────────────────
+
+def test_appender_all_int_types() raises:
     """Test signed integer types: Int8, Int16, Int32, Int64."""
     con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (a TINYINT, b SMALLINT, c INTEGER, d BIGINT)"
-    )
+    _ = con.execute("CREATE TABLE t (a TINYINT, b SMALLINT, c INTEGER, d BIGINT)")
     var appender = Appender(con, "t")
     appender.append_row(AllInts(Int8(1), Int16(2), Int32(3), Int64(4)))
     appender.close()
@@ -170,7 +257,7 @@ def test_appender_all_int_types():
     assert_equal(chunk.get[Int64](col=3, row=0), Int64(4))
 
 
-def test_appender_all_uint_types():
+def test_appender_all_uint_types() raises:
     """Test unsigned integer types: UInt8, UInt16, UInt32, UInt64."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
@@ -188,7 +275,7 @@ def test_appender_all_uint_types():
     assert_equal(chunk.get[UInt64](col=3, row=0), UInt64(40))
 
 
-def test_appender_float_types():
+def test_appender_float_types() raises:
     """Test Float32 and Float64 types."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (a FLOAT, b DOUBLE)")
@@ -198,14 +285,13 @@ def test_appender_float_types():
 
     result = con.execute("SELECT a, b FROM t")
     chunk = result.fetch_chunk()
-    # Float comparison with tolerance
     var a = chunk.get[Float32](col=0, row=0)
     var b = chunk.get[Float64](col=1, row=0)
     assert_almost_equal(a, 3.14, atol=0.001, msg="Float32 value mismatch")
     assert_almost_equal(b, 2.71828, atol=0.00001, msg="Float64 value mismatch")
 
 
-def test_appender_bool_type():
+def test_appender_bool_type() raises:
     """Test Bool type."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (flag BOOLEAN, value INTEGER)")
@@ -220,131 +306,7 @@ def test_appender_bool_type():
     assert_equal(chunk.get[Bool](col=0, row=1), True)
 
 
-def test_appender_append_null():
-    """Test low-level append_null method."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
-    var appender = Appender(con, "t")
-    appender.append_value(Int32(1))
-    appender.append_null()
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT COUNT(*) FROM t WHERE name IS NULL")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1))
-
-
-def test_appender_flush():
-    """Test that flush works without error and data is visible."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (id INTEGER)")
-    var appender = Appender(con, "t")
-    appender.append_value(Int32(1))
-    appender.end_row()
-    appender.flush()
-
-    # After flush, data should be visible
-    result = con.execute("SELECT COUNT(*) FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1))
-
-    # Can still append after flush
-    appender.append_value(Int32(2))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT COUNT(*) FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int64](col=0, row=0), Int64(2))
-
-
-def test_appender_column_count():
-    """Test column_count metadata method."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (a INTEGER, b VARCHAR, c DOUBLE)")
-    var appender = Appender(con, "t")
-    assert_equal(appender.column_count(), 3)
-    appender.close()
-
-
-def test_appender_many_rows():
-    """Test appending a larger number of rows."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (id INTEGER, val DOUBLE)")
-
-    var appender = Appender(con, "t")
-    for i in range(1000):
-        appender.append_value(Int32(i))
-        appender.append_value(Float64(i) * 1.5)
-        appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT COUNT(*) FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int64](col=0, row=0), Int64(1000))
-
-    # Sum of 0..999 = 999 * 1000 / 2 = 499500
-    result = con.execute("SELECT SUM(id)::BIGINT FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int64](col=0, row=0), Int64(499500))
-
-
-def test_appender_auto_destroy():
-    """Test that appender auto-flushes on destruction (scope exit)."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (id INTEGER)")
-
-    # Create appender, append data, then let it drop without explicit close
-    var appender = Appender(con, "t")
-    appender.append_value(Int32(42))
-    appender.end_row()
-    # Explicitly drop the appender (simulates going out of scope)
-    appender^.__del__()
-
-    result = con.execute("SELECT id FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int32](col=0, row=0), Int32(42))
-
-
-def test_appender_date_type():
-    """Test appending Date values."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (d DATE)")
-    var appender = Appender(con, "t")
-    # days since 1970-01-01 — e.g. 18628 = 2021-01-01
-    appender.append_value(Date(18628))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT d::VARCHAR FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[String](col=0, row=0), "2021-01-01")
-
-
-def test_appender_timestamp_type():
-    """Test appending Timestamp values."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (ts TIMESTAMP)")
-    var appender = Appender(con, "t")
-    # micros since epoch — 0 = 1970-01-01 00:00:00
-    appender.append_value(Timestamp(0))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT ts::VARCHAR FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[String](col=0, row=0), "1970-01-01 00:00:00")
-
-
-def test_appender_invalid_table():
-    """Test that creating an appender for a non-existent table raises."""
-    con = DuckDB.connect(":memory:")
-    with assert_raises():
-        var appender = Appender(con, "nonexistent_table")
-
-
-def test_appender_hugeint():
+def test_appender_hugeint() raises:
     """Test appending HUGEINT (Int128) values."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (val HUGEINT)")
@@ -364,7 +326,7 @@ def test_appender_hugeint():
     assert_equal(chunk.get[String](col=0, row=2), "-42")
 
 
-def test_appender_uhugeint():
+def test_appender_uhugeint() raises:
     """Test appending UHUGEINT (UInt128) values."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (val UHUGEINT)")
@@ -381,46 +343,7 @@ def test_appender_uhugeint():
     assert_equal(chunk.get[String](col=0, row=1), "999999999999999")
 
 
-def test_appender_blob():
-    """Test appending BLOB (List[UInt8]) values."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (data BLOB)")
-    var appender = Appender(con, "t")
-    var blob = List[UInt8](capacity=5)
-    blob.append(0x48)  # H
-    blob.append(0x65)  # e
-    blob.append(0x6C)  # l
-    blob.append(0x6C)  # l
-    blob.append(0x6F)  # o
-    appender.append_value(blob)
-    appender.end_row()
-    appender.close()
-
-    # Read back as hex string to verify
-    result = con.execute("SELECT data::VARCHAR FROM t")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[String](col=0, row=0), "Hello")
-
-
-def test_appender_decimal():
-    """Test appending Decimal values."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (val DECIMAL(10, 2))")
-    var appender = Appender(con, "t")
-    # Decimal value 123.45 with width=10, scale=2 → internal value = 12345
-    appender.append_value(Decimal(UInt8(10), UInt8(2), Int128(12345)))
-    appender.end_row()
-    appender.append_value(Decimal(UInt8(10), UInt8(2), Int128(-9999)))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT val::VARCHAR FROM t ORDER BY rowid")
-    chunk = result.fetch_chunk()
-    assert_equal(chunk.get[String](col=0, row=0), "123.45")
-    assert_equal(chunk.get[String](col=0, row=1), "-99.99")
-
-
-def test_appender_hugeint_typed_api():
+def test_appender_hugeint_typed_api() raises:
     """Test round-trip of HUGEINT through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (val HUGEINT)")
@@ -434,7 +357,7 @@ def test_appender_hugeint_typed_api():
     assert_equal(chunk.get[Int128](col=0, row=0), Int128(123456789012345))
 
 
-def test_appender_uhugeint_typed_api():
+def test_appender_uhugeint_typed_api() raises:
     """Test round-trip of UHUGEINT through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (val UHUGEINT)")
@@ -448,7 +371,24 @@ def test_appender_uhugeint_typed_api():
     assert_equal(chunk.get[UInt128](col=0, row=0), UInt128(999999999999999))
 
 
-def test_appender_decimal_typed_api():
+def test_appender_decimal() raises:
+    """Test appending Decimal values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (val DECIMAL(10, 2))")
+    var appender = Appender(con, "t")
+    appender.append_value(Decimal(UInt8(10), UInt8(2), Int128(12345)))
+    appender.end_row()
+    appender.append_value(Decimal(UInt8(10), UInt8(2), Int128(-9999)))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT val::VARCHAR FROM t ORDER BY rowid")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "123.45")
+    assert_equal(chunk.get[String](col=0, row=1), "-99.99")
+
+
+def test_appender_decimal_typed_api() raises:
     """Test round-trip of DECIMAL through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (val DECIMAL(10, 2))")
@@ -465,12 +405,61 @@ def test_appender_decimal_typed_api():
     assert_equal(dec.value(), Int128(12345))
 
 
-def test_appender_timestamp_s():
+def test_appender_blob() raises:
+    """Test appending BLOB (List[UInt8]) values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (data BLOB)")
+    var appender = Appender(con, "t")
+    var blob = List[UInt8](capacity=5)
+    blob.append(0x48)  # H
+    blob.append(0x65)  # e
+    blob.append(0x6C)  # l
+    blob.append(0x6C)  # l
+    blob.append(0x6F)  # o
+    appender.append_value(blob)
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT data::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "Hello")
+
+
+# ─── Temporal type tests ────────────────────────────────────────
+
+def test_appender_date_type() raises:
+    """Test appending Date values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (d DATE)")
+    var appender = Appender(con, "t")
+    appender.append_value(Date(18628))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT d::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "2021-01-01")
+
+
+def test_appender_timestamp_type() raises:
+    """Test appending Timestamp values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (ts TIMESTAMP)")
+    var appender = Appender(con, "t")
+    appender.append_value(Timestamp(0))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT ts::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "1970-01-01 00:00:00")
+
+
+def test_appender_timestamp_s() raises:
     """Test appending TIMESTAMP_S values and round-trip via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_S)")
     var appender = Appender(con, "t")
-    # 0 seconds = 1970-01-01 00:00:00
     appender.append_value(TimestampS(0))
     appender.end_row()
     appender.append_value(TimestampS(1609459200))  # 2021-01-01 00:00:00
@@ -483,7 +472,7 @@ def test_appender_timestamp_s():
     assert_equal(chunk.get[String](col=0, row=1), "2021-01-01 00:00:00")
 
 
-def test_appender_timestamp_s_typed_api():
+def test_appender_timestamp_s_typed_api() raises:
     """Test round-trip of TIMESTAMP_S through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_S)")
@@ -497,7 +486,7 @@ def test_appender_timestamp_s_typed_api():
     assert_equal(chunk.get[TimestampS](col=0, row=0), TimestampS(1609459200))
 
 
-def test_appender_timestamp_ms():
+def test_appender_timestamp_ms() raises:
     """Test appending TIMESTAMP_MS values and round-trip via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_MS)")
@@ -514,7 +503,7 @@ def test_appender_timestamp_ms():
     assert_equal(chunk.get[String](col=0, row=1), "2021-01-01 00:00:00")
 
 
-def test_appender_timestamp_ms_typed_api():
+def test_appender_timestamp_ms_typed_api() raises:
     """Test round-trip of TIMESTAMP_MS through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_MS)")
@@ -528,7 +517,7 @@ def test_appender_timestamp_ms_typed_api():
     assert_equal(chunk.get[TimestampMS](col=0, row=0), TimestampMS(1609459200000))
 
 
-def test_appender_timestamp_ns():
+def test_appender_timestamp_ns() raises:
     """Test appending TIMESTAMP_NS values and round-trip via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_NS)")
@@ -545,7 +534,7 @@ def test_appender_timestamp_ns():
     assert_equal(chunk.get[String](col=0, row=1), "2021-01-01 00:00:00")
 
 
-def test_appender_timestamp_ns_typed_api():
+def test_appender_timestamp_ns_typed_api() raises:
     """Test round-trip of TIMESTAMP_NS through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMP_NS)")
@@ -559,25 +548,22 @@ def test_appender_timestamp_ns_typed_api():
     assert_equal(chunk.get[TimestampNS](col=0, row=0), TimestampNS(1609459200000000000))
 
 
-def test_appender_timestamp_tz():
+def test_appender_timestamp_tz() raises:
     """Test appending TIMESTAMPTZ values and reading back as text."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (ts TIMESTAMPTZ)")
     var appender = Appender(con, "t")
-    # 0 micros = 1970-01-01 00:00:00+00
     appender.append_value(TimestampTZ(0))
     appender.end_row()
     appender.close()
 
     result = con.execute("SELECT ts::VARCHAR FROM t")
     chunk = result.fetch_chunk()
-    # DuckDB renders TIMESTAMPTZ relative to the session's time zone.
-    # The epoch value should always start with "1970-01-01"
     var ts_str = chunk.get[String](col=0, row=0)
     assert_true(ts_str.startswith("1970-01-01"), "Expected 1970-01-01, got: " + ts_str)
 
 
-def test_appender_timestamp_tz_typed_api():
+def test_appender_timestamp_tz_typed_api() raises:
     """Test round-trip of TIMESTAMPTZ through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("SET TimeZone = 'UTC'")
@@ -592,12 +578,11 @@ def test_appender_timestamp_tz_typed_api():
     assert_equal(chunk.get[TimestampTZ](col=0, row=0), TimestampTZ(1609459200000000))
 
 
-def test_appender_time_tz():
+def test_appender_time_tz() raises:
     """Test appending TIMETZ values."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (t TIMETZ)")
     var appender = Appender(con, "t")
-    # Use init overload to build: 12:30:00 with +02:00 offset (7200 seconds)
     var ttz = TimeTZ(
         micros=Int64(12) * 3600 * 1_000_000 + Int64(30) * 60 * 1_000_000,
         offset=Int32(7200),
@@ -612,7 +597,7 @@ def test_appender_time_tz():
     assert_true(val.startswith("12:30:00"), "Expected 12:30:00, got: " + val)
 
 
-def test_appender_time_tz_typed_api():
+def test_appender_time_tz_typed_api() raises:
     """Test round-trip of TIMETZ through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (t TIMETZ)")
@@ -630,12 +615,11 @@ def test_appender_time_tz_typed_api():
     assert_equal(chunk.get[TimeTZ](col=0, row=0), ttz)
 
 
-def test_appender_uuid():
+def test_appender_uuid() raises:
     """Test appending UUID values and reading back as text."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id UUID)")
     var appender = Appender(con, "t")
-    # Insert via SQL to get a known UUID, then compare with appender round-trip
     appender.append_value(UUID(UInt128(0)))
     appender.end_row()
     appender.close()
@@ -648,7 +632,7 @@ def test_appender_uuid():
     )
 
 
-def test_appender_uuid_typed_api():
+def test_appender_uuid_typed_api() raises:
     """Test round-trip of UUID through appender and typed API fetch."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id UUID)")
@@ -662,7 +646,7 @@ def test_appender_uuid_typed_api():
     assert_equal(chunk.get[UUID](col=0, row=0), UUID(UInt128(42)))
 
 
-def test_appender_uuid_from_sql():
+def test_appender_uuid_from_sql() raises:
     """Test reading a SQL-inserted UUID via typed API."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id UUID)")
@@ -672,7 +656,6 @@ def test_appender_uuid_from_sql():
     chunk = result.fetch_chunk()
     var uuid = chunk.get[UUID](col=0, row=0)
 
-    # Round-trip: insert back and read as string to verify consistency
     _ = con.execute("CREATE TABLE t2 (id UUID)")
     var appender = Appender(con, "t2")
     appender.append_value(uuid)
@@ -687,400 +670,7 @@ def test_appender_uuid_from_sql():
     )
 
 
-# ──────────────────────────────────────────────────────────────────
-# List-of-scalars appender tests
-# ──────────────────────────────────────────────────────────────────
-
-
-def test_append_list_int32():
-    """Append a List[Int32] into a LIST(INTEGER) column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (nums INTEGER[])")
-    var appender = Appender(con, "t")
-
-    var l1 = List[Int32]()
-    l1.append(1)
-    l1.append(2)
-    l1.append(3)
-    appender.append_value(l1)
-    appender.end_row()
-
-    var l2 = List[Int32]()
-    l2.append(4)
-    l2.append(5)
-    appender.append_value(l2)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT nums FROM t")
-    var chunk = result.fetch_chunk()
-    var lists = chunk.get[List[Optional[Int32]]](col=0)
-    assert_equal(len(lists), 2)
-
-    var row0 = lists[0].copy()
-    assert_equal(len(row0), 3)
-    assert_equal(row0[0].value(), 1)
-    assert_equal(row0[1].value(), 2)
-    assert_equal(row0[2].value(), 3)
-
-    var row1 = lists[1].copy()
-    assert_equal(len(row1), 2)
-    assert_equal(row1[0].value(), 4)
-    assert_equal(row1[1].value(), 5)
-
-
-def test_append_list_int64():
-    """Append a List[Int64] into a LIST(BIGINT) column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (nums BIGINT[])")
-    var appender = Appender(con, "t")
-
-    var l = List[Int64]()
-    l.append(100)
-    l.append(200)
-    l.append(300)
-    appender.append_value(l)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT nums FROM t")
-    var chunk = result.fetch_chunk()
-    var row = chunk.get[List[Optional[Int64]]](col=0, row=0)
-    assert_equal(len(row), 3)
-    assert_equal(row[0].value(), 100)
-    assert_equal(row[1].value(), 200)
-    assert_equal(row[2].value(), 300)
-
-
-def test_append_list_float64():
-    """Append a List[Float64] into a LIST(DOUBLE) column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (vals DOUBLE[])")
-    var appender = Appender(con, "t")
-
-    var l = List[Float64]()
-    l.append(1.5)
-    l.append(2.5)
-    l.append(3.5)
-    appender.append_value(l)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT vals FROM t")
-    var chunk = result.fetch_chunk()
-    var row = chunk.get[List[Optional[Float64]]](col=0, row=0)
-    assert_equal(len(row), 3)
-    assert_equal(row[0].value(), 1.5)
-    assert_equal(row[1].value(), 2.5)
-    assert_equal(row[2].value(), 3.5)
-
-
-def test_append_list_bool():
-    """Append a List[Bool] into a LIST(BOOLEAN) column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (flags BOOLEAN[])")
-    var appender = Appender(con, "t")
-
-    var l = List[Bool]()
-    l.append(True)
-    l.append(False)
-    l.append(True)
-    appender.append_value(l)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT flags FROM t")
-    var chunk = result.fetch_chunk()
-    var row = chunk.get[List[Optional[Bool]]](col=0, row=0)
-    assert_equal(len(row), 3)
-    assert_equal(row[0].value(), True)
-    assert_equal(row[1].value(), False)
-    assert_equal(row[2].value(), True)
-
-
-def test_append_empty_list():
-    """Append an empty list."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (nums INTEGER[])")
-    var appender = Appender(con, "t")
-    appender.append_value(List[Int32]())
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT nums FROM t")
-    var chunk = result.fetch_chunk()
-    var row = chunk.get[List[Optional[Int32]]](col=0, row=0)
-    assert_equal(len(row), 0)
-
-
-# ─── Variant / UNION tests ──────────────────────────────────────
-
-
-def test_append_variant_int_member():
-    """Append a Variant whose active member is an integer."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Variant[Int32, String](Int32(42)))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT u FROM t")
-    var chunk = result.fetch_chunk()
-    var v = chunk.get[Variant[Int32, String]](col=0, row=0)
-    assert_true(v.isa[Int32]())
-    assert_equal(v[Int32], 42)
-
-
-def test_append_variant_str_member():
-    """Append a Variant whose active member is a string."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Variant[Int32, String](String("hello")))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT u FROM t")
-    var chunk = result.fetch_chunk()
-    var v = chunk.get[Variant[Int32, String]](col=0, row=0)
-    assert_true(v.isa[String]())
-    assert_equal(v[String], "hello")
-
-
-def test_append_variant_multiple_rows():
-    """Append several rows with different active Variant members."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Variant[Int32, String](Int32(1)))
-    appender.end_row()
-    appender.append_value(Variant[Int32, String](String("two")))
-    appender.end_row()
-    appender.append_value(Variant[Int32, String](Int32(3)))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT u FROM t ORDER BY rowid")
-    var chunk = result.fetch_chunk()
-    var vals = chunk.get[Variant[Int32, String]](col=0)
-    assert_equal(len(vals), 3)
-
-    assert_true(vals[0].isa[Int32]())
-    assert_equal(vals[0][Int32], 1)
-
-    assert_true(vals[1].isa[String]())
-    assert_equal(vals[1][String], "two")
-
-    assert_true(vals[2].isa[Int32]())
-    assert_equal(vals[2][Int32], 3)
-
-
-def test_append_variant_three_members():
-    """Append to a UNION with three member types."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (u UNION(i INTEGER, f FLOAT, s VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Variant[Int32, Float32, String](Float32(3.14)))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT u FROM t")
-    var chunk = result.fetch_chunk()
-    var v = chunk.get[Variant[Int32, Float32, String]](col=0, row=0)
-    assert_true(v.isa[Float32]())
-
-
-def test_append_variant_with_id_column():
-    """Append Variant to a table that also has a regular column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (id INTEGER, u UNION(num INTEGER, str VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Int32(1))
-    appender.append_value(Variant[Int32, String](String("hello")))
-    appender.end_row()
-    appender.append_value(Int32(2))
-    appender.append_value(Variant[Int32, String](Int32(99)))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT id, u FROM t ORDER BY id")
-    var chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
-    var v0 = chunk.get[Variant[Int32, String]](col=1, row=0)
-    assert_true(v0.isa[String]())
-    assert_equal(v0[String], "hello")
-
-    assert_equal(chunk.get[Int32](col=0, row=1), Int32(2))
-    var v1 = chunk.get[Variant[Int32, String]](col=1, row=1)
-    assert_true(v1.isa[Int32]())
-    assert_equal(v1[Int32], 99)
-
-
-def test_append_variant_roundtrip():
-    """Append Variant values and read them back via Variant deserialization."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Variant[Int32, String](Int32(42)))
-    appender.end_row()
-    appender.append_value(Variant[Int32, String](String("hello")))
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT u FROM t ORDER BY rowid")
-    var chunk = result.fetch_chunk()
-    var v0 = chunk.get[Variant[Int32, String]](col=0, row=0)
-    assert_true(v0.isa[Int32]())
-    assert_equal(v0[Int32], 42)
-
-    var v1 = chunk.get[Variant[Int32, String]](col=0, row=1)
-    assert_true(v1.isa[String]())
-    assert_equal(v1[String], "hello")
-
-
-# ─── Dict / MAP tests ────────────────────────────────────────────
-
-
-def test_append_dict_map():
-    """Append a Dict to a MAP column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
-    var appender = Appender(con, "t")
-    var d: Dict[String, Int32] = {'a': 1, 'b': 2}
-    appender.append_value(d)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT m FROM t")
-    var chunk = result.fetch_chunk()
-    var m = chunk.get[Dict[String, Int32]](col=0, row=0)
-    assert_equal(len(m), 2)
-    assert_equal(m["a"], 1)
-    assert_equal(m["b"], 2)
-
-
-def test_append_dict_map_multiple_rows():
-    """Append multiple Dict rows to a MAP column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
-    var appender = Appender(con, "t")
-
-    var d1: Dict[String, Int32] = {'x': 10}
-    appender.append_value(d1)
-    appender.end_row()
-
-    var d2: Dict[String, Int32] = {'y': 20, 'z': 30}
-    appender.append_value(d2)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT m FROM t ORDER BY rowid")
-    var chunk = result.fetch_chunk()
-    var dicts = chunk.get[Dict[String, Int32]](col=0)
-    assert_equal(len(dicts), 2)
-
-    var m0 = dicts[0].copy()
-    assert_equal(len(m0), 1)
-    assert_equal(m0["x"], 10)
-
-    var m1 = dicts[1].copy()
-    assert_equal(len(m1), 2)
-    assert_equal(m1["y"], 20)
-    assert_equal(m1["z"], 30)
-
-
-def test_append_dict_map_with_id():
-    """Append Dict to table with regular column."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (id INTEGER, m MAP(VARCHAR, INTEGER))"
-    )
-    var appender = Appender(con, "t")
-    appender.append_value(Int32(1))
-    var d: Dict[String, Int32] = {'key': 42}
-    appender.append_value(d)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT id, m FROM t")
-    var chunk = result.fetch_chunk()
-    assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
-    var m = chunk.get[Dict[String, Int32]](col=1, row=0)
-    assert_equal(m["key"], 42)
-
-
-def test_append_dict_map_roundtrip():
-    """Append Dict values and read back as Dict — full roundtrip."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute(
-        "CREATE TABLE t (m MAP(INTEGER, VARCHAR))"
-    )
-    var appender = Appender(con, "t")
-    var d = Dict[Int32, String]()
-    d[Int32(1)] = "one"
-    d[Int32(2)] = "two"
-    appender.append_value(d)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT m FROM t")
-    var chunk = result.fetch_chunk()
-    var m = chunk.get[Dict[Int32, String]](col=0, row=0)
-    assert_equal(len(m), 2)
-    assert_equal(m[Int32(1)], "one")
-    assert_equal(m[Int32(2)], "two")
-
-
-def test_append_dict_map_mojo_int():
-    """Append Dict[String, Int] using Mojo's native Int type."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, BIGINT))")
-    var appender = Appender(con, "t")
-    var d: Dict[String, Int] = {'a': 1, 'b': 2}
-    appender.append_value(d)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT m FROM t")
-    var chunk = result.fetch_chunk()
-    var m = chunk.get[Dict[String, Int]](col=0, row=0)
-    assert_equal(len(m), 2)
-    assert_equal(m["a"], 1)
-    assert_equal(m["b"], 2)
-
-
-def test_append_dict_map_mojo_uint():
-    """Append Dict[String, UInt] using Mojo's native UInt type."""
-    con = DuckDB.connect(":memory:")
-    _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, UBIGINT))")
-    var appender = Appender(con, "t")
-    var d: Dict[String, UInt] = {'x': 10, 'y': 20}
-    appender.append_value(d)
-    appender.end_row()
-    appender.close()
-
-    result = con.execute("SELECT m FROM t")
-    var chunk = result.fetch_chunk()
-    var m = chunk.get[Dict[String, UInt]](col=0, row=0)
-    assert_equal(len(m), 2)
-    assert_equal(m["x"], 10)
-    assert_equal(m["y"], 20)
-
-
-def test_appender_mojo_int():
+def test_appender_mojo_int() raises:
     """Append and read back Mojo's native Int type as a scalar."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (v BIGINT)")
@@ -1097,7 +687,7 @@ def test_appender_mojo_int():
     assert_equal(chunk.get[Int](col=0, row=1), 42)
 
 
-def test_appender_mojo_uint():
+def test_appender_mojo_uint() raises:
     """Append and read back Mojo's native UInt type as a scalar."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (v UBIGINT)")
@@ -1114,5 +704,78 @@ def test_appender_mojo_uint():
     assert_equal(chunk.get[UInt](col=0, row=1), 200)
 
 
-def main():
+def test_appender_time_ns() raises:
+    """Append and read back TIME_NS values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (t TIME_NS)")
+    var appender = Appender(con, "t")
+    appender.append_value(TimeNS(0))
+    appender.end_row()
+    appender.append_value(TimeNS(3_600_000_000_000))  # 1 hour
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT t::VARCHAR FROM t ORDER BY rowid")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "00:00:00")
+    assert_equal(chunk.get[String](col=0, row=1), "01:00:00")
+
+
+def test_appender_bit() raises:
+    """Test appending Bit values."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit("10110"))
+    appender.end_row()
+    appender.append_value(Bit("0"))
+    appender.end_row()
+    appender.close()
+
+    # Read back as VARCHAR to verify
+    result = con.execute("SELECT b::VARCHAR FROM t ORDER BY rowid")
+    chunk = result.fetch_chunk()
+    assert_equal(chunk.get[String](col=0, row=0), "10110")
+    assert_equal(chunk.get[String](col=0, row=1), "0")
+
+
+def test_appender_bit_round_trip() raises:
+    """Test round-trip of BIT through appender and typed API."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit("10110"))
+    appender.end_row()
+    appender.close()
+
+    result = con.execute("SELECT b FROM t")
+    chunk = result.fetch_chunk()
+    var val = chunk.get[Bit](col=0, row=0)
+    assert_equal(String(val), "10110")
+    assert_equal(len(val), 5)
+
+
+def test_appender_bit_from_int32() raises:
+    """Test appending Bit constructed from Int32 matches DuckDB cast."""
+    con = DuckDB.connect(":memory:")
+    _ = con.execute("CREATE TABLE t (b BIT)")
+    var appender = Appender(con, "t")
+    appender.append_value(Bit(Int32(123)))
+    appender.end_row()
+    appender.close()
+
+    # Read back the appended value
+    result = con.execute("SELECT b::VARCHAR FROM t")
+    chunk = result.fetch_chunk()
+    var appended = chunk.get[String](col=0, row=0)
+
+    # Compare with DuckDB's own cast
+    result2 = con.execute("SELECT (123::INTEGER::BITSTRING)::VARCHAR")
+    chunk2 = result2.fetch_chunk()
+    var duckdb_cast = chunk2.get[String](col=0, row=0)
+
+    assert_equal(appended, duckdb_cast)
+
+
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

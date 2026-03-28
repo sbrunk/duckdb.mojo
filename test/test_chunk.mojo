@@ -1,9 +1,9 @@
 from duckdb import *
-from testing import *
-from testing.suite import TestSuite
+from std.testing import *
+from std.testing.suite import TestSuite
 
 
-def test_chunk_create():
+def test_chunk_create() raises:
     """Test creating a data chunk with specific types."""
     var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
@@ -16,7 +16,7 @@ def test_chunk_create():
     assert_equal(len(chunk), 0)  # Initially empty
 
 
-def test_chunk_set_size():
+def test_chunk_set_size() raises:
     """Test setting the size of a data chunk."""
     var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
@@ -31,7 +31,7 @@ def test_chunk_set_size():
     assert_equal(len(chunk), 5)
 
 
-def test_chunk_reset():
+def test_chunk_reset() raises:
     """Test resetting a data chunk."""
     var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
@@ -45,7 +45,7 @@ def test_chunk_reset():
     assert_equal(len(chunk), 0)
 
 
-def test_chunk_get_vector():
+def test_chunk_get_vector() raises:
     """Test getting a vector from a data chunk."""
     var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
@@ -58,7 +58,7 @@ def test_chunk_get_vector():
     assert_equal(chunk.type(1), DuckDBType.varchar)
 
 
-def test_chunk_type():
+def test_chunk_type() raises:
     """Test getting column types from a data chunk."""
     var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
     types.append(LogicalType(DuckDBType.bigint))
@@ -72,7 +72,7 @@ def test_chunk_type():
     assert_equal(chunk.type(2), DuckDBType.double)
 
 
-def test_chunk_from_query():
+def test_chunk_from_query() raises:
     """Test working with chunks from query results."""
     con = DuckDB.connect(":memory:")
     result = con.execute("SELECT 42 as num, 'hello' as text")
@@ -84,5 +84,5 @@ def test_chunk_from_query():
     assert_equal(chunk.type(1), DuckDBType.varchar)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
