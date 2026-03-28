@@ -5,7 +5,6 @@ from duckdb.duckdb_type import *
 from std.sys.info import CompilationTarget
 from std.os import abort
 from std.pathlib import Path
-from std.ffi import _get_dylib_function as _ffi_get_dylib_function
 from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
 from std.memory import UnsafePointer
 
@@ -1566,23 +1565,13 @@ fn _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb"](materialize[DUCKDB_LIBRARY_PATHS]())
 
 
-@always_inline
-fn _get_dylib_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_function[Self.fn_name, Self.type]()
+        return DUCKDB_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 comptime DUCKDB_HELPERS_PATHS: List[Path] = [
     "libduckdb_mojo_helpers.so",
@@ -1594,22 +1583,13 @@ comptime DUCKDB_HELPERS_LIBRARY = _Global["DUCKDB_HELPERS_LIBRARY", _init_helper
 fn _init_helper_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_mojo_helpers"](materialize[DUCKDB_HELPERS_PATHS]())
 
-@always_inline
-fn _get_dylib_helpers_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_HELPERS_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_helpers_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_helpers_function[Self.fn_name, Self.type]()
+        return DUCKDB_HELPERS_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 struct LibDuckDB(Movable):
 

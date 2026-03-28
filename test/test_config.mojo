@@ -21,7 +21,7 @@ def test_config_set_multiple_options() raises:
     """Test setting multiple configuration options."""
     var config = Config()
     config.set("threads", "2")
-    config.set("memory_limit", "256MB")
+    config.set("default_order", "DESCENDING")
 
 
 def test_config_set_invalid_value() raises:
@@ -34,7 +34,7 @@ def test_config_set_invalid_value() raises:
 
 def test_config_from_dict() raises:
     """Test creating a Config from a dictionary."""
-    var config = Config({"threads": "2", "memory_limit": "256MB"})
+    var config = Config({"threads": "2", "default_order": "DESCENDING"})
 
 
 def test_config_available_options() raises:
@@ -64,7 +64,7 @@ def test_connection_with_config() raises:
     """Test creating a Connection with a Config."""
     var config = Config()
     config.set("threads", "2")
-    config.set("memory_limit", "256MB")
+    config.set("default_order", "DESCENDING")
     var con = Connection(":memory:", config^)
     # Verify the config took effect by querying current_setting
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
@@ -86,25 +86,23 @@ def test_connect_with_config() raises:
 def test_connect_with_dict() raises:
     """Test DuckDB.connect with a dictionary config."""
     var con = DuckDB.connect(
-        ":memory:", config={"threads": "2", "memory_limit": "256MB"}
+        ":memory:", config={"threads": "2", "default_order": "DESCENDING"}
     )
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[String](col=0, row=0), "2")
 
 
-def test_config_memory_limit() raises:
-    """Test configuring the memory limit."""
+def test_config_default_order_descending() raises:
+    """Test configuring the default order."""
     var config = Config()
-    config.set("memory_limit", "100MB")
+    config.set("default_order", "DESCENDING")
     var con = Connection(":memory:", config)
     var result = con.execute(
-        "SELECT current_setting('memory_limit') AS memory_limit"
+        "SELECT current_setting('default_order') AS default_order"
     )
     var chunk = result.fetch_chunk()
-    # DuckDB normalizes memory values, so check it's set (exact format may vary)
-    var mem_val = chunk.get[String](col=0, row=0)
-    assert_true(len(mem_val) > 0, "memory_limit should be set")
+    assert_equal(chunk.get[String](col=0, row=0), "DESC")
 
 
 def test_config_access_mode_read_write() raises:

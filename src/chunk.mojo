@@ -631,7 +631,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
             else:
                 var val = _deserialize_table_field[FT](vector, row)
-                dst.bitcast[FT]().init_pointee_move(val)
+                dst.bitcast[FT]().init_pointee_move(val^)
 
         var result = ptr.take_pointee()
         ptr.free()
@@ -833,7 +833,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
     fn get_tuple[
         *Ts: Copyable & Movable
-    ](self) raises -> List[Tuple[*Ts]]:
+    ](self) raises -> List[downcast[Tuple[*Ts], Copyable]]:
         """Deserialize all rows into Mojo Tuples.
 
         Parameters:
@@ -849,9 +849,9 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 print(rows[i][0], rows[i][1])
             ```
         """
-        var result = List[Tuple[*Ts]](capacity=len(self))
+        var result = List[downcast[Tuple[*Ts], Copyable]](capacity=len(self))
         for row in range(len(self)):
-            result.append(self.get_tuple[*Ts](row=row))
+            result.append(rebind_var[downcast[Tuple[*Ts], Copyable]](self.get_tuple[*Ts](row=row)))
         return result^
 
 
