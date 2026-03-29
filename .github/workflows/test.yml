@@ -47,6 +47,5 @@ jobs:
       - name: Execute tests
         run: |
           source $HOME/.bash_profile
-          pixi build
           pixi run mojo run example.mojo
           pixi run test
