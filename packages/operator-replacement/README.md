@@ -30,7 +30,7 @@ pixi run test         # Compile extension and run tests
 pixi run -e source-build test  # Build DuckDB from source and test
 ```
 
-The default environment builds against conda-forge's `libduckdb-devel` v1.4.4 package (recommended). The `source-build` environment clones and builds DuckDB from source for testing custom builds or development versions.
+The default environment builds against conda-forge's `libduckdb-devel` v1.5.1 package (recommended). The `source-build` environment clones and builds DuckDB from source for testing custom builds or development versions.
 
 ## API Usage
 
@@ -162,8 +162,8 @@ pixi run -e source-build clean  # Remove all build artifacts including duckdb/
 
 Two environments are available:
 
-- **default**: Uses `libduckdb-devel==1.4.4` from conda-forge (fast, recommended)
-- **source-build**: Builds DuckDB v1.4.4 from source (for testing custom builds/dev versions)
+- **default**: Uses `libduckdb-devel==1.5.1` from conda-forge (fast, recommended)
+- **source-build**: Builds DuckDB v1.5.1 from source (for testing custom builds/dev versions)
 
 Use `-e source-build` flag to run commands in the source-build environment.
 

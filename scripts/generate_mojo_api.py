@@ -677,15 +677,15 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 
 
 def _generate_header() -> str:
-    return """from ffi import external_call, c_char
-from utils import StaticTuple
-from collections import InlineArray
+    return """from std.ffi import external_call, c_char
+from std.utils import StaticTuple
+from std.collections import InlineArray
 from duckdb.duckdb_type import *
-from sys.info import CompilationTarget
-from os import abort
-from pathlib import Path
-from ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
-from memory import UnsafePointer
+from std.sys.info import CompilationTarget
+from std.os import abort
+from std.pathlib import Path
+from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
+from std.memory import UnsafePointer
 
 # ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
@@ -1503,7 +1503,7 @@ def _generate_decimal_get_method(entry: dict, workaround_name: str) -> str:
         "        NOTE: Mojo cannot return duckdb_decimal by value correctly over the C ABI.",
         "        We therefore call a workaround function that returns via pointer instead.",
         '        """',
-        "        var result = duckdb_decimal(width=0, scale=0, value=0)",
+        "        var result = duckdb_decimal(width=UInt8(0), scale=UInt8(0), value=Int128(0))",
         f"        self._{workaround_name}(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())",
         "        return result",
     ]

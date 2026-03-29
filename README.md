@@ -92,8 +92,8 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb_extension.h)
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.1/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.1/src/include/duckdb_extension.h)
 instead of relying on dynamic symbol lookup. The struct is split into a
 **stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
 for the full design):

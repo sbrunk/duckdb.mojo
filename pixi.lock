@@ -14,7 +14,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/ca-certificates-2026.2.25-hbd8a1cb_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/click-8.3.1-pyh8f84b5b_1.conda
       - conda: https://prefix.dev/conda-forge/noarch/cpython-3.14.3-py314hd8ed1ab_101.conda
-      - conda: https://prefix.dev/conda-forge/linux-64/duckdb-cli-1.4.4-hecca717_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-64/duckdb-cli-1.5.1-hecca717_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/icu-78.3-h33c6efd_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/jupyter_client-8.6.3-pyhd8ed1ab_1.conda
@@ -22,8 +22,8 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-64/keyutils-1.6.3-hb9d3cd8_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/krb5-1.22.2-ha1258a1_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/ld_impl_linux-64-2.45.1-default_hbd61a6d_102.conda
-      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.4.4-h77cc3ed_3.conda
-      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-devel-1.4.4-hecca717_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.5.1-h77cc3ed_0.conda
+      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-devel-1.5.1-hecca717_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libedit-3.1.20250104-pl5321h7949ede_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libexpat-2.7.4-hecca717_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libffi-3.5.2-h3435931_0.conda
@@ -72,7 +72,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/ca-certificates-2026.2.25-hbd8a1cb_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/click-8.3.1-pyh8f84b5b_1.conda
       - conda: https://prefix.dev/conda-forge/noarch/cpython-3.14.3-py314hd8ed1ab_101.conda
-      - conda: https://prefix.dev/conda-forge/linux-aarch64/duckdb-cli-1.4.4-hfae3067_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-aarch64/duckdb-cli-1.5.1-hfae3067_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/icu-78.3-hcab7f73_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/jupyter_client-8.6.3-pyhd8ed1ab_1.conda
@@ -80,8 +80,8 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/keyutils-1.6.3-h86ecc28_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/krb5-1.22.2-hfd895c2_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/ld_impl_linux-aarch64-2.45.1-default_h1979696_102.conda
-      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.4.4-h080e337_3.conda
-      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-devel-1.4.4-hfae3067_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.5.1-h080e337_0.conda
+      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-devel-1.5.1-hfae3067_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libedit-3.1.20250104-pl5321h976ea20_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libexpat-2.7.4-hfae3067_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libffi-3.5.2-h376a255_0.conda
@@ -129,15 +129,15 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/ca-certificates-2026.2.25-hbd8a1cb_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/click-8.3.1-pyh8f84b5b_1.conda
       - conda: https://prefix.dev/conda-forge/noarch/cpython-3.14.3-py314hd8ed1ab_101.conda
-      - conda: https://prefix.dev/conda-forge/osx-arm64/duckdb-cli-1.4.4-hf6b4638_3.conda
+      - conda: https://prefix.dev/conda-forge/osx-arm64/duckdb-cli-1.5.1-hf6b4638_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/icu-78.3-hef89b57_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
       - conda: https://prefix.dev/conda-forge/noarch/jupyter_client-8.6.3-pyhd8ed1ab_1.conda
       - conda: https://prefix.dev/conda-forge/noarch/jupyter_core-5.9.1-pyhc90fa1f_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/krb5-1.22.2-h385eeb1_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libcxx-22.1.2-h55c6f16_0.conda
-      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.4.4-h067f6b4_3.conda
-      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-devel-1.4.4-hf6b4638_3.conda
+      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.5.1-h067f6b4_0.conda
+      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-devel-1.5.1-hf6b4638_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libedit-3.1.20250104-pl5321hafb1f1b_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libexpat-2.7.4-hf6b4638_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
@@ -196,7 +196,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-64/keyutils-1.6.3-hb9d3cd8_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/krb5-1.22.2-ha1258a1_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/ld_impl_linux-64-2.45.1-default_hbd61a6d_102.conda
-      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.4.4-h77cc3ed_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.5.1-h77cc3ed_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libedit-3.1.20250104-pl5321h7949ede_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libexpat-2.7.4-hecca717_0.conda
       - conda: https://prefix.dev/conda-forge/linux-64/libffi-3.5.2-h3435931_0.conda
@@ -256,7 +256,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/keyutils-1.6.3-h86ecc28_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/krb5-1.22.2-hfd895c2_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/ld_impl_linux-aarch64-2.45.1-default_h1979696_102.conda
-      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.4.4-h080e337_3.conda
+      - conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.5.1-h080e337_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libedit-3.1.20250104-pl5321h976ea20_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libexpat-2.7.4-hfae3067_0.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/libffi-3.5.2-h376a255_0.conda
@@ -314,7 +314,7 @@ environments:
       - conda: https://prefix.dev/conda-forge/noarch/jupyter_core-5.9.1-pyhc90fa1f_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/krb5-1.22.2-h385eeb1_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libcxx-22.1.2-h55c6f16_0.conda
-      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.4.4-h067f6b4_3.conda
+      - conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.5.1-h067f6b4_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libedit-3.1.20250104-pl5321hafb1f1b_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libexpat-2.7.4-hf6b4638_0.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
@@ -449,43 +449,43 @@ packages:
   license: Python-2.0
   size: 50078
   timestamp: 1770674447292
-- conda: https://prefix.dev/conda-forge/linux-64/duckdb-cli-1.4.4-hecca717_3.conda
-  sha256: de6a9e25b3058f88a5553c9bf1c14028b023528cca197b17ca16e89ec45a2e2f
-  md5: 0b445be6d437b0a7c69a84c82208f931
+- conda: https://prefix.dev/conda-forge/linux-64/duckdb-cli-1.5.1-hecca717_0.conda
+  sha256: 3691c1cf0ade766f59b40e88fe6d41d38d1337201594cd00b570158c0e06addc
+  md5: 0e8f1bdd6ac6f7dfd7008a1e6ac86e7c
   depends:
   - __glibc >=2.17,<3.0.a0
-  - libduckdb 1.4.4 h77cc3ed_3
+  - libduckdb 1.5.1 h77cc3ed_0
   - libgcc >=14
   - libstdcxx >=14
   license: MIT
   license_family: MIT
-  size: 286795
-  timestamp: 1770668172653
-- conda: https://prefix.dev/conda-forge/linux-aarch64/duckdb-cli-1.4.4-hfae3067_3.conda
-  sha256: 0a0d15395a41251a4ce9853425aebfa161d6653b975643e45995c48bbdba7ffb
-  md5: 8ecf19550cb4c3ad693b0f3f35ba9bfc
+  size: 306748
+  timestamp: 1774287801090
+- conda: https://prefix.dev/conda-forge/linux-aarch64/duckdb-cli-1.5.1-hfae3067_0.conda
+  sha256: ad06a4d47293d1dc367d83a0f1a22506db541e755b8133cc757d6161cee3c8df
+  md5: 2aec39b0e8a9f8ef59b5db3a1a8e3eff
   depends:
-  - libduckdb 1.4.4 h080e337_3
+  - libduckdb 1.5.1 h080e337_0
   - libgcc >=14
   - libstdcxx >=14
   license: MIT
   license_family: MIT
-  size: 301446
-  timestamp: 1770668486592
-- conda: https://prefix.dev/conda-forge/osx-arm64/duckdb-cli-1.4.4-hf6b4638_3.conda
-  sha256: 4932ca34b8af999a4270de247ef6dd84121d3ad746fb1efe2722f38d6db460ab
-  md5: 0b0bcc46ba204530134647362d2d0d1d
+  size: 291171
+  timestamp: 1774288028483
+- conda: https://prefix.dev/conda-forge/osx-arm64/duckdb-cli-1.5.1-hf6b4638_0.conda
+  sha256: 8716d0ac4ade5e8a3fd5b12d8b4cafa668b72cb35c1ef77ddc0449399b06b12a
+  md5: 9daf1d22514e703b1330836840aae0aa
   depends:
   - __osx >=11.0
   - libcxx >=19
-  - libduckdb 1.4.4 h067f6b4_3
+  - libduckdb 1.5.1 h067f6b4_0
   license: MIT
   license_family: MIT
-  size: 190285
-  timestamp: 1770667039807
+  size: 235649
+  timestamp: 1774288152472
 - conda: packages/duckdb-from-source
   name: duckdb-from-source
-  version: 1.4.4
+  version: 1.5.1
   build: h60d57d3_0
   subdir: osx-arm64
   variants:
@@ -494,7 +494,7 @@ packages:
   - libcxx >=22
 - conda: packages/duckdb-from-source
   name: duckdb-from-source
-  version: 1.4.4
+  version: 1.5.1
   build: hb0f4dca_0
   subdir: linux-64
   variants:
@@ -505,7 +505,7 @@ packages:
   - libstdcxx >=15
 - conda: packages/duckdb-from-source
   name: duckdb-from-source
-  version: 1.4.4
+  version: 1.5.1
   build: he8cfe8b_0
   subdir: linux-aarch64
   variants:
@@ -523,7 +523,7 @@ packages:
     target_platform: osx-arm64
   depends:
   - libcxx >=22
-  - libduckdb >=1.4.4,<1.4.5.0a0
+  - libduckdb >=1.5.1,<1.5.2.0a0
 - conda: packages/duckdb-mojo-helpers
   name: duckdb-mojo-helpers
   version: 0.0.1
@@ -534,7 +534,7 @@ packages:
   depends:
   - libstdcxx >=15
   - libgcc >=15
-  - libduckdb >=1.4.4,<1.4.5.0a0
+  - libduckdb >=1.5.1,<1.5.2.0a0
 - conda: packages/duckdb-mojo-helpers
   name: duckdb-mojo-helpers
   version: 0.0.1
@@ -545,7 +545,7 @@ packages:
   depends:
   - libstdcxx >=15
   - libgcc >=15
-  - libduckdb >=1.4.4,<1.4.5.0a0
+  - libduckdb >=1.5.1,<1.5.2.0a0
 - conda: packages/operator-replacement
   name: duckdb-operator-replacement
   version: 0.0.1
@@ -788,77 +788,77 @@ packages:
   license_family: Apache
   size: 568094
   timestamp: 1774439202359
-- conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.4.4-h77cc3ed_3.conda
-  sha256: 256567cfc6d731539459eeb66ab614d090697d7fa284dd7724454b616f881c22
-  md5: 4e7b23d4e9e933b6af3bf365844d99ad
+- conda: https://prefix.dev/conda-forge/linux-64/libduckdb-1.5.1-h77cc3ed_0.conda
+  sha256: 121666d5aaa2ac7f0605a67e63ba2ff95dbe963b35e743c09b3d4d9658045c13
+  md5: 45f1cb2fb917ee774022ee353f159dce
   depends:
   - __glibc >=2.17,<3.0.a0
-  - icu >=78.2,<79.0a0
+  - icu >=78.3,<79.0a0
   - libgcc >=14
   - libstdcxx >=14
   - openssl >=3.5.5,<4.0a0
   license: MIT
   license_family: MIT
-  size: 14016827
-  timestamp: 1770668136062
-- conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.4.4-h080e337_3.conda
-  sha256: ce0a5774031854ded498de2b314b54343f11bd42edff601559d42a4e46b1e943
-  md5: b806b2d76adc1b381bc7ab580758226c
+  size: 15222062
+  timestamp: 1774287757064
+- conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-1.5.1-h080e337_0.conda
+  sha256: e466eee0882697b0f0fd11c16b1318236fd190615e905a75277eba974a5a6b80
+  md5: 4197b6cb559461f149ee588f8595a5b1
   depends:
-  - icu >=78.2,<79.0a0
+  - icu >=78.3,<79.0a0
   - libgcc >=14
   - libstdcxx >=14
   - openssl >=3.5.5,<4.0a0
   license: MIT
   license_family: MIT
-  size: 12697742
-  timestamp: 1770668446828
-- conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.4.4-h067f6b4_3.conda
-  sha256: e1462967949618dbbbbd8c646fa31b3d65d490f03a0dc31f5672e4594458fd2f
-  md5: 060d75d37b76e12b1f428a9412aef826
+  size: 13846576
+  timestamp: 1774287989391
+- conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-1.5.1-h067f6b4_0.conda
+  sha256: 6b91fed8231d10a835041b9382965caf2de10404b11a0ef3d8cda77a4b063d21
+  md5: 697ccfa0366e90474ac95a9ef5f966c5
   depends:
   - __osx >=11.0
-  - icu >=78.2,<79.0a0
+  - icu >=78.3,<79.0a0
   - libcxx >=19
   - openssl >=3.5.5,<4.0a0
   license: MIT
   license_family: MIT
-  size: 9064642
-  timestamp: 1770666990353
-- conda: https://prefix.dev/conda-forge/linux-64/libduckdb-devel-1.4.4-hecca717_3.conda
-  sha256: c59c4ca371afc42e880fe248c727325b50718afb2630041f3a04cb0f96363696
-  md5: 7ad2d5684d1a32bba85c225d6b7ed585
+  size: 9928215
+  timestamp: 1774288100386
+- conda: https://prefix.dev/conda-forge/linux-64/libduckdb-devel-1.5.1-hecca717_0.conda
+  sha256: 4c330a3aff379bfc7f8bc522269935275b24fb735c001b756abb979f9207bd2a
+  md5: b3af922ec5e9de73266882c514f2bede
   depends:
   - __glibc >=2.17,<3.0.a0
-  - libduckdb 1.4.4 h77cc3ed_3
+  - libduckdb 1.5.1 h77cc3ed_0
   - libgcc >=14
   - libstdcxx >=14
   license: MIT
   license_family: MIT
-  size: 747493
-  timestamp: 1770668345246
-- conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-devel-1.4.4-hfae3067_3.conda
-  sha256: 134715b4b52eab8bc1981808faa9d3059ed28bd15bda3a2d2943b202bbf73a4e
-  md5: 123346d973ba9d2058f7a7726a6307cf
+  size: 786204
+  timestamp: 1774288054871
+- conda: https://prefix.dev/conda-forge/linux-aarch64/libduckdb-devel-1.5.1-hfae3067_0.conda
+  sha256: de4d6038014304017b04fe62b5d1537a342b7de8445c0b975c43adc7f14302d0
+  md5: 76154db14f9eb89da8d59627e23d8a04
   depends:
-  - libduckdb 1.4.4 h080e337_3
+  - libduckdb 1.5.1 h080e337_0
   - libgcc >=14
   - libstdcxx >=14
   license: MIT
   license_family: MIT
-  size: 747557
-  timestamp: 1770668662631
-- conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-devel-1.4.4-hf6b4638_3.conda
-  sha256: 004092bf83d8467110e2d4e01f22a13bce31642b65c5bc08b453032330fedcf1
-  md5: 3102991e390972b811b39cb0e6c0987d
+  size: 785623
+  timestamp: 1774288265499
+- conda: https://prefix.dev/conda-forge/osx-arm64/libduckdb-devel-1.5.1-hf6b4638_0.conda
+  sha256: f1099532fe0ccd6a25ea5e033a85dc224240fc21d869b0e1dd9576cbdcb5a03b
+  md5: d2f8cf08220db7debd48b940ed936100
   depends:
   - __osx >=11.0
   - libcxx >=19
-  - libduckdb 1.4.4 h067f6b4_3
+  - libduckdb 1.5.1 h067f6b4_0
   license: MIT
   license_family: MIT
-  size: 753732
-  timestamp: 1770667354901
+  size: 784376
+  timestamp: 1774288450542
 - conda: https://prefix.dev/conda-forge/linux-64/libedit-3.1.20250104-pl5321h7949ede_0.conda
   sha256: d789471216e7aba3c184cd054ed61ce3f6dac6f87a50ec69291b9297f8c18724
   md5: c277e0a4d549b03ac1e9d6cbbe3d017b

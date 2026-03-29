@@ -8,8 +8,8 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 
 ## Tech Stack
 
-- **Language:** Mojo (nightly builds, pinned in pixi.toml)
-- **Database:** DuckDB 1.4 (C API via auto-generated FFI bindings)
+- **Language:** Mojo (stable releases, pinned in pixi.toml)
+- **Database:** DuckDB 1.5 (C API via auto-generated FFI bindings)
 - **Package manager:** Pixi (conda-based, config in pixi.toml)
 - **CI:** GitHub Actions (test.yml - runs on linux-64, linux-aarch64, osx-arm64)
 

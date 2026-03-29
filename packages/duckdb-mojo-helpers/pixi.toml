@@ -9,7 +9,7 @@ backend = { name = "pixi-build-cmake", version = "0.3.*" }
 extra-args = ["-DCMAKE_BUILD_TYPE=Release"] 
 
 [package.host-dependencies]
-libduckdb-devel = "=1.4"
+libduckdb-devel = "=1.5.1"
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
