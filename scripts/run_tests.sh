@@ -8,11 +8,11 @@ if [ ! -f "./duckdb.mojopkg" ]; then
     exit 1
 fi
 
-# On CI, hide src/ so mojo uses the pre-built mojopkg instead of recompiling
+# On CI, hide duckdb/ so mojo uses the pre-built mojopkg instead of recompiling
 # from source for each test file (saves 9+ GB peak memory).
 if [[ "${CI:-}" == "true" ]]; then
-    mv src src.bak
-    trap "mv src.bak src" EXIT
+    mv duckdb duckdb.bak
+    trap "mv duckdb.bak duckdb" EXIT
 fi
 
 # Tests that compile quickly (no heavy generic monomorphization)

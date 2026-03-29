@@ -139,7 +139,7 @@ SELECT mojo_add_numbers(40, 2);  -- 42
 See the [demo extension](demo-extension/) for a full working example.
 
 ## Status
-- The [FFI bindings](src/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
+- The [FFI bindings](duckdb/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
 - We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
 
 
@@ -166,7 +166,7 @@ pixi build
 
 ### (Re-)generate the C API bindings
 
-The low-level bindings in `src/_libduckdb.mojo` are auto-generated from DuckDB's
+The low-level bindings in `duckdb/_libduckdb.mojo` are auto-generated from DuckDB's
 declarative JSON schemata (the same source used to generate `duckdb.h`).
 To regenerate them (e.g. after bumping the DuckDB version in `pixi.toml`):
 

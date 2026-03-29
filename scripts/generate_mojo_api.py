@@ -34,7 +34,7 @@ EXT_API_DEFINITION_PATTERN = "src/include/duckdb/main/capi/header_generation/api
 EXT_API_EXCLUSION_FILE = "src/include/duckdb/main/capi/header_generation/apis/v1/exclusion_list.json"
 
 # Output file (relative to the workspace root)
-OUTPUT_FILE = "src/libduckdb.mojo"
+OUTPUT_FILE = "duckdb/libduckdb.mojo"
 
 # Groups in the order they appear in duckdb.h – maintained for easy diffing.
 ORIGINAL_FUNCTION_GROUP_ORDER = [

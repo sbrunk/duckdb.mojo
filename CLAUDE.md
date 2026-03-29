@@ -15,7 +15,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 
 ## Project Structure
 
-- `src/` - Main library source (Mojo package named `duckdb`)
+- `duckdb/` - Main library source (the `duckdb` Mojo package)
   - `_libduckdb.mojo` - Auto-generated low-level C API bindings (do not edit manually)
   - `connection.mojo`, `database.mojo`, `result.mojo` - Core client API
   - `scalar_function.mojo`, `aggregate_function.mojo`, `table_function.mojo` - UDF registration
