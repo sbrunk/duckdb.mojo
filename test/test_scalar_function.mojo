@@ -4,7 +4,7 @@ from duckdb._libduckdb import *
 from std.testing import assert_equal, assert_true, assert_false, assert_almost_equal, assert_raises
 from std.testing.suite import TestSuite
 from std.sys.info import size_of
-import std.math
+from std import math
 
 
 # ===--------------------------------------------------------------------===#

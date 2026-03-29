@@ -6,7 +6,7 @@ This package builds DuckDB from source and provides the full headers and library
 
 The `duckdb-operator-replacement` package requires access to internal DuckDB headers that are not available in the precompiled `libduckdb-devel` package from conda-forge. This package:
 
-1. Clones DuckDB v1.4.4 from GitHub
+1. Clones DuckDB v1.5.1 from GitHub
 2. Builds it from source with CMake/Ninja
 3. Installs the library and **all** headers to `$PREFIX`
 4. Gets cached by pixi-build
@@ -17,7 +17,7 @@ Once built, this package is cached by pixi. Subsequent builds of `duckdb-operato
 
 ## Version
 
-- **DuckDB Version**: 1.4.4
+- **DuckDB Version**: 1.5.1
 - **Build Type**: Release
 - **Build System**: CMake + Ninja
 

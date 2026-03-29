@@ -5,7 +5,6 @@ from duckdb.duckdb_type import *
 from std.sys.info import CompilationTarget
 from std.os import abort
 from std.pathlib import Path
-from std.ffi import _get_dylib_function as _ffi_get_dylib_function
 from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
 from std.memory import UnsafePointer
 
@@ -203,6 +202,42 @@ comptime DUCKDB_INVALID_CONFIGURATION = 42
 comptime duckdb_cast_mode = Int32
 comptime DUCKDB_CAST_NORMAL = 0
 comptime DUCKDB_CAST_TRY = 1
+
+comptime duckdb_file_flag = Int32
+comptime DUCKDB_FILE_FLAG_INVALID = 0
+# Open the file with "read" capabilities.
+comptime DUCKDB_FILE_FLAG_READ = 1
+# Open the file with "write" capabilities.
+comptime DUCKDB_FILE_FLAG_WRITE = 2
+# Create a new file, or open if it already exists.
+comptime DUCKDB_FILE_FLAG_CREATE = 3
+# Create a new file, or fail if it already exists.
+comptime DUCKDB_FILE_FLAG_CREATE_NEW = 4
+# Open the file in "append" mode.
+comptime DUCKDB_FILE_FLAG_APPEND = 5
+
+#! An enum over DuckDB's configuration option scopes. This enum can be used to specify the default scope when creating a custom configuration option, but it is also be used to determine the scope in which a configuration option is set when it is changed or retrieved.
+comptime duckdb_config_option_scope = Int32
+comptime DUCKDB_CONFIG_OPTION_SCOPE_INVALID = 0
+# !! CURRENTLY NOT IMPLEMENTED !!
+comptime DUCKDB_CONFIG_OPTION_SCOPE_LOCAL = 1
+# The option is set for the current session/connection only.
+comptime DUCKDB_CONFIG_OPTION_SCOPE_SESSION = 2
+# Set the option globally for all sessions/connections.
+comptime DUCKDB_CONFIG_OPTION_SCOPE_GLOBAL = 3
+
+#! An enum over DuckDB's catalog entry types.
+comptime duckdb_catalog_entry_type = Int32
+comptime DUCKDB_CATALOG_ENTRY_TYPE_INVALID = 0
+comptime DUCKDB_CATALOG_ENTRY_TYPE_TABLE = 1
+comptime DUCKDB_CATALOG_ENTRY_TYPE_SCHEMA = 2
+comptime DUCKDB_CATALOG_ENTRY_TYPE_VIEW = 3
+comptime DUCKDB_CATALOG_ENTRY_TYPE_INDEX = 4
+comptime DUCKDB_CATALOG_ENTRY_TYPE_PREPARED_STATEMENT = 5
+comptime DUCKDB_CATALOG_ENTRY_TYPE_SEQUENCE = 6
+comptime DUCKDB_CATALOG_ENTRY_TYPE_COLLATION = 7
+comptime DUCKDB_CATALOG_ENTRY_TYPE_TYPE = 8
+comptime DUCKDB_CATALOG_ENTRY_TYPE_DATABASE = 9
 
 
 # ===--------------------------------------------------------------------===#
@@ -1058,7 +1093,7 @@ struct duckdb_ext_api_v1:
 struct duckdb_ext_api_v1_unstable:
     """DuckDB Extension C API function pointer table (duckdb_ext_api_v1_unstable).
 
-    Contains 459 function pointers.
+    Contains 545 function pointers.
     """
 
     # --- v1.2.0 ---
@@ -1478,6 +1513,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_append_default_to_chunk: fn (duckdb_appender, duckdb_data_chunk, idx_t, idx_t) -> duckdb_state
     var duckdb_appender_error_data: fn (duckdb_appender) -> duckdb_error_data
     var duckdb_appender_create_query: fn (duckdb_connection, UnsafePointer[c_char, ImmutAnyOrigin], idx_t, UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], MutAnyOrigin], UnsafePointer[duckdb_appender, ImmutAnyOrigin]) -> duckdb_state
+    var duckdb_appender_clear: fn (duckdb_appender) -> duckdb_state
 
     # --- unstable_new_arrow_functions ---
     var duckdb_to_arrow_schema: fn (duckdb_arrow_options, UnsafePointer[duckdb_logical_type, ImmutAnyOrigin], UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], MutAnyOrigin], idx_t, UnsafePointer[NoneType, MutAnyOrigin]) -> duckdb_error_data
@@ -1485,6 +1521,64 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_schema_from_arrow: fn (duckdb_connection, UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_arrow_converted_schema, ImmutAnyOrigin]) -> duckdb_error_data
     var duckdb_data_chunk_from_arrow: fn (duckdb_connection, UnsafePointer[NoneType, MutAnyOrigin], duckdb_arrow_converted_schema, UnsafePointer[duckdb_data_chunk, ImmutAnyOrigin]) -> duckdb_error_data
     var duckdb_destroy_arrow_converted_schema: fn (UnsafePointer[duckdb_arrow_converted_schema, ImmutAnyOrigin]) -> NoneType
+
+    # --- unstable_new_catalog_interface ---
+    var duckdb_client_context_get_catalog: fn (duckdb_client_context, UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_catalog
+    var duckdb_catalog_get_type_name: fn (duckdb_catalog) -> UnsafePointer[c_char, ImmutAnyOrigin]
+    var duckdb_catalog_get_entry: fn (duckdb_catalog, duckdb_client_context, duckdb_catalog_entry_type, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_catalog_entry
+    var duckdb_destroy_catalog: fn (UnsafePointer[duckdb_catalog, MutAnyOrigin]) -> NoneType
+    var duckdb_catalog_entry_get_type: fn (duckdb_catalog_entry) -> duckdb_catalog_entry_type
+    var duckdb_catalog_entry_get_name: fn (duckdb_catalog_entry) -> UnsafePointer[c_char, ImmutAnyOrigin]
+    var duckdb_destroy_catalog_entry: fn (UnsafePointer[duckdb_catalog_entry, MutAnyOrigin]) -> NoneType
+
+    # --- unstable_new_config_options_functions ---
+    var duckdb_create_config_option: fn () -> duckdb_config_option
+    var duckdb_destroy_config_option: fn (UnsafePointer[duckdb_config_option, MutAnyOrigin]) -> NoneType
+    var duckdb_config_option_set_name: fn (duckdb_config_option, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_config_option_set_type: fn (duckdb_config_option, duckdb_logical_type) -> NoneType
+    var duckdb_config_option_set_default_value: fn (duckdb_config_option, duckdb_value) -> NoneType
+    var duckdb_config_option_set_default_scope: fn (duckdb_config_option, duckdb_config_option_scope) -> NoneType
+    var duckdb_config_option_set_description: fn (duckdb_config_option, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_register_config_option: fn (duckdb_connection, duckdb_config_option) -> duckdb_state
+    var duckdb_client_context_get_config_option: fn (duckdb_client_context, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_config_option_scope, MutAnyOrigin]) -> duckdb_value
+
+    # --- unstable_new_copy_functions_api ---
+    var duckdb_create_copy_function: fn () -> duckdb_copy_function
+    var duckdb_copy_function_set_name: fn (duckdb_copy_function, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_set_extra_info: fn (duckdb_copy_function, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_register_copy_function: fn (duckdb_connection, duckdb_copy_function) -> duckdb_state
+    var duckdb_destroy_copy_function: fn (UnsafePointer[duckdb_copy_function, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_set_bind: fn (duckdb_copy_function, fn (duckdb_copy_function_bind_info) -> NoneType) -> NoneType
+    var duckdb_copy_function_bind_set_error: fn (duckdb_copy_function_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_bind_get_extra_info: fn (duckdb_copy_function_bind_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_bind_get_client_context: fn (duckdb_copy_function_bind_info) -> duckdb_client_context
+    var duckdb_copy_function_bind_get_column_count: fn (duckdb_copy_function_bind_info) -> idx_t
+    var duckdb_copy_function_bind_get_column_type: fn (duckdb_copy_function_bind_info, idx_t) -> duckdb_logical_type
+    var duckdb_copy_function_bind_get_options: fn (duckdb_copy_function_bind_info) -> duckdb_value
+    var duckdb_copy_function_bind_set_bind_data: fn (duckdb_copy_function_bind_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_copy_function_set_global_init: fn (duckdb_copy_function, fn (duckdb_copy_function_global_init_info) -> NoneType) -> NoneType
+    var duckdb_copy_function_global_init_set_error: fn (duckdb_copy_function_global_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_global_init_get_extra_info: fn (duckdb_copy_function_global_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_global_init_get_client_context: fn (duckdb_copy_function_global_init_info) -> duckdb_client_context
+    var duckdb_copy_function_global_init_get_bind_data: fn (duckdb_copy_function_global_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_global_init_set_global_state: fn (duckdb_copy_function_global_init_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_copy_function_global_init_get_file_path: fn (duckdb_copy_function_global_init_info) -> UnsafePointer[c_char, ImmutAnyOrigin]
+    var duckdb_copy_function_set_sink: fn (duckdb_copy_function, fn (duckdb_copy_function_sink_info, duckdb_data_chunk) -> NoneType) -> NoneType
+    var duckdb_copy_function_sink_set_error: fn (duckdb_copy_function_sink_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_sink_get_extra_info: fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_sink_get_client_context: fn (duckdb_copy_function_sink_info) -> duckdb_client_context
+    var duckdb_copy_function_sink_get_bind_data: fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_sink_get_global_state: fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_set_finalize: fn (duckdb_copy_function, fn (duckdb_copy_function_finalize_info) -> NoneType) -> NoneType
+    var duckdb_copy_function_finalize_set_error: fn (duckdb_copy_function_finalize_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_copy_function_finalize_get_extra_info: fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_finalize_get_client_context: fn (duckdb_copy_function_finalize_info) -> duckdb_client_context
+    var duckdb_copy_function_finalize_get_bind_data: fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_finalize_get_global_state: fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_set_copy_from_function: fn (duckdb_copy_function, duckdb_table_function) -> NoneType
+    var duckdb_table_function_bind_get_result_column_count: fn (duckdb_bind_info) -> idx_t
+    var duckdb_table_function_bind_get_result_column_name: fn (duckdb_bind_info, idx_t) -> UnsafePointer[c_char, ImmutAnyOrigin]
+    var duckdb_table_function_bind_get_result_column_type: fn (duckdb_bind_info, idx_t) -> duckdb_logical_type
 
     # --- unstable_new_error_data_functions ---
     var duckdb_create_error_data: fn (duckdb_error_type, UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_error_data
@@ -1498,6 +1592,32 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_expression_return_type: fn (duckdb_expression) -> duckdb_logical_type
     var duckdb_expression_is_foldable: fn (duckdb_expression) -> Bool
     var duckdb_expression_fold: fn (duckdb_client_context, duckdb_expression, UnsafePointer[duckdb_value, ImmutAnyOrigin]) -> duckdb_error_data
+
+    # --- unstable_new_file_system_api ---
+    var duckdb_client_context_get_file_system: fn (duckdb_client_context) -> duckdb_file_system
+    var duckdb_destroy_file_system: fn (UnsafePointer[duckdb_file_system, MutAnyOrigin]) -> NoneType
+    var duckdb_file_system_open: fn (duckdb_file_system, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_file_open_options, UnsafePointer[duckdb_file_handle, MutAnyOrigin]) -> duckdb_state
+    var duckdb_file_system_error_data: fn (duckdb_file_system) -> duckdb_error_data
+    var duckdb_create_file_open_options: fn () -> duckdb_file_open_options
+    var duckdb_file_open_options_set_flag: fn (duckdb_file_open_options, duckdb_file_flag, Bool) -> duckdb_state
+    var duckdb_destroy_file_open_options: fn (UnsafePointer[duckdb_file_open_options, MutAnyOrigin]) -> NoneType
+    var duckdb_destroy_file_handle: fn (UnsafePointer[duckdb_file_handle, MutAnyOrigin]) -> NoneType
+    var duckdb_file_handle_error_data: fn (duckdb_file_handle) -> duckdb_error_data
+    var duckdb_file_handle_close: fn (duckdb_file_handle) -> duckdb_state
+    var duckdb_file_handle_read: fn (duckdb_file_handle, UnsafePointer[NoneType, MutAnyOrigin], Int64) -> Int64
+    var duckdb_file_handle_write: fn (duckdb_file_handle, UnsafePointer[NoneType, ImmutAnyOrigin], Int64) -> Int64
+    var duckdb_file_handle_seek: fn (duckdb_file_handle, Int64) -> duckdb_state
+    var duckdb_file_handle_tell: fn (duckdb_file_handle) -> Int64
+    var duckdb_file_handle_sync: fn (duckdb_file_handle) -> duckdb_state
+    var duckdb_file_handle_size: fn (duckdb_file_handle) -> Int64
+
+    # --- unstable_new_logger_functions ---
+    var duckdb_create_log_storage: fn () -> duckdb_log_storage
+    var duckdb_destroy_log_storage: fn (UnsafePointer[duckdb_log_storage, ImmutAnyOrigin]) -> NoneType
+    var duckdb_log_storage_set_write_log_entry: fn (duckdb_log_storage, fn (UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_log_storage_set_extra_data: fn (duckdb_log_storage, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_log_storage_set_name: fn (duckdb_log_storage, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_register_log_storage: fn (duckdb_database, duckdb_log_storage) -> duckdb_state
 
     # --- unstable_new_open_connect_functions ---
     var duckdb_client_context_get_connection_id: fn (duckdb_client_context) -> idx_t
@@ -1527,8 +1647,22 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_scalar_function_bind_get_argument: fn (duckdb_bind_info, idx_t) -> duckdb_expression
     var duckdb_scalar_function_set_bind_data_copy: fn (duckdb_bind_info, fn (UnsafePointer[NoneType, MutAnyOrigin]) -> UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
 
+    # --- unstable_new_scalar_function_state_functions ---
+    var duckdb_scalar_function_get_state: fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_set_init: fn (duckdb_scalar_function, fn (duckdb_init_info) -> NoneType) -> NoneType
+    var duckdb_scalar_function_init_set_error: fn (duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    var duckdb_scalar_function_init_set_state: fn (duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+    var duckdb_scalar_function_init_get_client_context: fn (duckdb_init_info, UnsafePointer[duckdb_client_context, ImmutAnyOrigin]) -> NoneType
+    var duckdb_scalar_function_init_get_bind_data: fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_init_get_extra_info: fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+
     # --- unstable_new_string_functions ---
     var duckdb_value_to_string: fn (duckdb_value) -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_valid_utf8_check: fn (UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> duckdb_error_data
+
+    # --- unstable_new_table_description_functions ---
+    var duckdb_table_description_get_column_count: fn (duckdb_table_description) -> idx_t
+    var duckdb_table_description_get_column_type: fn (duckdb_table_description, idx_t) -> duckdb_logical_type
 
     # --- unstable_new_table_function_functions ---
     var duckdb_table_function_get_client_context: fn (duckdb_bind_info, UnsafePointer[duckdb_client_context, ImmutAnyOrigin]) -> NoneType
@@ -1549,6 +1683,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_destroy_selection_vector: fn (duckdb_selection_vector) -> NoneType
     var duckdb_selection_vector_get_data_ptr: fn (duckdb_selection_vector) -> UnsafePointer[UInt32, MutExternalOrigin]
     var duckdb_vector_copy_sel: fn (duckdb_vector, duckdb_vector, duckdb_selection_vector, idx_t, idx_t, idx_t) -> NoneType
+    var duckdb_unsafe_vector_assign_string_element_len: fn (duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> NoneType
 
 
 # ===-----------------------------------------------------------------------===#
@@ -1566,23 +1701,13 @@ fn _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb"](materialize[DUCKDB_LIBRARY_PATHS]())
 
 
-@always_inline
-fn _get_dylib_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_function[Self.fn_name, Self.type]()
+        return DUCKDB_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 comptime DUCKDB_HELPERS_PATHS: List[Path] = [
     "libduckdb_mojo_helpers.so",
@@ -1594,22 +1719,13 @@ comptime DUCKDB_HELPERS_LIBRARY = _Global["DUCKDB_HELPERS_LIBRARY", _init_helper
 fn _init_helper_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_mojo_helpers"](materialize[DUCKDB_HELPERS_PATHS]())
 
-@always_inline
-fn _get_dylib_helpers_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_HELPERS_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_helpers_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_helpers_function[Self.fn_name, Self.type]()
+        return DUCKDB_HELPERS_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 struct LibDuckDB(Movable):
 
@@ -1653,12 +1769,14 @@ struct LibDuckDB(Movable):
     var _duckdb_nullmask_data: _duckdb_nullmask_data.fn_type
     var _duckdb_result_error: _duckdb_result_error.fn_type
     var _duckdb_result_error_type: _duckdb_result_error_type.fn_type
+    var _duckdb_result_return_type: _duckdb_result_return_type.fn_type
     var _duckdb_malloc: _duckdb_malloc.fn_type
     var _duckdb_free: _duckdb_free.fn_type
     var _duckdb_vector_size: _duckdb_vector_size.fn_type
     var _duckdb_string_is_inlined: _duckdb_string_is_inlined.fn_type
     var _duckdb_string_t_length: _duckdb_string_t_length.fn_type
     var _duckdb_string_t_data: _duckdb_string_t_data.fn_type
+    var _duckdb_valid_utf8_check: _duckdb_valid_utf8_check.fn_type
     var _duckdb_from_date: _duckdb_from_date.fn_type
     var _duckdb_to_date: _duckdb_to_date.fn_type
     var _duckdb_is_finite_date: _duckdb_is_finite_date.fn_type
@@ -1672,6 +1790,10 @@ struct LibDuckDB(Movable):
     var _duckdb_is_finite_timestamp_s: _duckdb_is_finite_timestamp_s.fn_type
     var _duckdb_is_finite_timestamp_ms: _duckdb_is_finite_timestamp_ms.fn_type
     var _duckdb_is_finite_timestamp_ns: _duckdb_is_finite_timestamp_ns.fn_type
+    var _duckdb_hugeint_to_double: _duckdb_hugeint_to_double.fn_type
+    var _duckdb_double_to_hugeint: _duckdb_double_to_hugeint.fn_type
+    var _duckdb_uhugeint_to_double: _duckdb_uhugeint_to_double.fn_type
+    var _duckdb_double_to_uhugeint: _duckdb_double_to_uhugeint.fn_type
     var _duckdb_double_to_decimal: _duckdb_double_to_decimal.fn_type
     var _duckdb_decimal_to_double: _duckdb_decimal_to_double.fn_type
     var _duckdb_prepare: _duckdb_prepare.fn_type
@@ -1846,6 +1968,7 @@ struct LibDuckDB(Movable):
     var _duckdb_vector_ensure_validity_writable: _duckdb_vector_ensure_validity_writable.fn_type
     var _duckdb_vector_assign_string_element: _duckdb_vector_assign_string_element.fn_type
     var _duckdb_vector_assign_string_element_len: _duckdb_vector_assign_string_element_len.fn_type
+    var _duckdb_unsafe_vector_assign_string_element_len: _duckdb_unsafe_vector_assign_string_element_len.fn_type
     var _duckdb_list_vector_get_child: _duckdb_list_vector_get_child.fn_type
     var _duckdb_list_vector_get_size: _duckdb_list_vector_get_size.fn_type
     var _duckdb_list_vector_set_size: _duckdb_list_vector_set_size.fn_type
@@ -1886,6 +2009,13 @@ struct LibDuckDB(Movable):
     var _duckdb_register_scalar_function_set: _duckdb_register_scalar_function_set.fn_type
     var _duckdb_scalar_function_bind_get_argument_count: _duckdb_scalar_function_bind_get_argument_count.fn_type
     var _duckdb_scalar_function_bind_get_argument: _duckdb_scalar_function_bind_get_argument.fn_type
+    var _duckdb_scalar_function_get_state: _duckdb_scalar_function_get_state.fn_type
+    var _duckdb_scalar_function_set_init: _duckdb_scalar_function_set_init.fn_type
+    var _duckdb_scalar_function_init_set_error: _duckdb_scalar_function_init_set_error.fn_type
+    var _duckdb_scalar_function_init_set_state: _duckdb_scalar_function_init_set_state.fn_type
+    var _duckdb_scalar_function_init_get_client_context: _duckdb_scalar_function_init_get_client_context.fn_type
+    var _duckdb_scalar_function_init_get_bind_data: _duckdb_scalar_function_init_get_bind_data.fn_type
+    var _duckdb_scalar_function_init_get_extra_info: _duckdb_scalar_function_init_get_extra_info.fn_type
     var _duckdb_create_selection_vector: _duckdb_create_selection_vector.fn_type
     var _duckdb_destroy_selection_vector: _duckdb_destroy_selection_vector.fn_type
     var _duckdb_selection_vector_get_data_ptr: _duckdb_selection_vector_get_data_ptr.fn_type
@@ -1954,6 +2084,7 @@ struct LibDuckDB(Movable):
     var _duckdb_appender_column_type: _duckdb_appender_column_type.fn_type
     var _duckdb_appender_error_data: _duckdb_appender_error_data.fn_type
     var _duckdb_appender_flush: _duckdb_appender_flush.fn_type
+    var _duckdb_appender_clear: _duckdb_appender_clear.fn_type
     var _duckdb_appender_close: _duckdb_appender_close.fn_type
     var _duckdb_appender_destroy: _duckdb_appender_destroy.fn_type
     var _duckdb_appender_add_column: _duckdb_appender_add_column.fn_type
@@ -1990,7 +2121,9 @@ struct LibDuckDB(Movable):
     var _duckdb_table_description_destroy: _duckdb_table_description_destroy.fn_type
     var _duckdb_table_description_error: _duckdb_table_description_error.fn_type
     var _duckdb_column_has_default: _duckdb_column_has_default.fn_type
+    var _duckdb_table_description_get_column_count: _duckdb_table_description_get_column_count.fn_type
     var _duckdb_table_description_get_column_name: _duckdb_table_description_get_column_name.fn_type
+    var _duckdb_table_description_get_column_type: _duckdb_table_description_get_column_type.fn_type
     var _duckdb_to_arrow_schema: _duckdb_to_arrow_schema.fn_type
     var _duckdb_data_chunk_to_arrow: _duckdb_data_chunk_to_arrow.fn_type
     var _duckdb_schema_from_arrow: _duckdb_schema_from_arrow.fn_type
@@ -2021,11 +2154,80 @@ struct LibDuckDB(Movable):
     var _duckdb_expression_return_type: _duckdb_expression_return_type.fn_type
     var _duckdb_expression_is_foldable: _duckdb_expression_is_foldable.fn_type
     var _duckdb_expression_fold: _duckdb_expression_fold.fn_type
-    var _duckdb_hugeint_to_double: _duckdb_hugeint_to_double.fn_type
-    var _duckdb_double_to_hugeint: _duckdb_double_to_hugeint.fn_type
-    var _duckdb_result_return_type: _duckdb_result_return_type.fn_type
-    var _duckdb_uhugeint_to_double: _duckdb_uhugeint_to_double.fn_type
-    var _duckdb_double_to_uhugeint: _duckdb_double_to_uhugeint.fn_type
+    var _duckdb_client_context_get_file_system: _duckdb_client_context_get_file_system.fn_type
+    var _duckdb_destroy_file_system: _duckdb_destroy_file_system.fn_type
+    var _duckdb_file_system_error_data: _duckdb_file_system_error_data.fn_type
+    var _duckdb_file_system_open: _duckdb_file_system_open.fn_type
+    var _duckdb_create_file_open_options: _duckdb_create_file_open_options.fn_type
+    var _duckdb_file_open_options_set_flag: _duckdb_file_open_options_set_flag.fn_type
+    var _duckdb_destroy_file_open_options: _duckdb_destroy_file_open_options.fn_type
+    var _duckdb_destroy_file_handle: _duckdb_destroy_file_handle.fn_type
+    var _duckdb_file_handle_error_data: _duckdb_file_handle_error_data.fn_type
+    var _duckdb_file_handle_read: _duckdb_file_handle_read.fn_type
+    var _duckdb_file_handle_write: _duckdb_file_handle_write.fn_type
+    var _duckdb_file_handle_tell: _duckdb_file_handle_tell.fn_type
+    var _duckdb_file_handle_size: _duckdb_file_handle_size.fn_type
+    var _duckdb_file_handle_seek: _duckdb_file_handle_seek.fn_type
+    var _duckdb_file_handle_sync: _duckdb_file_handle_sync.fn_type
+    var _duckdb_file_handle_close: _duckdb_file_handle_close.fn_type
+    var _duckdb_create_config_option: _duckdb_create_config_option.fn_type
+    var _duckdb_destroy_config_option: _duckdb_destroy_config_option.fn_type
+    var _duckdb_config_option_set_name: _duckdb_config_option_set_name.fn_type
+    var _duckdb_config_option_set_type: _duckdb_config_option_set_type.fn_type
+    var _duckdb_config_option_set_default_value: _duckdb_config_option_set_default_value.fn_type
+    var _duckdb_config_option_set_default_scope: _duckdb_config_option_set_default_scope.fn_type
+    var _duckdb_config_option_set_description: _duckdb_config_option_set_description.fn_type
+    var _duckdb_register_config_option: _duckdb_register_config_option.fn_type
+    var _duckdb_client_context_get_config_option: _duckdb_client_context_get_config_option.fn_type
+    var _duckdb_create_copy_function: _duckdb_create_copy_function.fn_type
+    var _duckdb_copy_function_set_name: _duckdb_copy_function_set_name.fn_type
+    var _duckdb_copy_function_set_extra_info: _duckdb_copy_function_set_extra_info.fn_type
+    var _duckdb_register_copy_function: _duckdb_register_copy_function.fn_type
+    var _duckdb_destroy_copy_function: _duckdb_destroy_copy_function.fn_type
+    var _duckdb_copy_function_set_bind: _duckdb_copy_function_set_bind.fn_type
+    var _duckdb_copy_function_bind_set_error: _duckdb_copy_function_bind_set_error.fn_type
+    var _duckdb_copy_function_bind_get_extra_info: _duckdb_copy_function_bind_get_extra_info.fn_type
+    var _duckdb_copy_function_bind_get_client_context: _duckdb_copy_function_bind_get_client_context.fn_type
+    var _duckdb_copy_function_bind_get_column_count: _duckdb_copy_function_bind_get_column_count.fn_type
+    var _duckdb_copy_function_bind_get_column_type: _duckdb_copy_function_bind_get_column_type.fn_type
+    var _duckdb_copy_function_bind_get_options: _duckdb_copy_function_bind_get_options.fn_type
+    var _duckdb_copy_function_bind_set_bind_data: _duckdb_copy_function_bind_set_bind_data.fn_type
+    var _duckdb_copy_function_set_global_init: _duckdb_copy_function_set_global_init.fn_type
+    var _duckdb_copy_function_global_init_set_error: _duckdb_copy_function_global_init_set_error.fn_type
+    var _duckdb_copy_function_global_init_get_extra_info: _duckdb_copy_function_global_init_get_extra_info.fn_type
+    var _duckdb_copy_function_global_init_get_client_context: _duckdb_copy_function_global_init_get_client_context.fn_type
+    var _duckdb_copy_function_global_init_get_bind_data: _duckdb_copy_function_global_init_get_bind_data.fn_type
+    var _duckdb_copy_function_global_init_get_file_path: _duckdb_copy_function_global_init_get_file_path.fn_type
+    var _duckdb_copy_function_global_init_set_global_state: _duckdb_copy_function_global_init_set_global_state.fn_type
+    var _duckdb_copy_function_set_sink: _duckdb_copy_function_set_sink.fn_type
+    var _duckdb_copy_function_sink_set_error: _duckdb_copy_function_sink_set_error.fn_type
+    var _duckdb_copy_function_sink_get_extra_info: _duckdb_copy_function_sink_get_extra_info.fn_type
+    var _duckdb_copy_function_sink_get_client_context: _duckdb_copy_function_sink_get_client_context.fn_type
+    var _duckdb_copy_function_sink_get_bind_data: _duckdb_copy_function_sink_get_bind_data.fn_type
+    var _duckdb_copy_function_sink_get_global_state: _duckdb_copy_function_sink_get_global_state.fn_type
+    var _duckdb_copy_function_set_finalize: _duckdb_copy_function_set_finalize.fn_type
+    var _duckdb_copy_function_finalize_set_error: _duckdb_copy_function_finalize_set_error.fn_type
+    var _duckdb_copy_function_finalize_get_extra_info: _duckdb_copy_function_finalize_get_extra_info.fn_type
+    var _duckdb_copy_function_finalize_get_client_context: _duckdb_copy_function_finalize_get_client_context.fn_type
+    var _duckdb_copy_function_finalize_get_bind_data: _duckdb_copy_function_finalize_get_bind_data.fn_type
+    var _duckdb_copy_function_finalize_get_global_state: _duckdb_copy_function_finalize_get_global_state.fn_type
+    var _duckdb_copy_function_set_copy_from_function: _duckdb_copy_function_set_copy_from_function.fn_type
+    var _duckdb_table_function_bind_get_result_column_count: _duckdb_table_function_bind_get_result_column_count.fn_type
+    var _duckdb_table_function_bind_get_result_column_name: _duckdb_table_function_bind_get_result_column_name.fn_type
+    var _duckdb_table_function_bind_get_result_column_type: _duckdb_table_function_bind_get_result_column_type.fn_type
+    var _duckdb_client_context_get_catalog: _duckdb_client_context_get_catalog.fn_type
+    var _duckdb_catalog_get_type_name: _duckdb_catalog_get_type_name.fn_type
+    var _duckdb_catalog_get_entry: _duckdb_catalog_get_entry.fn_type
+    var _duckdb_destroy_catalog: _duckdb_destroy_catalog.fn_type
+    var _duckdb_catalog_entry_get_type: _duckdb_catalog_entry_get_type.fn_type
+    var _duckdb_catalog_entry_get_name: _duckdb_catalog_entry_get_name.fn_type
+    var _duckdb_destroy_catalog_entry: _duckdb_destroy_catalog_entry.fn_type
+    var _duckdb_create_log_storage: _duckdb_create_log_storage.fn_type
+    var _duckdb_destroy_log_storage: _duckdb_destroy_log_storage.fn_type
+    var _duckdb_log_storage_set_write_log_entry: _duckdb_log_storage_set_write_log_entry.fn_type
+    var _duckdb_log_storage_set_extra_data: _duckdb_log_storage_set_extra_data.fn_type
+    var _duckdb_log_storage_set_name: _duckdb_log_storage_set_name.fn_type
+    var _duckdb_register_log_storage: _duckdb_register_log_storage.fn_type
 
     # Workaround functions for Mojo FFI byval struct issues (from libduckdb_mojo_helpers)
     var _workaround_create_decimal_ptr: _workaround_create_decimal_ptr.fn_type
@@ -2078,12 +2280,14 @@ struct LibDuckDB(Movable):
             self._duckdb_nullmask_data = _duckdb_nullmask_data.load()
             self._duckdb_result_error = _duckdb_result_error.load()
             self._duckdb_result_error_type = _duckdb_result_error_type.load()
+            self._duckdb_result_return_type = _duckdb_result_return_type.load()
             self._duckdb_malloc = _duckdb_malloc.load()
             self._duckdb_free = _duckdb_free.load()
             self._duckdb_vector_size = _duckdb_vector_size.load()
             self._duckdb_string_is_inlined = _duckdb_string_is_inlined.load()
             self._duckdb_string_t_length = _duckdb_string_t_length.load()
             self._duckdb_string_t_data = _duckdb_string_t_data.load()
+            self._duckdb_valid_utf8_check = _duckdb_valid_utf8_check.load()
             self._duckdb_from_date = _duckdb_from_date.load()
             self._duckdb_to_date = _duckdb_to_date.load()
             self._duckdb_is_finite_date = _duckdb_is_finite_date.load()
@@ -2097,6 +2301,10 @@ struct LibDuckDB(Movable):
             self._duckdb_is_finite_timestamp_s = _duckdb_is_finite_timestamp_s.load()
             self._duckdb_is_finite_timestamp_ms = _duckdb_is_finite_timestamp_ms.load()
             self._duckdb_is_finite_timestamp_ns = _duckdb_is_finite_timestamp_ns.load()
+            self._duckdb_hugeint_to_double = _duckdb_hugeint_to_double.load()
+            self._duckdb_double_to_hugeint = _duckdb_double_to_hugeint.load()
+            self._duckdb_uhugeint_to_double = _duckdb_uhugeint_to_double.load()
+            self._duckdb_double_to_uhugeint = _duckdb_double_to_uhugeint.load()
             self._duckdb_double_to_decimal = _duckdb_double_to_decimal.load()
             self._duckdb_decimal_to_double = _duckdb_decimal_to_double.load()
             self._duckdb_prepare = _duckdb_prepare.load()
@@ -2271,6 +2479,7 @@ struct LibDuckDB(Movable):
             self._duckdb_vector_ensure_validity_writable = _duckdb_vector_ensure_validity_writable.load()
             self._duckdb_vector_assign_string_element = _duckdb_vector_assign_string_element.load()
             self._duckdb_vector_assign_string_element_len = _duckdb_vector_assign_string_element_len.load()
+            self._duckdb_unsafe_vector_assign_string_element_len = _duckdb_unsafe_vector_assign_string_element_len.load()
             self._duckdb_list_vector_get_child = _duckdb_list_vector_get_child.load()
             self._duckdb_list_vector_get_size = _duckdb_list_vector_get_size.load()
             self._duckdb_list_vector_set_size = _duckdb_list_vector_set_size.load()
@@ -2311,6 +2520,13 @@ struct LibDuckDB(Movable):
             self._duckdb_register_scalar_function_set = _duckdb_register_scalar_function_set.load()
             self._duckdb_scalar_function_bind_get_argument_count = _duckdb_scalar_function_bind_get_argument_count.load()
             self._duckdb_scalar_function_bind_get_argument = _duckdb_scalar_function_bind_get_argument.load()
+            self._duckdb_scalar_function_get_state = _duckdb_scalar_function_get_state.load()
+            self._duckdb_scalar_function_set_init = _duckdb_scalar_function_set_init.load()
+            self._duckdb_scalar_function_init_set_error = _duckdb_scalar_function_init_set_error.load()
+            self._duckdb_scalar_function_init_set_state = _duckdb_scalar_function_init_set_state.load()
+            self._duckdb_scalar_function_init_get_client_context = _duckdb_scalar_function_init_get_client_context.load()
+            self._duckdb_scalar_function_init_get_bind_data = _duckdb_scalar_function_init_get_bind_data.load()
+            self._duckdb_scalar_function_init_get_extra_info = _duckdb_scalar_function_init_get_extra_info.load()
             self._duckdb_create_selection_vector = _duckdb_create_selection_vector.load()
             self._duckdb_destroy_selection_vector = _duckdb_destroy_selection_vector.load()
             self._duckdb_selection_vector_get_data_ptr = _duckdb_selection_vector_get_data_ptr.load()
@@ -2379,6 +2595,7 @@ struct LibDuckDB(Movable):
             self._duckdb_appender_column_type = _duckdb_appender_column_type.load()
             self._duckdb_appender_error_data = _duckdb_appender_error_data.load()
             self._duckdb_appender_flush = _duckdb_appender_flush.load()
+            self._duckdb_appender_clear = _duckdb_appender_clear.load()
             self._duckdb_appender_close = _duckdb_appender_close.load()
             self._duckdb_appender_destroy = _duckdb_appender_destroy.load()
             self._duckdb_appender_add_column = _duckdb_appender_add_column.load()
@@ -2415,7 +2632,9 @@ struct LibDuckDB(Movable):
             self._duckdb_table_description_destroy = _duckdb_table_description_destroy.load()
             self._duckdb_table_description_error = _duckdb_table_description_error.load()
             self._duckdb_column_has_default = _duckdb_column_has_default.load()
+            self._duckdb_table_description_get_column_count = _duckdb_table_description_get_column_count.load()
             self._duckdb_table_description_get_column_name = _duckdb_table_description_get_column_name.load()
+            self._duckdb_table_description_get_column_type = _duckdb_table_description_get_column_type.load()
             self._duckdb_to_arrow_schema = _duckdb_to_arrow_schema.load()
             self._duckdb_data_chunk_to_arrow = _duckdb_data_chunk_to_arrow.load()
             self._duckdb_schema_from_arrow = _duckdb_schema_from_arrow.load()
@@ -2446,11 +2665,80 @@ struct LibDuckDB(Movable):
             self._duckdb_expression_return_type = _duckdb_expression_return_type.load()
             self._duckdb_expression_is_foldable = _duckdb_expression_is_foldable.load()
             self._duckdb_expression_fold = _duckdb_expression_fold.load()
-            self._duckdb_hugeint_to_double = _duckdb_hugeint_to_double.load()
-            self._duckdb_double_to_hugeint = _duckdb_double_to_hugeint.load()
-            self._duckdb_result_return_type = _duckdb_result_return_type.load()
-            self._duckdb_uhugeint_to_double = _duckdb_uhugeint_to_double.load()
-            self._duckdb_double_to_uhugeint = _duckdb_double_to_uhugeint.load()
+            self._duckdb_client_context_get_file_system = _duckdb_client_context_get_file_system.load()
+            self._duckdb_destroy_file_system = _duckdb_destroy_file_system.load()
+            self._duckdb_file_system_error_data = _duckdb_file_system_error_data.load()
+            self._duckdb_file_system_open = _duckdb_file_system_open.load()
+            self._duckdb_create_file_open_options = _duckdb_create_file_open_options.load()
+            self._duckdb_file_open_options_set_flag = _duckdb_file_open_options_set_flag.load()
+            self._duckdb_destroy_file_open_options = _duckdb_destroy_file_open_options.load()
+            self._duckdb_destroy_file_handle = _duckdb_destroy_file_handle.load()
+            self._duckdb_file_handle_error_data = _duckdb_file_handle_error_data.load()
+            self._duckdb_file_handle_read = _duckdb_file_handle_read.load()
+            self._duckdb_file_handle_write = _duckdb_file_handle_write.load()
+            self._duckdb_file_handle_tell = _duckdb_file_handle_tell.load()
+            self._duckdb_file_handle_size = _duckdb_file_handle_size.load()
+            self._duckdb_file_handle_seek = _duckdb_file_handle_seek.load()
+            self._duckdb_file_handle_sync = _duckdb_file_handle_sync.load()
+            self._duckdb_file_handle_close = _duckdb_file_handle_close.load()
+            self._duckdb_create_config_option = _duckdb_create_config_option.load()
+            self._duckdb_destroy_config_option = _duckdb_destroy_config_option.load()
+            self._duckdb_config_option_set_name = _duckdb_config_option_set_name.load()
+            self._duckdb_config_option_set_type = _duckdb_config_option_set_type.load()
+            self._duckdb_config_option_set_default_value = _duckdb_config_option_set_default_value.load()
+            self._duckdb_config_option_set_default_scope = _duckdb_config_option_set_default_scope.load()
+            self._duckdb_config_option_set_description = _duckdb_config_option_set_description.load()
+            self._duckdb_register_config_option = _duckdb_register_config_option.load()
+            self._duckdb_client_context_get_config_option = _duckdb_client_context_get_config_option.load()
+            self._duckdb_create_copy_function = _duckdb_create_copy_function.load()
+            self._duckdb_copy_function_set_name = _duckdb_copy_function_set_name.load()
+            self._duckdb_copy_function_set_extra_info = _duckdb_copy_function_set_extra_info.load()
+            self._duckdb_register_copy_function = _duckdb_register_copy_function.load()
+            self._duckdb_destroy_copy_function = _duckdb_destroy_copy_function.load()
+            self._duckdb_copy_function_set_bind = _duckdb_copy_function_set_bind.load()
+            self._duckdb_copy_function_bind_set_error = _duckdb_copy_function_bind_set_error.load()
+            self._duckdb_copy_function_bind_get_extra_info = _duckdb_copy_function_bind_get_extra_info.load()
+            self._duckdb_copy_function_bind_get_client_context = _duckdb_copy_function_bind_get_client_context.load()
+            self._duckdb_copy_function_bind_get_column_count = _duckdb_copy_function_bind_get_column_count.load()
+            self._duckdb_copy_function_bind_get_column_type = _duckdb_copy_function_bind_get_column_type.load()
+            self._duckdb_copy_function_bind_get_options = _duckdb_copy_function_bind_get_options.load()
+            self._duckdb_copy_function_bind_set_bind_data = _duckdb_copy_function_bind_set_bind_data.load()
+            self._duckdb_copy_function_set_global_init = _duckdb_copy_function_set_global_init.load()
+            self._duckdb_copy_function_global_init_set_error = _duckdb_copy_function_global_init_set_error.load()
+            self._duckdb_copy_function_global_init_get_extra_info = _duckdb_copy_function_global_init_get_extra_info.load()
+            self._duckdb_copy_function_global_init_get_client_context = _duckdb_copy_function_global_init_get_client_context.load()
+            self._duckdb_copy_function_global_init_get_bind_data = _duckdb_copy_function_global_init_get_bind_data.load()
+            self._duckdb_copy_function_global_init_get_file_path = _duckdb_copy_function_global_init_get_file_path.load()
+            self._duckdb_copy_function_global_init_set_global_state = _duckdb_copy_function_global_init_set_global_state.load()
+            self._duckdb_copy_function_set_sink = _duckdb_copy_function_set_sink.load()
+            self._duckdb_copy_function_sink_set_error = _duckdb_copy_function_sink_set_error.load()
+            self._duckdb_copy_function_sink_get_extra_info = _duckdb_copy_function_sink_get_extra_info.load()
+            self._duckdb_copy_function_sink_get_client_context = _duckdb_copy_function_sink_get_client_context.load()
+            self._duckdb_copy_function_sink_get_bind_data = _duckdb_copy_function_sink_get_bind_data.load()
+            self._duckdb_copy_function_sink_get_global_state = _duckdb_copy_function_sink_get_global_state.load()
+            self._duckdb_copy_function_set_finalize = _duckdb_copy_function_set_finalize.load()
+            self._duckdb_copy_function_finalize_set_error = _duckdb_copy_function_finalize_set_error.load()
+            self._duckdb_copy_function_finalize_get_extra_info = _duckdb_copy_function_finalize_get_extra_info.load()
+            self._duckdb_copy_function_finalize_get_client_context = _duckdb_copy_function_finalize_get_client_context.load()
+            self._duckdb_copy_function_finalize_get_bind_data = _duckdb_copy_function_finalize_get_bind_data.load()
+            self._duckdb_copy_function_finalize_get_global_state = _duckdb_copy_function_finalize_get_global_state.load()
+            self._duckdb_copy_function_set_copy_from_function = _duckdb_copy_function_set_copy_from_function.load()
+            self._duckdb_table_function_bind_get_result_column_count = _duckdb_table_function_bind_get_result_column_count.load()
+            self._duckdb_table_function_bind_get_result_column_name = _duckdb_table_function_bind_get_result_column_name.load()
+            self._duckdb_table_function_bind_get_result_column_type = _duckdb_table_function_bind_get_result_column_type.load()
+            self._duckdb_client_context_get_catalog = _duckdb_client_context_get_catalog.load()
+            self._duckdb_catalog_get_type_name = _duckdb_catalog_get_type_name.load()
+            self._duckdb_catalog_get_entry = _duckdb_catalog_get_entry.load()
+            self._duckdb_destroy_catalog = _duckdb_destroy_catalog.load()
+            self._duckdb_catalog_entry_get_type = _duckdb_catalog_entry_get_type.load()
+            self._duckdb_catalog_entry_get_name = _duckdb_catalog_entry_get_name.load()
+            self._duckdb_destroy_catalog_entry = _duckdb_destroy_catalog_entry.load()
+            self._duckdb_create_log_storage = _duckdb_create_log_storage.load()
+            self._duckdb_destroy_log_storage = _duckdb_destroy_log_storage.load()
+            self._duckdb_log_storage_set_write_log_entry = _duckdb_log_storage_set_write_log_entry.load()
+            self._duckdb_log_storage_set_extra_data = _duckdb_log_storage_set_extra_data.load()
+            self._duckdb_log_storage_set_name = _duckdb_log_storage_set_name.load()
+            self._duckdb_register_log_storage = _duckdb_register_log_storage.load()
             # Load workaround functions from C shim library
             self._workaround_create_decimal_ptr = _workaround_create_decimal_ptr.load()
             self._workaround_fetch_chunk_ptr = _workaround_fetch_chunk_ptr.load()
@@ -2507,12 +2795,14 @@ struct LibDuckDB(Movable):
             self._duckdb_nullmask_data = _duckdb_nullmask_data.load()
             self._duckdb_result_error = api[].duckdb_result_error
             self._duckdb_result_error_type = api[].duckdb_result_error_type
+            self._duckdb_result_return_type = api[].duckdb_result_return_type
             self._duckdb_malloc = api[].duckdb_malloc
             self._duckdb_free = api[].duckdb_free
             self._duckdb_vector_size = api[].duckdb_vector_size
             self._duckdb_string_is_inlined = api[].duckdb_string_is_inlined
             self._duckdb_string_t_length = api[].duckdb_string_t_length
             self._duckdb_string_t_data = api[].duckdb_string_t_data
+            self._duckdb_valid_utf8_check = _duckdb_valid_utf8_check.load()
             self._duckdb_from_date = api[].duckdb_from_date
             self._duckdb_to_date = api[].duckdb_to_date
             self._duckdb_is_finite_date = api[].duckdb_is_finite_date
@@ -2526,6 +2816,10 @@ struct LibDuckDB(Movable):
             self._duckdb_is_finite_timestamp_s = api[].duckdb_is_finite_timestamp_s
             self._duckdb_is_finite_timestamp_ms = api[].duckdb_is_finite_timestamp_ms
             self._duckdb_is_finite_timestamp_ns = api[].duckdb_is_finite_timestamp_ns
+            self._duckdb_hugeint_to_double = api[].duckdb_hugeint_to_double
+            self._duckdb_double_to_hugeint = api[].duckdb_double_to_hugeint
+            self._duckdb_uhugeint_to_double = api[].duckdb_uhugeint_to_double
+            self._duckdb_double_to_uhugeint = api[].duckdb_double_to_uhugeint
             self._duckdb_double_to_decimal = api[].duckdb_double_to_decimal
             self._duckdb_decimal_to_double = api[].duckdb_decimal_to_double
             self._duckdb_prepare = api[].duckdb_prepare
@@ -2700,6 +2994,7 @@ struct LibDuckDB(Movable):
             self._duckdb_vector_ensure_validity_writable = api[].duckdb_vector_ensure_validity_writable
             self._duckdb_vector_assign_string_element = api[].duckdb_vector_assign_string_element
             self._duckdb_vector_assign_string_element_len = api[].duckdb_vector_assign_string_element_len
+            self._duckdb_unsafe_vector_assign_string_element_len = _duckdb_unsafe_vector_assign_string_element_len.load()
             self._duckdb_list_vector_get_child = api[].duckdb_list_vector_get_child
             self._duckdb_list_vector_get_size = api[].duckdb_list_vector_get_size
             self._duckdb_list_vector_set_size = api[].duckdb_list_vector_set_size
@@ -2740,6 +3035,13 @@ struct LibDuckDB(Movable):
             self._duckdb_register_scalar_function_set = api[].duckdb_register_scalar_function_set
             self._duckdb_scalar_function_bind_get_argument_count = _duckdb_scalar_function_bind_get_argument_count.load()
             self._duckdb_scalar_function_bind_get_argument = _duckdb_scalar_function_bind_get_argument.load()
+            self._duckdb_scalar_function_get_state = _duckdb_scalar_function_get_state.load()
+            self._duckdb_scalar_function_set_init = _duckdb_scalar_function_set_init.load()
+            self._duckdb_scalar_function_init_set_error = _duckdb_scalar_function_init_set_error.load()
+            self._duckdb_scalar_function_init_set_state = _duckdb_scalar_function_init_set_state.load()
+            self._duckdb_scalar_function_init_get_client_context = _duckdb_scalar_function_init_get_client_context.load()
+            self._duckdb_scalar_function_init_get_bind_data = _duckdb_scalar_function_init_get_bind_data.load()
+            self._duckdb_scalar_function_init_get_extra_info = _duckdb_scalar_function_init_get_extra_info.load()
             self._duckdb_create_selection_vector = _duckdb_create_selection_vector.load()
             self._duckdb_destroy_selection_vector = _duckdb_destroy_selection_vector.load()
             self._duckdb_selection_vector_get_data_ptr = _duckdb_selection_vector_get_data_ptr.load()
@@ -2808,6 +3110,7 @@ struct LibDuckDB(Movable):
             self._duckdb_appender_column_type = api[].duckdb_appender_column_type
             self._duckdb_appender_error_data = _duckdb_appender_error_data.load()
             self._duckdb_appender_flush = api[].duckdb_appender_flush
+            self._duckdb_appender_clear = _duckdb_appender_clear.load()
             self._duckdb_appender_close = api[].duckdb_appender_close
             self._duckdb_appender_destroy = api[].duckdb_appender_destroy
             self._duckdb_appender_add_column = api[].duckdb_appender_add_column
@@ -2844,7 +3147,9 @@ struct LibDuckDB(Movable):
             self._duckdb_table_description_destroy = api[].duckdb_table_description_destroy
             self._duckdb_table_description_error = api[].duckdb_table_description_error
             self._duckdb_column_has_default = api[].duckdb_column_has_default
+            self._duckdb_table_description_get_column_count = _duckdb_table_description_get_column_count.load()
             self._duckdb_table_description_get_column_name = api[].duckdb_table_description_get_column_name
+            self._duckdb_table_description_get_column_type = _duckdb_table_description_get_column_type.load()
             self._duckdb_to_arrow_schema = _duckdb_to_arrow_schema.load()
             self._duckdb_data_chunk_to_arrow = _duckdb_data_chunk_to_arrow.load()
             self._duckdb_schema_from_arrow = _duckdb_schema_from_arrow.load()
@@ -2875,11 +3180,80 @@ struct LibDuckDB(Movable):
             self._duckdb_expression_return_type = _duckdb_expression_return_type.load()
             self._duckdb_expression_is_foldable = _duckdb_expression_is_foldable.load()
             self._duckdb_expression_fold = _duckdb_expression_fold.load()
-            self._duckdb_hugeint_to_double = api[].duckdb_hugeint_to_double
-            self._duckdb_double_to_hugeint = api[].duckdb_double_to_hugeint
-            self._duckdb_result_return_type = api[].duckdb_result_return_type
-            self._duckdb_uhugeint_to_double = api[].duckdb_uhugeint_to_double
-            self._duckdb_double_to_uhugeint = api[].duckdb_double_to_uhugeint
+            self._duckdb_client_context_get_file_system = _duckdb_client_context_get_file_system.load()
+            self._duckdb_destroy_file_system = _duckdb_destroy_file_system.load()
+            self._duckdb_file_system_error_data = _duckdb_file_system_error_data.load()
+            self._duckdb_file_system_open = _duckdb_file_system_open.load()
+            self._duckdb_create_file_open_options = _duckdb_create_file_open_options.load()
+            self._duckdb_file_open_options_set_flag = _duckdb_file_open_options_set_flag.load()
+            self._duckdb_destroy_file_open_options = _duckdb_destroy_file_open_options.load()
+            self._duckdb_destroy_file_handle = _duckdb_destroy_file_handle.load()
+            self._duckdb_file_handle_error_data = _duckdb_file_handle_error_data.load()
+            self._duckdb_file_handle_read = _duckdb_file_handle_read.load()
+            self._duckdb_file_handle_write = _duckdb_file_handle_write.load()
+            self._duckdb_file_handle_tell = _duckdb_file_handle_tell.load()
+            self._duckdb_file_handle_size = _duckdb_file_handle_size.load()
+            self._duckdb_file_handle_seek = _duckdb_file_handle_seek.load()
+            self._duckdb_file_handle_sync = _duckdb_file_handle_sync.load()
+            self._duckdb_file_handle_close = _duckdb_file_handle_close.load()
+            self._duckdb_create_config_option = _duckdb_create_config_option.load()
+            self._duckdb_destroy_config_option = _duckdb_destroy_config_option.load()
+            self._duckdb_config_option_set_name = _duckdb_config_option_set_name.load()
+            self._duckdb_config_option_set_type = _duckdb_config_option_set_type.load()
+            self._duckdb_config_option_set_default_value = _duckdb_config_option_set_default_value.load()
+            self._duckdb_config_option_set_default_scope = _duckdb_config_option_set_default_scope.load()
+            self._duckdb_config_option_set_description = _duckdb_config_option_set_description.load()
+            self._duckdb_register_config_option = _duckdb_register_config_option.load()
+            self._duckdb_client_context_get_config_option = _duckdb_client_context_get_config_option.load()
+            self._duckdb_create_copy_function = _duckdb_create_copy_function.load()
+            self._duckdb_copy_function_set_name = _duckdb_copy_function_set_name.load()
+            self._duckdb_copy_function_set_extra_info = _duckdb_copy_function_set_extra_info.load()
+            self._duckdb_register_copy_function = _duckdb_register_copy_function.load()
+            self._duckdb_destroy_copy_function = _duckdb_destroy_copy_function.load()
+            self._duckdb_copy_function_set_bind = _duckdb_copy_function_set_bind.load()
+            self._duckdb_copy_function_bind_set_error = _duckdb_copy_function_bind_set_error.load()
+            self._duckdb_copy_function_bind_get_extra_info = _duckdb_copy_function_bind_get_extra_info.load()
+            self._duckdb_copy_function_bind_get_client_context = _duckdb_copy_function_bind_get_client_context.load()
+            self._duckdb_copy_function_bind_get_column_count = _duckdb_copy_function_bind_get_column_count.load()
+            self._duckdb_copy_function_bind_get_column_type = _duckdb_copy_function_bind_get_column_type.load()
+            self._duckdb_copy_function_bind_get_options = _duckdb_copy_function_bind_get_options.load()
+            self._duckdb_copy_function_bind_set_bind_data = _duckdb_copy_function_bind_set_bind_data.load()
+            self._duckdb_copy_function_set_global_init = _duckdb_copy_function_set_global_init.load()
+            self._duckdb_copy_function_global_init_set_error = _duckdb_copy_function_global_init_set_error.load()
+            self._duckdb_copy_function_global_init_get_extra_info = _duckdb_copy_function_global_init_get_extra_info.load()
+            self._duckdb_copy_function_global_init_get_client_context = _duckdb_copy_function_global_init_get_client_context.load()
+            self._duckdb_copy_function_global_init_get_bind_data = _duckdb_copy_function_global_init_get_bind_data.load()
+            self._duckdb_copy_function_global_init_get_file_path = _duckdb_copy_function_global_init_get_file_path.load()
+            self._duckdb_copy_function_global_init_set_global_state = _duckdb_copy_function_global_init_set_global_state.load()
+            self._duckdb_copy_function_set_sink = _duckdb_copy_function_set_sink.load()
+            self._duckdb_copy_function_sink_set_error = _duckdb_copy_function_sink_set_error.load()
+            self._duckdb_copy_function_sink_get_extra_info = _duckdb_copy_function_sink_get_extra_info.load()
+            self._duckdb_copy_function_sink_get_client_context = _duckdb_copy_function_sink_get_client_context.load()
+            self._duckdb_copy_function_sink_get_bind_data = _duckdb_copy_function_sink_get_bind_data.load()
+            self._duckdb_copy_function_sink_get_global_state = _duckdb_copy_function_sink_get_global_state.load()
+            self._duckdb_copy_function_set_finalize = _duckdb_copy_function_set_finalize.load()
+            self._duckdb_copy_function_finalize_set_error = _duckdb_copy_function_finalize_set_error.load()
+            self._duckdb_copy_function_finalize_get_extra_info = _duckdb_copy_function_finalize_get_extra_info.load()
+            self._duckdb_copy_function_finalize_get_client_context = _duckdb_copy_function_finalize_get_client_context.load()
+            self._duckdb_copy_function_finalize_get_bind_data = _duckdb_copy_function_finalize_get_bind_data.load()
+            self._duckdb_copy_function_finalize_get_global_state = _duckdb_copy_function_finalize_get_global_state.load()
+            self._duckdb_copy_function_set_copy_from_function = _duckdb_copy_function_set_copy_from_function.load()
+            self._duckdb_table_function_bind_get_result_column_count = _duckdb_table_function_bind_get_result_column_count.load()
+            self._duckdb_table_function_bind_get_result_column_name = _duckdb_table_function_bind_get_result_column_name.load()
+            self._duckdb_table_function_bind_get_result_column_type = _duckdb_table_function_bind_get_result_column_type.load()
+            self._duckdb_client_context_get_catalog = _duckdb_client_context_get_catalog.load()
+            self._duckdb_catalog_get_type_name = _duckdb_catalog_get_type_name.load()
+            self._duckdb_catalog_get_entry = _duckdb_catalog_get_entry.load()
+            self._duckdb_destroy_catalog = _duckdb_destroy_catalog.load()
+            self._duckdb_catalog_entry_get_type = _duckdb_catalog_entry_get_type.load()
+            self._duckdb_catalog_entry_get_name = _duckdb_catalog_entry_get_name.load()
+            self._duckdb_destroy_catalog_entry = _duckdb_destroy_catalog_entry.load()
+            self._duckdb_create_log_storage = _duckdb_create_log_storage.load()
+            self._duckdb_destroy_log_storage = _duckdb_destroy_log_storage.load()
+            self._duckdb_log_storage_set_write_log_entry = _duckdb_log_storage_set_write_log_entry.load()
+            self._duckdb_log_storage_set_extra_data = _duckdb_log_storage_set_extra_data.load()
+            self._duckdb_log_storage_set_name = _duckdb_log_storage_set_name.load()
+            self._duckdb_register_log_storage = _duckdb_register_log_storage.load()
             # Load workaround functions from C shim library
             self._workaround_create_decimal_ptr = _workaround_create_decimal_ptr.load()
             self._workaround_fetch_chunk_ptr = _workaround_fetch_chunk_ptr.load()
@@ -2934,12 +3308,14 @@ struct LibDuckDB(Movable):
             self._duckdb_nullmask_data = api[].duckdb_nullmask_data
             self._duckdb_result_error = api[].duckdb_result_error
             self._duckdb_result_error_type = api[].duckdb_result_error_type
+            self._duckdb_result_return_type = api[].duckdb_result_return_type
             self._duckdb_malloc = api[].duckdb_malloc
             self._duckdb_free = api[].duckdb_free
             self._duckdb_vector_size = api[].duckdb_vector_size
             self._duckdb_string_is_inlined = api[].duckdb_string_is_inlined
             self._duckdb_string_t_length = api[].duckdb_string_t_length
             self._duckdb_string_t_data = api[].duckdb_string_t_data
+            self._duckdb_valid_utf8_check = api[].duckdb_valid_utf8_check
             self._duckdb_from_date = api[].duckdb_from_date
             self._duckdb_to_date = api[].duckdb_to_date
             self._duckdb_is_finite_date = api[].duckdb_is_finite_date
@@ -2953,6 +3329,10 @@ struct LibDuckDB(Movable):
             self._duckdb_is_finite_timestamp_s = api[].duckdb_is_finite_timestamp_s
             self._duckdb_is_finite_timestamp_ms = api[].duckdb_is_finite_timestamp_ms
             self._duckdb_is_finite_timestamp_ns = api[].duckdb_is_finite_timestamp_ns
+            self._duckdb_hugeint_to_double = api[].duckdb_hugeint_to_double
+            self._duckdb_double_to_hugeint = api[].duckdb_double_to_hugeint
+            self._duckdb_uhugeint_to_double = api[].duckdb_uhugeint_to_double
+            self._duckdb_double_to_uhugeint = api[].duckdb_double_to_uhugeint
             self._duckdb_double_to_decimal = api[].duckdb_double_to_decimal
             self._duckdb_decimal_to_double = api[].duckdb_decimal_to_double
             self._duckdb_prepare = api[].duckdb_prepare
@@ -3127,6 +3507,7 @@ struct LibDuckDB(Movable):
             self._duckdb_vector_ensure_validity_writable = api[].duckdb_vector_ensure_validity_writable
             self._duckdb_vector_assign_string_element = api[].duckdb_vector_assign_string_element
             self._duckdb_vector_assign_string_element_len = api[].duckdb_vector_assign_string_element_len
+            self._duckdb_unsafe_vector_assign_string_element_len = api[].duckdb_unsafe_vector_assign_string_element_len
             self._duckdb_list_vector_get_child = api[].duckdb_list_vector_get_child
             self._duckdb_list_vector_get_size = api[].duckdb_list_vector_get_size
             self._duckdb_list_vector_set_size = api[].duckdb_list_vector_set_size
@@ -3167,6 +3548,13 @@ struct LibDuckDB(Movable):
             self._duckdb_register_scalar_function_set = api[].duckdb_register_scalar_function_set
             self._duckdb_scalar_function_bind_get_argument_count = api[].duckdb_scalar_function_bind_get_argument_count
             self._duckdb_scalar_function_bind_get_argument = api[].duckdb_scalar_function_bind_get_argument
+            self._duckdb_scalar_function_get_state = api[].duckdb_scalar_function_get_state
+            self._duckdb_scalar_function_set_init = api[].duckdb_scalar_function_set_init
+            self._duckdb_scalar_function_init_set_error = api[].duckdb_scalar_function_init_set_error
+            self._duckdb_scalar_function_init_set_state = api[].duckdb_scalar_function_init_set_state
+            self._duckdb_scalar_function_init_get_client_context = api[].duckdb_scalar_function_init_get_client_context
+            self._duckdb_scalar_function_init_get_bind_data = api[].duckdb_scalar_function_init_get_bind_data
+            self._duckdb_scalar_function_init_get_extra_info = api[].duckdb_scalar_function_init_get_extra_info
             self._duckdb_create_selection_vector = api[].duckdb_create_selection_vector
             self._duckdb_destroy_selection_vector = api[].duckdb_destroy_selection_vector
             self._duckdb_selection_vector_get_data_ptr = api[].duckdb_selection_vector_get_data_ptr
@@ -3235,6 +3623,7 @@ struct LibDuckDB(Movable):
             self._duckdb_appender_column_type = api[].duckdb_appender_column_type
             self._duckdb_appender_error_data = api[].duckdb_appender_error_data
             self._duckdb_appender_flush = api[].duckdb_appender_flush
+            self._duckdb_appender_clear = api[].duckdb_appender_clear
             self._duckdb_appender_close = api[].duckdb_appender_close
             self._duckdb_appender_destroy = api[].duckdb_appender_destroy
             self._duckdb_appender_add_column = api[].duckdb_appender_add_column
@@ -3271,7 +3660,9 @@ struct LibDuckDB(Movable):
             self._duckdb_table_description_destroy = api[].duckdb_table_description_destroy
             self._duckdb_table_description_error = api[].duckdb_table_description_error
             self._duckdb_column_has_default = api[].duckdb_column_has_default
+            self._duckdb_table_description_get_column_count = api[].duckdb_table_description_get_column_count
             self._duckdb_table_description_get_column_name = api[].duckdb_table_description_get_column_name
+            self._duckdb_table_description_get_column_type = api[].duckdb_table_description_get_column_type
             self._duckdb_to_arrow_schema = api[].duckdb_to_arrow_schema
             self._duckdb_data_chunk_to_arrow = api[].duckdb_data_chunk_to_arrow
             self._duckdb_schema_from_arrow = api[].duckdb_schema_from_arrow
@@ -3302,11 +3693,80 @@ struct LibDuckDB(Movable):
             self._duckdb_expression_return_type = api[].duckdb_expression_return_type
             self._duckdb_expression_is_foldable = api[].duckdb_expression_is_foldable
             self._duckdb_expression_fold = api[].duckdb_expression_fold
-            self._duckdb_hugeint_to_double = api[].duckdb_hugeint_to_double
-            self._duckdb_double_to_hugeint = api[].duckdb_double_to_hugeint
-            self._duckdb_result_return_type = api[].duckdb_result_return_type
-            self._duckdb_uhugeint_to_double = api[].duckdb_uhugeint_to_double
-            self._duckdb_double_to_uhugeint = api[].duckdb_double_to_uhugeint
+            self._duckdb_client_context_get_file_system = api[].duckdb_client_context_get_file_system
+            self._duckdb_destroy_file_system = api[].duckdb_destroy_file_system
+            self._duckdb_file_system_error_data = api[].duckdb_file_system_error_data
+            self._duckdb_file_system_open = api[].duckdb_file_system_open
+            self._duckdb_create_file_open_options = api[].duckdb_create_file_open_options
+            self._duckdb_file_open_options_set_flag = api[].duckdb_file_open_options_set_flag
+            self._duckdb_destroy_file_open_options = api[].duckdb_destroy_file_open_options
+            self._duckdb_destroy_file_handle = api[].duckdb_destroy_file_handle
+            self._duckdb_file_handle_error_data = api[].duckdb_file_handle_error_data
+            self._duckdb_file_handle_read = api[].duckdb_file_handle_read
+            self._duckdb_file_handle_write = api[].duckdb_file_handle_write
+            self._duckdb_file_handle_tell = api[].duckdb_file_handle_tell
+            self._duckdb_file_handle_size = api[].duckdb_file_handle_size
+            self._duckdb_file_handle_seek = api[].duckdb_file_handle_seek
+            self._duckdb_file_handle_sync = api[].duckdb_file_handle_sync
+            self._duckdb_file_handle_close = api[].duckdb_file_handle_close
+            self._duckdb_create_config_option = api[].duckdb_create_config_option
+            self._duckdb_destroy_config_option = api[].duckdb_destroy_config_option
+            self._duckdb_config_option_set_name = api[].duckdb_config_option_set_name
+            self._duckdb_config_option_set_type = api[].duckdb_config_option_set_type
+            self._duckdb_config_option_set_default_value = api[].duckdb_config_option_set_default_value
+            self._duckdb_config_option_set_default_scope = api[].duckdb_config_option_set_default_scope
+            self._duckdb_config_option_set_description = api[].duckdb_config_option_set_description
+            self._duckdb_register_config_option = api[].duckdb_register_config_option
+            self._duckdb_client_context_get_config_option = api[].duckdb_client_context_get_config_option
+            self._duckdb_create_copy_function = api[].duckdb_create_copy_function
+            self._duckdb_copy_function_set_name = api[].duckdb_copy_function_set_name
+            self._duckdb_copy_function_set_extra_info = api[].duckdb_copy_function_set_extra_info
+            self._duckdb_register_copy_function = api[].duckdb_register_copy_function
+            self._duckdb_destroy_copy_function = api[].duckdb_destroy_copy_function
+            self._duckdb_copy_function_set_bind = api[].duckdb_copy_function_set_bind
+            self._duckdb_copy_function_bind_set_error = api[].duckdb_copy_function_bind_set_error
+            self._duckdb_copy_function_bind_get_extra_info = api[].duckdb_copy_function_bind_get_extra_info
+            self._duckdb_copy_function_bind_get_client_context = api[].duckdb_copy_function_bind_get_client_context
+            self._duckdb_copy_function_bind_get_column_count = api[].duckdb_copy_function_bind_get_column_count
+            self._duckdb_copy_function_bind_get_column_type = api[].duckdb_copy_function_bind_get_column_type
+            self._duckdb_copy_function_bind_get_options = api[].duckdb_copy_function_bind_get_options
+            self._duckdb_copy_function_bind_set_bind_data = api[].duckdb_copy_function_bind_set_bind_data
+            self._duckdb_copy_function_set_global_init = api[].duckdb_copy_function_set_global_init
+            self._duckdb_copy_function_global_init_set_error = api[].duckdb_copy_function_global_init_set_error
+            self._duckdb_copy_function_global_init_get_extra_info = api[].duckdb_copy_function_global_init_get_extra_info
+            self._duckdb_copy_function_global_init_get_client_context = api[].duckdb_copy_function_global_init_get_client_context
+            self._duckdb_copy_function_global_init_get_bind_data = api[].duckdb_copy_function_global_init_get_bind_data
+            self._duckdb_copy_function_global_init_get_file_path = api[].duckdb_copy_function_global_init_get_file_path
+            self._duckdb_copy_function_global_init_set_global_state = api[].duckdb_copy_function_global_init_set_global_state
+            self._duckdb_copy_function_set_sink = api[].duckdb_copy_function_set_sink
+            self._duckdb_copy_function_sink_set_error = api[].duckdb_copy_function_sink_set_error
+            self._duckdb_copy_function_sink_get_extra_info = api[].duckdb_copy_function_sink_get_extra_info
+            self._duckdb_copy_function_sink_get_client_context = api[].duckdb_copy_function_sink_get_client_context
+            self._duckdb_copy_function_sink_get_bind_data = api[].duckdb_copy_function_sink_get_bind_data
+            self._duckdb_copy_function_sink_get_global_state = api[].duckdb_copy_function_sink_get_global_state
+            self._duckdb_copy_function_set_finalize = api[].duckdb_copy_function_set_finalize
+            self._duckdb_copy_function_finalize_set_error = api[].duckdb_copy_function_finalize_set_error
+            self._duckdb_copy_function_finalize_get_extra_info = api[].duckdb_copy_function_finalize_get_extra_info
+            self._duckdb_copy_function_finalize_get_client_context = api[].duckdb_copy_function_finalize_get_client_context
+            self._duckdb_copy_function_finalize_get_bind_data = api[].duckdb_copy_function_finalize_get_bind_data
+            self._duckdb_copy_function_finalize_get_global_state = api[].duckdb_copy_function_finalize_get_global_state
+            self._duckdb_copy_function_set_copy_from_function = api[].duckdb_copy_function_set_copy_from_function
+            self._duckdb_table_function_bind_get_result_column_count = api[].duckdb_table_function_bind_get_result_column_count
+            self._duckdb_table_function_bind_get_result_column_name = api[].duckdb_table_function_bind_get_result_column_name
+            self._duckdb_table_function_bind_get_result_column_type = api[].duckdb_table_function_bind_get_result_column_type
+            self._duckdb_client_context_get_catalog = api[].duckdb_client_context_get_catalog
+            self._duckdb_catalog_get_type_name = api[].duckdb_catalog_get_type_name
+            self._duckdb_catalog_get_entry = api[].duckdb_catalog_get_entry
+            self._duckdb_destroy_catalog = api[].duckdb_destroy_catalog
+            self._duckdb_catalog_entry_get_type = api[].duckdb_catalog_entry_get_type
+            self._duckdb_catalog_entry_get_name = api[].duckdb_catalog_entry_get_name
+            self._duckdb_destroy_catalog_entry = api[].duckdb_destroy_catalog_entry
+            self._duckdb_create_log_storage = api[].duckdb_create_log_storage
+            self._duckdb_destroy_log_storage = api[].duckdb_destroy_log_storage
+            self._duckdb_log_storage_set_write_log_entry = api[].duckdb_log_storage_set_write_log_entry
+            self._duckdb_log_storage_set_extra_data = api[].duckdb_log_storage_set_extra_data
+            self._duckdb_log_storage_set_name = api[].duckdb_log_storage_set_name
+            self._duckdb_register_log_storage = api[].duckdb_register_log_storage
             # Load workaround functions from C shim library
             self._workaround_create_decimal_ptr = _workaround_create_decimal_ptr.load()
             self._workaround_fetch_chunk_ptr = _workaround_fetch_chunk_ptr.load()
@@ -3356,12 +3816,14 @@ struct LibDuckDB(Movable):
         self._duckdb_nullmask_data = take._duckdb_nullmask_data
         self._duckdb_result_error = take._duckdb_result_error
         self._duckdb_result_error_type = take._duckdb_result_error_type
+        self._duckdb_result_return_type = take._duckdb_result_return_type
         self._duckdb_malloc = take._duckdb_malloc
         self._duckdb_free = take._duckdb_free
         self._duckdb_vector_size = take._duckdb_vector_size
         self._duckdb_string_is_inlined = take._duckdb_string_is_inlined
         self._duckdb_string_t_length = take._duckdb_string_t_length
         self._duckdb_string_t_data = take._duckdb_string_t_data
+        self._duckdb_valid_utf8_check = take._duckdb_valid_utf8_check
         self._duckdb_from_date = take._duckdb_from_date
         self._duckdb_to_date = take._duckdb_to_date
         self._duckdb_is_finite_date = take._duckdb_is_finite_date
@@ -3375,6 +3837,10 @@ struct LibDuckDB(Movable):
         self._duckdb_is_finite_timestamp_s = take._duckdb_is_finite_timestamp_s
         self._duckdb_is_finite_timestamp_ms = take._duckdb_is_finite_timestamp_ms
         self._duckdb_is_finite_timestamp_ns = take._duckdb_is_finite_timestamp_ns
+        self._duckdb_hugeint_to_double = take._duckdb_hugeint_to_double
+        self._duckdb_double_to_hugeint = take._duckdb_double_to_hugeint
+        self._duckdb_uhugeint_to_double = take._duckdb_uhugeint_to_double
+        self._duckdb_double_to_uhugeint = take._duckdb_double_to_uhugeint
         self._duckdb_double_to_decimal = take._duckdb_double_to_decimal
         self._duckdb_decimal_to_double = take._duckdb_decimal_to_double
         self._duckdb_prepare = take._duckdb_prepare
@@ -3549,6 +4015,7 @@ struct LibDuckDB(Movable):
         self._duckdb_vector_ensure_validity_writable = take._duckdb_vector_ensure_validity_writable
         self._duckdb_vector_assign_string_element = take._duckdb_vector_assign_string_element
         self._duckdb_vector_assign_string_element_len = take._duckdb_vector_assign_string_element_len
+        self._duckdb_unsafe_vector_assign_string_element_len = take._duckdb_unsafe_vector_assign_string_element_len
         self._duckdb_list_vector_get_child = take._duckdb_list_vector_get_child
         self._duckdb_list_vector_get_size = take._duckdb_list_vector_get_size
         self._duckdb_list_vector_set_size = take._duckdb_list_vector_set_size
@@ -3589,6 +4056,13 @@ struct LibDuckDB(Movable):
         self._duckdb_register_scalar_function_set = take._duckdb_register_scalar_function_set
         self._duckdb_scalar_function_bind_get_argument_count = take._duckdb_scalar_function_bind_get_argument_count
         self._duckdb_scalar_function_bind_get_argument = take._duckdb_scalar_function_bind_get_argument
+        self._duckdb_scalar_function_get_state = take._duckdb_scalar_function_get_state
+        self._duckdb_scalar_function_set_init = take._duckdb_scalar_function_set_init
+        self._duckdb_scalar_function_init_set_error = take._duckdb_scalar_function_init_set_error
+        self._duckdb_scalar_function_init_set_state = take._duckdb_scalar_function_init_set_state
+        self._duckdb_scalar_function_init_get_client_context = take._duckdb_scalar_function_init_get_client_context
+        self._duckdb_scalar_function_init_get_bind_data = take._duckdb_scalar_function_init_get_bind_data
+        self._duckdb_scalar_function_init_get_extra_info = take._duckdb_scalar_function_init_get_extra_info
         self._duckdb_create_selection_vector = take._duckdb_create_selection_vector
         self._duckdb_destroy_selection_vector = take._duckdb_destroy_selection_vector
         self._duckdb_selection_vector_get_data_ptr = take._duckdb_selection_vector_get_data_ptr
@@ -3657,6 +4131,7 @@ struct LibDuckDB(Movable):
         self._duckdb_appender_column_type = take._duckdb_appender_column_type
         self._duckdb_appender_error_data = take._duckdb_appender_error_data
         self._duckdb_appender_flush = take._duckdb_appender_flush
+        self._duckdb_appender_clear = take._duckdb_appender_clear
         self._duckdb_appender_close = take._duckdb_appender_close
         self._duckdb_appender_destroy = take._duckdb_appender_destroy
         self._duckdb_appender_add_column = take._duckdb_appender_add_column
@@ -3693,7 +4168,9 @@ struct LibDuckDB(Movable):
         self._duckdb_table_description_destroy = take._duckdb_table_description_destroy
         self._duckdb_table_description_error = take._duckdb_table_description_error
         self._duckdb_column_has_default = take._duckdb_column_has_default
+        self._duckdb_table_description_get_column_count = take._duckdb_table_description_get_column_count
         self._duckdb_table_description_get_column_name = take._duckdb_table_description_get_column_name
+        self._duckdb_table_description_get_column_type = take._duckdb_table_description_get_column_type
         self._duckdb_to_arrow_schema = take._duckdb_to_arrow_schema
         self._duckdb_data_chunk_to_arrow = take._duckdb_data_chunk_to_arrow
         self._duckdb_schema_from_arrow = take._duckdb_schema_from_arrow
@@ -3724,11 +4201,80 @@ struct LibDuckDB(Movable):
         self._duckdb_expression_return_type = take._duckdb_expression_return_type
         self._duckdb_expression_is_foldable = take._duckdb_expression_is_foldable
         self._duckdb_expression_fold = take._duckdb_expression_fold
-        self._duckdb_hugeint_to_double = take._duckdb_hugeint_to_double
-        self._duckdb_double_to_hugeint = take._duckdb_double_to_hugeint
-        self._duckdb_result_return_type = take._duckdb_result_return_type
-        self._duckdb_uhugeint_to_double = take._duckdb_uhugeint_to_double
-        self._duckdb_double_to_uhugeint = take._duckdb_double_to_uhugeint
+        self._duckdb_client_context_get_file_system = take._duckdb_client_context_get_file_system
+        self._duckdb_destroy_file_system = take._duckdb_destroy_file_system
+        self._duckdb_file_system_error_data = take._duckdb_file_system_error_data
+        self._duckdb_file_system_open = take._duckdb_file_system_open
+        self._duckdb_create_file_open_options = take._duckdb_create_file_open_options
+        self._duckdb_file_open_options_set_flag = take._duckdb_file_open_options_set_flag
+        self._duckdb_destroy_file_open_options = take._duckdb_destroy_file_open_options
+        self._duckdb_destroy_file_handle = take._duckdb_destroy_file_handle
+        self._duckdb_file_handle_error_data = take._duckdb_file_handle_error_data
+        self._duckdb_file_handle_read = take._duckdb_file_handle_read
+        self._duckdb_file_handle_write = take._duckdb_file_handle_write
+        self._duckdb_file_handle_tell = take._duckdb_file_handle_tell
+        self._duckdb_file_handle_size = take._duckdb_file_handle_size
+        self._duckdb_file_handle_seek = take._duckdb_file_handle_seek
+        self._duckdb_file_handle_sync = take._duckdb_file_handle_sync
+        self._duckdb_file_handle_close = take._duckdb_file_handle_close
+        self._duckdb_create_config_option = take._duckdb_create_config_option
+        self._duckdb_destroy_config_option = take._duckdb_destroy_config_option
+        self._duckdb_config_option_set_name = take._duckdb_config_option_set_name
+        self._duckdb_config_option_set_type = take._duckdb_config_option_set_type
+        self._duckdb_config_option_set_default_value = take._duckdb_config_option_set_default_value
+        self._duckdb_config_option_set_default_scope = take._duckdb_config_option_set_default_scope
+        self._duckdb_config_option_set_description = take._duckdb_config_option_set_description
+        self._duckdb_register_config_option = take._duckdb_register_config_option
+        self._duckdb_client_context_get_config_option = take._duckdb_client_context_get_config_option
+        self._duckdb_create_copy_function = take._duckdb_create_copy_function
+        self._duckdb_copy_function_set_name = take._duckdb_copy_function_set_name
+        self._duckdb_copy_function_set_extra_info = take._duckdb_copy_function_set_extra_info
+        self._duckdb_register_copy_function = take._duckdb_register_copy_function
+        self._duckdb_destroy_copy_function = take._duckdb_destroy_copy_function
+        self._duckdb_copy_function_set_bind = take._duckdb_copy_function_set_bind
+        self._duckdb_copy_function_bind_set_error = take._duckdb_copy_function_bind_set_error
+        self._duckdb_copy_function_bind_get_extra_info = take._duckdb_copy_function_bind_get_extra_info
+        self._duckdb_copy_function_bind_get_client_context = take._duckdb_copy_function_bind_get_client_context
+        self._duckdb_copy_function_bind_get_column_count = take._duckdb_copy_function_bind_get_column_count
+        self._duckdb_copy_function_bind_get_column_type = take._duckdb_copy_function_bind_get_column_type
+        self._duckdb_copy_function_bind_get_options = take._duckdb_copy_function_bind_get_options
+        self._duckdb_copy_function_bind_set_bind_data = take._duckdb_copy_function_bind_set_bind_data
+        self._duckdb_copy_function_set_global_init = take._duckdb_copy_function_set_global_init
+        self._duckdb_copy_function_global_init_set_error = take._duckdb_copy_function_global_init_set_error
+        self._duckdb_copy_function_global_init_get_extra_info = take._duckdb_copy_function_global_init_get_extra_info
+        self._duckdb_copy_function_global_init_get_client_context = take._duckdb_copy_function_global_init_get_client_context
+        self._duckdb_copy_function_global_init_get_bind_data = take._duckdb_copy_function_global_init_get_bind_data
+        self._duckdb_copy_function_global_init_get_file_path = take._duckdb_copy_function_global_init_get_file_path
+        self._duckdb_copy_function_global_init_set_global_state = take._duckdb_copy_function_global_init_set_global_state
+        self._duckdb_copy_function_set_sink = take._duckdb_copy_function_set_sink
+        self._duckdb_copy_function_sink_set_error = take._duckdb_copy_function_sink_set_error
+        self._duckdb_copy_function_sink_get_extra_info = take._duckdb_copy_function_sink_get_extra_info
+        self._duckdb_copy_function_sink_get_client_context = take._duckdb_copy_function_sink_get_client_context
+        self._duckdb_copy_function_sink_get_bind_data = take._duckdb_copy_function_sink_get_bind_data
+        self._duckdb_copy_function_sink_get_global_state = take._duckdb_copy_function_sink_get_global_state
+        self._duckdb_copy_function_set_finalize = take._duckdb_copy_function_set_finalize
+        self._duckdb_copy_function_finalize_set_error = take._duckdb_copy_function_finalize_set_error
+        self._duckdb_copy_function_finalize_get_extra_info = take._duckdb_copy_function_finalize_get_extra_info
+        self._duckdb_copy_function_finalize_get_client_context = take._duckdb_copy_function_finalize_get_client_context
+        self._duckdb_copy_function_finalize_get_bind_data = take._duckdb_copy_function_finalize_get_bind_data
+        self._duckdb_copy_function_finalize_get_global_state = take._duckdb_copy_function_finalize_get_global_state
+        self._duckdb_copy_function_set_copy_from_function = take._duckdb_copy_function_set_copy_from_function
+        self._duckdb_table_function_bind_get_result_column_count = take._duckdb_table_function_bind_get_result_column_count
+        self._duckdb_table_function_bind_get_result_column_name = take._duckdb_table_function_bind_get_result_column_name
+        self._duckdb_table_function_bind_get_result_column_type = take._duckdb_table_function_bind_get_result_column_type
+        self._duckdb_client_context_get_catalog = take._duckdb_client_context_get_catalog
+        self._duckdb_catalog_get_type_name = take._duckdb_catalog_get_type_name
+        self._duckdb_catalog_get_entry = take._duckdb_catalog_get_entry
+        self._duckdb_destroy_catalog = take._duckdb_destroy_catalog
+        self._duckdb_catalog_entry_get_type = take._duckdb_catalog_entry_get_type
+        self._duckdb_catalog_entry_get_name = take._duckdb_catalog_entry_get_name
+        self._duckdb_destroy_catalog_entry = take._duckdb_destroy_catalog_entry
+        self._duckdb_create_log_storage = take._duckdb_create_log_storage
+        self._duckdb_destroy_log_storage = take._duckdb_destroy_log_storage
+        self._duckdb_log_storage_set_write_log_entry = take._duckdb_log_storage_set_write_log_entry
+        self._duckdb_log_storage_set_extra_data = take._duckdb_log_storage_set_extra_data
+        self._duckdb_log_storage_set_name = take._duckdb_log_storage_set_name
+        self._duckdb_register_log_storage = take._duckdb_register_log_storage
         self._workaround_create_decimal_ptr = take._workaround_create_decimal_ptr
         self._workaround_fetch_chunk_ptr = take._workaround_fetch_chunk_ptr
         self._workaround_get_decimal_ptr = take._workaround_get_decimal_ptr
@@ -3838,7 +4384,7 @@ struct LibDuckDB(Movable):
         connection: duckdb_connection,
     ) -> duckdb_query_progress_type:
         """
-        Get progress of the running query.
+        Get the progress of the running query.
         """
         return self._duckdb_query_progress(connection)
 
@@ -4217,6 +4763,15 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_result_error_type(result)
 
+    fn duckdb_result_return_type(
+        self,
+        result: duckdb_result,
+    ) -> duckdb_result_type:
+        """
+        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error.
+        """
+        return self._duckdb_result_return_type(result)
+
 
     # ===--------------------------------------------------------------------===#
     # Helpers
@@ -4278,6 +4833,16 @@ struct LibDuckDB(Movable):
         Get a pointer to the string data of a string_t.
         """
         return self._duckdb_string_t_data(string)
+
+    fn duckdb_valid_utf8_check(
+        self,
+        str: UnsafePointer[c_char, ImmutAnyOrigin],
+        len: idx_t,
+    ) -> duckdb_error_data:
+        """
+        Checks if a string is valid UTF-8.
+        """
+        return self._duckdb_valid_utf8_check(str, len)
 
 
     # ===--------------------------------------------------------------------===#
@@ -4403,6 +4968,51 @@ struct LibDuckDB(Movable):
         Test a `duckdb_timestamp_ns` to see if it is a finite value.
         """
         return self._duckdb_is_finite_timestamp_ns(ts)
+
+
+    # ===--------------------------------------------------------------------===#
+    # Hugeint And Uhugeint Helpers
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_hugeint_to_double(
+        self,
+        val: duckdb_hugeint,
+    ) -> Float64:
+        """
+        Converts a duckdb_hugeint object (as obtained from a `DUCKDB_TYPE_HUGEINT` column) into a double.
+        """
+        return self._duckdb_hugeint_to_double(val)
+
+    fn duckdb_double_to_hugeint(
+        self,
+        val: Float64,
+    ) -> duckdb_hugeint:
+        """
+        Converts a double value to a duckdb_hugeint object.
+
+        If the conversion fails because the double value is too big the result will be 0.
+        """
+        return self._duckdb_double_to_hugeint(val)
+
+    fn duckdb_uhugeint_to_double(
+        self,
+        val: duckdb_uhugeint,
+    ) -> Float64:
+        """
+        Converts a duckdb_uhugeint object (as obtained from a `DUCKDB_TYPE_UHUGEINT` column) into a double.
+        """
+        return self._duckdb_uhugeint_to_double(val)
+
+    fn duckdb_double_to_uhugeint(
+        self,
+        val: Float64,
+    ) -> duckdb_uhugeint:
+        """
+        Converts a double value to a duckdb_uhugeint object.
+
+        If the conversion fails because the double value is too big the result will be 0.
+        """
+        return self._duckdb_double_to_uhugeint(val)
 
 
     # ===--------------------------------------------------------------------===#
@@ -4601,6 +5211,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Binds a value to the prepared statement at the specified index.
+
+        Supersedes all type-specific bind functions (e.g., `duckdb_bind_varchar`, `duckdb_bind_int64`, etc.).
         """
         return self._duckdb_bind_value(prepared_statement, param_idx, val)
 
@@ -4832,6 +5444,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Binds a null-terminated varchar value to the prepared statement at the specified index.
+
+        Superseded by `duckdb_bind_value`.
         """
         return self._duckdb_bind_varchar(prepared_statement, param_idx, val)
 
@@ -4844,6 +5458,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_state:
         """
         Binds a varchar value to the prepared statement at the specified index.
+
+        Superseded by `duckdb_bind_value`.
         """
         return self._duckdb_bind_varchar_length(prepared_statement, param_idx, val, length)
 
@@ -5056,7 +5672,9 @@ struct LibDuckDB(Movable):
         text: UnsafePointer[c_char, ImmutAnyOrigin],
     ) -> duckdb_value:
         """
-        Creates a value from a null-terminated string.
+        Creates a value from a null-terminated string. Returns nullptr if the string is not valid UTF-8 or other invalid input.
+
+        Superseded by `duckdb_create_varchar_length`.
         """
         return self._duckdb_create_varchar(text)
 
@@ -5066,7 +5684,7 @@ struct LibDuckDB(Movable):
         length: idx_t,
     ) -> duckdb_value:
         """
-        Creates a value from a string.
+        Creates a value from a string. Returns nullptr if the string is not valid UTF-8 or other invalid input.
         """
         return self._duckdb_create_varchar_length(text, length)
 
@@ -5450,7 +6068,7 @@ struct LibDuckDB(Movable):
         NOTE: Mojo cannot return duckdb_decimal by value correctly over the C ABI.
         We therefore call a workaround function that returns via pointer instead.
         """
-        var result = duckdb_decimal(width=0, scale=0, value=Int128(0))
+        var result = duckdb_decimal(width=UInt8(0), scale=UInt8(0), value=Int128(0))
         self._workaround_get_decimal_ptr(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())
         return result
 
@@ -6259,7 +6877,9 @@ struct LibDuckDB(Movable):
         str: UnsafePointer[c_char, ImmutAnyOrigin],
     ) -> NoneType:
         """
-        Assigns a string element in the vector at the specified location. The vector type must be VARCHAR and the input must be valid UTF-8. Otherwise, undefined behavior is expected at later stages.
+        Assigns a string element in the vector at the specified location. For VARCHAR vectors, the input is validated as UTF-8; if invalid, a NULL value is assigned at that index.
+
+        Superseded by `duckdb_unsafe_vector_assign_string_element_len`, optionally combined with `duckdb_valid_utf8_check`.
         """
         return self._duckdb_vector_assign_string_element(vector, index, str)
 
@@ -6271,9 +6891,23 @@ struct LibDuckDB(Movable):
         str_len: idx_t,
     ) -> NoneType:
         """
-        Assigns a string element in the vector at the specified location. The vector type can be VARCHAR or BLOB. In the case of VARCHAR, you must pass valid UTF-8. Otherwise, undefined behavior is expected at later stages.
+        Assigns a string element in the vector at the specified location. For VARCHAR vectors, the input is validated as UTF-8; if invalid, a NULL value is assigned at that index. For BLOB vectors, no validation is performed.
+
+        Superseded by `duckdb_unsafe_vector_assign_string_element_len`, optionally combined with `duckdb_valid_utf8_check`.
         """
         return self._duckdb_vector_assign_string_element_len(vector, index, str, str_len)
+
+    fn duckdb_unsafe_vector_assign_string_element_len(
+        self,
+        vector: duckdb_vector,
+        index: idx_t,
+        str: UnsafePointer[c_char, ImmutAnyOrigin],
+        str_len: idx_t,
+    ) -> NoneType:
+        """
+        Assigns a string element in the vector at the specified location without UTF-8 validation. The caller is responsible for ensuring the input is valid UTF-8. Use `duckdb_valid_utf8_check` to validate strings before calling this function if needed. If the input is known to be valid UTF-8, this function can be called directly for better performance, avoiding the overhead of redundant validation.
+        """
+        return self._duckdb_unsafe_vector_assign_string_element_len(vector, index, str, str_len)
 
     fn duckdb_list_vector_get_child(
         self,
@@ -6301,7 +6935,10 @@ struct LibDuckDB(Movable):
         size: idx_t,
     ) -> duckdb_state:
         """
-        Sets the total size of the underlying child-vector of a list vector.
+        Sets the size of the underlying child-vector of a list vector.
+        Note that this does NOT reserve the memory in the child buffer,
+        and that it is possible to set a size exceeding the capacity.
+        To set the capacity, use `duckdb_list_vector_reserve`.
         """
         return self._duckdb_list_vector_set_size(vector, size)
 
@@ -6311,10 +6948,10 @@ struct LibDuckDB(Movable):
         required_capacity: idx_t,
     ) -> duckdb_state:
         """
-        Sets the total capacity of the underlying child-vector of a list.
-
-        After calling this method, you must call `duckdb_vector_get_validity` and `duckdb_vector_get_data` to obtain current
-        data and validity pointers
+        Sets the capacity of the underlying child-vector of a list vector.
+        We increment to the next power of two, based on the required capacity.
+        Thus, the capacity might not match the size of the list (capacity >= size),
+        which is set via `duckdb_list_vector_set_size`.
         """
         return self._duckdb_list_vector_reserve(vector, required_capacity)
 
@@ -6714,6 +7351,76 @@ struct LibDuckDB(Movable):
         Returns the input argument at index of the scalar function.
         """
         return self._duckdb_scalar_function_bind_get_argument(info, index)
+
+    fn duckdb_scalar_function_get_state(
+        self,
+        info: duckdb_function_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the state pointer of the function info.
+        """
+        return self._duckdb_scalar_function_get_state(info)
+
+    fn duckdb_scalar_function_set_init(
+        self,
+        scalar_function: duckdb_scalar_function,
+        init_: fn (duckdb_init_info) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the (optional) state init function of the scalar function.
+        This is called once for each worker thread that begins executing the function.
+        """
+        return self._duckdb_scalar_function_set_init(scalar_function, init_)
+
+    fn duckdb_scalar_function_init_set_error(
+        self,
+        info: duckdb_init_info,
+        error: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Report that an error has occurred while calling init on a scalar function.
+        """
+        return self._duckdb_scalar_function_init_set_error(info, error)
+
+    fn duckdb_scalar_function_init_set_state(
+        self,
+        info: duckdb_init_info,
+        state: UnsafePointer[NoneType, MutAnyOrigin],
+        destroy: fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the state pointer in the init info of the scalar function.
+        """
+        return self._duckdb_scalar_function_init_set_state(info, state, destroy)
+
+    fn duckdb_scalar_function_init_get_client_context(
+        self,
+        info: duckdb_init_info,
+        out_context: UnsafePointer[duckdb_client_context, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Retrieves the client context of the init info of a scalar function.
+        """
+        return self._duckdb_scalar_function_init_get_client_context(info, out_context)
+
+    fn duckdb_scalar_function_init_get_bind_data(
+        self,
+        info: duckdb_init_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Gets the scalar function's bind data set by `duckdb_scalar_function_set_bind_data`.
+        Note that the bind data is read-only.
+        """
+        return self._duckdb_scalar_function_init_get_bind_data(info)
+
+    fn duckdb_scalar_function_init_get_extra_info(
+        self,
+        info: duckdb_init_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the extra info of the function as set in the init info.
+        """
+        return self._duckdb_scalar_function_init_get_extra_info(info)
 
 
     # ===--------------------------------------------------------------------===#
@@ -7492,6 +8199,15 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_appender_flush(appender)
 
+    fn duckdb_appender_clear(
+        self,
+        appender: duckdb_appender,
+    ) -> duckdb_state:
+        """
+        Clears all buffered data from the appender without flushing it to the table. This discards any data that has been appended but not yet written. The appender can continue to be used after clearing.
+        """
+        return self._duckdb_appender_clear(appender)
+
     fn duckdb_appender_close(
         self,
         appender: duckdb_appender,
@@ -7871,6 +8587,15 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_column_has_default(table_description, index, out_)
 
+    fn duckdb_table_description_get_column_count(
+        self,
+        table_description: duckdb_table_description,
+    ) -> idx_t:
+        """
+        Return the number of columns of the described table.
+        """
+        return self._duckdb_table_description_get_column_count(table_description)
+
     fn duckdb_table_description_get_column_name(
         self,
         table_description: duckdb_table_description,
@@ -7881,6 +8606,17 @@ struct LibDuckDB(Movable):
         The out result must be destroyed with `duckdb_free`.
         """
         return self._duckdb_table_description_get_column_name(table_description, index)
+
+    fn duckdb_table_description_get_column_type(
+        self,
+        table_description: duckdb_table_description,
+        index: idx_t,
+    ) -> duckdb_logical_type:
+        """
+        Obtain the column type at 'index'.
+        The return value must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self._duckdb_table_description_get_column_type(table_description, index)
 
 
     # ===--------------------------------------------------------------------===#
@@ -8227,67 +8963,781 @@ struct LibDuckDB(Movable):
 
 
     # ===--------------------------------------------------------------------===#
-    # Hugeint Helpers
+    # File System Interface
     # ===--------------------------------------------------------------------===#
 
-    fn duckdb_hugeint_to_double(
+    fn duckdb_client_context_get_file_system(
         self,
-        val: duckdb_hugeint,
-    ) -> Float64:
+        context: duckdb_client_context,
+    ) -> duckdb_file_system:
         """
-        Converts a duckdb_hugeint object (as obtained from a `DUCKDB_TYPE_HUGEINT` column) into a double.
+        Get a file system instance associated with the given client context.
         """
-        return self._duckdb_hugeint_to_double(val)
+        return self._duckdb_client_context_get_file_system(context)
 
-    fn duckdb_double_to_hugeint(
+    fn duckdb_destroy_file_system(
         self,
-        val: Float64,
-    ) -> duckdb_hugeint:
+        file_system: UnsafePointer[duckdb_file_system, MutAnyOrigin],
+    ) -> NoneType:
         """
-        Converts a double value to a duckdb_hugeint object.
+        Destroys the given file system instance.
+        """
+        return self._duckdb_destroy_file_system(file_system)
 
-        If the conversion fails because the double value is too big the result will be 0.
+    fn duckdb_file_system_error_data(
+        self,
+        file_system: duckdb_file_system,
+    ) -> duckdb_error_data:
         """
-        return self._duckdb_double_to_hugeint(val)
+        Retrieves the last error that occurred on the given file system instance.
+        """
+        return self._duckdb_file_system_error_data(file_system)
+
+    fn duckdb_file_system_open(
+        self,
+        file_system: duckdb_file_system,
+        path: UnsafePointer[c_char, ImmutAnyOrigin],
+        options: duckdb_file_open_options,
+        out_file: UnsafePointer[duckdb_file_handle, MutAnyOrigin],
+    ) -> duckdb_state:
+        """
+        Opens a file at the given path with the specified options.
+        """
+        return self._duckdb_file_system_open(file_system, path, options, out_file)
+
+    fn duckdb_create_file_open_options(
+        self,
+    ) -> duckdb_file_open_options:
+        """
+        Creates a new file open options instance with blank settings.
+        """
+        return self._duckdb_create_file_open_options()
+
+    fn duckdb_file_open_options_set_flag(
+        self,
+        options: duckdb_file_open_options,
+        flag: duckdb_file_flag,
+        value: Bool,
+    ) -> duckdb_state:
+        """
+        Sets a specific flag in the file open options.
+        """
+        return self._duckdb_file_open_options_set_flag(options, flag, value)
+
+    fn duckdb_destroy_file_open_options(
+        self,
+        options: UnsafePointer[duckdb_file_open_options, MutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given file open options instance.
+        """
+        return self._duckdb_destroy_file_open_options(options)
+
+    fn duckdb_destroy_file_handle(
+        self,
+        file_handle: UnsafePointer[duckdb_file_handle, MutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given file handle and deallocates all associated resources.
+        This will also close the file if it is still open.
+        """
+        return self._duckdb_destroy_file_handle(file_handle)
+
+    fn duckdb_file_handle_error_data(
+        self,
+        file_handle: duckdb_file_handle,
+    ) -> duckdb_error_data:
+        """
+        Retrieves the last error that occurred on the given file handle.
+        """
+        return self._duckdb_file_handle_error_data(file_handle)
+
+    fn duckdb_file_handle_read(
+        self,
+        file_handle: duckdb_file_handle,
+        buffer: UnsafePointer[NoneType, MutAnyOrigin],
+        size: Int64,
+    ) -> Int64:
+        """
+        Reads data from the file into the buffer.
+        """
+        return self._duckdb_file_handle_read(file_handle, buffer, size)
+
+    fn duckdb_file_handle_write(
+        self,
+        file_handle: duckdb_file_handle,
+        buffer: UnsafePointer[NoneType, ImmutAnyOrigin],
+        size: Int64,
+    ) -> Int64:
+        """
+        Writes data from the buffer to the file.
+        """
+        return self._duckdb_file_handle_write(file_handle, buffer, size)
+
+    fn duckdb_file_handle_tell(
+        self,
+        file_handle: duckdb_file_handle,
+    ) -> Int64:
+        """
+        Tells the current position in the file.
+        """
+        return self._duckdb_file_handle_tell(file_handle)
+
+    fn duckdb_file_handle_size(
+        self,
+        file_handle: duckdb_file_handle,
+    ) -> Int64:
+        """
+        Gets the size of the file.
+        """
+        return self._duckdb_file_handle_size(file_handle)
+
+    fn duckdb_file_handle_seek(
+        self,
+        file_handle: duckdb_file_handle,
+        position: Int64,
+    ) -> duckdb_state:
+        """
+        Seeks to a specific position in the file.
+        """
+        return self._duckdb_file_handle_seek(file_handle, position)
+
+    fn duckdb_file_handle_sync(
+        self,
+        file_handle: duckdb_file_handle,
+    ) -> duckdb_state:
+        """
+        Synchronizes the file's state with the underlying storage.
+        """
+        return self._duckdb_file_handle_sync(file_handle)
+
+    fn duckdb_file_handle_close(
+        self,
+        file_handle: duckdb_file_handle,
+    ) -> duckdb_state:
+        """
+        Closes the given file handle.
+        """
+        return self._duckdb_file_handle_close(file_handle)
 
 
     # ===--------------------------------------------------------------------===#
-    # Result Functions
+    # Config Options Interface
     # ===--------------------------------------------------------------------===#
 
-    fn duckdb_result_return_type(
+    fn duckdb_create_config_option(
         self,
-        result: duckdb_result,
-    ) -> duckdb_result_type:
+    ) -> duckdb_config_option:
         """
-        Returns the return_type of the given result, or DUCKDB_RETURN_TYPE_INVALID on error.
+        Creates a configuration option instance.
         """
-        return self._duckdb_result_return_type(result)
+        return self._duckdb_create_config_option()
+
+    fn duckdb_destroy_config_option(
+        self,
+        option: UnsafePointer[duckdb_config_option, MutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given configuration option instance.
+        """
+        return self._duckdb_destroy_config_option(option)
+
+    fn duckdb_config_option_set_name(
+        self,
+        option: duckdb_config_option,
+        name: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Sets the name of the configuration option.
+        """
+        return self._duckdb_config_option_set_name(option, name)
+
+    fn duckdb_config_option_set_type(
+        self,
+        option: duckdb_config_option,
+        type_: duckdb_logical_type,
+    ) -> NoneType:
+        """
+        Sets the type of the configuration option.
+        """
+        return self._duckdb_config_option_set_type(option, type_)
+
+    fn duckdb_config_option_set_default_value(
+        self,
+        option: duckdb_config_option,
+        default_value: duckdb_value,
+    ) -> NoneType:
+        """
+        Sets the default value of the configuration option.
+        If the type of this option has already been set with `duckdb_config_option_set_type`, the value is cast to the type.
+        Otherwise, the type is inferred from the value.
+        """
+        return self._duckdb_config_option_set_default_value(option, default_value)
+
+    fn duckdb_config_option_set_default_scope(
+        self,
+        option: duckdb_config_option,
+        default_scope: duckdb_config_option_scope,
+    ) -> NoneType:
+        """
+        Sets the default scope of the configuration option.
+        If not set, this defaults to `DUCKDB_CONFIG_OPTION_SCOPE_SESSION`.
+        """
+        return self._duckdb_config_option_set_default_scope(option, default_scope)
+
+    fn duckdb_config_option_set_description(
+        self,
+        option: duckdb_config_option,
+        description: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Sets the description of the configuration option.
+        """
+        return self._duckdb_config_option_set_description(option, description)
+
+    fn duckdb_register_config_option(
+        self,
+        connection: duckdb_connection,
+        option: duckdb_config_option,
+    ) -> duckdb_state:
+        """
+        Registers the given configuration option on the specified connection.
+        """
+        return self._duckdb_register_config_option(connection, option)
+
+    fn duckdb_client_context_get_config_option(
+        self,
+        context: duckdb_client_context,
+        name: UnsafePointer[c_char, ImmutAnyOrigin],
+        out_scope: UnsafePointer[duckdb_config_option_scope, MutAnyOrigin],
+    ) -> duckdb_value:
+        """
+        Retrieves the value of a configuration option by name from the given client context.
+        """
+        return self._duckdb_client_context_get_config_option(context, name, out_scope)
 
 
     # ===--------------------------------------------------------------------===#
-    # Unsigned Hugeint Helpers
+    # Copy Functions
     # ===--------------------------------------------------------------------===#
 
-    fn duckdb_uhugeint_to_double(
+    fn duckdb_create_copy_function(
         self,
-        val: duckdb_uhugeint,
-    ) -> Float64:
+    ) -> duckdb_copy_function:
         """
-        Converts a duckdb_uhugeint object (as obtained from a `DUCKDB_TYPE_UHUGEINT` column) into a double.
-        """
-        return self._duckdb_uhugeint_to_double(val)
+        Creates a new empty copy function.
 
-    fn duckdb_double_to_uhugeint(
+        The return value must be destroyed with `duckdb_destroy_copy_function`.
+        """
+        return self._duckdb_create_copy_function()
+
+    fn duckdb_copy_function_set_name(
         self,
-        val: Float64,
-    ) -> duckdb_uhugeint:
+        copy_function: duckdb_copy_function,
+        name: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
         """
-        Converts a double value to a duckdb_uhugeint object.
+        Sets the name of the copy function.
+        """
+        return self._duckdb_copy_function_set_name(copy_function, name)
 
-        If the conversion fails because the double value is too big the result will be 0.
+    fn duckdb_copy_function_set_extra_info(
+        self,
+        copy_function: duckdb_copy_function,
+        extra_info: UnsafePointer[NoneType, MutAnyOrigin],
+        destructor: fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
         """
-        return self._duckdb_double_to_uhugeint(val)
+        Sets the extra info pointer of the copy function, which can be used to store arbitrary data.
+        """
+        return self._duckdb_copy_function_set_extra_info(copy_function, extra_info, destructor)
+
+    fn duckdb_register_copy_function(
+        self,
+        connection: duckdb_connection,
+        copy_function: duckdb_copy_function,
+    ) -> duckdb_state:
+        """
+        Registers the given copy function on the database connection under the specified name.
+        """
+        return self._duckdb_register_copy_function(connection, copy_function)
+
+    fn duckdb_destroy_copy_function(
+        self,
+        copy_function: UnsafePointer[duckdb_copy_function, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given copy function object.
+        """
+        return self._duckdb_destroy_copy_function(copy_function)
+
+    fn duckdb_copy_function_set_bind(
+        self,
+        copy_function: duckdb_copy_function,
+        bind: fn (duckdb_copy_function_bind_info) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the bind function of the copy function, to use when binding `COPY ... TO`.
+        """
+        return self._duckdb_copy_function_set_bind(copy_function, bind)
+
+    fn duckdb_copy_function_bind_set_error(
+        self,
+        info: duckdb_copy_function_bind_info,
+        error: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Report that an error occurred during the binding-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_bind_set_error(info, error)
+
+    fn duckdb_copy_function_bind_get_extra_info(
+        self,
+        info: duckdb_copy_function_bind_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the extra info pointer of the copy function.
+        """
+        return self._duckdb_copy_function_bind_get_extra_info(info)
+
+    fn duckdb_copy_function_bind_get_client_context(
+        self,
+        info: duckdb_copy_function_bind_info,
+    ) -> duckdb_client_context:
+        """
+        Retrieves the client context of the current connection binding the `COPY ... TO` function.
+
+        Must be destroyed with `duckdb_destroy_client_context`
+        """
+        return self._duckdb_copy_function_bind_get_client_context(info)
+
+    fn duckdb_copy_function_bind_get_column_count(
+        self,
+        info: duckdb_copy_function_bind_info,
+    ) -> idx_t:
+        """
+        Retrieves the number of columns that will be provided to the `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_bind_get_column_count(info)
+
+    fn duckdb_copy_function_bind_get_column_type(
+        self,
+        info: duckdb_copy_function_bind_info,
+        col_idx: idx_t,
+    ) -> duckdb_logical_type:
+        """
+        Retrieves the type of a column that will be provided to the `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_bind_get_column_type(info, col_idx)
+
+    fn duckdb_copy_function_bind_get_options(
+        self,
+        info: duckdb_copy_function_bind_info,
+    ) -> duckdb_value:
+        """
+        Retrieves all values for the given options provided to the `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_bind_get_options(info)
+
+    fn duckdb_copy_function_bind_set_bind_data(
+        self,
+        info: duckdb_copy_function_bind_info,
+        bind_data: UnsafePointer[NoneType, MutAnyOrigin],
+        destructor: fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the bind data of the copy function, to be provided to the init, sink and finalize functions.
+        """
+        return self._duckdb_copy_function_bind_set_bind_data(info, bind_data, destructor)
+
+    fn duckdb_copy_function_set_global_init(
+        self,
+        copy_function: duckdb_copy_function,
+        init_: fn (duckdb_copy_function_global_init_info) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the initialization function of the copy function, called right before executing `COPY ... TO`.
+        """
+        return self._duckdb_copy_function_set_global_init(copy_function, init_)
+
+    fn duckdb_copy_function_global_init_set_error(
+        self,
+        info: duckdb_copy_function_global_init_info,
+        error: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Report that an error occurred during the initialization-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_global_init_set_error(info, error)
+
+    fn duckdb_copy_function_global_init_get_extra_info(
+        self,
+        info: duckdb_copy_function_global_init_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the extra info pointer of the copy function.
+        """
+        return self._duckdb_copy_function_global_init_get_extra_info(info)
+
+    fn duckdb_copy_function_global_init_get_client_context(
+        self,
+        info: duckdb_copy_function_global_init_info,
+    ) -> duckdb_client_context:
+        """
+        Retrieves the client context of the current connection initializing the `COPY ... TO` function.
+
+        Must be destroyed with `duckdb_destroy_client_context`
+        """
+        return self._duckdb_copy_function_global_init_get_client_context(info)
+
+    fn duckdb_copy_function_global_init_get_bind_data(
+        self,
+        info: duckdb_copy_function_global_init_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_global_init_get_bind_data(info)
+
+    fn duckdb_copy_function_global_init_get_file_path(
+        self,
+        info: duckdb_copy_function_global_init_info,
+    ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
+        """
+        Retrieves the file path provided to the `COPY ... TO` function.
+
+        Lives for the duration of the initialization callback, must not be destroyed.
+        """
+        return self._duckdb_copy_function_global_init_get_file_path(info)
+
+    fn duckdb_copy_function_global_init_set_global_state(
+        self,
+        info: duckdb_copy_function_global_init_info,
+        global_state: UnsafePointer[NoneType, MutAnyOrigin],
+        destructor: fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the global state of the copy function, to be provided to all subsequent local init, sink and finalize functions.
+        """
+        return self._duckdb_copy_function_global_init_set_global_state(info, global_state, destructor)
+
+    fn duckdb_copy_function_set_sink(
+        self,
+        copy_function: duckdb_copy_function,
+        function_: fn (duckdb_copy_function_sink_info, duckdb_data_chunk) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the sink function of the copy function, called during `COPY ... TO`.
+        """
+        return self._duckdb_copy_function_set_sink(copy_function, function_)
+
+    fn duckdb_copy_function_sink_set_error(
+        self,
+        info: duckdb_copy_function_sink_info,
+        error: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Report that an error occurred during the sink-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_sink_set_error(info, error)
+
+    fn duckdb_copy_function_sink_get_extra_info(
+        self,
+        info: duckdb_copy_function_sink_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the extra info pointer of the copy function.
+        """
+        return self._duckdb_copy_function_sink_get_extra_info(info)
+
+    fn duckdb_copy_function_sink_get_client_context(
+        self,
+        info: duckdb_copy_function_sink_info,
+    ) -> duckdb_client_context:
+        """
+        Retrieves the client context of the current connection during the sink-phase of the `COPY ... TO` function.
+
+        Must be destroyed with `duckdb_destroy_client_context`
+        """
+        return self._duckdb_copy_function_sink_get_client_context(info)
+
+    fn duckdb_copy_function_sink_get_bind_data(
+        self,
+        info: duckdb_copy_function_sink_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_sink_get_bind_data(info)
+
+    fn duckdb_copy_function_sink_get_global_state(
+        self,
+        info: duckdb_copy_function_sink_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the global state provided during the init-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_sink_get_global_state(info)
+
+    fn duckdb_copy_function_set_finalize(
+        self,
+        copy_function: duckdb_copy_function,
+        finalize: fn (duckdb_copy_function_finalize_info) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the finalize function of the copy function, called at the end of `COPY ... TO`.
+        """
+        return self._duckdb_copy_function_set_finalize(copy_function, finalize)
+
+    fn duckdb_copy_function_finalize_set_error(
+        self,
+        info: duckdb_copy_function_finalize_info,
+        error: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Report that an error occurred during the finalize-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_finalize_set_error(info, error)
+
+    fn duckdb_copy_function_finalize_get_extra_info(
+        self,
+        info: duckdb_copy_function_finalize_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the extra info pointer of the copy function.
+        """
+        return self._duckdb_copy_function_finalize_get_extra_info(info)
+
+    fn duckdb_copy_function_finalize_get_client_context(
+        self,
+        info: duckdb_copy_function_finalize_info,
+    ) -> duckdb_client_context:
+        """
+        Retrieves the client context of the current connection during the finalize-phase of the `COPY ... TO` function.
+
+        Must be destroyed with `duckdb_destroy_client_context`
+        """
+        return self._duckdb_copy_function_finalize_get_client_context(info)
+
+    fn duckdb_copy_function_finalize_get_bind_data(
+        self,
+        info: duckdb_copy_function_finalize_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_finalize_get_bind_data(info)
+
+    fn duckdb_copy_function_finalize_get_global_state(
+        self,
+        info: duckdb_copy_function_finalize_info,
+    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+        """
+        Retrieves the global state provided during the init-phase of a `COPY ... TO` function.
+        """
+        return self._duckdb_copy_function_finalize_get_global_state(info)
+
+    fn duckdb_copy_function_set_copy_from_function(
+        self,
+        copy_function: duckdb_copy_function,
+        table_function: duckdb_table_function,
+    ) -> NoneType:
+        """
+        Sets the table function to use when executing a `COPY ... FROM (...)` statement with this copy function.
+
+        The table function must have a `duckdb_table_function_bind_t`, `duckdb_table_function_init_t` and `duckdb_table_function_t` set.
+
+        The table function must take a single VARCHAR parameter (the file path).
+
+        Options passed to the `COPY ... FROM (...)` statement are forwarded as named parameters to the table function.
+
+        Since `COPY ... FROM` copies into an already existing table, the table function should not define its own result columns using `duckdb_bind_add_result_column` when binding
+        . Instead use `duckdb_table_function_bind_get_result_column_count` and related functions in the bind callback of the table function to retrieve the schema of the target table of the `COPY ... FROM` statement.
+        """
+        return self._duckdb_copy_function_set_copy_from_function(copy_function, table_function)
+
+    fn duckdb_table_function_bind_get_result_column_count(
+        self,
+        info: duckdb_bind_info,
+    ) -> idx_t:
+        """
+        Retrieves the number of result columns of a table function.
+
+        If the table function is used in a `COPY ... FROM` statement, this can be used to retrieve the number of columns in the target table at the start of the bind callback.
+        """
+        return self._duckdb_table_function_bind_get_result_column_count(info)
+
+    fn duckdb_table_function_bind_get_result_column_name(
+        self,
+        info: duckdb_bind_info,
+        col_idx: idx_t,
+    ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
+        """
+        Retrieves the name of a result column of a table function.
+
+        If the table function is used in a `COPY ... FROM` statement, this can be used to retrieve the names of the columns in the target table at the start of the bind callback.
+
+        The result is valid for the duration of the bind callback or until the next call to `duckdb_bind_add_result_column`, so it must not be destroyed.
+        """
+        return self._duckdb_table_function_bind_get_result_column_name(info, col_idx)
+
+    fn duckdb_table_function_bind_get_result_column_type(
+        self,
+        info: duckdb_bind_info,
+        col_idx: idx_t,
+    ) -> duckdb_logical_type:
+        """
+        Retrieves the type of a result column of a table function.
+
+        If the table function is used in a `COPY ... FROM` statement, this can be used to retrieve the types of the columns in the target table at the start of the bind callback.
+
+        The result must be destroyed with `duckdb_destroy_logical_type`.
+        """
+        return self._duckdb_table_function_bind_get_result_column_type(info, col_idx)
+
+
+    # ===--------------------------------------------------------------------===#
+    # Catalog Interface
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_client_context_get_catalog(
+        self,
+        context: duckdb_client_context,
+        catalog_name: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> duckdb_catalog:
+        """
+        Retrieve a database catalog instance by name.
+        This function can only be called from within the context of an active transaction, e.g. during execution of a registered function callback. Otherwise returns `nullptr`.
+        """
+        return self._duckdb_client_context_get_catalog(context, catalog_name)
+
+    fn duckdb_catalog_get_type_name(
+        self,
+        catalog: duckdb_catalog,
+    ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
+        """
+        Retrieve the "type name" of the given catalog.
+        E.g. for a DuckDB database, this returns 'duckdb'.
+        The returned string is owned by the catalog and remains valid until the catalog is destroyed.
+        """
+        return self._duckdb_catalog_get_type_name(catalog)
+
+    fn duckdb_catalog_get_entry(
+        self,
+        catalog: duckdb_catalog,
+        context: duckdb_client_context,
+        entry_type: duckdb_catalog_entry_type,
+        schema_name: UnsafePointer[c_char, ImmutAnyOrigin],
+        entry_name: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> duckdb_catalog_entry:
+        """
+        Retrieve a catalog entry from the given catalog by type, schema name and entry name.
+        The returned catalog entry remains valid for the duration of the current transaction.
+        """
+        return self._duckdb_catalog_get_entry(catalog, context, entry_type, schema_name, entry_name)
+
+    fn duckdb_destroy_catalog(
+        self,
+        catalog: UnsafePointer[duckdb_catalog, MutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given catalog instance.
+
+        Note that this does not actually "drop" the contents of the catalog; it merely frees the C API handle.
+        """
+        return self._duckdb_destroy_catalog(catalog)
+
+    fn duckdb_catalog_entry_get_type(
+        self,
+        entry: duckdb_catalog_entry,
+    ) -> duckdb_catalog_entry_type:
+        """
+        Get the type of the given catalog entry.
+        """
+        return self._duckdb_catalog_entry_get_type(entry)
+
+    fn duckdb_catalog_entry_get_name(
+        self,
+        entry: duckdb_catalog_entry,
+    ) -> UnsafePointer[c_char, ImmutAnyOrigin]:
+        """
+        Get the name of the given catalog entry.
+        """
+        return self._duckdb_catalog_entry_get_name(entry)
+
+    fn duckdb_destroy_catalog_entry(
+        self,
+        entry: UnsafePointer[duckdb_catalog_entry, MutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys the given catalog entry instance.
+
+        Note that this does not actually "drop" the catalog entry from the database catalog; it merely frees the C API handle.
+        """
+        return self._duckdb_destroy_catalog_entry(entry)
+
+
+    # ===--------------------------------------------------------------------===#
+    # Logging
+    # ===--------------------------------------------------------------------===#
+
+    fn duckdb_create_log_storage(
+        self,
+    ) -> duckdb_log_storage:
+        """
+        Creates a new log storage object.
+        """
+        return self._duckdb_create_log_storage()
+
+    fn duckdb_destroy_log_storage(
+        self,
+        log_storage: UnsafePointer[duckdb_log_storage, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Destroys a log storage object.
+        """
+        return self._duckdb_destroy_log_storage(log_storage)
+
+    fn duckdb_log_storage_set_write_log_entry(
+        self,
+        log_storage: duckdb_log_storage,
+        function_: fn (UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the callback function for writing log entries.
+        """
+        return self._duckdb_log_storage_set_write_log_entry(log_storage, function_)
+
+    fn duckdb_log_storage_set_extra_data(
+        self,
+        log_storage: duckdb_log_storage,
+        extra_data: UnsafePointer[NoneType, MutAnyOrigin],
+        delete_callback: fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType,
+    ) -> NoneType:
+        """
+        Sets the extra data of the custom log storage.
+        """
+        return self._duckdb_log_storage_set_extra_data(log_storage, extra_data, delete_callback)
+
+    fn duckdb_log_storage_set_name(
+        self,
+        log_storage: duckdb_log_storage,
+        name: UnsafePointer[c_char, ImmutAnyOrigin],
+    ) -> NoneType:
+        """
+        Sets the name of the log storage.
+        """
+        return self._duckdb_log_storage_set_name(log_storage, name)
+
+    fn duckdb_register_log_storage(
+        self,
+        database: duckdb_database,
+        log_storage: duckdb_log_storage,
+    ) -> duckdb_state:
+        """
+        Registers a custom log storage for the logger.
+        """
+        return self._duckdb_register_log_storage(database, log_storage)
 
 
 
@@ -8514,6 +9964,11 @@ comptime _duckdb_result_error_type = _dylib_function["duckdb_result_error_type",
     fn (UnsafePointer[duckdb_result, ImmutAnyOrigin]) -> duckdb_error_type
 ]
 
+# [ext_api: v1.2.0]
+comptime _duckdb_result_return_type = _dylib_function["duckdb_result_return_type",
+    fn (duckdb_result) -> duckdb_result_type
+]
+
 
 # ===--------------------------------------------------------------------===#
 # Helpers
@@ -8547,6 +10002,11 @@ comptime _duckdb_string_t_length = _dylib_function["duckdb_string_t_length",
 # [ext_api: v1.2.0]
 comptime _duckdb_string_t_data = _dylib_function["duckdb_string_t_data",
     fn (UnsafePointer[duckdb_string_t, MutAnyOrigin]) -> UnsafePointer[c_char, ImmutAnyOrigin]
+]
+
+# [ext_api: unstable_new_string_functions]
+comptime _duckdb_valid_utf8_check = _dylib_function["duckdb_valid_utf8_check",
+    fn (UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> duckdb_error_data
 ]
 
 
@@ -8617,6 +10077,31 @@ comptime _duckdb_is_finite_timestamp_ms = _dylib_function["duckdb_is_finite_time
 # [ext_api: v1.2.0]
 comptime _duckdb_is_finite_timestamp_ns = _dylib_function["duckdb_is_finite_timestamp_ns",
     fn (duckdb_timestamp_ns) -> Bool
+]
+
+
+# ===--------------------------------------------------------------------===#
+# Hugeint And Uhugeint Helpers
+# ===--------------------------------------------------------------------===#
+
+# [ext_api: v1.2.0]
+comptime _duckdb_hugeint_to_double = _dylib_function["duckdb_hugeint_to_double",
+    fn (duckdb_hugeint) -> Float64
+]
+
+# [ext_api: v1.2.0]
+comptime _duckdb_double_to_hugeint = _dylib_function["duckdb_double_to_hugeint",
+    fn (Float64) -> duckdb_hugeint
+]
+
+# [ext_api: v1.2.0]
+comptime _duckdb_uhugeint_to_double = _dylib_function["duckdb_uhugeint_to_double",
+    fn (duckdb_uhugeint) -> Float64
+]
+
+# [ext_api: v1.2.0]
+comptime _duckdb_double_to_uhugeint = _dylib_function["duckdb_double_to_uhugeint",
+    fn (Float64) -> duckdb_uhugeint
 ]
 
 
@@ -9539,6 +11024,11 @@ comptime _duckdb_vector_assign_string_element_len = _dylib_function["duckdb_vect
     fn (duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> NoneType
 ]
 
+# [ext_api: unstable_new_vector_functions]
+comptime _duckdb_unsafe_vector_assign_string_element_len = _dylib_function["duckdb_unsafe_vector_assign_string_element_len",
+    fn (duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) -> NoneType
+]
+
 # [ext_api: v1.2.0]
 comptime _duckdb_list_vector_get_child = _dylib_function["duckdb_list_vector_get_child",
     fn (duckdb_vector) -> duckdb_vector
@@ -9747,6 +11237,41 @@ comptime _duckdb_scalar_function_bind_get_argument_count = _dylib_function["duck
 # [ext_api: unstable_new_scalar_function_functions]
 comptime _duckdb_scalar_function_bind_get_argument = _dylib_function["duckdb_scalar_function_bind_get_argument",
     fn (duckdb_bind_info, idx_t) -> duckdb_expression
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_get_state = _dylib_function["duckdb_scalar_function_get_state",
+    fn (duckdb_function_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_set_init = _dylib_function["duckdb_scalar_function_set_init",
+    fn (duckdb_scalar_function, fn (duckdb_init_info) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_init_set_error = _dylib_function["duckdb_scalar_function_init_set_error",
+    fn (duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_init_set_state = _dylib_function["duckdb_scalar_function_init_set_state",
+    fn (duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_init_get_client_context = _dylib_function["duckdb_scalar_function_init_get_client_context",
+    fn (duckdb_init_info, UnsafePointer[duckdb_client_context, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_init_get_bind_data = _dylib_function["duckdb_scalar_function_init_get_bind_data",
+    fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_scalar_function_state_functions]
+comptime _duckdb_scalar_function_init_get_extra_info = _dylib_function["duckdb_scalar_function_init_get_extra_info",
+    fn (duckdb_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
 ]
 
 
@@ -10134,6 +11659,11 @@ comptime _duckdb_appender_flush = _dylib_function["duckdb_appender_flush",
     fn (duckdb_appender) -> duckdb_state
 ]
 
+# [ext_api: unstable_new_append_functions]
+comptime _duckdb_appender_clear = _dylib_function["duckdb_appender_clear",
+    fn (duckdb_appender) -> duckdb_state
+]
+
 # [ext_api: v1.2.0]
 comptime _duckdb_appender_close = _dylib_function["duckdb_appender_close",
     fn (duckdb_appender) -> duckdb_state
@@ -10319,9 +11849,19 @@ comptime _duckdb_column_has_default = _dylib_function["duckdb_column_has_default
     fn (duckdb_table_description, idx_t, UnsafePointer[Bool, MutExternalOrigin]) -> duckdb_state
 ]
 
+# [ext_api: unstable_new_table_description_functions]
+comptime _duckdb_table_description_get_column_count = _dylib_function["duckdb_table_description_get_column_count",
+    fn (duckdb_table_description) -> idx_t
+]
+
 # [ext_api: v1.2.0]
 comptime _duckdb_table_description_get_column_name = _dylib_function["duckdb_table_description_get_column_name",
     fn (duckdb_table_description, idx_t) -> UnsafePointer[c_char, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_table_description_functions]
+comptime _duckdb_table_description_get_column_type = _dylib_function["duckdb_table_description_get_column_type",
+    fn (duckdb_table_description, idx_t) -> duckdb_logical_type
 ]
 
 
@@ -10505,42 +12045,397 @@ comptime _duckdb_expression_fold = _dylib_function["duckdb_expression_fold",
 
 
 # ===--------------------------------------------------------------------===#
-# Hugeint Helpers
+# File System Interface
 # ===--------------------------------------------------------------------===#
 
-# [ext_api: v1.2.0]
-comptime _duckdb_hugeint_to_double = _dylib_function["duckdb_hugeint_to_double",
-    fn (duckdb_hugeint) -> Float64
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_client_context_get_file_system = _dylib_function["duckdb_client_context_get_file_system",
+    fn (duckdb_client_context) -> duckdb_file_system
 ]
 
-# [ext_api: v1.2.0]
-comptime _duckdb_double_to_hugeint = _dylib_function["duckdb_double_to_hugeint",
-    fn (Float64) -> duckdb_hugeint
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_destroy_file_system = _dylib_function["duckdb_destroy_file_system",
+    fn (UnsafePointer[duckdb_file_system, MutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_system_error_data = _dylib_function["duckdb_file_system_error_data",
+    fn (duckdb_file_system) -> duckdb_error_data
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_system_open = _dylib_function["duckdb_file_system_open",
+    fn (duckdb_file_system, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_file_open_options, UnsafePointer[duckdb_file_handle, MutAnyOrigin]) -> duckdb_state
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_create_file_open_options = _dylib_function["duckdb_create_file_open_options",
+    fn () -> duckdb_file_open_options
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_open_options_set_flag = _dylib_function["duckdb_file_open_options_set_flag",
+    fn (duckdb_file_open_options, duckdb_file_flag, Bool) -> duckdb_state
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_destroy_file_open_options = _dylib_function["duckdb_destroy_file_open_options",
+    fn (UnsafePointer[duckdb_file_open_options, MutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_destroy_file_handle = _dylib_function["duckdb_destroy_file_handle",
+    fn (UnsafePointer[duckdb_file_handle, MutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_error_data = _dylib_function["duckdb_file_handle_error_data",
+    fn (duckdb_file_handle) -> duckdb_error_data
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_read = _dylib_function["duckdb_file_handle_read",
+    fn (duckdb_file_handle, UnsafePointer[NoneType, MutAnyOrigin], Int64) -> Int64
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_write = _dylib_function["duckdb_file_handle_write",
+    fn (duckdb_file_handle, UnsafePointer[NoneType, ImmutAnyOrigin], Int64) -> Int64
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_tell = _dylib_function["duckdb_file_handle_tell",
+    fn (duckdb_file_handle) -> Int64
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_size = _dylib_function["duckdb_file_handle_size",
+    fn (duckdb_file_handle) -> Int64
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_seek = _dylib_function["duckdb_file_handle_seek",
+    fn (duckdb_file_handle, Int64) -> duckdb_state
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_sync = _dylib_function["duckdb_file_handle_sync",
+    fn (duckdb_file_handle) -> duckdb_state
+]
+
+# [ext_api: unstable_new_file_system_api]
+comptime _duckdb_file_handle_close = _dylib_function["duckdb_file_handle_close",
+    fn (duckdb_file_handle) -> duckdb_state
 ]
 
 
 # ===--------------------------------------------------------------------===#
-# Result Functions
+# Config Options Interface
 # ===--------------------------------------------------------------------===#
 
-# [ext_api: v1.2.0]
-comptime _duckdb_result_return_type = _dylib_function["duckdb_result_return_type",
-    fn (duckdb_result) -> duckdb_result_type
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_create_config_option = _dylib_function["duckdb_create_config_option",
+    fn () -> duckdb_config_option
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_destroy_config_option = _dylib_function["duckdb_destroy_config_option",
+    fn (UnsafePointer[duckdb_config_option, MutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_config_option_set_name = _dylib_function["duckdb_config_option_set_name",
+    fn (duckdb_config_option, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_config_option_set_type = _dylib_function["duckdb_config_option_set_type",
+    fn (duckdb_config_option, duckdb_logical_type) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_config_option_set_default_value = _dylib_function["duckdb_config_option_set_default_value",
+    fn (duckdb_config_option, duckdb_value) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_config_option_set_default_scope = _dylib_function["duckdb_config_option_set_default_scope",
+    fn (duckdb_config_option, duckdb_config_option_scope) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_config_option_set_description = _dylib_function["duckdb_config_option_set_description",
+    fn (duckdb_config_option, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_register_config_option = _dylib_function["duckdb_register_config_option",
+    fn (duckdb_connection, duckdb_config_option) -> duckdb_state
+]
+
+# [ext_api: unstable_new_config_options_functions]
+comptime _duckdb_client_context_get_config_option = _dylib_function["duckdb_client_context_get_config_option",
+    fn (duckdb_client_context, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_config_option_scope, MutAnyOrigin]) -> duckdb_value
 ]
 
 
 # ===--------------------------------------------------------------------===#
-# Unsigned Hugeint Helpers
+# Copy Functions
 # ===--------------------------------------------------------------------===#
 
-# [ext_api: v1.2.0]
-comptime _duckdb_uhugeint_to_double = _dylib_function["duckdb_uhugeint_to_double",
-    fn (duckdb_uhugeint) -> Float64
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_create_copy_function = _dylib_function["duckdb_create_copy_function",
+    fn () -> duckdb_copy_function
 ]
 
-# [ext_api: v1.2.0]
-comptime _duckdb_double_to_uhugeint = _dylib_function["duckdb_double_to_uhugeint",
-    fn (Float64) -> duckdb_uhugeint
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_name = _dylib_function["duckdb_copy_function_set_name",
+    fn (duckdb_copy_function, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_extra_info = _dylib_function["duckdb_copy_function_set_extra_info",
+    fn (duckdb_copy_function, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_register_copy_function = _dylib_function["duckdb_register_copy_function",
+    fn (duckdb_connection, duckdb_copy_function) -> duckdb_state
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_destroy_copy_function = _dylib_function["duckdb_destroy_copy_function",
+    fn (UnsafePointer[duckdb_copy_function, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_bind = _dylib_function["duckdb_copy_function_set_bind",
+    fn (duckdb_copy_function, fn (duckdb_copy_function_bind_info) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_set_error = _dylib_function["duckdb_copy_function_bind_set_error",
+    fn (duckdb_copy_function_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_get_extra_info = _dylib_function["duckdb_copy_function_bind_get_extra_info",
+    fn (duckdb_copy_function_bind_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_get_client_context = _dylib_function["duckdb_copy_function_bind_get_client_context",
+    fn (duckdb_copy_function_bind_info) -> duckdb_client_context
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_get_column_count = _dylib_function["duckdb_copy_function_bind_get_column_count",
+    fn (duckdb_copy_function_bind_info) -> idx_t
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_get_column_type = _dylib_function["duckdb_copy_function_bind_get_column_type",
+    fn (duckdb_copy_function_bind_info, idx_t) -> duckdb_logical_type
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_get_options = _dylib_function["duckdb_copy_function_bind_get_options",
+    fn (duckdb_copy_function_bind_info) -> duckdb_value
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_bind_set_bind_data = _dylib_function["duckdb_copy_function_bind_set_bind_data",
+    fn (duckdb_copy_function_bind_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_global_init = _dylib_function["duckdb_copy_function_set_global_init",
+    fn (duckdb_copy_function, fn (duckdb_copy_function_global_init_info) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_set_error = _dylib_function["duckdb_copy_function_global_init_set_error",
+    fn (duckdb_copy_function_global_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_get_extra_info = _dylib_function["duckdb_copy_function_global_init_get_extra_info",
+    fn (duckdb_copy_function_global_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_get_client_context = _dylib_function["duckdb_copy_function_global_init_get_client_context",
+    fn (duckdb_copy_function_global_init_info) -> duckdb_client_context
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_get_bind_data = _dylib_function["duckdb_copy_function_global_init_get_bind_data",
+    fn (duckdb_copy_function_global_init_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_get_file_path = _dylib_function["duckdb_copy_function_global_init_get_file_path",
+    fn (duckdb_copy_function_global_init_info) -> UnsafePointer[c_char, ImmutAnyOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_global_init_set_global_state = _dylib_function["duckdb_copy_function_global_init_set_global_state",
+    fn (duckdb_copy_function_global_init_info, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_sink = _dylib_function["duckdb_copy_function_set_sink",
+    fn (duckdb_copy_function, fn (duckdb_copy_function_sink_info, duckdb_data_chunk) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_sink_set_error = _dylib_function["duckdb_copy_function_sink_set_error",
+    fn (duckdb_copy_function_sink_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_sink_get_extra_info = _dylib_function["duckdb_copy_function_sink_get_extra_info",
+    fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_sink_get_client_context = _dylib_function["duckdb_copy_function_sink_get_client_context",
+    fn (duckdb_copy_function_sink_info) -> duckdb_client_context
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_sink_get_bind_data = _dylib_function["duckdb_copy_function_sink_get_bind_data",
+    fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_sink_get_global_state = _dylib_function["duckdb_copy_function_sink_get_global_state",
+    fn (duckdb_copy_function_sink_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_finalize = _dylib_function["duckdb_copy_function_set_finalize",
+    fn (duckdb_copy_function, fn (duckdb_copy_function_finalize_info) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_finalize_set_error = _dylib_function["duckdb_copy_function_finalize_set_error",
+    fn (duckdb_copy_function_finalize_info, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_finalize_get_extra_info = _dylib_function["duckdb_copy_function_finalize_get_extra_info",
+    fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_finalize_get_client_context = _dylib_function["duckdb_copy_function_finalize_get_client_context",
+    fn (duckdb_copy_function_finalize_info) -> duckdb_client_context
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_finalize_get_bind_data = _dylib_function["duckdb_copy_function_finalize_get_bind_data",
+    fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_finalize_get_global_state = _dylib_function["duckdb_copy_function_finalize_get_global_state",
+    fn (duckdb_copy_function_finalize_info) -> UnsafePointer[NoneType, MutExternalOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_copy_function_set_copy_from_function = _dylib_function["duckdb_copy_function_set_copy_from_function",
+    fn (duckdb_copy_function, duckdb_table_function) -> NoneType
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_table_function_bind_get_result_column_count = _dylib_function["duckdb_table_function_bind_get_result_column_count",
+    fn (duckdb_bind_info) -> idx_t
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_table_function_bind_get_result_column_name = _dylib_function["duckdb_table_function_bind_get_result_column_name",
+    fn (duckdb_bind_info, idx_t) -> UnsafePointer[c_char, ImmutAnyOrigin]
+]
+
+# [ext_api: unstable_new_copy_functions_api]
+comptime _duckdb_table_function_bind_get_result_column_type = _dylib_function["duckdb_table_function_bind_get_result_column_type",
+    fn (duckdb_bind_info, idx_t) -> duckdb_logical_type
+]
+
+
+# ===--------------------------------------------------------------------===#
+# Catalog Interface
+# ===--------------------------------------------------------------------===#
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_client_context_get_catalog = _dylib_function["duckdb_client_context_get_catalog",
+    fn (duckdb_client_context, UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_catalog
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_catalog_get_type_name = _dylib_function["duckdb_catalog_get_type_name",
+    fn (duckdb_catalog) -> UnsafePointer[c_char, ImmutAnyOrigin]
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_catalog_get_entry = _dylib_function["duckdb_catalog_get_entry",
+    fn (duckdb_catalog, duckdb_client_context, duckdb_catalog_entry_type, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> duckdb_catalog_entry
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_destroy_catalog = _dylib_function["duckdb_destroy_catalog",
+    fn (UnsafePointer[duckdb_catalog, MutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_catalog_entry_get_type = _dylib_function["duckdb_catalog_entry_get_type",
+    fn (duckdb_catalog_entry) -> duckdb_catalog_entry_type
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_catalog_entry_get_name = _dylib_function["duckdb_catalog_entry_get_name",
+    fn (duckdb_catalog_entry) -> UnsafePointer[c_char, ImmutAnyOrigin]
+]
+
+# [ext_api: unstable_new_catalog_interface]
+comptime _duckdb_destroy_catalog_entry = _dylib_function["duckdb_destroy_catalog_entry",
+    fn (UnsafePointer[duckdb_catalog_entry, MutAnyOrigin]) -> NoneType
+]
+
+
+# ===--------------------------------------------------------------------===#
+# Logging
+# ===--------------------------------------------------------------------===#
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_create_log_storage = _dylib_function["duckdb_create_log_storage",
+    fn () -> duckdb_log_storage
+]
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_destroy_log_storage = _dylib_function["duckdb_destroy_log_storage",
+    fn (UnsafePointer[duckdb_log_storage, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_log_storage_set_write_log_entry = _dylib_function["duckdb_log_storage_set_write_log_entry",
+    fn (duckdb_log_storage, fn (UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_log_storage_set_extra_data = _dylib_function["duckdb_log_storage_set_extra_data",
+    fn (duckdb_log_storage, UnsafePointer[NoneType, MutAnyOrigin], fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType) -> NoneType
+]
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_log_storage_set_name = _dylib_function["duckdb_log_storage_set_name",
+    fn (duckdb_log_storage, UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+]
+
+# [ext_api: unstable_new_logger_functions]
+comptime _duckdb_register_log_storage = _dylib_function["duckdb_register_log_storage",
+    fn (duckdb_database, duckdb_log_storage) -> duckdb_state
 ]
 
 

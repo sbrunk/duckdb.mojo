@@ -34,7 +34,7 @@ EXT_API_DEFINITION_PATTERN = "src/include/duckdb/main/capi/header_generation/api
 EXT_API_EXCLUSION_FILE = "src/include/duckdb/main/capi/header_generation/apis/v1/exclusion_list.json"
 
 # Output file (relative to the workspace root)
-OUTPUT_FILE = "src/libduckdb.mojo"
+OUTPUT_FILE = "duckdb/libduckdb.mojo"
 
 # Groups in the order they appear in duckdb.h – maintained for easy diffing.
 ORIGINAL_FUNCTION_GROUP_ORDER = [
@@ -677,16 +677,15 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 
 
 def _generate_header() -> str:
-    return """from ffi import external_call, c_char
-from utils import StaticTuple
-from collections import InlineArray
+    return """from std.ffi import external_call, c_char
+from std.utils import StaticTuple
+from std.collections import InlineArray
 from duckdb.duckdb_type import *
-from sys.info import CompilationTarget
-from os import abort
-from pathlib import Path
-from ffi import _get_dylib_function as _ffi_get_dylib_function
-from ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
-from memory import UnsafePointer
+from std.sys.info import CompilationTarget
+from std.os import abort
+from std.pathlib import Path
+from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
+from std.memory import UnsafePointer
 
 # ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
@@ -1210,23 +1209,13 @@ fn _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb"](materialize[DUCKDB_LIBRARY_PATHS]())
 
 
-@always_inline
-fn _get_dylib_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_function[Self.fn_name, Self.type]()
+        return DUCKDB_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 comptime DUCKDB_HELPERS_PATHS: List[Path] = [
     "libduckdb_mojo_helpers.so",
@@ -1238,22 +1227,13 @@ comptime DUCKDB_HELPERS_LIBRARY = _Global["DUCKDB_HELPERS_LIBRARY", _init_helper
 fn _init_helper_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_mojo_helpers"](materialize[DUCKDB_HELPERS_PATHS]())
 
-@always_inline
-fn _get_dylib_helpers_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        DUCKDB_HELPERS_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-struct _dylib_helpers_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_helpers_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     fn load() raises -> Self.type:
-        return _get_dylib_helpers_function[Self.fn_name, Self.type]()"""
+        return DUCKDB_HELPERS_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()"""
 
 
 def _generate_libduckdb_struct(
@@ -1523,7 +1503,7 @@ def _generate_decimal_get_method(entry: dict, workaround_name: str) -> str:
         "        NOTE: Mojo cannot return duckdb_decimal by value correctly over the C ABI.",
         "        We therefore call a workaround function that returns via pointer instead.",
         '        """',
-        "        var result = duckdb_decimal(width=0, scale=0, value=0)",
+        "        var result = duckdb_decimal(width=UInt8(0), scale=UInt8(0), value=Int128(0))",
         f"        self._{workaround_name}(val, UnsafePointer(to=result).unsafe_origin_cast[MutExternalOrigin]())",
         "        return result",
     ]

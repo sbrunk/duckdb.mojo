@@ -1,10 +1,10 @@
 package:
   name: duckdb-from-source
-  version: 1.4.4
+  version: 1.5.1
 
 source:
   - git: https://github.com/duckdb/duckdb.git
-    tag: v1.4.4
+    tag: v1.5.1
     target_directory: duckdb-src
 
 build:

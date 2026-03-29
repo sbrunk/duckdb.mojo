@@ -92,8 +92,8 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.4.4/src/include/duckdb_extension.h)
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.1/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.1/src/include/duckdb_extension.h)
 instead of relying on dynamic symbol lookup. The struct is split into a
 **stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
 for the full design):
@@ -139,7 +139,7 @@ SELECT mojo_add_numbers(40, 2);  -- 42
 See the [demo extension](demo-extension/) for a full working example.
 
 ## Status
-- The [FFI bindings](src/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
+- The [FFI bindings](duckdb/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
 - We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
 
 
@@ -166,7 +166,7 @@ pixi build
 
 ### (Re-)generate the C API bindings
 
-The low-level bindings in `src/_libduckdb.mojo` are auto-generated from DuckDB's
+The low-level bindings in `duckdb/_libduckdb.mojo` are auto-generated from DuckDB's
 declarative JSON schemata (the same source used to generate `duckdb.h`).
 To regenerate them (e.g. after bumping the DuckDB version in `pixi.toml`):
 

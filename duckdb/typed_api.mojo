@@ -935,7 +935,7 @@ fn _deserialize_union_row[
             else:
                 # Non-Optional field in union — deserialize directly
                 var val = _deserialize_table_field[FT](child_vec, offset)
-                dst.bitcast[FT]().init_pointee_move(val)
+                dst.bitcast[FT]().init_pointee_move(val^)
         else:
             # Inactive member — set to None if Optional
             comptime if conforms_to(FT, _NullableColumn):
@@ -1045,7 +1045,7 @@ trait _InnerListDeserializer(_DBase):
     @staticmethod
     fn _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
-    ) raises -> List[Self]:
+    ) raises -> List[downcast[Self, Copyable]]:
         ...
 
 
@@ -1053,13 +1053,13 @@ __extension Optional(_InnerListDeserializer):
     @staticmethod
     fn _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
-    ) raises -> List[Self]:
+    ) raises -> List[downcast[Self, Copyable]]:
         # Self = Optional[X],  Self.T = X
         # _deserialize_list[X] returns List[Optional[X]] == List[Self]
         var inner = _deserialize_list[downcast[Self.T, _DBase]](
             child_vector, length, offset
         )
-        return rebind_var[List[Self]](inner^)
+        return rebind_var[List[downcast[Self, Copyable]]](inner^)
 
 
 trait _VectorListConstructible(_DBase):
@@ -1707,7 +1707,7 @@ trait _NullableColumn(_DBase):
     @staticmethod
     fn _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
-    ) raises -> List[Self]:
+    ) raises -> List[downcast[Self, Copyable]]:
         """Deserialize a full column with None for NULL entries."""
         ...
 
@@ -1731,8 +1731,8 @@ __extension Optional(_NullableColumn):
     @staticmethod
     fn _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
-    ) raises -> List[Self]:
+    ) raises -> List[downcast[Self, Copyable]]:
         var inner = deserialize_from_vector[downcast[Self.T, _DBase]](
             vector, count, offset
         )
-        return rebind_var[List[Self]](inner^)
+        return rebind_var[List[downcast[Self, Copyable]]](inner^)

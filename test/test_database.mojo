@@ -3,7 +3,7 @@ from duckdb.database import Database
 from std.testing import *
 from std.testing.suite import TestSuite
 from std.pathlib import Path
-import std.os
+from std.os import remove
 
 
 def test_database_in_memory_default() raises:
@@ -30,7 +30,7 @@ def test_database_with_file_path() raises:
     
     # Clean up - remove the test database file if it exists
     try:
-        os.unlink(Path(test_db_path))
+        remove(test_db_path)
     except:
         pass
 
@@ -47,7 +47,7 @@ def test_database_with_temp_file() raises:
     
     # Clean up
     try:
-        os.unlink(Path(temp_db_path))
+        remove(temp_db_path)
     except:
         pass
 
