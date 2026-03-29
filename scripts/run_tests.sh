@@ -56,8 +56,8 @@ for f in "${TESTS[@]}"; do
     mojo run "$f"
 done
 
-if [[ "${CI:-}" == "true" && "$(uname)" != "Linux" ]]; then
-    echo "--- Skipping generic tests on macOS CI (insufficient RAM) ---"
+if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "Linux" ]]; then
+    echo "--- Skipping generic tests on macOS CI (use full test run to include) ---"
 else
     for f in "${GENERIC_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"

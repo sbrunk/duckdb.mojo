@@ -1,6 +1,13 @@
 name: Run tests
 
-on: ["push"]
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run full test suite (including heavy generic tests)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -45,6 +52,8 @@ jobs:
             mojo-cache-${{ matrix.target }}-
 
       - name: Execute tests
+        env:
+          DUCKDB_MOJO_FULL_TESTS: ${{ inputs.full && 'true' || '' }}
         run: |
           source $HOME/.bash_profile
           pixi run mojo run example.mojo
