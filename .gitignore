@@ -177,3 +177,6 @@ cython_debug/
 
 # DuckDB source checkout for code generation
 .duckdb-src/
+
+# Development symlinks (created by dev_activate.sh)
+.dev/

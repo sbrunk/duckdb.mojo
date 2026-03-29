@@ -54,14 +54,18 @@ duckdb-cli = "=1.5.1"
 mojo = "=0.26.2.0"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
-"duckdb.mojo" = { path = "." }
+
+# Make mojo find the duckdb package from source without building a mojopkg.
+# A symlink maps src/ -> duckdb/ so `from duckdb import ...` resolves to source.
+# MODULAR_MOJO_MAX_IMPORT_PATH overrides the default, so we include the stdlib path too.
+[activation]
+scripts = ["scripts/dev_activate.sh"]
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
-"duckdb.mojo" = { path = "." }
 mojo = "=0.26.2.0"
 
 # Environments

@@ -61,8 +61,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-64/zeromq-4.3.5-h41580af_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
-      - conda: .
-        build: hb0f4dca_0
       - conda: packages/duckdb-mojo-helpers
         build: hb0f4dca_0
       linux-aarch64:
@@ -119,8 +117,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/zeromq-4.3.5-hc0523f8_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/zstd-1.5.7-h85ac4a6_6.conda
-      - conda: .
-        build: he8cfe8b_0
       - conda: packages/duckdb-mojo-helpers
         build: he8cfe8b_0
       osx-arm64:
@@ -171,8 +167,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/osx-arm64/zeromq-4.3.5-h4818236_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - conda: .
-        build: h60d57d3_0
       - conda: packages/duckdb-mojo-helpers
         build: h60d57d3_0
   full:
@@ -234,8 +228,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-64/zeromq-4.3.5-h41580af_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
-      - conda: .
-        build: hb0f4dca_0
       - conda: packages/duckdb-from-source
         build: hb0f4dca_0
       - conda: packages/duckdb-mojo-helpers
@@ -294,8 +286,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/linux-aarch64/zeromq-4.3.5-hc0523f8_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/linux-aarch64/zstd-1.5.7-h85ac4a6_6.conda
-      - conda: .
-        build: he8cfe8b_0
       - conda: packages/duckdb-from-source
         build: he8cfe8b_0
       - conda: packages/duckdb-mojo-helpers
@@ -348,8 +338,6 @@ environments:
       - conda: https://prefix.dev/conda-forge/osx-arm64/zeromq-4.3.5-h4818236_10.conda
       - conda: https://prefix.dev/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - conda: https://prefix.dev/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - conda: .
-        build: h60d57d3_0
       - conda: packages/duckdb-from-source
         build: h60d57d3_0
       - conda: packages/duckdb-mojo-helpers
@@ -589,42 +577,6 @@ packages:
   sources:
     duckdb-from-source:
       path: ../duckdb-from-source
-- conda: .
-  name: duckdb.mojo
-  version: 0.0.1
-  build: h60d57d3_0
-  subdir: osx-arm64
-  variants:
-    target_platform: osx-arm64
-  depends:
-  - duckdb-mojo-helpers
-  sources:
-    duckdb-mojo-helpers:
-      path: packages/duckdb-mojo-helpers
-- conda: .
-  name: duckdb.mojo
-  version: 0.0.1
-  build: hb0f4dca_0
-  subdir: linux-64
-  variants:
-    target_platform: linux-64
-  depends:
-  - duckdb-mojo-helpers
-  sources:
-    duckdb-mojo-helpers:
-      path: packages/duckdb-mojo-helpers
-- conda: .
-  name: duckdb.mojo
-  version: 0.0.1
-  build: he8cfe8b_0
-  subdir: linux-aarch64
-  variants:
-    target_platform: linux-aarch64
-  depends:
-  - duckdb-mojo-helpers
-  sources:
-    duckdb-mojo-helpers:
-      path: packages/duckdb-mojo-helpers
 - conda: https://prefix.dev/conda-forge/linux-64/icu-78.3-h33c6efd_0.conda
   sha256: fbf86c4a59c2ed05bbffb2ba25c7ed94f6185ec30ecb691615d42342baa1a16a
   md5: c80d8a3b84358cb967fa81e7075fbc8a
