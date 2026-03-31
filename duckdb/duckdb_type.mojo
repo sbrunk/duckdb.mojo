@@ -287,22 +287,19 @@ struct DuckDBType(
 
 @fieldwise_init
 struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
-    """Days are stored as days since 1970-01-01.
-
-    TODO calling duckdb_to_date/duckdb_from_date is currently broken for unknown reasons.
-    """
+    """Days are stored as days since 1970-01-01."""
 
     var days: Int32
 
-    # fn __init__(out self, year: Int32, month: Int8, day: Int8):
-    #     self = duckdb_to_date(duckdb_date_struct(year, month, day))
+    fn __init__(out self, year: Int32, month: Int8, day: Int8):
+        """Create a Date from year, month, and day components."""
+        self = DuckDB().libduckdb().duckdb_to_date(duckdb_date_struct(year, month, day))
 
     fn write_to[W: Writer](self, mut writer: W):
-        return writer.write(self.days)
-        # return writer.write(self.year(), "-", self.month(), "-", self.day())
+        return writer.write(self.year(), "-", self.month(), "-", self.day())
 
     fn __str__(self) -> String:
-        return String(self.days)
+        return String.write(self)
 
     fn __repr__(self) -> String:
         return "Date(" + String(self.days) + ")"
@@ -313,38 +310,36 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
     fn __ne__(self, other: Date) -> Bool:
         return not self == other
 
-    # fn year(self) -> Int32:
-    #     return duckdb_from_date(self).year
+    fn _parts(self) -> duckdb_date_struct:
+        return DuckDB().libduckdb().duckdb_from_date(self)
 
-    # fn month(self) -> Int8:
-    #     return duckdb_from_date(self).month
+    fn year(self) -> Int32:
+        return self._parts().year
 
-    # fn day(self) -> Int8:
-    #     return duckdb_from_date(self).day
+    fn month(self) -> Int8:
+        return self._parts().month
+
+    fn day(self) -> Int8:
+        return self._parts().day
 
 
 @fieldwise_init
 struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
-    """Time is stored as microseconds since 00:00:00.
-
-    TODO calling duckdb_to_time/duckdb_from_time is currently broken for unknown reasons.
-    """
+    """Time is stored as microseconds since 00:00:00."""
 
     var micros: Int64
 
-    # fn __init__(
-    #     out self, hour: Int8, minute: Int8, second: Int8, micros: Int32
-    # ):
-    #     self = duckdb_to_time(
-    #         duckdb_time_struct(hour, minute, second, micros)
-    #     )
+    fn __init__(out self, hour: Int8, minute: Int8, second: Int8, micros: Int32):
+        """Create a Time from hour, minute, second, and microseconds."""
+        self = DuckDB().libduckdb().duckdb_to_time(
+            duckdb_time_struct(hour, minute, second, micros)
+        )
 
     fn __str__(self) -> String:
-        return String(self.micros)
+        return String.write(self)
 
     fn write_to[W: Writer](self, mut writer: W):
-        return writer.write(self.micros)
-        # return writer.write(self.hour(), ":", self.minute(), ":", self.second())
+        return writer.write(self.hour(), ":", self.minute(), ":", self.second())
 
     fn __repr__(self) -> String:
         return "Time(" + String(self.micros) + ")"
@@ -359,17 +354,20 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
     fn __ne__(self, other: Time) -> Bool:
         return not self == other
 
-    # fn hour(self) -> Int8:
-    #     return duckdb_from_time(self).hour
+    fn _parts(self) -> duckdb_time_struct:
+        return DuckDB().libduckdb().duckdb_from_time(self)
 
-    # fn minute(self) -> Int8:
-    #     return duckdb_from_time(self).min
+    fn hour(self) -> Int8:
+        return self._parts().hour
 
-    # fn second(self) -> Int8:
-    #     return duckdb_from_time(self).sec
+    fn minute(self) -> Int8:
+        return self._parts().min
 
-    # fn micro(self) -> Int32:
-    #     return duckdb_from_time(self).micros
+    fn second(self) -> Int8:
+        return self._parts().sec
+
+    fn micro(self) -> Int32:
+        return self._parts().micros
 
 
 @fieldwise_init
@@ -378,19 +376,20 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
     var micros: Int64
 
-    # fn __init__(out self, date: Date, time: Time):
-    #     self = duckdb_to_timestamp(
-    #         duckdb_timestamp_struct(
-    #             duckdb_from_date(date), duckdb_from_time(time)
-    #         )
-    #     )
+    fn __init__(out self, date: Date, time: Time):
+        """Create a Timestamp from a Date and Time."""
+        ref libduckdb = DuckDB().libduckdb()
+        self = libduckdb.duckdb_to_timestamp(
+            duckdb_timestamp_struct(
+                libduckdb.duckdb_from_date(date), libduckdb.duckdb_from_time(time)
+            )
+        )
 
     fn __str__(self) -> String:
-        return String(self.micros)
+        return String.write(self)
 
     fn write_to[W: Writer](self, mut writer: W):
-        return writer.write(self.micros)
-        # return writer.write(self.date(), " ", self.time())
+        return writer.write(self.date(), " ", self.time())
 
     fn __eq__(self, other: Timestamp) -> Bool:
         return self.micros == other.micros
@@ -425,11 +424,14 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
         """Convert to nanosecond-precision timestamp."""
         return TimestampNS(self.micros * 1_000)
 
-    # fn date(self) -> Date:
-    #     return duckdb_to_date(duckdb_from_timestamp(self).date)
+    fn _parts(self) -> duckdb_timestamp_struct:
+        return DuckDB().libduckdb().duckdb_from_timestamp(self)
 
-    # fn time(self) -> Time:
-    #     return duckdb_to_time(duckdb_from_timestamp(self).time)
+    fn date(self) -> Date:
+        return DuckDB().libduckdb().duckdb_to_date(self._parts().date)
+
+    fn time(self) -> Time:
+        return DuckDB().libduckdb().duckdb_to_time(self._parts().time)
 
 
 @fieldwise_init
