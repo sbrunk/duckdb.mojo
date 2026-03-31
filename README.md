@@ -264,6 +264,22 @@ in `scripts/generate_mojo_api.py`. Currently these are:
 Single-field wrapper structs (`Date`, `Time`, `Timestamp`, `Int128`, etc.) work
 correctly through DLHandle when they appear as the *only* struct argument.
 
+### Extensions and the DLHandle workaround
+
+DuckDB extensions are shared libraries loaded at runtime. The Extension C API
+provides function pointers via a struct (`duckdb_ext_api_v1`), which uses the
+same struct-by-value signatures as the regular C API. Calling these through
+indirect function pointers triggers the same ABI bug.
+
+Extensions **cannot use the `external_call` path** (`-D USE_DLHANDLE=false`)
+because `external_call` requires linker-resolved symbols, and extensions have
+no linker step against `libduckdb` — DuckDB provides the API at runtime.
+
+This means extensions always use the default DLHandle + C shim path and
+**require `libduckdb_mojo_helpers` at runtime** if they call any of the
+affected functions. The shim library must be discoverable (e.g. via
+`LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`) when DuckDB loads the extension.
+
 ## Scalar Functions
 
 Register Mojo functions as DuckDB scalar functions (UDFs) that operate on table
