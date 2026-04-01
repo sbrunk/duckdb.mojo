@@ -140,7 +140,7 @@ See the [demo extension](demo-extension/) for a full working example.
 
 ## Status
 - The [FFI bindings](duckdb/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
-- We need to build a small C shim library until https://github.com/modular/modular/issues/5846 is fixed.
+- A small C shim library is needed to work around a Mojo FFI bug — see [FFI Struct Workaround](#ffi-struct-workaround-use_dlhandle) for details and how to build without it.
 
 
 ## Installation
@@ -164,6 +164,16 @@ pixi run test
 pixi build
 ```
 
+### Test both FFI paths
+
+The library tests run using the default DLHandle path. To also verify the
+`external_call` path (see [FFI Struct Workaround](#ffi-struct-workaround-use_dlhandle)):
+
+```shell
+pixi run test-library          # DLHandle path (mojo run, default)
+pixi run test-external-call    # external_call path (mojo build + link)
+```
+
 ### (Re-)generate the C API bindings
 
 The low-level bindings in `duckdb/_libduckdb.mojo` are auto-generated from DuckDB's
@@ -173,6 +183,102 @@ To regenerate them (e.g. after bumping the DuckDB version in `pixi.toml`):
 ```shell
 pixi run generate-api
 ```
+
+## FFI Struct Workaround (`USE_DLHANDLE`)
+
+Mojo's `OwnedDLHandle.get_function` does not correctly implement C ABI struct
+coercion ([modular#3144](https://github.com/modular/modular/issues/3144),
+[modular#5846](https://github.com/modular/modular/issues/5846)). When a C
+function passes or returns a multi-field struct by value, calling it through a
+DLHandle function pointer corrupts the data or crashes. The bug also triggers
+when `TrivialRegisterPassable` struct types appear as pointer type parameters
+in the function signature.
+
+The auto-generated bindings in `duckdb/_libduckdb.mojo` provide a `comptime
+USE_DLHANDLE` flag that selects between two FFI strategies:
+
+### `USE_DLHANDLE = True` (default) — DLHandle + C shim
+
+All DuckDB functions are loaded via `dlopen`/`dlsym` at runtime. Functions that
+pass or return multi-field structs are routed through a small C shim library
+(`libduckdb_mojo_helpers`) that converts struct-by-value parameters to
+pointer-based calling, avoiding the bug.
+
+- Works with both `mojo run` (development) and `mojo build` (production)
+- Requires `libduckdb_mojo_helpers.{so,dylib}` at runtime (installed
+  automatically by Pixi)
+
+This is the default and requires no special configuration.
+
+### `USE_DLHANDLE = False` — `external_call` (linker-resolved)
+
+Struct-by-value functions use `external_call` instead, which correctly
+implements C ABI struct coercion (fixed in Mojo 0.26.2). The compiler emits
+normal function calls that the linker resolves against `libduckdb` at link
+time (still dynamic linking — the library is a `.so`/`.dylib`, not statically
+linked). Because the compiler knows the full function signature, LLVM generates
+correct C ABI calling convention code, avoiding the DLHandle bug.
+
+This eliminates the runtime dependency on `libduckdb_mojo_helpers`.
+
+Pass `-D USE_DLHANDLE=false` to `mojo build` along with linker flags:
+
+```shell
+mojo build my_app.mojo -o my_app \
+  -D USE_DLHANDLE=false \
+  -Xlinker -L/path/to/libduckdb -Xlinker -lduckdb
+```
+
+Inside a Pixi environment, the library is at `.pixi/envs/default/lib`:
+
+```shell
+pixi run mojo build my_app.mojo -o my_app \
+  -D USE_DLHANDLE=false \
+  -Xlinker -L.pixi/envs/default/lib -Xlinker -lduckdb
+```
+
+Then run the binary (ensure `libduckdb` is in the library path):
+
+```shell
+DYLD_LIBRARY_PATH=.pixi/envs/default/lib ./my_app   # macOS
+LD_LIBRARY_PATH=.pixi/envs/default/lib ./my_app      # Linux
+```
+
+**Limitations:** `mojo run` does not perform a link step, so it cannot resolve
+`external_call` symbols. This mode only works with `mojo build`.
+
+### Which functions are affected?
+
+Only functions that pass or return multi-field structs by value need the
+workaround. The affected functions are listed in the `STRUCT_WORKAROUNDS` dict
+in `scripts/generate_mojo_api.py`. Currently these are:
+
+- Date/time struct conversions: `duckdb_from_date`, `duckdb_to_date`,
+  `duckdb_from_time`, `duckdb_to_time`, `duckdb_from_timestamp`,
+  `duckdb_to_timestamp`, `duckdb_from_time_tz`
+- Decimal conversions: `duckdb_create_decimal`, `duckdb_get_decimal`,
+  `duckdb_decimal_to_double`, `duckdb_double_to_decimal`
+- Result functions: `duckdb_fetch_chunk`, `duckdb_result_statement_type`
+- Query progress: `duckdb_query_progress`
+
+Single-field wrapper structs (`Date`, `Time`, `Timestamp`, `Int128`, etc.) work
+correctly through DLHandle when they appear as the *only* struct argument.
+
+### Extensions and the DLHandle workaround
+
+DuckDB extensions are shared libraries loaded at runtime. The Extension C API
+provides function pointers via a struct (`duckdb_ext_api_v1`), which uses the
+same struct-by-value signatures as the regular C API. Calling these through
+indirect function pointers triggers the same ABI bug.
+
+Extensions **cannot use the `external_call` path** (`-D USE_DLHANDLE=false`)
+because `external_call` requires linker-resolved symbols, and extensions have
+no linker step against `libduckdb` — DuckDB provides the API at runtime.
+
+This means extensions always use the default DLHandle + C shim path and
+**require `libduckdb_mojo_helpers` at runtime** if they call any of the
+affected functions. The shim library must be discoverable (e.g. via
+`LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`) when DuckDB loads the extension.
 
 ## Scalar Functions
 

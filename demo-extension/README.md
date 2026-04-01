@@ -120,6 +120,12 @@ unaffected — `ApiLevel.CLIENT` is the default and gives full access.
 > extensions cannot yet be published as signed extensions through DuckDB's
 > extension distribution mechanism.
 
+> [!NOTE]
+> Extensions always use the DLHandle + C shim FFI path (the `external_call`
+> path is not available for shared libraries). If the extension calls any of
+> the [affected struct-by-value functions](../README.md#which-functions-are-affected),
+> `libduckdb_mojo_helpers` must be available at runtime.
+
 ## Creating Your Own Extension
 
 To create your own Mojo extension for DuckDB:

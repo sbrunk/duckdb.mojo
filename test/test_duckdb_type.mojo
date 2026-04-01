@@ -458,6 +458,92 @@ def test_bit_from_int() raises:
     )
 
 
+# ─── Date/Time/Timestamp struct conversions (via C shims) ────────
+
+
+def test_date_from_components() raises:
+    """Date(year, month, day) round-trips through duckdb_to_date."""
+    var d = Date(Int32(2025), Int8(3), Int8(29))
+    assert_equal(d.year(), Int32(2025))
+    assert_equal(d.month(), Int8(3))
+    assert_equal(d.day(), Int8(29))
+
+
+def test_date_epoch() raises:
+    """Date with days=0 is 1970-01-01."""
+    var d = Date(days=Int32(0))
+    assert_equal(d.year(), Int32(1970))
+    assert_equal(d.month(), Int8(1))
+    assert_equal(d.day(), Int8(1))
+
+
+def test_date_write_to() raises:
+    """Date write_to produces year-month-day string."""
+    var d = Date(Int32(2025), Int8(3), Int8(29))
+    var s = String.write(d)
+    assert_equal(s, "2025-3-29")
+
+
+def test_time_from_components() raises:
+    """Time(hour, minute, second, micros) round-trips through duckdb_to_time."""
+    var t = Time(Int8(14), Int8(30), Int8(45), Int32(123456))
+    assert_equal(t.hour(), Int8(14))
+    assert_equal(t.minute(), Int8(30))
+    assert_equal(t.second(), Int8(45))
+    assert_equal(t.micro(), Int32(123456))
+
+
+def test_time_midnight() raises:
+    """Time with micros=0 is midnight."""
+    var t = Time(micros=Int64(0))
+    assert_equal(t.hour(), Int8(0))
+    assert_equal(t.minute(), Int8(0))
+    assert_equal(t.second(), Int8(0))
+    assert_equal(t.micro(), Int32(0))
+
+
+def test_time_write_to() raises:
+    """Time write_to produces hour:minute:second string."""
+    var t = Time(Int8(14), Int8(30), Int8(45), Int32(0))
+    var s = String.write(t)
+    assert_equal(s, "14:30:45")
+
+
+def test_timestamp_from_date_time() raises:
+    """Timestamp(date, time) round-trips through duckdb_to_timestamp."""
+    var d = Date(Int32(2025), Int8(6), Int8(15))
+    var t = Time(Int8(10), Int8(30), Int8(0), Int32(0))
+    var ts = Timestamp(d, t)
+    assert_equal(ts.date(), d)
+    assert_equal(ts.time(), t)
+
+
+def test_timestamp_date_time_accessors() raises:
+    """Timestamp.date() and .time() decompose correctly."""
+    var d = Date(Int32(2000), Int8(1), Int8(1))
+    var t = Time(Int8(0), Int8(0), Int8(0), Int32(0))
+    var ts = Timestamp(d, t)
+    var date_part = ts.date()
+    assert_equal(date_part.year(), Int32(2000))
+    assert_equal(date_part.month(), Int8(1))
+    assert_equal(date_part.day(), Int8(1))
+    var time_part = ts.time()
+    assert_equal(time_part.hour(), Int8(0))
+    assert_equal(time_part.minute(), Int8(0))
+    assert_equal(time_part.second(), Int8(0))
+
+
+def test_timestamp_epoch() raises:
+    """Timestamp at micros=0 is 1970-01-01 00:00:00."""
+    var ts = Timestamp(micros=Int64(0))
+    var d = ts.date()
+    assert_equal(d.year(), Int32(1970))
+    assert_equal(d.month(), Int8(1))
+    assert_equal(d.day(), Int8(1))
+    var t = ts.time()
+    assert_equal(t.hour(), Int8(0))
+
+
 # ─── run_suite ────────────────────────────────────────────────────
 
 
