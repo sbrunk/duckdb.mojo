@@ -79,7 +79,6 @@ from std.reflection import (
 )
 from std.collections import Optional, List, Dict
 from std.utils import Variant
-from std.builtin.variadics import Variadic
 from std.memory import alloc, memcpy
 from std.builtin.rebind import downcast
 from duckdb._libduckdb import *
@@ -116,21 +115,21 @@ struct MojoType(Copyable, Movable, Writable):
 
     # -- Constructors ---------------------------------------------------
 
-    fn __init__(out self, type_id: DuckDBType):
+    def __init__(out self, type_id: DuckDBType):
         """Create a scalar (leaf) MojoType."""
         self.type_id = type_id
         self.children = List[MojoType]()
         self.field_names = List[String]()
 
     @staticmethod
-    fn list_of(var element: MojoType) -> MojoType:
+    def list_of(var element: MojoType) -> MojoType:
         """Create a LIST type wrapping the given element type."""
         var mt = MojoType(DuckDBType.list)
         mt.children.append(element^)
         return mt^
 
     @staticmethod
-    fn struct_of(var names: List[String], var types: List[MojoType]) -> MojoType:
+    def struct_of(var names: List[String], var types: List[MojoType]) -> MojoType:
         """Create a STRUCT type with the given field names and types.
 
         Args:
@@ -143,7 +142,7 @@ struct MojoType(Copyable, Movable, Writable):
         return mt^
 
     @staticmethod
-    fn array_of(var element: MojoType, size: Int) -> MojoType:
+    def array_of(var element: MojoType, size: Int) -> MojoType:
         """Create an ARRAY type wrapping the given element type with fixed size.
 
         Args:
@@ -157,7 +156,7 @@ struct MojoType(Copyable, Movable, Writable):
         return mt^
 
     @staticmethod
-    fn map_of(var key_type: MojoType, var value_type: MojoType) -> MojoType:
+    def map_of(var key_type: MojoType, var value_type: MojoType) -> MojoType:
         """Create a MAP type with the given key and value types.
 
         Args:
@@ -171,7 +170,7 @@ struct MojoType(Copyable, Movable, Writable):
 
     # -- Conversions ----------------------------------------------------
 
-    fn to_logical_type(self) -> LogicalType[True, MutExternalOrigin]:
+    def to_logical_type(self) -> LogicalType[True, MutExternalOrigin]:
         """Convert this MojoType to a DuckDB runtime LogicalType.
 
         Returns a new *owned* LogicalType that the caller must manage.
@@ -214,10 +213,10 @@ struct MojoType(Copyable, Movable, Writable):
 
     # -- Display --------------------------------------------------------
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self.type_id == DuckDBType.list:
             writer.write("list(", self.children[0], ")")
         elif self.type_id == DuckDBType.array:
@@ -244,7 +243,7 @@ struct MojoType(Copyable, Movable, Writable):
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _is_list_compatible_type(actual: DuckDBType) -> Bool:
+def _is_list_compatible_type(actual: DuckDBType) -> Bool:
     """Check if a DuckDB type is compatible with Mojo List[T].
 
     LIST, ARRAY, MAP, and BLOB columns can all be deserialized into List[T].
@@ -257,7 +256,7 @@ fn _is_list_compatible_type(actual: DuckDBType) -> Bool:
     )
 
 
-fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
+def _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
     """Returns True if T is one of the known DuckDB-mappable scalar types."""
     comptime if (
         _type_is_eq[T, Bool]()
@@ -295,7 +294,7 @@ fn _is_known_scalar_type[T: Copyable & Movable]() -> Bool:
         return False
 
 
-fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
+def mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
     """Maps a Mojo type to its corresponding DuckDB type at compile time.
 
     Supports scalar types, Date/Time/Timestamp/Interval, String, List[T],
@@ -388,7 +387,7 @@ fn mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
             return DuckDBType.struct_t
 
 
-fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
+def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     """Map a field type (from struct_field_types) to DuckDBType.
 
     Used during struct reflection where field types come from
@@ -476,7 +475,7 @@ fn _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
             return DuckDBType.struct_t
 
 
-fn mojo_logical_type[T: Copyable & Movable]() -> MojoType:
+def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
     """Build a pure-Mojo MojoType descriptor from a Mojo type parameter.
 
     For scalar types this returns a leaf MojoType.
@@ -527,7 +526,7 @@ fn mojo_logical_type[T: Copyable & Movable]() -> MojoType:
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raises -> T:
+def _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raises -> T:
     """Deserialize a scalar value from a vector.
 
     Parameters:
@@ -617,7 +616,7 @@ fn _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raise
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
+def _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
     """Deserialize a BLOB value from a vector into a List[UInt8].
 
     BLOBs are stored using the same duckdb_string_t inline/pointer
@@ -652,7 +651,7 @@ fn _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_bit(vector: Vector, offset: Int) -> Bit:
+def _deserialize_bit(vector: Vector, offset: Int) -> Bit:
     """Deserialize a BIT value from a vector into a Bit.
 
     BIT values are stored using the same duckdb_string_t inline/pointer
@@ -692,7 +691,7 @@ fn _deserialize_bit(vector: Vector, offset: Int) -> Bit:
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_enum_value(vector: Vector, offset: Int) raises -> String:
+def _deserialize_enum_value(vector: Vector, offset: Int) raises -> String:
     """Deserialize a single ENUM value from a vector as a String.
 
     ENUMs are stored internally as small integers (UInt8, UInt16, or UInt32)
@@ -726,7 +725,7 @@ fn _deserialize_enum_value(vector: Vector, offset: Int) raises -> String:
     return result^
 
 
-fn _deserialize_enum_column[
+def _deserialize_enum_column[
     T: Copyable & Movable
 ](vector: Vector, length: Int, offset: Int) raises -> List[Optional[T]]:
     """Deserialize an ENUM column into a list of Optional[String].
@@ -760,7 +759,7 @@ fn _deserialize_enum_column[
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _is_valid(validity_mask: UnsafePointer[UInt64, MutAnyOrigin], idx: Int) -> Bool:
+def _is_valid(validity_mask: UnsafePointer[UInt64, MutAnyOrigin], idx: Int) -> Bool:
     """Check if a value at idx is valid (non-NULL) given a validity mask.
 
     If the mask is null, all values are valid.
@@ -772,7 +771,7 @@ fn _is_valid(validity_mask: UnsafePointer[UInt64, MutAnyOrigin], idx: Int) -> Bo
     return Bool(validity_mask[entry_idx] & UInt64(1 << idx_in_entry))
 
 
-fn _deserialize_struct_field[
+def _deserialize_struct_field[
     FieldType: Copyable & Movable
 ](child_vector: Vector, offset: Int) raises -> FieldType:
     """Deserialize a single field value from a struct child vector.
@@ -797,7 +796,7 @@ fn _deserialize_struct_field[
         return _deserialize_scalar[FieldType](child_vector, offset)
 
 
-fn _deserialize_struct_row[
+def _deserialize_struct_row[
     T: Copyable & Movable
 ](vector: Vector, offset: Int) raises -> T:
     """Deserialize a single DuckDB STRUCT row into a Mojo struct T.
@@ -887,7 +886,7 @@ fn _deserialize_struct_row[
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_union_row[
+def _deserialize_union_row[
     T: Copyable & Movable
 ](vector: Vector, offset: Int) raises -> T:
     """Deserialize a single DuckDB UNION row into a Mojo struct T.
@@ -985,21 +984,21 @@ trait _VariantUnionDeserializable(_DBase):
     """Deserialize a DuckDB UNION row into a Mojo Variant."""
 
     @staticmethod
-    fn _from_union_vector(vector: Vector, offset: Int) raises -> Self:
+    def _from_union_vector(vector: Vector, offset: Int) raises -> Self:
         """Construct a Variant from a DuckDB UNION vector at the given row."""
         ...
 
 
 __extension Variant(_VariantUnionDeserializable):
     @staticmethod
-    fn _from_union_vector(vector: Vector, offset: Int) raises -> Self:
+    def _from_union_vector(vector: Vector, offset: Int) raises -> Self:
         # Read the tag from child 0 (UTINYINT)
         var tag_vec = vector.struct_get_child(0)
         var tag = Int(tag_vec.get_data().bitcast[UInt8]()[offset])
 
         # Iterate over Variant's type parameters at compile time.
         # Each iteration generates a runtime branch for the matching tag.
-        comptime for i in range(Variadic.size(Self.Ts)):
+        comptime for i in range(Self.Ts.size):
             if tag == i:
                 comptime MemberType = Self.Ts[i]
                 comptime MT = downcast[MemberType, Copyable & Movable]
@@ -1014,7 +1013,7 @@ __extension Variant(_VariantUnionDeserializable):
 # List type decomposition — traits + extensions for recursive types
 # ──────────────────────────────────────────────────────────────────
 #
-# Problem: inside a generic `fn foo[T: Copyable & Movable]()` we
+# Problem: inside a generic `def foo[T: Copyable & Movable]()` we
 # cannot access `T.T` to decompose `List[Optional[X]]` into X.
 #
 # Solution (inspired by EmberJson): use `__extension` blocks where
@@ -1043,7 +1042,7 @@ trait _InnerListDeserializer(_DBase):
     """
 
     @staticmethod
-    fn _deser_as_list_elements(
+    def _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
     ) raises -> List[downcast[Self, Copyable]]:
         ...
@@ -1051,7 +1050,7 @@ trait _InnerListDeserializer(_DBase):
 
 __extension Optional(_InnerListDeserializer):
     @staticmethod
-    fn _deser_as_list_elements(
+    def _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
     ) raises -> List[downcast[Self, Copyable]]:
         # Self = Optional[X],  Self.T = X
@@ -1070,7 +1069,7 @@ trait _VectorListConstructible(_DBase):
     """
 
     @staticmethod
-    fn _from_list_child(
+    def _from_list_child(
         child_vector: Vector, length: Int, offset: Int
     ) raises -> Self:
         """Construct one Self from a child-vector region."""
@@ -1079,7 +1078,7 @@ trait _VectorListConstructible(_DBase):
 
 __extension List(_VectorListConstructible):
     @staticmethod
-    fn _from_list_child(
+    def _from_list_child(
         child_vector: Vector, length: Int, offset: Int
     ) raises -> Self:
         # If Self.T conforms to _InnerListDeserializer (i.e. it is Optional),
@@ -1128,7 +1127,7 @@ trait _DictMapDeserializable(_DBase):
     """Construct a Dict from a DuckDB MAP child-vector region."""
 
     @staticmethod
-    fn _from_map_child(
+    def _from_map_child(
         struct_vec: Vector, length: Int, offset: Int
     ) raises -> Self:
         """Build a Dict from the STRUCT(key, value) child of a MAP vector.
@@ -1143,7 +1142,7 @@ trait _DictMapDeserializable(_DBase):
 
 __extension Dict(_DictMapDeserializable):
     @staticmethod
-    fn _from_map_child(
+    def _from_map_child(
         struct_vec: Vector, length: Int, offset: Int
     ) raises -> Self:
         var key_vec = struct_vec.struct_get_child(0)
@@ -1192,7 +1191,7 @@ __extension Dict(_DictMapDeserializable):
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_list[
+def _deserialize_list[
     ElementType: Copyable & Movable
 ](vector: Vector, length: Int, offset: Int) raises -> List[Optional[ElementType]]:
     """Deserialize list elements from a vector.
@@ -1297,7 +1296,7 @@ fn _deserialize_list[
 # ──────────────────────────────────────────────────────────────────
 
 
-fn deserialize_list_column[
+def deserialize_list_column[
     ElementType: Copyable & Movable
 ](
     vector: Vector, length: Int, offset: Int = 0
@@ -1384,7 +1383,7 @@ fn deserialize_list_column[
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _deserialize_table_field[
+def _deserialize_table_field[
     T: Copyable & Movable
 ](vector: Vector, row: Int) raises -> T:
     """Deserialize a single non-null value from a column vector at a given row.
@@ -1473,7 +1472,7 @@ fn _deserialize_table_field[
 # ──────────────────────────────────────────────────────────────────
 
 
-fn deserialize_from_vector[
+def deserialize_from_vector[
     T: Copyable & Movable
 ](vector: Vector, length: Int, offset: Int = 0) raises -> List[Optional[T]]:
     """Deserialize values from a DuckDB vector into native Mojo types.
@@ -1693,19 +1692,19 @@ trait _NullableColumn(_DBase):
     """Marker for types that accept NULL as None (i.e., Optional[T])."""
 
     @staticmethod
-    fn _expected_duckdb_type() -> DuckDBType:
+    def _expected_duckdb_type() -> DuckDBType:
         """DuckDB type of the wrapped inner type."""
         ...
 
     @staticmethod
-    fn _deserialize_single_nullable(
+    def _deserialize_single_nullable(
         vector: Vector, row: Int, is_null: Bool
     ) raises -> Self:
         """Deserialize one value, returning None when is_null is True."""
         ...
 
     @staticmethod
-    fn _deserialize_column_nullable(
+    def _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
     ) raises -> List[downcast[Self, Copyable]]:
         """Deserialize a full column with None for NULL entries."""
@@ -1714,11 +1713,11 @@ trait _NullableColumn(_DBase):
 
 __extension Optional(_NullableColumn):
     @staticmethod
-    fn _expected_duckdb_type() -> DuckDBType:
+    def _expected_duckdb_type() -> DuckDBType:
         return mojo_type_to_duckdb_type[downcast[Self.T, _DBase]]()
 
     @staticmethod
-    fn _deserialize_single_nullable(
+    def _deserialize_single_nullable(
         vector: Vector, row: Int, is_null: Bool
     ) raises -> Self:
         if is_null:
@@ -1729,7 +1728,7 @@ __extension Optional(_NullableColumn):
         return rebind_var[Self](Optional(val^))
 
     @staticmethod
-    fn _deserialize_column_nullable(
+    def _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
     ) raises -> List[downcast[Self, Copyable]]:
         var inner = deserialize_from_vector[downcast[Self.T, _DBase]](

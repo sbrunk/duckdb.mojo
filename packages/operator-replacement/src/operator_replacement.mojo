@@ -22,11 +22,11 @@ comptime OPERATOR_REPLACEMENT_PATHS: List[Path] = [
 
 comptime OPERATOR_REPLACEMENT_LIBRARY = _Global["OPERATOR_REPLACEMENT_LIBRARY", _init_dylib]
 
-fn _init_dylib() -> OwnedDLHandle:
+def _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_operator_replacement"](materialize[OPERATOR_REPLACEMENT_PATHS]())
 
 @always_inline
-fn _get_dylib_function[
+def _get_dylib_function[
     func_name: StaticString, result_type: __TypeOfAllTypes
 ]() raises -> result_type:
     return _ffi_get_dylib_function[
@@ -39,7 +39,7 @@ struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialReg
     comptime fn_type = Self.type
 
     @staticmethod
-    fn load() raises -> Self.type:
+    def load() raises -> Self.type:
         return _get_dylib_function[Self.fn_name, Self.type]()
 
 # ===--------------------------------------------------------------------===#
@@ -47,11 +47,11 @@ struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialReg
 # ===--------------------------------------------------------------------===#
 
 comptime _register_function_replacement = _dylib_function["register_function_replacement",
-    fn (UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    def(UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
 ]
 
 comptime _register_operator_replacement = _dylib_function["register_operator_replacement",
-    fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
+    def(UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#
@@ -64,11 +64,11 @@ struct OperatorReplacementLib:
     var _register_function_replacement: _register_function_replacement.fn_type
     var _register_operator_replacement: _register_operator_replacement.fn_type
     
-    fn __init__(out self) raises:
+    def __init__(out self) raises:
         self._register_function_replacement = _register_function_replacement.load()
         self._register_operator_replacement = _register_operator_replacement.load()
     
-    fn register_function_replacement(self, var original_name: String, var replacement_name: String):
+    def register_function_replacement(self, var original_name: String, var replacement_name: String):
         """Register a function/operator replacement.
         
         Maps an original function/operator name to a replacement function that must
@@ -82,7 +82,7 @@ struct OperatorReplacementLib:
         var repl = replacement_name.as_c_string_slice()
         _ = self._register_function_replacement(orig.unsafe_ptr(), repl.unsafe_ptr())
     
-    fn register_operator_replacement(self, connection: UnsafePointer[NoneType, MutAnyOrigin]):
+    def register_operator_replacement(self, connection: UnsafePointer[NoneType, MutAnyOrigin]):
         """Activate all registered function/operator replacements.
         
         This registers the optimizer extension that performs the replacements.

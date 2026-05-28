@@ -11,7 +11,7 @@ from std import math
 # Helper UDF implementations (using high-level API)
 # ===--------------------------------------------------------------------===#
 
-fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+def add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds 1 to the input."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -22,7 +22,7 @@ fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = in_data[i] + 1
 
 
-fn multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
+def multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that multiplies input by 2."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -33,7 +33,7 @@ fn multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = in_data[i] * 2.0
 
 
-fn binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds two integers."""
     var size = len(input)
     var vec_a = input.get_vector(0)
@@ -46,7 +46,7 @@ fn binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = a_data[i] + b_data[i]
 
 
-fn binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
     """UDF that adds two floats."""
     var size = len(input)
     var vec_a = input.get_vector(0)
@@ -653,19 +653,19 @@ def test_create_on_table() raises:
 # ===--------------------------------------------------------------------===#
 
 # Simple row-at-a-time functions (not vectorized)
-fn simple_add_one(x: Int32) -> Int32:
+def simple_add_one(x: Int32) -> Int32:
     return x + 1
 
 
-fn simple_double(x: Float32) -> Float32:
+def simple_double(x: Float32) -> Float32:
     return x * 2.0
 
 
-fn simple_add(a: Int32, b: Int32) -> Int32:
+def simple_add(a: Int32, b: Int32) -> Int32:
     return a + b
 
 
-fn simple_add_float(a: Float64, b: Float64) -> Float64:
+def simple_add_float(a: Float64, b: Float64) -> Float64:
     return a + b
 
 
@@ -731,21 +731,21 @@ def test_from_function_on_table() raises:
 # ===--------------------------------------------------------------------===#
 
 # SIMD-vectorized functions (operate on SIMD[dt, width] vectors)
-fn simd_add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+def simd_add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
     return x + 1
 
 
-fn simd_double[width: Int](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
+def simd_double[width: Int](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
     return x * 2.0
 
 
-fn simd_add[width: Int](
+def simd_add[width: Int](
     a: SIMD[DType.int32, width], b: SIMD[DType.int32, width]
 ) -> SIMD[DType.int32, width]:
     return a + b
 
 
-fn simd_add_f64[width: Int](
+def simd_add_f64[width: Int](
     a: SIMD[DType.float64, width], b: SIMD[DType.float64, width]
 ) -> SIMD[DType.float64, width]:
     return a + b

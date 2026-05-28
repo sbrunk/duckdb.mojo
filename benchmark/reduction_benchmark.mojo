@@ -27,7 +27,7 @@ import std.benchmark
 
 comptime F = DType.float32
 
-fn sql_type() -> String:
+def sql_type() -> String:
     """Returns the SQL type name corresponding to F."""
     comptime if F == DType.float64:
         return "DOUBLE"
@@ -39,10 +39,10 @@ fn sql_type() -> String:
 # Custom reduce kernel — sum of squares (not a DuckDB builtin)
 # ===--------------------------------------------------------------------===#
 
-fn simd_add[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
+def simd_add[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
     return a + b
 
-fn zero() -> Scalar[F]:
+def zero() -> Scalar[F]:
     return 0
 
 
@@ -50,7 +50,7 @@ fn zero() -> Scalar[F]:
 # Registration
 # ===--------------------------------------------------------------------===#
 
-fn register_functions(conn: Connection) raises:
+def register_functions(conn: Connection) raises:
     """Register all Mojo aggregate functions."""
     AggregateFunction.from_sum["mojo_sum", F](conn)
     AggregateFunction.from_max["mojo_max", F](conn)
@@ -66,7 +66,7 @@ fn register_functions(conn: Connection) raises:
 # Benchmark runner
 # ===--------------------------------------------------------------------===#
 
-fn run_benchmark(
+def run_benchmark(
     name: String,
     conn: Connection,
     query_standard: String,
@@ -82,7 +82,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_standard)
 
-    fn bench_standard() capturing raises:
+    def bench_standard() capturing raises:
         _ = conn.execute(query_standard)
 
     var std_report = benchmark.run[bench_standard](max_iters=max_iters)
@@ -93,7 +93,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_mojo)
 
-    fn bench_mojo() capturing raises:
+    def bench_mojo() capturing raises:
         _ = conn.execute(query_mojo)
 
     var mojo_report = benchmark.run[bench_mojo](max_iters=max_iters)
@@ -111,7 +111,7 @@ fn run_benchmark(
 # Main
 # ===--------------------------------------------------------------------===#
 
-fn main() raises:
+def main() raises:
     var num_rows = 10_000_000
     var num_groups = 1000
     var max_iters = 50
@@ -156,14 +156,14 @@ fn main() raises:
     # ---- Validate correctness ----
     print("\nValidating correctness...")
 
-    fn check_close(label: String, conn: Connection, query: String) raises:
+    def check_close(label: String, conn: Connection, query: String) raises:
         var res = conn.execute(query)
         var ck = res.fetch_chunk()
         var ok = ck.get[Bool](col=0, row=0)
         print("  " + label + ": " + String(ok))
 
     # Use a tolerance that accommodates float accumulation differences
-    fn tol() -> String:
+    def tol() -> String:
         comptime if F == DType.float64:
             return "0.001"
         else:

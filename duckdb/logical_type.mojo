@@ -18,12 +18,12 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
     var _logical_type: duckdb_logical_type
 
 
-    fn __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], type_id: DuckDBType):
+    def __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], type_id: DuckDBType):
         """Creates an owned LogicalType from a standard primitive type."""
         ref libduckdb = DuckDB().libduckdb()
         self._logical_type = libduckdb.duckdb_create_logical_type(type_id.value)
 
-    fn __init__(out self: LogicalType[is_owned=False, origin=Self.origin], logical_type: duckdb_logical_type):
+    def __init__(out self: LogicalType[is_owned=False, origin=Self.origin], logical_type: duckdb_logical_type):
         """Creates a borrowed LogicalType (not owned).
         
         This creates a `LogicalType` that does not own the logical type and will not
@@ -34,7 +34,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         """
         self._logical_type = logical_type
 
-    fn __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], var logical_type: duckdb_logical_type):
+    def __init__(out self: LogicalType[is_owned=True, origin=MutExternalOrigin], var logical_type: duckdb_logical_type):
         """Creates an owned LogicalType from a duckdb_logical_type pointer.
         
         This takes ownership of the logical type and will destroy it.
@@ -44,7 +44,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         """
         self._logical_type = logical_type
 
-    fn __copyinit__(out self, copy: Self):
+    def __init__(out self, *, copy: Self):
         comptime if Self.is_owned:
             if copy.get_type_id() == DuckDBType.list:
                 var child = copy.list_type_child_type()
@@ -86,10 +86,10 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         else:
             self._logical_type = copy._logical_type
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self._logical_type = take._logical_type
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys owned LogicalTypes only."""
         comptime if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
@@ -97,14 +97,14 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 UnsafePointer(to=self._logical_type)
             )
 
-    fn create_list_type(self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+    def create_list_type(self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=True, origin=MutExternalOrigin](libduckdb.duckdb_create_list_type(self._logical_type))
 
-    fn internal_ptr(self) -> duckdb_logical_type:
+    def internal_ptr(self) -> duckdb_logical_type:
         return self._logical_type
 
-    fn get_type_id(self) -> DuckDBType:
+    def get_type_id(self) -> DuckDBType:
         """Retrieves the enum type class of this `LogicalType`.
 
         * type: The logical type object
@@ -113,7 +113,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return DuckDBType(libduckdb.duckdb_get_type_id(self._logical_type))
 
-    fn list_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def list_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child type of the given list type.
         
         The returned type is borrowed from this list type and should not be destroyed separately.
@@ -123,7 +123,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_list_type_child_type(self._logical_type))
 
-    fn map_type_key_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def map_type_key_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the key type of the given map type.
         
         The returned type is borrowed from this map type and should not be destroyed separately.
@@ -133,7 +133,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_map_type_key_type(self._logical_type))
 
-    fn map_type_value_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def map_type_value_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the value type of the given map type.
         
         The returned type is borrowed from this map type and should not be destroyed separately.
@@ -143,7 +143,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_map_type_value_type(self._logical_type))
 
-    fn array_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+    def array_type_child_type(ref [_]self: Self) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
         """Retrieves the child type of the given array type.
 
         The returned type is owned and must be destroyed.
@@ -155,7 +155,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
             libduckdb.duckdb_array_type_child_type(self._logical_type)
         )
 
-    fn array_type_array_size(self) -> idx_t:
+    def array_type_array_size(self) -> idx_t:
         """Retrieves the array size of the given array type.
 
         * returns: The fixed number of elements the values of this array type can store.
@@ -163,7 +163,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_array_type_array_size(self._logical_type)
 
-    fn struct_type_child_count(self) -> idx_t:
+    def struct_type_child_count(self) -> idx_t:
         """Retrieves the number of children of a struct type.
 
         * returns: The number of children (fields) of the struct type.
@@ -171,7 +171,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_struct_type_child_count(self._logical_type)
 
-    fn struct_type_child_name(self, index: idx_t) -> String:
+    def struct_type_child_name(self, index: idx_t) -> String:
         """Retrieves the name of a struct type's child at the given index.
 
         * index: The child index.
@@ -181,7 +181,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         var name_ptr = libduckdb.duckdb_struct_type_child_name(self._logical_type, index)
         return String(unsafe_from_utf8_ptr=name_ptr)
 
-    fn struct_type_child_type(ref [_]self: Self, index: idx_t) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
+    def struct_type_child_type(ref [_]self: Self, index: idx_t) -> LogicalType[is_owned=True, origin=MutExternalOrigin]:
         """Retrieves the type of a struct type's child at the given index.
 
         The returned type is owned and must be destroyed.
@@ -194,7 +194,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
             libduckdb.duckdb_struct_type_child_type(self._logical_type, index)
         )
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         if self.get_type_id() != other.get_type_id():
             return False
         if self.get_type_id() == DuckDBType.list:
@@ -217,10 +217,10 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
             return True
         return True
 
-    fn __ne__(self, other: Self) -> Bool:
+    def __ne__(self, other: Self) -> Bool:
         return not self == other
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         if self.get_type_id() == DuckDBType.list:
             return "list(" + String(self.list_type_child_type()) + ")"
         if self.get_type_id() == DuckDBType.map:
@@ -241,10 +241,10 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
             return s
         return String(self.get_type_id())
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(String(self))
 
-fn decimal_type(width: UInt8, scale: UInt8) -> LogicalType[True, MutExternalOrigin]:
+def decimal_type(width: UInt8, scale: UInt8) -> LogicalType[True, MutExternalOrigin]:
     """Creates a decimal type.
 
     Args:
@@ -259,7 +259,7 @@ fn decimal_type(width: UInt8, scale: UInt8) -> LogicalType[True, MutExternalOrig
         libduckdb.duckdb_create_decimal_type(width, scale)
     )
 
-fn enum_type(mut names: List[String]) -> LogicalType[True, MutExternalOrigin]:
+def enum_type(mut names: List[String]) -> LogicalType[True, MutExternalOrigin]:
     """Creates an enum type.
 
     Args:
@@ -288,7 +288,7 @@ fn enum_type(mut names: List[String]) -> LogicalType[True, MutExternalOrigin]:
     )
 
 
-fn struct_type(
+def struct_type(
     mut names: List[String],
     mut types: List[LogicalType[True, MutExternalOrigin]],
 ) -> LogicalType[True, MutExternalOrigin]:

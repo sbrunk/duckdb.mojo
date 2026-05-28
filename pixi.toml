@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=0.26.2.0"
+mojo-compiler = "=1.0.0b1"
 
 [package.build-dependencies]
-mojo-compiler = "=0.26.2.0"
+mojo-compiler = "=1.0.0b1"
 
 [package.run-dependencies]
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
@@ -53,7 +53,7 @@ test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 [dependencies]
 libduckdb-devel = "=1.5.1"
 duckdb-cli = "=1.5.1"
-mojo = "=0.26.2.0"
+mojo = "=1.0.0b1"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 
@@ -68,7 +68,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
 duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
-mojo = "=0.26.2.0"
+mojo = "=1.0.0b1"
 
 # Environments
 # 

@@ -31,7 +31,7 @@ struct DuckDBValue(Movable):
     """
     var _value: duckdb_value
 
-    fn __init__(out self, value: duckdb_value):
+    def __init__(out self, value: duckdb_value):
         """Constructs a DuckDBValue from a raw duckdb_value pointer.
 
         Warning: The DuckDBValue takes ownership of the pointer and will destroy it.
@@ -41,7 +41,7 @@ struct DuckDBValue(Movable):
         """
         self._value = value
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership of the underlying value.
         
         Args:
@@ -49,7 +49,7 @@ struct DuckDBValue(Movable):
         """
         self._value = take._value
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the value and deallocates all associated memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_value(UnsafePointer(to=self._value))
@@ -59,7 +59,7 @@ struct DuckDBValue(Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_string(text: String) -> Self:
+    def from_string(text: String) -> Self:
         """Creates a value from a string.
 
         Args:
@@ -76,7 +76,7 @@ struct DuckDBValue(Movable):
         ))
 
     @staticmethod
-    fn from_bool(value: Bool) -> Self:
+    def from_bool(value: Bool) -> Self:
         """Creates a value from a boolean.
 
         Args:
@@ -89,7 +89,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_bool(value))
 
     @staticmethod
-    fn from_decimal(value: duckdb_decimal) -> Self:
+    def from_decimal(value: duckdb_decimal) -> Self:
         """Creates a value from a decimal (DECIMAL).
 
         Args:
@@ -102,7 +102,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_decimal(value))
 
     @staticmethod
-    fn from_enum[is_owned: Bool, origin: ImmutOrigin](type: LogicalType[is_owned, origin], value: UInt64) -> Self:
+    def from_enum[is_owned: Bool, origin: ImmutOrigin](type: LogicalType[is_owned, origin], value: UInt64) -> Self:
         """Creates a value from an enum (ENUM).
 
         Args:
@@ -116,7 +116,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_enum_value(type.internal_ptr(), value))
 
     @staticmethod
-    fn from_int8(value: Int8) -> Self:
+    def from_int8(value: Int8) -> Self:
         """Creates a value from an int8 (TINYINT).
 
         Args:
@@ -129,7 +129,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_int8(value))
 
     @staticmethod
-    fn from_uint8(value: UInt8) -> Self:
+    def from_uint8(value: UInt8) -> Self:
         """Creates a value from a uint8 (UTINYINT).
 
         Args:
@@ -142,7 +142,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uint8(value))
 
     @staticmethod
-    fn from_int16(value: Int16) -> Self:
+    def from_int16(value: Int16) -> Self:
         """Creates a value from an int16 (SMALLINT).
 
         Args:
@@ -155,7 +155,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_int16(value))
 
     @staticmethod
-    fn from_uint16(value: UInt16) -> Self:
+    def from_uint16(value: UInt16) -> Self:
         """Creates a value from a uint16 (USMALLINT).
 
         Args:
@@ -168,7 +168,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uint16(value))
 
     @staticmethod
-    fn from_int32(value: Int32) -> Self:
+    def from_int32(value: Int32) -> Self:
         """Creates a value from an int32 (INTEGER).
 
         Args:
@@ -181,7 +181,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_int32(value))
 
     @staticmethod
-    fn from_uint32(value: UInt32) -> Self:
+    def from_uint32(value: UInt32) -> Self:
         """Creates a value from a uint32 (UINTEGER).
 
         Args:
@@ -194,7 +194,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uint32(value))
 
     @staticmethod
-    fn from_int64(value: Int64) -> Self:
+    def from_int64(value: Int64) -> Self:
         """Creates a value from an int64 (BIGINT).
 
         Args:
@@ -207,7 +207,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_int64(value))
 
     @staticmethod
-    fn from_uint64(value: UInt64) -> Self:
+    def from_uint64(value: UInt64) -> Self:
         """Creates a value from a uint64 (UBIGINT).
 
         Args:
@@ -220,7 +220,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uint64(value))
 
     @staticmethod
-    fn from_hugeint(value: duckdb_hugeint) -> Self:
+    def from_hugeint(value: duckdb_hugeint) -> Self:
         """Creates a value from a hugeint (HUGEINT).
 
         Args:
@@ -233,7 +233,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_hugeint(value))
 
     @staticmethod
-    fn from_uhugeint(value: duckdb_uhugeint) -> Self:
+    def from_uhugeint(value: duckdb_uhugeint) -> Self:
         """Creates a value from a uhugeint (UHUGEINT).
 
         Args:
@@ -246,7 +246,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uhugeint(value))
 
     @staticmethod
-    fn from_float32(value: Float32) -> Self:
+    def from_float32(value: Float32) -> Self:
         """Creates a value from a float32 (FLOAT).
 
         Args:
@@ -259,7 +259,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_float(value))
 
     @staticmethod
-    fn from_float64(value: Float64) -> Self:
+    def from_float64(value: Float64) -> Self:
         """Creates a value from a float64 (DOUBLE).
 
         Args:
@@ -272,7 +272,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_double(value))
 
     @staticmethod
-    fn from_date(value: duckdb_date) -> Self:
+    def from_date(value: duckdb_date) -> Self:
         """Creates a value from a date.
 
         Args:
@@ -285,7 +285,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_date(value))
 
     @staticmethod
-    fn from_timestamp(value: duckdb_timestamp) -> Self:
+    def from_timestamp(value: duckdb_timestamp) -> Self:
         """Creates a value from a timestamp.
 
         Args:
@@ -298,7 +298,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_timestamp(value))
 
     @staticmethod
-    fn from_time(value: duckdb_time) -> Self:
+    def from_time(value: duckdb_time) -> Self:
         """Creates a value from a time.
 
         Args:
@@ -311,7 +311,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_time(value))
 
     @staticmethod
-    fn from_interval(value: Interval) -> Self:
+    def from_interval(value: Interval) -> Self:
         """Creates a value from an interval.
 
         Args:
@@ -324,7 +324,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_interval(UnsafePointer(to=value).bitcast[duckdb_interval]()[]))
 
     @staticmethod
-    fn from_blob(data: Span[UInt8, _]) -> Self:
+    def from_blob(data: Span[UInt8, _]) -> Self:
         """Creates a value from binary data (BLOB).
 
         Args:
@@ -339,7 +339,7 @@ struct DuckDBValue(Movable):
         ))
 
     @staticmethod
-    fn from_bit(data: Span[UInt8, _]) -> Self:
+    def from_bit(data: Span[UInt8, _]) -> Self:
         """Creates a value from a BIT string.
 
         Args:
@@ -356,7 +356,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_bit(bit_val))
 
     @staticmethod
-    fn from_uuid(value: UInt128) -> Self:
+    def from_uuid(value: UInt128) -> Self:
         """Creates a value from a UUID.
 
         Args:
@@ -369,7 +369,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_uuid(value))
 
     @staticmethod
-    fn null() -> Self:
+    def null() -> Self:
         """Creates a NULL value.
 
         Returns:
@@ -382,7 +382,7 @@ struct DuckDBValue(Movable):
     # Getter methods for extracting values
     # ===--------------------------------------------------------------------===#
 
-    fn is_null(self) -> Bool:
+    def is_null(self) -> Bool:
         """Checks if this value is SQL NULL.
 
         Returns:
@@ -391,7 +391,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_is_null_value(self._value)
 
-    fn as_bool(self) -> Bool:
+    def as_bool(self) -> Bool:
         """Extracts the boolean value.
 
         Returns:
@@ -400,7 +400,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_bool(self._value)
 
-    fn as_enum_value(self) -> UInt64:
+    def as_enum_value(self) -> UInt64:
         """Extracts the enum value (index).
 
         Returns:
@@ -409,7 +409,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_enum_value(self._value)
 
-    fn as_decimal(self) -> duckdb_decimal:
+    def as_decimal(self) -> duckdb_decimal:
         """Extracts the decimal value.
 
         Returns:
@@ -418,7 +418,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_decimal(self._value)
 
-    fn as_int8(self) -> Int8:
+    def as_int8(self) -> Int8:
         """Extracts the int8 value.
 
         Returns:
@@ -427,7 +427,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_int8(self._value)
 
-    fn as_uint8(self) -> UInt8:
+    def as_uint8(self) -> UInt8:
         """Extracts the uint8 value.
 
         Returns:
@@ -436,7 +436,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uint8(self._value)
 
-    fn as_int16(self) -> Int16:
+    def as_int16(self) -> Int16:
         """Extracts the int16 value.
 
         Returns:
@@ -445,7 +445,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_int16(self._value)
 
-    fn as_uint16(self) -> UInt16:
+    def as_uint16(self) -> UInt16:
         """Extracts the uint16 value.
 
         Returns:
@@ -454,7 +454,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uint16(self._value)
 
-    fn as_int32(self) -> Int32:
+    def as_int32(self) -> Int32:
         """Extracts the int32 value.
 
         Returns:
@@ -463,7 +463,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_int32(self._value)
 
-    fn as_uint32(self) -> UInt32:
+    def as_uint32(self) -> UInt32:
         """Extracts the uint32 value.
 
         Returns:
@@ -472,7 +472,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uint32(self._value)
 
-    fn as_int64(self) -> Int64:
+    def as_int64(self) -> Int64:
         """Extracts the int64 value.
 
         Returns:
@@ -481,7 +481,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_int64(self._value)
 
-    fn as_uint64(self) -> UInt64:
+    def as_uint64(self) -> UInt64:
         """Extracts the uint64 value.
 
         Returns:
@@ -490,7 +490,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uint64(self._value)
 
-    fn as_hugeint(self) -> duckdb_hugeint:
+    def as_hugeint(self) -> duckdb_hugeint:
         """Extracts the hugeint value.
 
         Returns:
@@ -499,7 +499,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_hugeint(self._value)
 
-    fn as_uhugeint(self) -> duckdb_uhugeint:
+    def as_uhugeint(self) -> duckdb_uhugeint:
         """Extracts the uhugeint value.
 
         Returns:
@@ -508,7 +508,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uhugeint(self._value)
 
-    fn as_float32(self) -> Float32:
+    def as_float32(self) -> Float32:
         """Extracts the float32 value.
 
         Returns:
@@ -517,7 +517,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_float(self._value)
 
-    fn as_float64(self) -> Float64:
+    def as_float64(self) -> Float64:
         """Extracts the float64 value.
 
         Returns:
@@ -526,7 +526,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_double(self._value)
 
-    fn as_date(self) -> duckdb_date:
+    def as_date(self) -> duckdb_date:
         """Extracts the date value.
 
         Returns:
@@ -535,7 +535,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_date(self._value)
 
-    fn as_timestamp(self) -> duckdb_timestamp:
+    def as_timestamp(self) -> duckdb_timestamp:
         """Extracts the timestamp value.
 
         Returns:
@@ -544,7 +544,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_timestamp(self._value)
 
-    fn as_time(self) -> duckdb_time:
+    def as_time(self) -> duckdb_time:
         """Extracts the time value.
 
         Returns:
@@ -553,7 +553,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_time(self._value)
 
-    fn as_interval(self) -> Interval:
+    def as_interval(self) -> Interval:
         """Extracts the interval value.
 
         Returns:
@@ -562,7 +562,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return UnsafePointer(to=libduckdb.duckdb_get_interval(self._value)).bitcast[Interval]()[]
 
-    fn as_blob(self) -> List[UInt8]:
+    def as_blob(self) -> List[UInt8]:
         """Extracts the blob value.
 
         Returns:
@@ -577,7 +577,7 @@ struct DuckDBValue(Movable):
         libduckdb.duckdb_free(blob.data)
         return result^
 
-    fn as_bit(self) -> List[UInt8]:
+    def as_bit(self) -> List[UInt8]:
         """Extracts the bit value.
 
         Returns:
@@ -591,7 +591,7 @@ struct DuckDBValue(Movable):
         libduckdb.duckdb_free(bit_val.data.bitcast[NoneType]())
         return result^
 
-    fn as_uuid(self) -> UInt128:
+    def as_uuid(self) -> UInt128:
         """Extracts the UUID value.
 
         Returns:
@@ -600,7 +600,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_get_uuid(self._value)
 
-    fn as_string(self) -> String:
+    def as_string(self) -> String:
         """Gets the string representation of the value.
 
         The returned string is allocated by DuckDB and owned by this method.
@@ -615,7 +615,7 @@ struct DuckDBValue(Movable):
         libduckdb.duckdb_free(c_str.bitcast[NoneType]())
         return result
 
-    fn to_sql_string(self) -> String:
+    def to_sql_string(self) -> String:
         """Gets the SQL string representation of the value.
 
         This formats the value as it would appear in a SQL query
@@ -630,7 +630,7 @@ struct DuckDBValue(Movable):
         libduckdb.duckdb_free(c_str.bitcast[NoneType]())
         return result
 
-    fn get_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def get_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Gets the logical type of this value.
 
         The returned type is borrowed from the value and will not be destroyed.

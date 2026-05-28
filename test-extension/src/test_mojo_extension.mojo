@@ -20,22 +20,22 @@ from duckdb.aggregate_function import AggregateFunction
 # ===--------------------------------------------------------------------===#
 
 
-fn add_numbers(a: Int64, b: Int64) -> Int64:
+def add_numbers(a: Int64, b: Int64) -> Int64:
     """Adds two integers together."""
     return a + b
 
 
-fn negate(x: Int64) -> Int64:
+def negate(x: Int64) -> Int64:
     """Negates the input."""
     return -x
 
 
-fn multiply(a: Float64, b: Float64) -> Float64:
+def multiply(a: Float64, b: Float64) -> Float64:
     """Multiplies two floats."""
     return a * b
 
 
-fn double_value(x: Int64) -> Int64:
+def double_value(x: Int64) -> Int64:
     """Doubles the input value."""
     return x * 2
 
@@ -45,7 +45,7 @@ fn double_value(x: Int64) -> Int64:
 # ===--------------------------------------------------------------------===#
 
 
-fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+def init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
     """Register all test extension functions."""
     # Binary scalar (row-at-a-time): BIGINT x BIGINT -> BIGINT
     ScalarFunction.from_function[
@@ -72,7 +72,7 @@ fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
 
 
 @export("mojo_init_c_api", ABI="C")
-fn mojo_init_c_api(
+def mojo_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) -> Bool:

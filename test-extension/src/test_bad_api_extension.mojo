@@ -10,7 +10,7 @@ from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 
 
-fn get_invalid_version() -> String:
+def get_invalid_version() -> String:
     """Return the invalid version string to test.
     
     Using a function to construct the string helps avoid PIC issues
@@ -19,7 +19,7 @@ fn get_invalid_version() -> String:
     return "v9999.0.0"
 
 
-fn get_error_message() -> String:
+def get_error_message() -> String:
     """Construct the error message dynamically.
     
     Using a function to build the string helps avoid PIC issues
@@ -30,7 +30,7 @@ fn get_error_message() -> String:
 
 
 @export("bad_api_init_c_api", ABI="C")
-fn bad_api_init_c_api(
+def bad_api_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) -> Bool:

@@ -46,7 +46,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     var _db: Database
     var _conn: duckdb_connection
 
-    fn __init__(out self, path: String) raises:
+    def __init__(out self, path: String) raises:
         """Create a connection with a new database."""
         self._db = Database(path)
         self._conn = UnsafePointer[
@@ -58,7 +58,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
-    fn __init__(out self, path: String, config: Config) raises:
+    def __init__(out self, path: String, config: Config) raises:
         """Create a connection with a new database and startup configuration.
 
         Args:
@@ -75,7 +75,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
-    fn __init__(out self, db: Database) raises:
+    def __init__(out self, db: Database) raises:
         """Create a connection from an existing database.
 
         Args:
@@ -91,11 +91,11 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
 
-    fn execute(self, query: String) raises ResultError -> Result:
+    def execute(self, query: String) raises ResultError -> Result:
         var result = duckdb_result()
         var result_ptr = UnsafePointer(to=result)
         var _query = query.copy()

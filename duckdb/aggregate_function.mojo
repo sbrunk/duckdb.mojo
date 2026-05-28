@@ -25,7 +25,7 @@ struct AggregateFunctionInfo:
 
     var _info: duckdb_function_info
 
-    fn __init__(out self, info: duckdb_function_info):
+    def __init__(out self, info: duckdb_function_info):
         """Creates an AggregateFunctionInfo from a duckdb_function_info pointer.
 
         This is a non-owning wrapper - the pointer is managed by DuckDB.
@@ -35,7 +35,7 @@ struct AggregateFunctionInfo:
         """
         self._info = info
 
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `AggregateFunction.set_extra_info()`.
 
         Returns:
@@ -44,7 +44,7 @@ struct AggregateFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_aggregate_function_get_extra_info(self._info)
 
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports an error during aggregate function execution.
 
         This should be called when the function encounters an error.
@@ -79,7 +79,7 @@ struct AggregateState:
 
     var _state: duckdb_aggregate_state
 
-    fn __init__(out self, state: duckdb_aggregate_state):
+    def __init__(out self, state: duckdb_aggregate_state):
         """Creates an AggregateState wrapper.
 
         Args:
@@ -87,7 +87,7 @@ struct AggregateState:
         """
         self._state = state
 
-    fn get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Returns a pointer to the state's internal data.
 
         The `duckdb_aggregate_state` pointer directly points to user state data.
@@ -127,7 +127,7 @@ struct AggregateStateArray(Sized):
     var _states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]
     var _count: Int
 
-    fn __init__(out self, states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], count: Int = 0):
+    def __init__(out self, states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], count: Int = 0):
         """Creates an AggregateStateArray wrapper.
 
         Args:
@@ -137,7 +137,7 @@ struct AggregateStateArray(Sized):
         self._states = states
         self._count = count
 
-    fn get_state(self, index: Int) -> AggregateState:
+    def get_state(self, index: Int) -> AggregateState:
         """Gets the state at the specified index.
 
         Args:
@@ -148,7 +148,7 @@ struct AggregateStateArray(Sized):
         """
         return AggregateState(self._states[index])
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         """Returns the number of states in this array.
 
         Returns:
@@ -167,11 +167,11 @@ struct _ReduceState[D: DType](Movable):
     var value: Scalar[Self.D]
     var count: Int64
 
-    fn __init__(out self, *, value: Scalar[Self.D], count: Int64):
+    def __init__(out self, *, value: Scalar[Self.D], count: Int64):
         self.value = value
         self.count = count
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self.value = take.value
         self.count = take.count
 
@@ -239,7 +239,7 @@ struct AggregateFunction(Movable):
 
     var _function: duckdb_aggregate_function
 
-    fn __init__(out self):
+    def __init__(out self):
         """Creates a new aggregate function.
 
         The function must be destroyed with `__del__` or by letting it go out of scope.
@@ -247,18 +247,18 @@ struct AggregateFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_aggregate_function()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the aggregate function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_aggregate_function(
             UnsafePointer(to=self._function)
         )
 
-    fn set_name(self, name: String):
+    def set_name(self, name: String):
         """Sets the name of the aggregate function.
 
         Args:
@@ -271,7 +271,7 @@ struct AggregateFunction(Movable):
             name_copy.as_c_string_slice().unsafe_ptr(),
         )
 
-    fn add_parameter(self, type: LogicalType):
+    def add_parameter(self, type: LogicalType):
         """Adds a parameter to the aggregate function.
 
         Args:
@@ -282,7 +282,7 @@ struct AggregateFunction(Movable):
             self._function, type._logical_type
         )
 
-    fn set_return_type(self, type: LogicalType):
+    def set_return_type(self, type: LogicalType):
         """Sets the return type of the aggregate function.
 
         Args:
@@ -293,7 +293,7 @@ struct AggregateFunction(Movable):
             self._function, type._logical_type
         )
 
-    fn set_special_handling(self):
+    def set_special_handling(self):
         """Sets the NULL handling of the aggregate function to SPECIAL_HANDLING.
 
         When enabled, NULL values are not automatically filtered and are passed
@@ -302,7 +302,7 @@ struct AggregateFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_aggregate_function_set_special_handling(self._function)
 
-    fn set_extra_info(
+    def set_extra_info(
         self,
         extra_info: UnsafePointer[NoneType, MutAnyOrigin],
         destroy: duckdb_delete_callback_t,
@@ -321,12 +321,12 @@ struct AggregateFunction(Movable):
             self._function, extra_info, destroy
         )
 
-    fn set_functions[
-        state_size_fn: fn (AggregateFunctionInfo) -> idx_t,
-        state_init_fn: fn (AggregateFunctionInfo, AggregateState) -> None,
-        update_fn: fn (AggregateFunctionInfo, mut Chunk, AggregateStateArray) -> None,
-        combine_fn: fn (AggregateFunctionInfo, AggregateStateArray, AggregateStateArray, Int) -> None,
-        finalize_fn: fn (AggregateFunctionInfo, AggregateStateArray, Vector, Int, Int) -> None,
+    def set_functions[
+        state_size_fn: def(AggregateFunctionInfo) thin -> idx_t,
+        state_init_fn: def(AggregateFunctionInfo, AggregateState) thin -> None,
+        update_fn: def(AggregateFunctionInfo, mut Chunk, AggregateStateArray) thin -> None,
+        combine_fn: def(AggregateFunctionInfo, AggregateStateArray, AggregateStateArray, Int) thin -> None,
+        finalize_fn: def(AggregateFunctionInfo, AggregateStateArray, Vector, Int, Int) thin -> None,
     ](self):
         """Sets all callback functions for the aggregate function using high-level Mojo types.
 
@@ -381,28 +381,28 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn raw_state_size(raw_info: duckdb_function_info) -> idx_t:
+        def raw_state_size(raw_info: duckdb_function_info) abi("C") -> idx_t:
             var info = AggregateFunctionInfo(raw_info)
             return state_size_fn(info)
 
-        fn raw_state_init(
+        def raw_state_init(
             raw_info: duckdb_function_info, raw_state: duckdb_aggregate_state
-        ):
+        ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var state = AggregateState(raw_state)
             state_init_fn(info, state)
 
-        fn raw_update(
+        def raw_update(
             raw_info: duckdb_function_info,
             raw_input: duckdb_data_chunk,
             raw_states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin],
-        ):
+        ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var input_chunk = Chunk[is_owned=False](raw_input)
             var states = AggregateStateArray(raw_states)
             update_fn(info, input_chunk, states)
 
-        fn raw_combine(
+        def raw_combine(
             raw_info: duckdb_function_info,
             raw_source: UnsafePointer[
                 duckdb_aggregate_state, MutExternalOrigin
@@ -411,13 +411,13 @@ struct AggregateFunction(Movable):
                 duckdb_aggregate_state, MutExternalOrigin
             ],
             count: idx_t,
-        ):
+        ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var source = AggregateStateArray(raw_source, Int(count))
             var target = AggregateStateArray(raw_target, Int(count))
             combine_fn(info, source, target, Int(count))
 
-        fn raw_finalize(
+        def raw_finalize(
             raw_info: duckdb_function_info,
             raw_source: UnsafePointer[
                 duckdb_aggregate_state, MutExternalOrigin
@@ -425,7 +425,7 @@ struct AggregateFunction(Movable):
             raw_result: duckdb_vector,
             count: idx_t,
             offset: idx_t,
-        ):
+        ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var source = AggregateStateArray(raw_source, Int(count))
             var result = Vector[False, MutExternalOrigin](raw_result)
@@ -441,8 +441,8 @@ struct AggregateFunction(Movable):
             raw_finalize,
         )
 
-    fn set_destructor[
-        destroy_fn: fn (AggregateStateArray) -> None,
+    def set_destructor[
+        destroy_fn: def(AggregateStateArray) thin -> None,
     ](self):
         """Sets an optional state destructor callback.
 
@@ -466,10 +466,10 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn raw_destroy(
+        def raw_destroy(
             raw_states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin],
             count: idx_t,
-        ):
+        ) abi("C"):
             var states = AggregateStateArray(raw_states, Int(count))
             destroy_fn(states)
 
@@ -478,7 +478,7 @@ struct AggregateFunction(Movable):
             self._function, raw_destroy
         )
 
-    fn register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection[_]) raises:
         """Registers the aggregate function within the given connection.
 
         The function requires at least a name, a return type,
@@ -506,13 +506,13 @@ struct AggregateFunction(Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_reduce[
+    def from_reduce[
         name: StringLiteral,
         D: DType,
-        reduce_fn: fn[width: Int] (
+        reduce_fn: def[width: Int] (
             SIMD[D, width], SIMD[D, width]
-        ) -> SIMD[D, width],
-        init_fn: fn () -> Scalar[D],
+        ) thin -> SIMD[D, width],
+        init_fn: def() thin -> Scalar[D],
     ](conn: Connection[_]) raises:
         """Create and register a unary aggregate from a SIMD reduction function.
 
@@ -541,15 +541,15 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _state_size(info: AggregateFunctionInfo) -> idx_t:
+        def _state_size(info: AggregateFunctionInfo) -> idx_t:
             return idx_t(size_of[_ReduceState[D]]())
 
-        fn _state_init(info: AggregateFunctionInfo, state: AggregateState):
+        def _state_init(info: AggregateFunctionInfo, state: AggregateState):
             state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
                 _ReduceState[D](value=init_fn(), count=0)
             )
 
-        fn _update(
+        def _update(
             info: AggregateFunctionInfo,
             mut input: Chunk,
             states: AggregateStateArray,
@@ -561,7 +561,7 @@ struct AggregateFunction(Movable):
                 s[].value = reduce_fn[1](s[].value, data[i])
                 s[].count += 1
 
-        fn _combine(
+        def _combine(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             target: AggregateStateArray,
@@ -573,7 +573,7 @@ struct AggregateFunction(Movable):
                 t[].value = reduce_fn[1](t[].value, s[].value)
                 t[].count += s[].count
 
-        fn _finalize(
+        def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             result: Vector,
@@ -593,7 +593,7 @@ struct AggregateFunction(Movable):
                         UInt64(1) << UInt64(row % 64)
                     )
 
-        fn _destroy(states: AggregateStateArray):
+        def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
                 states.get_state(i).get_data().bitcast[
                     _ReduceState[D]
@@ -610,14 +610,14 @@ struct AggregateFunction(Movable):
         func.register(conn)
 
     @staticmethod
-    fn from_reduce[
+    def from_reduce[
         name: StringLiteral,
         In: DType,
         Out: DType,
-        reduce_fn: fn[width: Int] (
+        reduce_fn: def[width: Int] (
             SIMD[Out, width], SIMD[Out, width]
-        ) -> SIMD[Out, width],
-        init_fn: fn () -> Scalar[Out],
+        ) thin -> SIMD[Out, width],
+        init_fn: def() thin -> Scalar[Out],
     ](conn: Connection[_]) raises:
         """Create and register a unary aggregate with separate input/output types.
 
@@ -642,15 +642,15 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _state_size(info: AggregateFunctionInfo) -> idx_t:
+        def _state_size(info: AggregateFunctionInfo) -> idx_t:
             return idx_t(size_of[_ReduceState[Out]]())
 
-        fn _state_init(info: AggregateFunctionInfo, state: AggregateState):
+        def _state_init(info: AggregateFunctionInfo, state: AggregateState):
             state.get_data().bitcast[_ReduceState[Out]]().init_pointee_move(
                 _ReduceState[Out](value=init_fn(), count=0)
             )
 
-        fn _update(
+        def _update(
             info: AggregateFunctionInfo,
             mut input: Chunk,
             states: AggregateStateArray,
@@ -662,7 +662,7 @@ struct AggregateFunction(Movable):
                 s[].value = reduce_fn[1](s[].value, data[i].cast[Out]())
                 s[].count += 1
 
-        fn _combine(
+        def _combine(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             target: AggregateStateArray,
@@ -674,7 +674,7 @@ struct AggregateFunction(Movable):
                 t[].value = reduce_fn[1](t[].value, s[].value)
                 t[].count += s[].count
 
-        fn _finalize(
+        def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             result: Vector,
@@ -694,7 +694,7 @@ struct AggregateFunction(Movable):
                         UInt64(1) << UInt64(row % 64)
                     )
 
-        fn _destroy(states: AggregateStateArray):
+        def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
                 states.get_state(i).get_data().bitcast[
                     _ReduceState[Out]
@@ -711,13 +711,13 @@ struct AggregateFunction(Movable):
         func.register(conn)
 
     @staticmethod
-    fn from_reduce[
+    def from_reduce[
         name: StringLiteral,
         D: DType,
-        reduce_fn: fn[dtype: DType, width: Int] (
+        reduce_fn: def[dtype: DType, width: Int] (
             SIMD[dtype, width], SIMD[dtype, width]
-        ) -> SIMD[dtype, width],
-        init_fn: fn () -> Scalar[D],
+        ) thin -> SIMD[dtype, width],
+        init_fn: def() thin -> Scalar[D],
     ](conn: Connection[_]) raises:
         """Create and register a unary aggregate from a stdlib-compatible function.
 
@@ -739,15 +739,15 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _state_size(info: AggregateFunctionInfo) -> idx_t:
+        def _state_size(info: AggregateFunctionInfo) -> idx_t:
             return idx_t(size_of[_ReduceState[D]]())
 
-        fn _state_init(info: AggregateFunctionInfo, state: AggregateState):
+        def _state_init(info: AggregateFunctionInfo, state: AggregateState):
             state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
                 _ReduceState[D](value=init_fn(), count=0)
             )
 
-        fn _update(
+        def _update(
             info: AggregateFunctionInfo,
             mut input: Chunk,
             states: AggregateStateArray,
@@ -759,7 +759,7 @@ struct AggregateFunction(Movable):
                 s[].value = reduce_fn[D, 1](s[].value, data[i])
                 s[].count += 1
 
-        fn _combine(
+        def _combine(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             target: AggregateStateArray,
@@ -771,7 +771,7 @@ struct AggregateFunction(Movable):
                 t[].value = reduce_fn[D, 1](t[].value, s[].value)
                 t[].count += s[].count
 
-        fn _finalize(
+        def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             result: Vector,
@@ -791,7 +791,7 @@ struct AggregateFunction(Movable):
                         UInt64(1) << UInt64(row % 64)
                     )
 
-        fn _destroy(states: AggregateStateArray):
+        def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
                 states.get_state(i).get_data().bitcast[
                     _ReduceState[D]
@@ -812,7 +812,7 @@ struct AggregateFunction(Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_sum[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_sum[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a SUM aggregate.
 
         Computes the sum of all non-NULL input values.  Returns NULL for
@@ -829,16 +829,16 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _add[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _add[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return a + b
 
-        fn _zero() -> Scalar[D]:
+        def _zero() -> Scalar[D]:
             return 0
 
         AggregateFunction.from_reduce[name, D, _add, _zero](conn)
 
     @staticmethod
-    fn from_product[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_product[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a PRODUCT aggregate.
 
         Computes the product of all non-NULL input values.  Returns NULL for
@@ -854,16 +854,16 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _mul[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _mul[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return a * b
 
-        fn _one() -> Scalar[D]:
+        def _one() -> Scalar[D]:
             return 1
 
         AggregateFunction.from_reduce[name, D, _mul, _one](conn)
 
     @staticmethod
-    fn from_max[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_max[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MAX aggregate.
 
         Returns the maximum non-NULL input value, or NULL for empty groups.
@@ -878,16 +878,16 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _max[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _max[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return max(a, b)
 
-        fn _init() -> Scalar[D]:
+        def _init() -> Scalar[D]:
             return Scalar[D].MIN
 
         AggregateFunction.from_reduce[name, D, _max, _init](conn)
 
     @staticmethod
-    fn from_min[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_min[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MIN aggregate.
 
         Returns the minimum non-NULL input value, or NULL for empty groups.
@@ -902,16 +902,16 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _min[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _min[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return min(a, b)
 
-        fn _init() -> Scalar[D]:
+        def _init() -> Scalar[D]:
             return Scalar[D].MAX
 
         AggregateFunction.from_reduce[name, D, _min, _init](conn)
 
     @staticmethod
-    fn from_mean[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_mean[name: StringLiteral, D: DType](conn: Connection[_]) raises:
         """Create and register a MEAN (average) aggregate.
 
         Computes the arithmetic mean of all non-NULL input values.
@@ -927,15 +927,15 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        fn _state_size(info: AggregateFunctionInfo) -> idx_t:
+        def _state_size(info: AggregateFunctionInfo) -> idx_t:
             return idx_t(size_of[_ReduceState[D]]())
 
-        fn _state_init(info: AggregateFunctionInfo, state: AggregateState):
+        def _state_init(info: AggregateFunctionInfo, state: AggregateState):
             state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
                 _ReduceState[D](value=Scalar[D](0), count=0)
             )
 
-        fn _update(
+        def _update(
             info: AggregateFunctionInfo,
             mut input: Chunk,
             states: AggregateStateArray,
@@ -947,7 +947,7 @@ struct AggregateFunction(Movable):
                 s[].value += data[i]
                 s[].count += 1
 
-        fn _combine(
+        def _combine(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             target: AggregateStateArray,
@@ -959,7 +959,7 @@ struct AggregateFunction(Movable):
                 t[].value += s[].value
                 t[].count += s[].count
 
-        fn _finalize(
+        def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
             result: Vector,
@@ -979,7 +979,7 @@ struct AggregateFunction(Movable):
                         UInt64(1) << UInt64(row % 64)
                     )
 
-        fn _destroy(states: AggregateStateArray):
+        def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
                 states.get_state(i).get_data().bitcast[
                     _ReduceState[D]
@@ -1026,7 +1026,7 @@ struct AggregateFunctionSet(Movable):
 
     var _function_set: duckdb_aggregate_function_set
 
-    fn __init__(out self, name: String):
+    def __init__(out self, name: String):
         """Creates a new aggregate function set.
 
         Args:
@@ -1038,18 +1038,18 @@ struct AggregateFunctionSet(Movable):
             name_copy.as_c_string_slice().unsafe_ptr()
         )
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the aggregate function set and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_aggregate_function_set(
             UnsafePointer(to=self._function_set)
         )
 
-    fn add_function(self, function: AggregateFunction) raises:
+    def add_function(self, function: AggregateFunction) raises:
         """Adds an aggregate function as a new overload to the function set.
 
         DuckDB copies the function internally, so the original AggregateFunction
@@ -1070,7 +1070,7 @@ struct AggregateFunctionSet(Movable):
                 "Failed to add function to set - overload may already exist"
             )
 
-    fn register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection[_]) raises:
         """Registers the aggregate function set within the given connection.
 
         The set requires at least one valid overload.

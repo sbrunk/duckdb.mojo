@@ -26,7 +26,7 @@ struct TableFunctionInfo:
 
     var _info: duckdb_function_info
 
-    fn __init__(out self, info: duckdb_function_info):
+    def __init__(out self, info: duckdb_function_info):
         """Creates a TableFunctionInfo from a duckdb_function_info pointer.
 
         Args:
@@ -34,7 +34,7 @@ struct TableFunctionInfo:
         """
         self._info = info
 
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info()`.
 
         Returns:
@@ -43,7 +43,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_extra_info(self._info)
 
-    fn get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the bind data set during the bind phase.
 
         Note that the bind data is read-only during execution.
@@ -54,7 +54,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_bind_data(self._info)
 
-    fn get_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the init data set during the init phase.
 
         Returns:
@@ -63,7 +63,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_init_data(self._info)
 
-    fn get_local_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_local_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the thread-local init data set during the local init phase.
 
         Returns:
@@ -72,7 +72,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_local_init_data(self._info)
 
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports an error during function execution.
 
         This should be called when the function encounters an error.
@@ -108,7 +108,7 @@ struct TableBindInfo:
 
     var _info: duckdb_bind_info
 
-    fn __init__(out self, info: duckdb_bind_info):
+    def __init__(out self, info: duckdb_bind_info):
         """Creates a TableBindInfo wrapper.
 
         Args:
@@ -116,7 +116,7 @@ struct TableBindInfo:
         """
         self._info = info
 
-    fn add_result_column(self, name: String, type: LogicalType):
+    def add_result_column(self, name: String, type: LogicalType):
         """Adds a result column to the output of the table function.
 
         Args:
@@ -131,7 +131,7 @@ struct TableBindInfo:
             type._logical_type,
         )
 
-    fn get_parameter_count(self) -> idx_t:
+    def get_parameter_count(self) -> idx_t:
         """Retrieves the number of regular (non-named) parameters.
 
         Returns:
@@ -140,7 +140,7 @@ struct TableBindInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_bind_get_parameter_count(self._info)
 
-    fn get_parameter(self, index: idx_t) -> DuckDBValue:
+    def get_parameter(self, index: idx_t) -> DuckDBValue:
         """Retrieves the parameter at the given index.
 
         Args:
@@ -154,7 +154,7 @@ struct TableBindInfo:
             libduckdb.duckdb_bind_get_parameter(self._info, index)
         )
 
-    fn get_named_parameter(self, name: String) -> DuckDBValue:
+    def get_named_parameter(self, name: String) -> DuckDBValue:
         """Retrieves a named parameter with the given name.
 
         Args:
@@ -172,7 +172,7 @@ struct TableBindInfo:
             )
         )
 
-    fn set_bind_data(
+    def set_bind_data(
         self,
         bind_data: UnsafePointer[NoneType, MutAnyOrigin],
         destroy: duckdb_delete_callback_t,
@@ -189,7 +189,7 @@ struct TableBindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_bind_set_bind_data(self._info, bind_data, destroy)
 
-    fn set_cardinality(self, cardinality: idx_t, is_exact: Bool):
+    def set_cardinality(self, cardinality: idx_t, is_exact: Bool):
         """Sets the cardinality estimate for the table function, used for optimization.
 
         Args:
@@ -199,7 +199,7 @@ struct TableBindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_bind_set_cardinality(self._info, cardinality, is_exact)
 
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports that an error has occurred during binding.
 
         Args:
@@ -212,7 +212,7 @@ struct TableBindInfo:
             error_copy.as_c_string_slice().unsafe_ptr(),
         )
 
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info`.
 
         Returns:
@@ -240,7 +240,7 @@ struct TableInitInfo:
 
     var _info: duckdb_init_info
 
-    fn __init__(out self, info: duckdb_init_info):
+    def __init__(out self, info: duckdb_init_info):
         """Creates a TableInitInfo wrapper.
 
         Args:
@@ -248,7 +248,7 @@ struct TableInitInfo:
         """
         self._info = info
 
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info`.
 
         Returns:
@@ -257,7 +257,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_extra_info(self._info)
 
-    fn get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the bind data set during the bind phase.
 
         Returns:
@@ -266,7 +266,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_bind_data(self._info)
 
-    fn set_init_data(
+    def set_init_data(
         self,
         init_data: UnsafePointer[NoneType, MutAnyOrigin],
         destroy: duckdb_delete_callback_t,
@@ -283,7 +283,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_init_set_init_data(self._info, init_data, destroy)
 
-    fn get_column_count(self) -> idx_t:
+    def get_column_count(self) -> idx_t:
         """Returns the number of projected columns.
 
         This function must be used if projection pushdown is enabled.
@@ -294,7 +294,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_column_count(self._info)
 
-    fn get_column_index(self, column_index: idx_t) -> idx_t:
+    def get_column_index(self, column_index: idx_t) -> idx_t:
         """Returns the column index of the projected column at the specified position.
 
         This function must be used if projection pushdown is enabled.
@@ -308,7 +308,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_column_index(self._info, column_index)
 
-    fn set_max_threads(self, max_threads: idx_t):
+    def set_max_threads(self, max_threads: idx_t):
         """Sets how many threads can process this table function in parallel.
 
         Args:
@@ -317,7 +317,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_init_set_max_threads(self._info, max_threads)
 
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports that an error has occurred during init.
 
         Args:
@@ -375,7 +375,7 @@ struct TableFunction(Movable):
 
     var _function: duckdb_table_function
 
-    fn __init__(out self):
+    def __init__(out self):
         """Creates a new table function.
 
         The function must be destroyed with `__del__` or by letting it go out of scope.
@@ -383,18 +383,18 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_table_function()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the table function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_table_function(
             UnsafePointer(to=self._function)
         )
 
-    fn set_name(self, name: String):
+    def set_name(self, name: String):
         """Sets the name of the table function.
 
         Args:
@@ -407,7 +407,7 @@ struct TableFunction(Movable):
             name_copy.as_c_string_slice().unsafe_ptr(),
         )
 
-    fn add_parameter(self, type: LogicalType):
+    def add_parameter(self, type: LogicalType):
         """Adds a parameter to the table function.
 
         Args:
@@ -418,7 +418,7 @@ struct TableFunction(Movable):
             self._function, type._logical_type
         )
 
-    fn add_named_parameter(self, name: String, type: LogicalType):
+    def add_named_parameter(self, name: String, type: LogicalType):
         """Adds a named parameter to the table function.
 
         Args:
@@ -433,7 +433,7 @@ struct TableFunction(Movable):
             type._logical_type,
         )
 
-    fn set_extra_info(
+    def set_extra_info(
         self,
         extra_info: UnsafePointer[NoneType, MutAnyOrigin],
         destroy: duckdb_delete_callback_t,
@@ -451,8 +451,8 @@ struct TableFunction(Movable):
             self._function, extra_info, destroy
         )
 
-    fn set_bind[
-        func: fn(TableBindInfo) -> None,
+    def set_bind[
+        func: def(TableBindInfo) thin -> None,
     ](self):
         """Sets the bind function using the high-level `TableBindInfo` type.
 
@@ -463,14 +463,14 @@ struct TableFunction(Movable):
             func: Your bind function with signature `fn(TableBindInfo) -> None`.
         """
 
-        fn wrapper(raw_info: duckdb_bind_info):
+        def wrapper(raw_info: duckdb_bind_info) abi("C"):
             var info = TableBindInfo(raw_info)
             func(info)
 
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_bind(self._function, wrapper)
 
-    fn set_bind_raw(self, bind: duckdb_table_function_bind_t):
+    def set_bind_raw(self, bind: duckdb_table_function_bind_t):
         """Sets the bind function using the raw FFI callback type.
 
         Args:
@@ -479,8 +479,8 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_bind(self._function, bind)
 
-    fn set_init[
-        func: fn(TableInitInfo) -> None,
+    def set_init[
+        func: def(TableInitInfo) thin -> None,
     ](self):
         """Sets the init function using the high-level `TableInitInfo` type.
 
@@ -490,14 +490,14 @@ struct TableFunction(Movable):
             func: Your init function with signature `fn(TableInitInfo) -> None`.
         """
 
-        fn wrapper(raw_info: duckdb_init_info):
+        def wrapper(raw_info: duckdb_init_info) abi("C"):
             var info = TableInitInfo(raw_info)
             func(info)
 
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_init(self._function, wrapper)
 
-    fn set_init_raw(self, init: duckdb_table_function_init_t):
+    def set_init_raw(self, init: duckdb_table_function_init_t):
         """Sets the init function using the raw FFI callback type.
 
         Args:
@@ -506,8 +506,8 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_init(self._function, init)
 
-    fn set_local_init[
-        func: fn(TableInitInfo) -> None,
+    def set_local_init[
+        func: def(TableInitInfo) thin -> None,
     ](self):
         """Sets the thread-local init function using the high-level `TableInitInfo` type.
 
@@ -515,14 +515,14 @@ struct TableFunction(Movable):
             func: Your init function with signature `fn(TableInitInfo) -> None`.
         """
 
-        fn wrapper(raw_info: duckdb_init_info):
+        def wrapper(raw_info: duckdb_init_info) abi("C"):
             var info = TableInitInfo(raw_info)
             func(info)
 
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_local_init(self._function, wrapper)
 
-    fn set_local_init_raw(self, init: duckdb_table_function_init_t):
+    def set_local_init_raw(self, init: duckdb_table_function_init_t):
         """Sets the thread-local init function using the raw FFI callback type.
 
         Args:
@@ -531,8 +531,8 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_local_init(self._function, init)
 
-    fn set_function[
-        func: fn(TableFunctionInfo, mut Chunk) -> None,
+    def set_function[
+        func: def(TableFunctionInfo, mut Chunk) thin -> None,
     ](self):
         """Sets the main execution function using high-level Mojo types.
 
@@ -558,9 +558,9 @@ struct TableFunction(Movable):
         ```
         """
 
-        fn wrapper(
+        def wrapper(
             raw_info: duckdb_function_info, raw_output: duckdb_data_chunk
-        ):
+        ) abi("C"):
             var info = TableFunctionInfo(raw_info)
             var output_chunk = Chunk[is_owned=False](raw_output)
             func(info, output_chunk)
@@ -568,7 +568,7 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_function(self._function, wrapper)
 
-    fn set_function_raw(self, function: duckdb_table_function_t):
+    def set_function_raw(self, function: duckdb_table_function_t):
         """Sets the main function using the raw FFI callback type.
 
         Args:
@@ -577,7 +577,7 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_function(self._function, function)
 
-    fn supports_projection_pushdown(self, pushdown: Bool):
+    def supports_projection_pushdown(self, pushdown: Bool):
         """Sets whether the table function supports projection pushdown.
 
         If enabled, the system will provide a list of all required columns in the init
@@ -591,7 +591,7 @@ struct TableFunction(Movable):
             self._function, pushdown
         )
 
-    fn register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection[_]) raises:
         """Registers the table function within the given connection.
 
         The function requires at least a name, a bind function, an init function,

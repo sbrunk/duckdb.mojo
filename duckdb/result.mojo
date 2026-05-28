@@ -33,7 +33,7 @@ struct ResultType(
     """Result represents a query result with data."""
 
     @always_inline
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Returns True if this result type equals the other result type.
 
         Args:
@@ -44,7 +44,7 @@ struct ResultType(
         """
         return self._value == other._value
 
-    fn __lt__(self, other: Self) -> Bool:
+    def __lt__(self, other: Self) -> Bool:
         """Returns True if this result type is less than the other result type.
 
         Args:
@@ -56,7 +56,7 @@ struct ResultType(
         """
         return self._value < other._value
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Writes the string representation of this result type to a writer.
 
         Parameters:
@@ -75,7 +75,7 @@ struct ResultType(
             writer.write("QUERY_RESULT")
 
     @no_inline
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         """Returns the string representation of this result type.
 
         Returns:
@@ -85,7 +85,7 @@ struct ResultType(
         return String.write(self)
 
     @no_inline
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         """Returns the detailed string representation of this result type.
 
         Returns:
@@ -239,7 +239,7 @@ struct ErrorType(
     """Invalid configuration error."""
 
     @always_inline
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Returns True if this error type equals the other error type.
 
         Args:
@@ -250,7 +250,7 @@ struct ErrorType(
         """
         return self._value == other._value
 
-    fn __lt__(self, other: Self) -> Bool:
+    def __lt__(self, other: Self) -> Bool:
         """Returns True if this error type is less than the other error type.
 
         Args:
@@ -262,7 +262,7 @@ struct ErrorType(
         """
         return self._value < other._value
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Writes the string representation of this error type to a writer.
 
         Parameters:
@@ -359,7 +359,7 @@ struct ErrorType(
             writer.write("INVALID_CONFIGURATION")
 
     @no_inline
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         """Returns the string representation of this error type.
 
         Returns:
@@ -369,7 +369,7 @@ struct ErrorType(
         return String.write(self)
 
     @no_inline
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         """Returns the detailed string representation of this error type.
 
         Returns:
@@ -454,7 +454,7 @@ struct StatementType(
     """CALL statement."""
 
     @always_inline
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Returns True if this statement type equals the other statement type.
 
         Args:
@@ -465,7 +465,7 @@ struct StatementType(
         """
         return self._value == other._value
 
-    fn __lt__(self, other: Self) -> Bool:
+    def __lt__(self, other: Self) -> Bool:
         """Returns True if this statement type is less than the other statement type.
 
         Args:
@@ -477,7 +477,7 @@ struct StatementType(
         """
         return self._value < other._value
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Writes the string representation of this statement type to a writer.
 
         Parameters:
@@ -528,7 +528,7 @@ struct StatementType(
             writer.write("CALL")
 
     @no_inline
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         """Returns the string representation of this statement type.
 
         Returns:
@@ -538,7 +538,7 @@ struct StatementType(
         return String.write(self)
 
     @no_inline
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         """Returns the detailed string representation of this statement type.
 
         Returns:
@@ -554,12 +554,12 @@ struct Column(Movable & Copyable & Writable):
     var name: String
     var type: LogicalType[is_owned=True, origin=MutExternalOrigin]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Column(", self.index, ", ", self.name, ": ", self.type, ")"
         )
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.type)
 
 
@@ -584,7 +584,7 @@ struct Result(Writable, Iterable, Movable):
     var _result: duckdb_result
     var columns: List[Column]
 
-    fn __init__(out self, result: duckdb_result):
+    def __init__(out self, result: duckdb_result):
         self._result = result
         self.columns = List[Column]()
         for i in range(self.column_count()):
@@ -594,20 +594,20 @@ struct Result(Writable, Iterable, Movable):
             )
             self.columns.append(col^)
 
-    fn column_count(self) -> Int:
+    def column_count(self) -> Int:
         ref libduckdb = DuckDB().libduckdb()
         return Int(
             libduckdb.duckdb_column_count(UnsafePointer(to=self._result))
         )
 
-    fn column_name(self, col: Int) -> String:
+    def column_name(self, col: Int) -> String:
         ref libduckdb = DuckDB().libduckdb()
         var c_str = libduckdb.duckdb_column_name(
             UnsafePointer(to=self._result), UInt64(col)
         )
         return String(unsafe_from_utf8_ptr=c_str)
 
-    fn column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
         var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
         for i in range(self.column_count()):
             # Copy the borrowed type to create an owned version
@@ -615,7 +615,7 @@ struct Result(Writable, Iterable, Movable):
             types.append(LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id()))
         return types^
 
-    fn column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](
             libduckdb.duckdb_column_logical_type(
@@ -623,7 +623,7 @@ struct Result(Writable, Iterable, Movable):
             )
         )
 
-    fn statement_type(self) -> StatementType:
+    def statement_type(self) -> StatementType:
         """Returns the statement type of the statement that was executed.
         
         Returns:
@@ -632,7 +632,7 @@ struct Result(Writable, Iterable, Movable):
         ref libduckdb = DuckDB().libduckdb()
         return StatementType(libduckdb.duckdb_result_statement_type(self._result))
 
-    fn rows_changed(self) -> Int:
+    def rows_changed(self) -> Int:
         """Returns the number of rows changed by the query stored in the result.
         
         This is relevant only for INSERT/UPDATE/DELETE queries. For other queries the rows_changed will be 0.
@@ -642,14 +642,14 @@ struct Result(Writable, Iterable, Movable):
         ref libduckdb = DuckDB().libduckdb()
         return Int(libduckdb.duckdb_rows_changed(UnsafePointer(to=self._result)))
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         for col in self.columns:
             writer.write(col, ", ")
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
         """Iterate over rows in this result.
 
         Example:
@@ -660,7 +660,7 @@ struct Result(Writable, Iterable, Movable):
         """
         return RowIter(Pointer(to=self))
 
-    fn fetch_chunk(self) raises -> Chunk[is_owned=True]:
+    def fetch_chunk(self) raises -> Chunk[is_owned=True]:
         """Fetch the next data chunk from the streaming result.
 
         Raises when no more chunks remain.  The returned chunk is owned
@@ -675,7 +675,7 @@ struct Result(Writable, Iterable, Movable):
             raise Error("No more chunks available")
         return Chunk[is_owned=True](raw)
 
-    fn chunks(ref self) -> ChunkIter[ImmutOrigin(origin_of(self))]:
+    def chunks(ref self) -> ChunkIter[ImmutOrigin(origin_of(self))]:
         """Iterate over data chunks in this result.
 
         Returns:
@@ -689,7 +689,7 @@ struct Result(Writable, Iterable, Movable):
         """
         return ChunkIter(Pointer(to=self))
 
-    fn rows(ref self) -> RowIter[ImmutOrigin(origin_of(self))]:
+    def rows(ref self) -> RowIter[ImmutOrigin(origin_of(self))]:
         """Iterate over rows — explicit spelling of ``__iter__``.
 
         Equivalent to ``for row in result``, provided for
@@ -707,7 +707,7 @@ struct Result(Writable, Iterable, Movable):
         """
         return RowIter(Pointer(to=self))
 
-    fn fetchall(var self) raises -> MaterializedResult:
+    def fetchall(var self) raises -> MaterializedResult:
         """Fetch all chunks into memory and return a MaterializedResult.
 
         Consumes this Result (streaming is exhausted).
@@ -717,11 +717,11 @@ struct Result(Writable, Iterable, Movable):
         """
         return MaterializedResult(self^)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_result(UnsafePointer(to=self._result))
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self._result = take._result^
         self.columns = take.columns^
 
@@ -745,7 +745,7 @@ struct ResultError(Writable):
     # ===-------------------------------------------------------------------===#
 
     @always_inline
-    fn __init__(
+    def __init__(
         out self, 
         var value: String, 
         type: ErrorType = ErrorType.INVALID,
@@ -766,7 +766,7 @@ struct ResultError(Writable):
 
     @always_inline
     @implicit
-    fn __init__(out self, value: StringLiteral):
+    def __init__(out self, value: StringLiteral):
         """Construct a ResultError object with a given string literal.
 
         Args:
@@ -778,7 +778,7 @@ struct ResultError(Writable):
 
     @no_inline
     @implicit
-    fn __init__(out self, value: Some[Writable]):
+    def __init__(out self, value: Some[Writable]):
         """Construct a ResultError object from a Writable argument.
 
         Args:
@@ -789,7 +789,7 @@ struct ResultError(Writable):
         self._stack_trace = StackTrace.collect_if_enabled(0)
 
     @no_inline
-    fn __init__[*Ts: Writable](out self, *args: *Ts):
+    def __init__[*Ts: Writable](out self, *args: *Ts):
         """Construct a ResultError by concatenating a sequence of Writable arguments.
 
         Args:
@@ -799,14 +799,14 @@ struct ResultError(Writable):
             Ts: The types of the arguments to format. Each type must satisfy
                 `Writable`.
         """
-        self = ResultError(String(args), depth=0)
+        self = ResultError(String(*args), depth=0)
 
     # ===-------------------------------------------------------------------===#
     # Trait implementations
     # ===-------------------------------------------------------------------===#
 
     @no_inline
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         """Converts the ResultError to string representation.
 
         Returns:
@@ -815,7 +815,7 @@ struct ResultError(Writable):
         return String(self.message)
 
     @no_inline
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """
         Formats this error to the provided Writer.
 
@@ -828,7 +828,7 @@ struct ResultError(Writable):
         self.message.write_to(writer)
 
     @no_inline
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         """Converts the ResultError to printable representation.
 
         Returns:
@@ -846,7 +846,7 @@ struct MaterializedResult(Sized, Movable):
     var chunks: List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]
     var size: Int
 
-    fn __init__(out self, var result: Result) raises:
+    def __init__(out self, var result: Result) raises:
         self.result = result^
         self.chunks = List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]()
         self.size = 0
@@ -860,25 +860,25 @@ struct MaterializedResult(Sized, Movable):
             except StopIteration:
                 break
 
-    fn column_count(self) -> Int:
+    def column_count(self) -> Int:
         return self.result.column_count()
 
-    fn column_name(self, col: Int) -> String:
+    def column_name(self, col: Int) -> String:
         return self.result.column_name(col)
 
-    fn column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
         return self.result.column_types()
 
-    fn column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self.result)]:
+    def column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self.result)]:
         return self.result.column_type(col)
 
-    fn columns(self) -> List[Column]:
+    def columns(self) -> List[Column]:
         return self.result.columns.copy()
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self.size
 
-    fn get[
+    def get[
         T: Copyable & Movable
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
@@ -910,7 +910,7 @@ struct MaterializedResult(Sized, Movable):
             result.extend(chunk_ptr[].get[T](col=col))
         return result^
 
-    fn get[
+    def get[
         T: Copyable & Movable
     ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value.
@@ -941,7 +941,7 @@ struct MaterializedResult(Sized, Movable):
         var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
         return self.chunks[chunk_idx][].get[T](col=col, row=chunk_offset)
 
-    fn get[
+    def get[
         T: Copyable & Movable
     ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
@@ -971,7 +971,7 @@ struct MaterializedResult(Sized, Movable):
         var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
         return self.chunks[chunk_idx][].get[T](row=chunk_offset)
 
-    fn get[
+    def get[
         T: Copyable & Movable
     ](self) raises -> List[T]:
         """Deserialize all rows into a list of Mojo structs.
@@ -993,7 +993,7 @@ struct MaterializedResult(Sized, Movable):
             result.extend(chunk_ptr[].get[T]())
         return result^
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         for chunk_ptr in self.chunks:
             chunk_ptr.destroy_pointee()
             chunk_ptr.free()
@@ -1027,10 +1027,10 @@ struct ChunkIter[
 
     var _result: Pointer[Result, Self.origin]
 
-    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
         return self.copy()
 
-    fn __next__(mut self) raises StopIteration -> Chunk[is_owned=True]:
+    def __next__(mut self) raises StopIteration -> Chunk[is_owned=True]:
         ref libduckdb = DuckDB().libduckdb()
         var raw = libduckdb.duckdb_fetch_chunk(self._result[]._result)
         if not raw:
@@ -1072,7 +1072,7 @@ struct RowIter[
     var _chunk_size: Int
     var _exhausted: Bool
 
-    fn __init__(out self, result_ptr: Pointer[Result, Self.origin]):
+    def __init__(out self, result_ptr: Pointer[Result, Self.origin]):
         self._result = result_ptr
         self._raw_chunk = duckdb_data_chunk()
         self._num_cols = 0
@@ -1080,17 +1080,17 @@ struct RowIter[
         self._chunk_size = 0
         self._exhausted = False
 
-    fn __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
         return self.copy()
 
-    fn _destroy_current_chunk(mut self):
+    def _destroy_current_chunk(mut self):
         """Destroy the current chunk if it exists."""
         if self._raw_chunk:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._raw_chunk))
             self._raw_chunk = duckdb_data_chunk()
 
-    fn __next__(mut self) raises StopIteration -> Row:
+    def __next__(mut self) raises StopIteration -> Row:
         # Advance to next chunk if current one is exhausted
         while self._chunk_row >= self._chunk_size:
             if self._exhausted:

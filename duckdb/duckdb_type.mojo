@@ -90,11 +90,11 @@ struct DuckDBType(
     comptime time_ns = DuckDBType(DUCKDB_TYPE_TIME_NS)
     """DuckDB type: TIME_NS, time in nanoseconds."""
 
-    # fn __init__(out self, value: LogicalType):
+    # def __init__(out self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""
     #     self = value.get_type_id()
 
-    fn is_fixed_size(self) -> Bool:
+    def is_fixed_size(self) -> Bool:
         return self in Set(
             DuckDBType.boolean,
             DuckDBType.tinyint,
@@ -122,7 +122,7 @@ struct DuckDBType(
             DuckDBType.time_ns,
         )
 
-    fn is_nested(self) -> Bool:
+    def is_nested(self) -> Bool:
         return self in Set(
             DuckDBType.list,
             DuckDBType.struct_t,
@@ -132,7 +132,7 @@ struct DuckDBType(
         )
 
     @always_inline
-    fn __init__(out self, *, other: Self):
+    def __init__(out self, *, other: Self):
         """Copy this DuckDBType.
 
         Args:
@@ -140,18 +140,18 @@ struct DuckDBType(
         """
         self = other
 
-    fn __hash__[H: Hasher](self, mut hasher: H):
+    def __hash__[H: Hasher](self, mut hasher: H):
         hasher.update(self.value)
 
     @always_inline("nodebug")
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "DuckDBType." + String(self)
 
     @always_inline("nodebug")
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self == DuckDBType.invalid:
             return writer.write("invalid")
         if self == DuckDBType.tinyint:
@@ -224,15 +224,15 @@ struct DuckDBType(
             return writer.write("time_ns")
         return writer.write("<<unknown>>")
 
-    fn __eq__(self, rhs: DuckDBType) -> Bool:
+    def __eq__(self, rhs: DuckDBType) -> Bool:
         return self.value == rhs.value
 
     @always_inline("nodebug")
-    fn __ne__(self, rhs: DuckDBType) -> Bool:
+    def __ne__(self, rhs: DuckDBType) -> Bool:
         return self.value != rhs.value
 
     @staticmethod
-    fn from_dtype[dtype: DType]() -> Self:
+    def from_dtype[dtype: DType]() -> Self:
         """Convert a Mojo numeric DType to a DuckDBType."""
         if dtype == DType.bool:
             return DuckDBType.boolean
@@ -258,7 +258,7 @@ struct DuckDBType(
             return DuckDBType.double
         return DuckDBType.invalid
 
-    fn to_dtype(self) -> DType:
+    def to_dtype(self) -> DType:
         """Convert a DuckDBType to a Mojo numeric DType."""
         if self == DuckDBType.boolean:
             return DType.bool
@@ -291,35 +291,35 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
     var days: Int32
 
-    fn __init__(out self, year: Int32, month: Int8, day: Int8):
+    def __init__(out self, year: Int32, month: Int8, day: Int8):
         """Create a Date from year, month, and day components."""
         self = DuckDB().libduckdb().duckdb_to_date(duckdb_date_struct(year, month, day))
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         return writer.write(self.year(), "-", self.month(), "-", self.day())
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "Date(" + String(self.days) + ")"
 
-    fn __eq__(self, other: Date) -> Bool:
+    def __eq__(self, other: Date) -> Bool:
         return self.days == other.days
 
-    fn __ne__(self, other: Date) -> Bool:
+    def __ne__(self, other: Date) -> Bool:
         return not self == other
 
-    fn _parts(self) -> duckdb_date_struct:
+    def _parts(self) -> duckdb_date_struct:
         return DuckDB().libduckdb().duckdb_from_date(self)
 
-    fn year(self) -> Int32:
+    def year(self) -> Int32:
         return self._parts().year
 
-    fn month(self) -> Int8:
+    def month(self) -> Int8:
         return self._parts().month
 
-    fn day(self) -> Int8:
+    def day(self) -> Int8:
         return self._parts().day
 
 
@@ -329,44 +329,44 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
     var micros: Int64
 
-    fn __init__(out self, hour: Int8, minute: Int8, second: Int8, micros: Int32):
+    def __init__(out self, hour: Int8, minute: Int8, second: Int8, micros: Int32):
         """Create a Time from hour, minute, second, and microseconds."""
         self = DuckDB().libduckdb().duckdb_to_time(
             duckdb_time_struct(hour, minute, second, micros)
         )
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         return writer.write(self.hour(), ":", self.minute(), ":", self.second())
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "Time(" + String(self.micros) + ")"
 
-    fn to_seconds(self) -> Float64:
+    def to_seconds(self) -> Float64:
         """Convert to seconds since midnight as a Float64."""
         return self.micros.cast[DType.float64]() / 1_000_000.0
 
-    fn __eq__(self, other: Time) -> Bool:
+    def __eq__(self, other: Time) -> Bool:
         return self.micros == other.micros
 
-    fn __ne__(self, other: Time) -> Bool:
+    def __ne__(self, other: Time) -> Bool:
         return not self == other
 
-    fn _parts(self) -> duckdb_time_struct:
+    def _parts(self) -> duckdb_time_struct:
         return DuckDB().libduckdb().duckdb_from_time(self)
 
-    fn hour(self) -> Int8:
+    def hour(self) -> Int8:
         return self._parts().hour
 
-    fn minute(self) -> Int8:
+    def minute(self) -> Int8:
         return self._parts().min
 
-    fn second(self) -> Int8:
+    def second(self) -> Int8:
         return self._parts().sec
 
-    fn micro(self) -> Int32:
+    def micro(self) -> Int32:
         return self._parts().micros
 
 
@@ -376,7 +376,7 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
     var micros: Int64
 
-    fn __init__(out self, date: Date, time: Time):
+    def __init__(out self, date: Date, time: Time):
         """Create a Timestamp from a Date and Time."""
         ref libduckdb = DuckDB().libduckdb()
         self = libduckdb.duckdb_to_timestamp(
@@ -385,26 +385,26 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
             )
         )
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         return writer.write(self.date(), " ", self.time())
 
-    fn __eq__(self, other: Timestamp) -> Bool:
+    def __eq__(self, other: Timestamp) -> Bool:
         return self.micros == other.micros
 
-    fn __ne__(self, other: Timestamp) -> Bool:
+    def __ne__(self, other: Timestamp) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "Timestamp(" + String(self.micros) + ")"
 
-    fn to_seconds(self) -> Float64:
+    def to_seconds(self) -> Float64:
         """Convert to seconds since epoch as a Float64."""
         return self.micros.cast[DType.float64]() / 1_000_000.0
 
-    fn __init__(out self, *, seconds: Float64):
+    def __init__(out self, *, seconds: Float64):
         """Create a Timestamp from seconds since epoch.
 
         Args:
@@ -412,25 +412,25 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
         """
         self.micros = (seconds * 1_000_000.0).cast[DType.int64]()
 
-    fn to_timestamp_s(self) -> TimestampS:
+    def to_timestamp_s(self) -> TimestampS:
         """Convert to second-precision timestamp (truncates sub-second part)."""
         return TimestampS(self.micros // 1_000_000)
 
-    fn to_timestamp_ms(self) -> TimestampMS:
+    def to_timestamp_ms(self) -> TimestampMS:
         """Convert to millisecond-precision timestamp (truncates sub-ms part)."""
         return TimestampMS(self.micros // 1_000)
 
-    fn to_timestamp_ns(self) -> TimestampNS:
+    def to_timestamp_ns(self) -> TimestampNS:
         """Convert to nanosecond-precision timestamp."""
         return TimestampNS(self.micros * 1_000)
 
-    fn _parts(self) -> duckdb_timestamp_struct:
+    def _parts(self) -> duckdb_timestamp_struct:
         return DuckDB().libduckdb().duckdb_from_timestamp(self)
 
-    fn date(self) -> Date:
+    def date(self) -> Date:
         return DuckDB().libduckdb().duckdb_to_date(self._parts().date)
 
-    fn time(self) -> Time:
+    def time(self) -> Time:
         return DuckDB().libduckdb().duckdb_to_time(self._parts().time)
 
 
@@ -440,22 +440,22 @@ struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyab
 
     var seconds: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.seconds)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.seconds)
 
-    fn __eq__(self, other: TimestampS) -> Bool:
+    def __eq__(self, other: TimestampS) -> Bool:
         return self.seconds == other.seconds
 
-    fn __ne__(self, other: TimestampS) -> Bool:
+    def __ne__(self, other: TimestampS) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimestampS(" + String(self.seconds) + ")"
 
-    fn to_timestamp(self) -> Timestamp:
+    def to_timestamp(self) -> Timestamp:
         """Convert to microsecond-precision Timestamp."""
         return Timestamp(self.seconds * 1_000_000)
 
@@ -466,22 +466,22 @@ struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
     var millis: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.millis)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.millis)
 
-    fn __eq__(self, other: TimestampMS) -> Bool:
+    def __eq__(self, other: TimestampMS) -> Bool:
         return self.millis == other.millis
 
-    fn __ne__(self, other: TimestampMS) -> Bool:
+    def __ne__(self, other: TimestampMS) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimestampMS(" + String(self.millis) + ")"
 
-    fn to_timestamp(self) -> Timestamp:
+    def to_timestamp(self) -> Timestamp:
         """Convert to microsecond-precision Timestamp."""
         return Timestamp(self.millis * 1_000)
 
@@ -492,22 +492,22 @@ struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
     var nanos: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.nanos)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.nanos)
 
-    fn __eq__(self, other: TimestampNS) -> Bool:
+    def __eq__(self, other: TimestampNS) -> Bool:
         return self.nanos == other.nanos
 
-    fn __ne__(self, other: TimestampNS) -> Bool:
+    def __ne__(self, other: TimestampNS) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimestampNS(" + String(self.nanos) + ")"
 
-    fn to_timestamp(self) -> Timestamp:
+    def to_timestamp(self) -> Timestamp:
         """Convert to microsecond-precision Timestamp (truncates sub-microsecond part)."""
         return Timestamp(self.nanos // 1_000)
 
@@ -518,29 +518,29 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
 
     var nanos: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.nanos)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.nanos)
 
-    fn __eq__(self, other: TimeNS) -> Bool:
+    def __eq__(self, other: TimeNS) -> Bool:
         return self.nanos == other.nanos
 
-    fn __ne__(self, other: TimeNS) -> Bool:
+    def __ne__(self, other: TimeNS) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimeNS(" + String(self.nanos) + ")"
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         writer.write("TimeNS(", self.nanos, ")")
 
-    fn to_seconds(self) -> Float64:
+    def to_seconds(self) -> Float64:
         """Convert to seconds since midnight as a Float64."""
         return self.nanos.cast[DType.float64]() / 1_000_000_000.0
 
-    fn to_time(self) -> Time:
+    def to_time(self) -> Time:
         """Convert to microsecond-precision Time (truncates sub-microsecond part)."""
         return Time(self.nanos // 1_000)
 
@@ -566,7 +566,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
     var _size: Int
     """Number of bits."""
 
-    fn __init__(out self, var data: List[UInt8], size: Int):
+    def __init__(out self, var data: List[UInt8], size: Int):
         """Create a Bit from raw packed data and bit count.
 
         Args:
@@ -576,7 +576,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = data^
         self._size = size
 
-    fn __init__(out self, s: StringSlice):
+    def __init__(out self, s: StringSlice):
         """Create a Bit from a binary string like ``"10110"``.
 
         Args:
@@ -600,7 +600,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._size = n
 
     @staticmethod
-    fn _pack_bytes(v: UInt64, num_bytes: Int) -> List[UInt8]:
+    def _pack_bytes(v: UInt64, num_bytes: Int) -> List[UInt8]:
         """Pack an integer value into big-endian bytes with padding byte prefix."""
         var data = List[UInt8](capacity=num_bytes + 1)
         data.append(UInt8(0))  # no padding — all widths are multiples of 8
@@ -609,7 +609,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
             data.append(((v >> shift) & UInt64(0xFF)).cast[DType.uint8]())
         return data^
 
-    fn __init__(out self, value: Int8):
+    def __init__(out self, value: Int8):
         """Create a Bit from an Int8 (8-bit two's complement).
 
         Matches DuckDB's ``value::TINYINT::BITSTRING`` cast.
@@ -617,7 +617,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint8]().cast[DType.uint64](), 1)
         self._size = 8
 
-    fn __init__(out self, value: UInt8):
+    def __init__(out self, value: UInt8):
         """Create a Bit from a UInt8 (8-bit unsigned).
 
         Matches DuckDB's ``value::UTINYINT::BITSTRING`` cast.
@@ -625,7 +625,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint64](), 1)
         self._size = 8
 
-    fn __init__(out self, value: Int16):
+    def __init__(out self, value: Int16):
         """Create a Bit from an Int16 (16-bit two's complement).
 
         Matches DuckDB's ``value::SMALLINT::BITSTRING`` cast.
@@ -633,7 +633,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint16]().cast[DType.uint64](), 2)
         self._size = 16
 
-    fn __init__(out self, value: UInt16):
+    def __init__(out self, value: UInt16):
         """Create a Bit from a UInt16 (16-bit unsigned).
 
         Matches DuckDB's ``value::USMALLINT::BITSTRING`` cast.
@@ -641,7 +641,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint64](), 2)
         self._size = 16
 
-    fn __init__(out self, value: Int32):
+    def __init__(out self, value: Int32):
         """Create a Bit from an Int32 (32-bit two's complement).
 
         Matches DuckDB's ``value::INTEGER::BITSTRING`` cast.
@@ -649,7 +649,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint32]().cast[DType.uint64](), 4)
         self._size = 32
 
-    fn __init__(out self, value: UInt32):
+    def __init__(out self, value: UInt32):
         """Create a Bit from a UInt32 (32-bit unsigned).
 
         Matches DuckDB's ``value::UINTEGER::BITSTRING`` cast.
@@ -657,7 +657,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint64](), 4)
         self._size = 32
 
-    fn __init__(out self, value: Int64):
+    def __init__(out self, value: Int64):
         """Create a Bit from an Int64 (64-bit two's complement).
 
         Matches DuckDB's ``value::BIGINT::BITSTRING`` cast.
@@ -665,7 +665,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value.cast[DType.uint64](), 8)
         self._size = 64
 
-    fn __init__(out self, value: UInt64):
+    def __init__(out self, value: UInt64):
         """Create a Bit from a UInt64 (64-bit unsigned).
 
         Matches DuckDB's ``value::UBIGINT::BITSTRING`` cast.
@@ -673,7 +673,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(value, 8)
         self._size = 64
 
-    fn __init__(out self, value: Int):
+    def __init__(out self, value: Int):
         """Create a Bit from an Int (64-bit, same as BIGINT).
 
         Matches DuckDB's ``value::BIGINT::BITSTRING`` cast.
@@ -681,11 +681,11 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         self._data = Self._pack_bytes(UInt64(value), 8)
         self._size = 64
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         """Return the number of bits."""
         return self._size
 
-    fn __getitem__(self, idx: Int) -> Bool:
+    def __getitem__(self, idx: Int) -> Bool:
         """Get the bit at the given index (0-based, left-to-right).
 
         Args:
@@ -700,22 +700,22 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         var bit_in_byte = UInt8(7 - (bit_pos % 8))
         return (self._data[byte_idx] >> bit_in_byte) & 1 == 1
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         for i in range(self._size):
             writer.write("1" if self[i] else "0")
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return 'Bit("' + String(self) + '")'
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         writer.write('Bit("')
         self.write_to(writer)
         writer.write('")')
 
-    fn __eq__(self, other: Bit) -> Bool:
+    def __eq__(self, other: Bit) -> Bool:
         if self._size != other._size:
             return False
         for i in range(self._size):
@@ -723,7 +723,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
                 return False
         return True
 
-    fn __ne__(self, other: Bit) -> Bool:
+    def __ne__(self, other: Bit) -> Bool:
         return not self == other
 
 
@@ -733,22 +733,22 @@ struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
     var micros: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.micros)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.micros)
 
-    fn __eq__(self, other: TimestampTZ) -> Bool:
+    def __eq__(self, other: TimestampTZ) -> Bool:
         return self.micros == other.micros
 
-    fn __ne__(self, other: TimestampTZ) -> Bool:
+    def __ne__(self, other: TimestampTZ) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimestampTZ(" + String(self.micros) + ")"
 
-    fn to_timestamp(self) -> Timestamp:
+    def to_timestamp(self) -> Timestamp:
         """Convert to a plain Timestamp (discards timezone semantics)."""
         return Timestamp(self.micros)
 
@@ -762,7 +762,7 @@ struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
 
     var bits: UInt64
 
-    fn __init__(out self, *, micros: Int64, offset: Int32):
+    def __init__(out self, *, micros: Int64, offset: Int32):
         """Create a TimeTZ from microseconds since midnight and UTC offset in seconds.
 
         Args:
@@ -773,19 +773,19 @@ struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
         var raw = libduckdb.duckdb_create_time_tz(micros, offset)
         self.bits = raw.bits
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.bits)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.bits)
 
-    fn __eq__(self, other: TimeTZ) -> Bool:
+    def __eq__(self, other: TimeTZ) -> Bool:
         return self.bits == other.bits
 
-    fn __ne__(self, other: TimeTZ) -> Bool:
+    def __ne__(self, other: TimeTZ) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "TimeTZ(" + String(self.bits) + ")"
 
 
@@ -801,22 +801,22 @@ struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Mo
 
     var value: UInt128
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String(self.value)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.value)
 
-    fn __eq__(self, other: UUID) -> Bool:
+    def __eq__(self, other: UUID) -> Bool:
         return self.value == other.value
 
-    fn __ne__(self, other: UUID) -> Bool:
+    def __ne__(self, other: UUID) -> Bool:
         return not self == other
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return "UUID(" + String(self.value) + ")"
 
-    fn __init__(out self, *, internal: Int128):
+    def __init__(out self, *, internal: Int128):
         """Create a UUID from DuckDB's internal hugeint representation.
 
         In vectors, UUIDs are stored as Int128 with ``upper`` offset
@@ -834,7 +834,7 @@ struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Mo
             upper = (upper_signed + Int64.MAX + 1).cast[DType.uint64]()
         self.value = upper.cast[DType.uint128]() << 64 | lower.cast[DType.uint128]()
 
-    fn _to_internal(self) -> Int128:
+    def _to_internal(self) -> Int128:
         """Convert from UUID to DuckDB's internal hugeint representation."""
         var lower = self.value.cast[DType.uint64]()
         var upper = (self.value >> 64).cast[DType.uint64]()
@@ -854,10 +854,10 @@ struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable
     var days: Int32
     var micros: Int64
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "months: ",
             self.months,
@@ -867,7 +867,7 @@ struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable
             self.micros,
         )
 
-    fn to_total_seconds(self) -> Float64:
+    def to_total_seconds(self) -> Float64:
         """Approximate total seconds, assuming 30-day months.
 
         Note: This is an approximation since month length varies.
@@ -875,7 +875,7 @@ struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable
         var total_days = Int64(self.months) * 30 + Int64(self.days)
         return (total_days * 86_400_000_000 + self.micros).cast[DType.float64]() / 1_000_000.0
 
-    fn __repr__(self) -> String:
+    def __repr__(self) -> String:
         return (
             "Interval("
             + String(self.months)
@@ -911,7 +911,7 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
     var lower: UInt64
     var upper: Int64
 
-    fn __init__(out self, width: UInt8, scale: UInt8, value: Int128):
+    def __init__(out self, width: UInt8, scale: UInt8, value: Int128):
         self.width = width
         self.scale = scale
         self._pad0 = 0
@@ -923,29 +923,29 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
         self.lower = value.cast[DType.uint64]()
         self.upper = (value >> 64).cast[DType.int64]() # Shift right to get upper bits
 
-    fn value(self) -> Int128:
+    def value(self) -> Int128:
         var l = self.lower.cast[DType.int128]()
         var u = self.upper.cast[DType.int128]() 
         return (u << 64) | l
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("width: ", self.width, ", scale: ", self.scale, ", value: ", self.value())
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         writer.write("Decimal(", self.width, ", ", self.scale, ", ", self.value(), ")"
         )
 
-    fn __eq__(self, other: Decimal) -> Bool:
+    def __eq__(self, other: Decimal) -> Bool:
         return (
             self.width == other.width
             and self.scale == other.scale
             and self.value() == other.value()
         )
 
-    fn __ne__(self, other: Decimal) -> Bool:
+    def __ne__(self, other: Decimal) -> Bool:
         return not self == other
 
-    fn to_float64(self) -> Float64:
+    def to_float64(self) -> Float64:
         """Convert this Decimal to a Float64.
 
         Note: This may lose precision for large values or high scales.
@@ -959,14 +959,14 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
         var frac_part = v % divisor
         return int_part.cast[DType.float64]() + frac_part.cast[DType.float64]() / divisor.cast[DType.float64]()
 
-    fn to_float32(self) -> Float32:
+    def to_float32(self) -> Float32:
         """Convert this Decimal to a Float32.
 
         Note: This may lose precision for large values or high scales.
         """
         return self.to_float64().cast[DType.float32]()
 
-    fn __init__(out self, width: UInt8, scale: UInt8, value: Float64):
+    def __init__(out self, width: UInt8, scale: UInt8, value: Float64):
         """Create a Decimal from a Float64 with the given width and scale.
 
         The float is multiplied by 10^scale and rounded to the nearest integer.
@@ -988,7 +988,7 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
             rounded = (scaled - 0.5).cast[DType.int128]()
         self = Decimal(width, scale, rounded)
 
-    fn __init__(out self, width: UInt8, scale: UInt8, value: Float32):
+    def __init__(out self, width: UInt8, scale: UInt8, value: Float32):
         """Create a Decimal from a Float32 with the given width and scale.
 
         Args:
@@ -999,7 +999,7 @@ struct Decimal(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, 
         self = Decimal(width, scale, value.cast[DType.float64]())
 
 
-fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
+def dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
     """Maps a Mojo DType to its corresponding DuckDB type at compile time.
 
     This enables deriving DuckDB parameter/return types from Mojo scalar types,
@@ -1043,7 +1043,7 @@ fn dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
         comptime assert False, "Unsupported DType for DuckDB mapping"
 
 
-fn mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
+def mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     """Maps a Mojo scalar type to its corresponding DuckDB type at compile time.
 
     Supports: Bool, Int8–Int64, UInt8–UInt64, Float32, Float64, Int, UInt,

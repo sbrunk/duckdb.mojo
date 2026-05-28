@@ -29,7 +29,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
     """
     var _vector: duckdb_vector
 
-    fn __init__(out self: Vector[is_owned=False, origin=Self.origin], vector: duckdb_vector):
+    def __init__(out self: Vector[is_owned=False, origin=Self.origin], vector: duckdb_vector):
         """Creates a borrowed Vector (not owned).
         
         This creates a `Vector` that does not own the vector and will not
@@ -40,7 +40,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         """
         self._vector = vector
 
-    fn __init__(out self: Vector[is_owned=True, origin=MutExternalOrigin], type: LogicalType, capacity: idx_t):
+    def __init__(out self: Vector[is_owned=True, origin=MutExternalOrigin], type: LogicalType, capacity: idx_t):
         """Creates a standalone owned vector.
         
         This creates a `Vector` that owns the underlying duckdb_vector
@@ -58,7 +58,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys standalone owned vectors."""
         comptime if Self.is_owned:
             comptime assert Self.api_level.includes_unstable(), "destroying an owned Vector requires the unstable API or client mode"
@@ -66,7 +66,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
 
-    fn get_column_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
+    def get_column_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the column type of the specified vector.
 
         * returns: The type of the vector
@@ -74,7 +74,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_vector_get_column_type(self._vector))
 
-    fn get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the data pointer of the vector.
 
         The data pointer can be used to read or write values from the vector.
@@ -85,7 +85,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_data(self._vector)
 
-    fn get_validity(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
+    def get_validity(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
         """Retrieves the validity mask pointer of the specified vector.
 
         If all values are valid, this function MIGHT return NULL!
@@ -107,7 +107,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_validity(self._vector)
 
-    fn ensure_validity_writable(self) -> NoneType:
+    def ensure_validity_writable(self) -> NoneType:
         """Ensures the validity mask is writable by allocating it.
 
         After this function is called, `get_validity` will ALWAYS return non-NULL.
@@ -116,7 +116,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_ensure_validity_writable(self._vector)
 
-    fn assign_string_element(self, index: idx_t, str: String) -> NoneType:
+    def assign_string_element(self, index: idx_t, str: String) -> NoneType:
         """Assigns a string element in the vector at the specified location.
 
         * index: The row position in the vector to assign the string to
@@ -126,7 +126,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_assign_string_element(self._vector, index, _str.as_c_string_slice().unsafe_ptr())
 
-    fn assign_string_element_len(self, index: idx_t, str: String, str_len: idx_t) -> NoneType:
+    def assign_string_element_len(self, index: idx_t, str: String, str_len: idx_t) -> NoneType:
         """Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
 
         * index: The row position in the vector to assign the string to
@@ -137,7 +137,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_assign_string_element_len(self._vector, index, _str.as_c_string_slice().unsafe_ptr(), str_len)
 
-    fn list_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
+    def list_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of a list vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -150,7 +150,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
             libduckdb.duckdb_list_vector_get_child(self._vector),
         )
 
-    fn list_get_size(self) -> idx_t:
+    def list_get_size(self) -> idx_t:
         """Returns the size of the child vector of the list.
 
         * returns: The size of the child list
@@ -158,7 +158,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_list_vector_get_size(self._vector)
 
-    fn list_set_size(self, size: idx_t) -> duckdb_state:
+    def list_set_size(self, size: idx_t) -> duckdb_state:
         """Sets the total size of the underlying child-vector of a list vector.
 
         * size: The size of the child list.
@@ -167,7 +167,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_list_vector_set_size(self._vector, size)
 
-    fn list_reserve(self, required_capacity: idx_t) -> duckdb_state:
+    def list_reserve(self, required_capacity: idx_t) -> duckdb_state:
         """Sets the total capacity of the underlying child-vector of a list.
 
         * required_capacity: the total capacity to reserve.
@@ -176,7 +176,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_list_vector_reserve(self._vector, required_capacity)
 
-    fn struct_get_child(self, index: idx_t) -> Vector[is_owned=False, origin=origin_of(self)]:
+    def struct_get_child(self, index: idx_t) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of a struct vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -189,7 +189,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
             libduckdb.duckdb_struct_vector_get_child(self._vector, index),
         )
 
-    fn array_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
+    def array_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of an array vector.
 
         The resulting vector is valid as long as the parent vector is valid.
@@ -203,7 +203,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
             child_vector,
         )
 
-    fn slice(self, sel: duckdb_selection_vector, len: idx_t) -> NoneType:
+    def slice(self, sel: duckdb_selection_vector, len: idx_t) -> NoneType:
         """Slice a vector with a selection vector.
         
         The length of the selection vector must be less than or equal to the length of the vector.
@@ -219,7 +219,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_slice_vector(self._vector, sel, len)
 
-    fn copy_sel[
+    def copy_sel[
         dst_owned: Bool, dst_origin: ImmutOrigin, dst_api: ApiLevel,
     ](
         self,
@@ -247,7 +247,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_copy_sel(self._vector, dst._vector, sel, src_count, src_offset, dst_offset)
 
-    fn reference_value(self, value: duckdb_value) -> NoneType:
+    def reference_value(self, value: duckdb_value) -> NoneType:
         """Copies the value from `value` to this vector.
 
         **Requires unstable API** — blocked at compile time for
@@ -260,7 +260,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_value(self._vector, value)
 
-    fn reference_vector[
+    def reference_vector[
         from_owned: Bool, from_origin: ImmutOrigin, from_api: ApiLevel,
     ](self, from_vector: Vector[from_owned, from_origin, from_api]) -> NoneType:
         """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
@@ -275,7 +275,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 
-    fn _check_type[db_is_owned: Bool, db_origin: ImmutOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
+    def _check_type[db_is_owned: Bool, db_origin: ImmutOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
         """
         var self_type_id = self.get_column_type().get_type_id()

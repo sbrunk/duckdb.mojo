@@ -30,7 +30,7 @@ comptime F = DType.float32
 
 
 # Derive SQL type name from F at comptime.
-fn sql_type() -> String:
+def sql_type() -> String:
     """Returns the SQL type name corresponding to F."""
     comptime if F == DType.float64:
         return "DOUBLE"
@@ -50,24 +50,24 @@ fn sql_type() -> String:
 
 # --- Fused (compound) kernels ---
 
-fn simd_sin_plus_cos[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_sin_plus_cos[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sin(x) + cos(x) — a common fused trig computation."""
     return math.sin(x) + math.cos(x)
 
 
-fn simd_hypot1[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_hypot1[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sqrt(x*x + 1) — distance from origin to (x, 1)."""
     return math.sqrt(x * x + 1.0)
 
 
-fn simd_gauss[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_gauss[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes exp(-x*x) — unnormalized Gaussian kernel."""
     return math.exp(-(x * x))
 
 
 # --- Binary kernels (compound only) ---
 
-fn simd_hypot[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
+def simd_hypot[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sqrt(a*a + b*b) — Euclidean distance."""
     return math.sqrt(a * a + b * b)
 
@@ -76,7 +76,7 @@ fn simd_hypot[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
 # Registration
 # ===--------------------------------------------------------------------===#
 
-fn register_functions(conn: Connection) raises:
+def register_functions(conn: Connection) raises:
     """Register all Mojo math scalar functions."""
 
     # Unary functions: pass stdlib math functions directly
@@ -87,7 +87,7 @@ fn register_functions(conn: Connection) raises:
     ScalarFunction.from_simd_function["mojo_log", F, math.log](conn)
 
     # abs uses a trait-based signature, so it still needs the original overload
-    fn simd_abs[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+    def simd_abs[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
         return math.abs(x)
 
     ScalarFunction.from_simd_function["mojo_abs", F, F, simd_abs](conn)
@@ -110,7 +110,7 @@ fn register_functions(conn: Connection) raises:
 # Benchmark runner
 # ===--------------------------------------------------------------------===#
 
-fn run_benchmark(
+def run_benchmark(
     name: String,
     conn: Connection,
     query_standard: String,
@@ -126,7 +126,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_standard)
 
-    fn bench_standard() capturing raises:
+    def bench_standard() capturing raises:
         _ = conn.execute(query_standard)
 
     var std_report = benchmark.run[bench_standard](max_iters=max_iters)
@@ -137,7 +137,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_mojo)
 
-    fn bench_mojo() capturing raises:
+    def bench_mojo() capturing raises:
         _ = conn.execute(query_mojo)
 
     var mojo_report = benchmark.run[bench_mojo](max_iters=max_iters)
@@ -155,7 +155,7 @@ fn run_benchmark(
 # Main
 # ===--------------------------------------------------------------------===#
 
-fn main() raises:
+def main() raises:
     var num_rows = 10_000_000
     var max_iters = 100
     var warmup_iters = 3
@@ -232,7 +232,7 @@ fn main() raises:
         )
 
     # Quick numeric check on aggregate — use wider tolerance for float32
-    fn agg_tol() -> String:
+    def agg_tol() -> String:
         comptime if F == DType.float64:
             return "0.001"
         else:

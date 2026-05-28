@@ -19,13 +19,13 @@ comptime EXT_PATH = "test-extension/build/mojo.duckdb_extension"
 comptime BAD_API_EXT_PATH = "test-extension/build/bad_api.duckdb_extension"
 
 
-fn _open_unsigned() raises -> Database:
+def _open_unsigned() raises -> Database:
     """Open an in-memory database with allow_unsigned_extensions enabled."""
     var config = Config({"allow_unsigned_extensions": "true"})
     return Database(":memory:", config)
 
 
-fn _connect() raises -> Connection[ApiLevel.CLIENT]:
+def _connect() raises -> Connection[ApiLevel.CLIENT]:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()

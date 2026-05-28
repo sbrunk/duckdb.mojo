@@ -143,29 +143,31 @@ OPAQUE_HANDLE_TYPES: set[str] = {
 }
 
 # Function-pointer / callback typedefs defined in the header template.
-# We map these to their Mojo `fn(...)` equivalents.
+# We map these to their Mojo `def(...) thin abi("C") -> ...` equivalents.
+# The `thin` effect declares a plain function pointer that doesn't carry captured
+# state; `abi("C")` ensures correct C-ABI argument/return coercion for FFI.
 CALLBACK_TYPES: dict[str, str] = {
-    "duckdb_delete_callback_t": "fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType",
-    "duckdb_copy_callback_t": "fn (UnsafePointer[NoneType, MutAnyOrigin]) -> UnsafePointer[NoneType, MutAnyOrigin]",
-    "duckdb_scalar_function_bind_t": "fn (duckdb_bind_info) -> NoneType",
-    "duckdb_scalar_function_init_t": "fn (duckdb_init_info) -> NoneType",
-    "duckdb_scalar_function_t": "fn (duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> NoneType",
-    "duckdb_table_function_bind_t": "fn (duckdb_bind_info) -> NoneType",
-    "duckdb_table_function_init_t": "fn (duckdb_init_info) -> NoneType",
-    "duckdb_table_function_t": "fn (duckdb_function_info, duckdb_data_chunk) -> NoneType",
-    "duckdb_aggregate_state_size": "fn (duckdb_function_info) -> idx_t",
-    "duckdb_aggregate_init_t": "fn (duckdb_function_info, duckdb_aggregate_state) -> NoneType",
-    "duckdb_aggregate_destroy_t": "fn (UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) -> NoneType",
-    "duckdb_aggregate_update_t": "fn (duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) -> NoneType",
-    "duckdb_aggregate_combine_t": "fn (duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) -> NoneType",
-    "duckdb_aggregate_finalize_t": "fn (duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) -> NoneType",
-    "duckdb_replacement_callback_t": "fn (duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType",
-    "duckdb_cast_function_t": "fn (duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) -> Bool",
-    "duckdb_copy_function_bind_t": "fn (duckdb_copy_function_bind_info) -> NoneType",
-    "duckdb_copy_function_global_init_t": "fn (duckdb_copy_function_global_init_info) -> NoneType",
-    "duckdb_copy_function_sink_t": "fn (duckdb_copy_function_sink_info, duckdb_data_chunk) -> NoneType",
-    "duckdb_copy_function_finalize_t": "fn (duckdb_copy_function_finalize_info) -> NoneType",
-    "duckdb_logger_write_log_entry_t": "fn (UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType",
+    "duckdb_delete_callback_t": 'def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
+    "duckdb_copy_callback_t": 'def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> UnsafePointer[NoneType, MutAnyOrigin]',
+    "duckdb_scalar_function_bind_t": 'def(duckdb_bind_info) thin abi("C") -> NoneType',
+    "duckdb_scalar_function_init_t": 'def(duckdb_init_info) thin abi("C") -> NoneType',
+    "duckdb_scalar_function_t": 'def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> NoneType',
+    "duckdb_table_function_bind_t": 'def(duckdb_bind_info) thin abi("C") -> NoneType',
+    "duckdb_table_function_init_t": 'def(duckdb_init_info) thin abi("C") -> NoneType',
+    "duckdb_table_function_t": 'def(duckdb_function_info, duckdb_data_chunk) thin abi("C") -> NoneType',
+    "duckdb_aggregate_state_size": 'def(duckdb_function_info) thin abi("C") -> idx_t',
+    "duckdb_aggregate_init_t": 'def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType',
+    "duckdb_aggregate_destroy_t": 'def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType',
+    "duckdb_aggregate_update_t": 'def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType',
+    "duckdb_aggregate_combine_t": 'def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType',
+    "duckdb_aggregate_finalize_t": 'def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType',
+    "duckdb_replacement_callback_t": 'def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
+    "duckdb_cast_function_t": 'def(duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) thin abi("C") -> Bool',
+    "duckdb_copy_function_bind_t": 'def(duckdb_copy_function_bind_info) thin abi("C") -> NoneType',
+    "duckdb_copy_function_global_init_t": 'def(duckdb_copy_function_global_init_info) thin abi("C") -> NoneType',
+    "duckdb_copy_function_sink_t": 'def(duckdb_copy_function_sink_info, duckdb_data_chunk) thin abi("C") -> NoneType',
+    "duckdb_copy_function_finalize_t": 'def(duckdb_copy_function_finalize_info) thin abi("C") -> NoneType',
+    "duckdb_logger_write_log_entry_t": 'def(UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType',
 }
 
 # Scalar / small struct C-types whose Mojo equivalents differ.
@@ -461,7 +463,12 @@ def takes_result_byval(entry: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def mojo_fn_type(entry: dict, *, use_ptr_helper: bool = False) -> str:
-    """Build the Mojo fn(...) -> ... type for a comptime _dylib_function."""
+    """Build the Mojo C-ABI function pointer type for a comptime _dylib_function.
+
+    Emits `def(...) thin abi("C") -> ...`. The `thin` effect declares a plain
+    function pointer without captured state; `abi("C")` ensures correct C-ABI
+    argument and return-value coercion for FFI.
+    """
     params = entry.get("params", [])
     ret = entry["return_type"]
 
@@ -472,21 +479,19 @@ def mojo_fn_type(entry: dict, *, use_ptr_helper: bool = False) -> str:
             mojo_params.append("UnsafePointer[duckdb_result, ImmutAnyOrigin]")
         else:
             mojo_params.append(c_type_to_mojo(ptype))
-    
+
     mojo_ret = c_type_to_mojo(ret, is_return=True)
 
-    if mojo_params:
-        return f"fn ({', '.join(mojo_params)}) -> {mojo_ret}"
-    return f"fn () -> {mojo_ret}"
+    return f'def({", ".join(mojo_params)}) thin abi("C") -> {mojo_ret}'
 
 
 def mojo_method_signature(entry: dict, *, use_ptr_helper: bool = False) -> str:
-    """Build the fn method_name(self, <params>) -> <ret>: line."""
+    """Build the `def method_name(self, <params>) -> <ret>:` line."""
     name = entry["name"]
     params = entry.get("params", [])
     ret = entry["return_type"]
 
-    parts = [f"    fn {name}(\n        self"]
+    parts = [f"    def {name}(\n        self"]
     for p in params:
         ptype = p["type"].strip()
         pname = p["name"]
@@ -824,10 +829,10 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("")
     lines.append("#! The callback that will be called to destroy data, e.g.,")
     lines.append("#! bind data (if any), init data (if any), extra data for replacement scans (if any)")
-    lines.append("comptime duckdb_delete_callback_t = fn (UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType")
+    lines.append(f"comptime duckdb_delete_callback_t = {CALLBACK_TYPES['duckdb_delete_callback_t']}")
     lines.append("")
     lines.append("#! The callback that will be called to copy bind data.")
-    lines.append("comptime duckdb_copy_callback_t = fn (UnsafePointer[NoneType, MutAnyOrigin]) -> UnsafePointer[NoneType, MutAnyOrigin]")
+    lines.append(f"comptime duckdb_copy_callback_t = {CALLBACK_TYPES['duckdb_copy_callback_t']}")
     lines.append("")
 
     # ---- Types (no explicit freeing) ----
@@ -969,7 +974,7 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("    var __deprecated_name: UnsafePointer[c_char, ImmutExternalOrigin]")
     lines.append("    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]")
     lines.append("")
-    lines.append("    fn __init__(out self):")
+    lines.append("    def __init__(out self):")
     lines.append("        self.__deprecated_data = UnsafePointer[NoneType, MutExternalOrigin]()")
     lines.append("        self.__deprecated_nullmask = UnsafePointer[Bool, MutExternalOrigin]()")
     lines.append("        self.__deprecated_type = 0")
@@ -1023,7 +1028,7 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("    var __deprecated_error_message: UnsafePointer[c_char, ImmutExternalOrigin]")
     lines.append("    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]")
     lines.append("")
-    lines.append("    fn __init__(out self):")
+    lines.append("    def __init__(out self):")
     lines.append("        self.__deprecated_column_count = 0")
     lines.append("        self.__deprecated_row_count = 0")
     lines.append("        self.__deprecated_rows_changed = 0")
@@ -1255,7 +1260,7 @@ comptime DUCKDB_LIBRARY_PATHS: List[Path] = [
 
 comptime DUCKDB_LIBRARY = _Global["DUCKDB_LIBRARY", _init_dylib]
 
-fn _init_dylib() -> OwnedDLHandle:
+def _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb"](materialize[DUCKDB_LIBRARY_PATHS]())
 
 
@@ -1263,13 +1268,13 @@ struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](Tri
     comptime fn_type = Self.type
 
     @staticmethod
-    fn load() raises -> Self.type:
+    def load() raises -> Self.type:
         return DUCKDB_LIBRARY.get_or_create_ptr()[]
             .borrow()._get_function[Self.fn_name, Self.type]()
 
 # C shim library for struct-by-value workarounds.
 # When USE_DLHANDLE is False the shim vars are still declared but never loaded
-# (the comptime if in __init__/__moveinit__/methods skips them at compile time).
+# (the comptime if in __init__/methods skips them at compile time).
 comptime DUCKDB_HELPERS_PATHS: List[Path] = [
     "libduckdb_mojo_helpers.so",
     "libduckdb_mojo_helpers.dylib",
@@ -1277,14 +1282,14 @@ comptime DUCKDB_HELPERS_PATHS: List[Path] = [
 
 comptime DUCKDB_HELPERS_LIBRARY = _Global["DUCKDB_HELPERS_LIBRARY", _init_helper_dylib]
 
-fn _init_helper_dylib() -> OwnedDLHandle:
+def _init_helper_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_mojo_helpers"](materialize[DUCKDB_HELPERS_PATHS]())
 
 struct _dylib_helpers_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
-    fn load() raises -> Self.type:
+    def load() raises -> Self.type:
         return DUCKDB_HELPERS_LIBRARY.get_or_create_ptr()[]
             .borrow()._get_function[Self.fn_name, Self.type]()"""
 
@@ -1343,14 +1348,14 @@ def _generate_libduckdb_struct(
         lines.append("")
 
     # ---- __init__ (dlopen/dlsym based) ----
-    lines.append("    fn __init__(out self):")
+    lines.append("    def __init__(out self):")
     lines.append("        \"\"\"Initialize LibDuckDB by loading functions via dlopen/dlsym.")
     lines.append("")
     lines.append("        This constructor is used in standalone mode (not as an extension).\"\"\"")
     _emit_init_body(lines, {})  # all via dlsym
 
     # ---- __init__ (from stable ext API struct) ----
-    lines.append("    fn __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]):")
+    lines.append("    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]):")
     lines.append("        \"\"\"Initialize LibDuckDB from a stable DuckDB extension API struct pointer.")
     lines.append("")
     lines.append("        This constructor is used when loaded as a DuckDB extension")
@@ -1361,7 +1366,7 @@ def _generate_libduckdb_struct(
     _emit_init_body(lines, stable_loader)
 
     # ---- __init__ (from unstable ext API struct) ----
-    lines.append("    fn __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]):")
+    lines.append("    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]):")
     lines.append("        \"\"\"Initialize LibDuckDB from an unstable DuckDB extension API struct pointer.")
     lines.append("")
     lines.append("        This constructor is used when loaded as a DuckDB extension")
@@ -1369,10 +1374,10 @@ def _generate_libduckdb_struct(
     unstable_loader = {name: f"api[].{name}" for name in all_fn_names}
     _emit_init_body(lines, unstable_loader)
 
-    # ---- __moveinit__ ----
+    # ---- move-init (unified __init__ in Mojo 1.0+) ----
     # Always copy all vars unconditionally — the workaround vars hold garbage
     # in external_call mode but that's fine since they're never called.
-    lines.append("    fn __moveinit__(out self, deinit take: Self):")
+    lines.append("    def __init__(out self, *, deinit take: Self):")
     for name in all_fn_names:
         lines.append(f"        self._{name} = take._{name}")
     for workaround_name in sorted(workaround_fn_names):
@@ -1410,7 +1415,7 @@ def _generate_normal_method(entry: dict) -> str:
     lines: list[str] = []
 
     # Signature
-    sig_parts = [f"    fn {name}(\n        self"]
+    sig_parts = [f"    def {name}(\n        self"]
     for p in params:
         ptype = p["type"].strip()
         pname = p["name"]
@@ -1543,7 +1548,7 @@ def _generate_dual_method(entry: dict, workaround_name: str) -> str:
     lines: list[str] = []
 
     # --- Signature (public API keeps original types) ---
-    sig_parts = [f"    fn {name}(\n        self"]
+    sig_parts = [f"    def {name}(\n        self"]
     for p in params:
         ptype = p["type"].strip()
         pname = p["name"]
@@ -1573,10 +1578,10 @@ def _generate_dual_method(entry: dict, workaround_name: str) -> str:
 
 
 def _ext_api_fn_type(entry: dict) -> str:
-    """Build the Mojo fn(...) -> ... type for an extension API struct field.
+    """Build the Mojo C-ABI function pointer type for an extension API struct field.
 
-    Unlike `mojo_fn_type`, this never uses the byval helper wrapper
-    (extensions always receive the original function pointers).
+    Emits `def(...) thin abi("C") -> ...`. Unlike `mojo_fn_type`, this never uses
+    the byval helper wrapper (extensions always receive the original function pointers).
     """
     params = entry.get("params", [])
     ret = entry["return_type"]
@@ -1584,9 +1589,7 @@ def _ext_api_fn_type(entry: dict) -> str:
     mojo_params: list[str] = [c_type_to_mojo(p["type"].strip()) for p in params]
     mojo_ret = c_type_to_mojo(ret, is_return=True)
 
-    if mojo_params:
-        return f"fn ({', '.join(mojo_params)}) -> {mojo_ret}"
-    return f"fn () -> {mojo_ret}"
+    return f'def({", ".join(mojo_params)}) thin abi("C") -> {mojo_ret}'
 
 
 def _generate_ext_api_structs(
@@ -1693,9 +1696,7 @@ def _workaround_fn_type(entry: dict, workaround_name: str) -> str:
     else:
         mojo_ret = c_type_to_mojo(ret, is_return=True)
 
-    if mojo_params:
-        return f"fn ({', '.join(mojo_params)}) -> {mojo_ret}"
-    return f"fn () -> {mojo_ret}"
+    return f'def({", ".join(mojo_params)}) thin abi("C") -> {mojo_ret}'
 
 
 def _generate_dylib_declarations(

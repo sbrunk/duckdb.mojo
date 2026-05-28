@@ -5,7 +5,7 @@ struct Database(Movable):
     var _db: duckdb_database
     var _is_owned: Bool
 
-    fn __init__(out self, path: Optional[String] = None) raises:
+    def __init__(out self, path: Optional[String] = None) raises:
         ref libduckdb = DuckDB().libduckdb()
         self._db = UnsafePointer[duckdb_database.type, MutExternalOrigin]()
         self._is_owned = True
@@ -22,7 +22,7 @@ struct Database(Movable):
             libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
             raise Error(error_msg)
 
-    fn __init__(out self, path: Optional[String], config: Config) raises:
+    def __init__(out self, path: Optional[String], config: Config) raises:
         """Create a database with startup configuration options.
 
         Args:
@@ -44,7 +44,7 @@ struct Database(Movable):
             libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
             raise Error(error_msg)
 
-    fn __init__(out self, *, _handle: duckdb_database):
+    def __init__(out self, *, _handle: duckdb_database):
         """Wrap an existing database handle without taking ownership.
 
         The caller retains ownership — the handle will not be closed
@@ -56,7 +56,7 @@ struct Database(Movable):
         self._db = _handle
         self._is_owned = False
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         if not self._is_owned:
             return
         ref libduckdb = DuckDB().libduckdb()

@@ -12,7 +12,7 @@ trait DuckDBWrapper(Copyable & Movable & Writable):
     """
     comptime Type: DuckDBType
 
-    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
+    def __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         ...
 
 trait DuckDBKeyElement(DuckDBWrapper, KeyElement):
@@ -25,19 +25,19 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & Trivial
 
     var value: Scalar[Self.Type.to_dtype()]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.value)
 
-    fn __hash__[H: Hasher](self, mut hasher: H):
+    def __hash__[H: Hasher](self, mut hasher: H):
         hasher.update(self.value)
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         return self.value == other.value
 
-    fn __ne__(self, other: Self) -> Bool:
+    def __ne__(self, other: Self) -> Bool:
         return self.value != other.value
 
-    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
+    def __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != Self.duckdb_type:
             raise "Expected type " + String(Self.duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
@@ -65,19 +65,19 @@ struct FixedSizeValue[
     comptime Type = Self.duckdb_type
     var value: Self.underlying
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         self.value.write_to(writer)
 
-    # fn __hash__(self) -> UInt:
+    # def __hash__(self) -> UInt:
     #     return self.value.__hash__()
 
-    # fn __eq__(self, other: Self) -> Bool:
+    # def __eq__(self, other: Self) -> Bool:
     #     return self.value == other.value
 
-    # fn __ne__(self, other: Self) -> Bool:
+    # def __ne__(self, other: Self) -> Bool:
     #     return self.value != other.value
 
-    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
+    def __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != Self.duckdb_type:
             raise "Expected type " + String(Self.duckdb_type) + " but got " + String(
                 vector.get_column_type().get_type_id()
@@ -85,7 +85,7 @@ struct FixedSizeValue[
 
         self = vector.get_data().bitcast[Self]()[offset=offset]
 
-    fn __copyinit__(out self, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.value = copy.value
 
 comptime DuckDBTimestamp = FixedSizeValue[DuckDBType.timestamp, Timestamp]
@@ -99,7 +99,7 @@ struct DuckDBString(DuckDBWrapper):
     comptime Type = DuckDBType.varchar
     var value: String
 
-    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
+    def __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         if vector.get_column_type().get_type_id() != DuckDBType.varchar:
             raise "Expected type " + String(
                 DuckDBType.varchar
@@ -120,7 +120,7 @@ struct DuckDBString(DuckDBWrapper):
             self.value = String(unsafe_uninit_length=string_length)
             memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.value)
 
 
@@ -132,10 +132,10 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
     comptime expected_element_type = Self.T.Type
     var value: List[Optional[Self.T]]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("DuckDBList")  # TODO
 
-    fn __init__(out self, vector: Vector, length: Int, offset: Int) raises:
+    def __init__(out self, vector: Vector, length: Int, offset: Int) raises:
         var runtime_element_type = vector.get_column_type().get_type_id()
         if runtime_element_type != Self.expected_element_type:
             raise "Expected type " + String(
@@ -235,10 +235,10 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
 #     comptime Type = DuckDBType.map
 #     var value: Dict[K, V]
 
-#     fn __str__(self) -> String:
+#     def __str__(self) -> String:
 #         return "DuckDBMap"  # TODO
 
-#     fn __init__(
+#     def __init__(
 #         out self, vector: Vector, length: Int, offset: Int = 0
 #     ) raises:
 #         self.value = Dict[K, V]()

@@ -39,13 +39,13 @@ struct MultiColBindData(Copyable, Movable):
 # ===--------------------------------------------------------------------===#
 
 
-fn destroy_counter_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
+def destroy_counter_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for CounterBindData."""
     data.bitcast[CounterBindData]().destroy_pointee()
     data.bitcast[CounterBindData]().free()
 
 
-fn destroy_multi_col_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
+def destroy_multi_col_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for MultiColBindData."""
     data.bitcast[MultiColBindData]().destroy_pointee()
     data.bitcast[MultiColBindData]().free()
@@ -56,7 +56,7 @@ fn destroy_multi_col_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
 # ===--------------------------------------------------------------------===#
 
 
-fn counter_bind(info: TableBindInfo):
+def counter_bind(info: TableBindInfo):
     """Bind function: defines one INTEGER output column and stores the limit from the parameter.
     """
     info.add_result_column("i", LogicalType(DuckDBType.integer))
@@ -70,12 +70,12 @@ fn counter_bind(info: TableBindInfo):
     )
 
 
-fn counter_init(info: TableInitInfo):
+def counter_init(info: TableInitInfo):
     """Init function: nothing to do, state lives in bind data."""
     pass
 
 
-fn counter_function(info: TableFunctionInfo, mut output: Chunk):
+def counter_function(info: TableFunctionInfo, mut output: Chunk):
     """Main function: produces rows in batches. Sets output size to 0 when done.
     """
     var bind_data = info.get_bind_data().bitcast[CounterBindData]()
@@ -102,7 +102,7 @@ fn counter_function(info: TableFunctionInfo, mut output: Chunk):
 # ===--------------------------------------------------------------------===#
 
 
-fn multi_col_bind(info: TableBindInfo):
+def multi_col_bind(info: TableBindInfo):
     """Bind function with multiple output columns."""
     info.add_result_column("id", LogicalType(DuckDBType.integer))
     info.add_result_column("name", LogicalType(DuckDBType.varchar))
@@ -115,12 +115,12 @@ fn multi_col_bind(info: TableBindInfo):
     )
 
 
-fn multi_col_init(info: TableInitInfo):
+def multi_col_init(info: TableInitInfo):
     """Init function: nothing to do."""
     pass
 
 
-fn multi_col_function(info: TableFunctionInfo, mut output: Chunk):
+def multi_col_function(info: TableFunctionInfo, mut output: Chunk):
     """Produces 3 rows with (id, name, score) columns."""
     var bind_data = info.get_bind_data().bitcast[MultiColBindData]()
     var current = bind_data[].current_row
@@ -160,12 +160,12 @@ struct StaticBindData(Copyable, Movable):
     var done: Bool
 
 
-fn destroy_static_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
+def destroy_static_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
     data.bitcast[StaticBindData]().destroy_pointee()
     data.bitcast[StaticBindData]().free()
 
 
-fn static_bind(info: TableBindInfo):
+def static_bind(info: TableBindInfo):
     """Bind function for a parameterless table function."""
     info.add_result_column("value", LogicalType(DuckDBType.integer))
     var bind_data = alloc[StaticBindData](1)
@@ -176,11 +176,11 @@ fn static_bind(info: TableBindInfo):
     )
 
 
-fn static_init(info: TableInitInfo):
+def static_init(info: TableInitInfo):
     pass
 
 
-fn static_function(info: TableFunctionInfo, mut output: Chunk):
+def static_function(info: TableFunctionInfo, mut output: Chunk):
     """Produces exactly 2 rows in one call, then signals done."""
     var bind_data = info.get_bind_data().bitcast[StaticBindData]()
     if bind_data[].done:
@@ -486,7 +486,7 @@ def test_table_function_set_cardinality() raises:
     """Test setting cardinality hint in bind phase."""
     var conn = DuckDB.connect(":memory:")
 
-    fn cardinality_bind(info: TableBindInfo):
+    def cardinality_bind(info: TableBindInfo):
         info.add_result_column("value", LogicalType(DuckDBType.integer))
         info.set_cardinality(2, True)
         var bind_data = alloc[StaticBindData](1)
