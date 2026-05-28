@@ -227,10 +227,6 @@ SIMPLE_TYPE_MAP: dict[str, str] = {
     "duckdb_result": "duckdb_result",
 }
 
-# Large structs that have ABI issues when passed by value.
-# When a function takes these by value, we need helper wrappers.
-LARGE_BYVAL_STRUCTS = {"duckdb_result"}
-
 # Mojo reserved keywords that cannot be used as parameter names.
 MOJO_RESERVED_PARAM_NAMES = {
     "type", "set", "input", "function", "init", "out", "ref", "mut",
@@ -437,32 +433,10 @@ def is_function_deprecated(entry: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Identify functions that need helper wrappers (large struct by-val)
-# ---------------------------------------------------------------------------
-
-def needs_byval_helper(entry: dict) -> bool:
-    """Return True if a function passes a large struct by value."""
-    for param in entry.get("params", []):
-        ptype = param["type"].strip()
-        if ptype in LARGE_BYVAL_STRUCTS:
-            return True
-    return False
-
-
-def takes_result_byval(entry: dict) -> bool:
-    """Whether the function takes duckdb_result by value (not pointer)."""
-    for param in entry.get("params", []):
-        ptype = param["type"].strip()
-        if ptype == "duckdb_result":
-            return True
-    return False
-
-
-# ---------------------------------------------------------------------------
 # Code generation helpers
 # ---------------------------------------------------------------------------
 
-def mojo_fn_type(entry: dict, *, use_ptr_helper: bool = False) -> str:
+def mojo_fn_type(entry: dict) -> str:
     """Build the Mojo C-ABI function pointer type for a comptime _dylib_function.
 
     Emits `def(...) thin abi("C") -> ...`. The `thin` effect declares a plain
@@ -472,41 +446,10 @@ def mojo_fn_type(entry: dict, *, use_ptr_helper: bool = False) -> str:
     params = entry.get("params", [])
     ret = entry["return_type"]
 
-    mojo_params: list[str] = []
-    for p in params:
-        ptype = p["type"].strip()
-        if use_ptr_helper and ptype == "duckdb_result":
-            mojo_params.append("UnsafePointer[duckdb_result, ImmutAnyOrigin]")
-        else:
-            mojo_params.append(c_type_to_mojo(ptype))
-
+    mojo_params: list[str] = [c_type_to_mojo(p["type"].strip()) for p in params]
     mojo_ret = c_type_to_mojo(ret, is_return=True)
 
     return f'def({", ".join(mojo_params)}) thin abi("C") -> {mojo_ret}'
-
-
-def mojo_method_signature(entry: dict, *, use_ptr_helper: bool = False) -> str:
-    """Build the `def method_name(self, <params>) -> <ret>:` line."""
-    name = entry["name"]
-    params = entry.get("params", [])
-    ret = entry["return_type"]
-
-    parts = [f"    def {name}(\n        self"]
-    for p in params:
-        ptype = p["type"].strip()
-        pname = p["name"]
-        # Avoid Mojo keyword collisions
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        if use_ptr_helper and ptype == "duckdb_result":
-            parts.append(f",\n        {pname}: UnsafePointer[duckdb_result, ImmutAnyOrigin]")
-        else:
-            mojo_type = c_type_to_mojo(ptype)
-            parts.append(f",\n        {pname}: {mojo_type}")
-
-    mojo_ret = c_type_to_mojo(ret, is_return=True)
-    sig = "".join(parts) + f",\n    ) -> {mojo_ret}:"
-    return sig
 
 
 def _ensure_period(line: str) -> str:
@@ -534,43 +477,6 @@ def _ensure_summary_period(desc_lines: list[str]) -> list[str]:
     return desc_lines
 
 
-def mojo_method_body(entry: dict, *, use_ptr_helper: bool = False) -> str:
-    """Build the body of a LibDuckDB method: docstring + return self._name(args)."""
-    name = entry["name"]
-    params = entry.get("params", [])
-    comment = entry.get("comment", {})
-
-    lines: list[str] = []
-
-    # Docstring
-    desc = comment.get("description", "").strip()
-    if desc:
-        desc_lines = _ensure_summary_period(desc.split("\n"))
-        lines.append('        """')
-        for line in desc_lines:
-            stripped = line.rstrip()
-            lines.append(f"        {stripped}" if stripped else "")
-        lines.append('        """')
-
-    # Call
-    args: list[str] = []
-    for p in params:
-        pname = p["name"]
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        ptype = p["type"].strip()
-        if use_ptr_helper and ptype == "duckdb_result":
-            # The helper wrapper takes pointer
-            args.append(pname)
-        else:
-            args.append(pname)
-    
-    call = f"        return self._{name}({', '.join(args)})"
-    lines.append(call)
-
-    return "\n".join(lines)
-
-
 def format_comment_header(title: str) -> str:
     return f"""
     # ===--------------------------------------------------------------------===#
@@ -591,64 +497,6 @@ def headline_capitalize(s: str) -> str:
     """Convert snake_case group name to Title Case."""
     return " ".join(w.capitalize() for w in s.split("_"))
 
-
-# ---------------------------------------------------------------------------
-# Struct-by-value workarounds for Mojo FFI (DLHandle path)
-# ---------------------------------------------------------------------------
-#
-# Mojo's OwnedDLHandle/get_function does not correctly implement C ABI struct
-# coercion (https://github.com/modular/modular/issues/3144, https://github.com/modular/modular/issues/5846).
-# The DLHandle bug corrupts even single-field structs when combined with other arguments.
-#
-# For each affected function, we define a C shim in libduckdb_mojo_helpers that:
-# - Converts multi-field struct params/returns to pointer-based calling
-# - Unwraps single-field struct params/returns to their raw scalar equivalents
-#
-# Multi-field struct types: passed/returned via pointer in the shim.
-MULTI_FIELD_STRUCTS = {
-    "duckdb_result",
-    "duckdb_decimal",
-    "duckdb_date_struct",
-    "duckdb_time_struct",
-    "duckdb_timestamp_struct",
-    "duckdb_time_tz_struct",
-    "duckdb_query_progress_type",
-}
-
-# Single-field struct types: unwrapped to their raw scalar field in the shim.
-# Maps C struct type → (Mojo scalar type, field name for unwrapping).
-SINGLE_FIELD_STRUCT_UNWRAP: dict[str, tuple[str, str]] = {
-    "duckdb_date": ("Int32", "days"),
-    "duckdb_time": ("Int64", "micros"),
-    "duckdb_timestamp": ("Int64", "micros"),
-    "duckdb_time_tz": ("UInt64", "bits"),
-}
-
-# All struct types that need workarounds (union of both sets).
-ALL_WORKAROUND_STRUCTS = MULTI_FIELD_STRUCTS | set(SINGLE_FIELD_STRUCT_UNWRAP.keys())
-
-# Map from original C function name to its shim in libduckdb_mojo_helpers.
-# The shim accepts/returns multi-field structs via pointer instead of by value.
-STRUCT_WORKAROUNDS: dict[str, str] = {
-    # duckdb_result by-value params
-    "duckdb_result_statement_type": "workaround_result_statement_type_ptr",
-    "duckdb_fetch_chunk": "workaround_fetch_chunk_ptr",
-    # duckdb_decimal by-value params/returns
-    "duckdb_create_decimal": "workaround_create_decimal_ptr",
-    "duckdb_get_decimal": "workaround_get_decimal_ptr",
-    "duckdb_decimal_to_double": "workaround_decimal_to_double_ptr",
-    "duckdb_double_to_decimal": "workaround_double_to_decimal_ptr",
-    # Date/time struct conversions (multi-field return structs)
-    "duckdb_from_date": "workaround_from_date_ptr",
-    "duckdb_to_date": "workaround_to_date_ptr",
-    "duckdb_from_time": "workaround_from_time_ptr",
-    "duckdb_to_time": "workaround_to_time_ptr",
-    "duckdb_from_timestamp": "workaround_from_timestamp_ptr",
-    "duckdb_to_timestamp": "workaround_to_timestamp_ptr",
-    "duckdb_from_time_tz": "workaround_from_time_tz_ptr",
-    # Query progress (multi-field return struct)
-    "duckdb_query_progress": "workaround_query_progress_ptr",
-}
 
 # ---------------------------------------------------------------------------
 # Main code generation
@@ -719,7 +567,7 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 
 
 def _generate_header() -> str:
-    return """from std.ffi import external_call, c_char
+    return """from std.ffi import c_char
 from std.utils import StaticTuple
 from std.collections import InlineArray
 from duckdb.duckdb_type import *
@@ -728,26 +576,13 @@ from std.os import abort
 from std.pathlib import Path
 from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
 from std.memory import UnsafePointer
-from std.sys.defines import get_defined_bool
 
 # ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
 #
 # WARNING: this file is autogenerated by scripts/generate_mojo_api.py
 # Manual changes will be overwritten!
-# ===-----------------------------------------------------------------------===#
-
-# Controls how struct-by-value C functions are called.
-#
-# True (default): DLHandle (dlopen/dlsym) + C shim (libduckdb_mojo_helpers).
-#   Works with `mojo run` and `mojo build`. No special flags needed.
-#
-# False: `external_call` with correct C ABI struct coercion. No shim needed
-#   at runtime. Requires `mojo build` with linker flags:
-#     mojo build -D USE_DLHANDLE=false -Xlinker -L<path> -Xlinker -lduckdb
-#
-# Pass `-D USE_DLHANDLE=false` to mojo build to select the external_call path.
-comptime USE_DLHANDLE = get_defined_bool["USE_DLHANDLE", True]()"""
+# ===-----------------------------------------------------------------------===#"""
 
 
 def _read_template(duckdb_dir: str) -> str:
@@ -1021,7 +856,14 @@ def _generate_types(duckdb_dir: str) -> str:
 
     # duckdb_result
     lines.append("@fieldwise_init")
-    lines.append("struct duckdb_result(ImplicitlyCopyable & Movable):")
+    # WORKAROUND: TrivialRegisterPassable is required for `abi("C")` to
+    # lower the by-value struct ABI correctly on Linux x86_64 with the nightly
+    # compiler (1.0.0b2.dev2026052706). Without it, calls like
+    # `duckdb_fetch_chunk(result)` either return NULL or crash. The first fix
+    # for the abi("C") lowering bug (https://github.com/modular/modular/issues/6511)
+    # only covered the case where the struct happens to be
+    # TrivialRegisterPassable. Filed follow-up needed for non-TRP structs.
+    lines.append("struct duckdb_result(TrivialRegisterPassable, ImplicitlyCopyable & Movable):")
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")
@@ -1272,27 +1114,6 @@ struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](Tri
     @staticmethod
     def load() raises -> Self.type:
         return DUCKDB_LIBRARY.get_or_create_ptr()[]
-            .borrow()._get_function[Self.fn_name, Self.type]()
-
-# C shim library for struct-by-value workarounds.
-# When USE_DLHANDLE is False the shim vars are still declared but never loaded
-# (the comptime if in __init__/methods skips them at compile time).
-comptime DUCKDB_HELPERS_PATHS: List[Path] = [
-    "libduckdb_mojo_helpers.so",
-    "libduckdb_mojo_helpers.dylib",
-]
-
-comptime DUCKDB_HELPERS_LIBRARY = _Global["DUCKDB_HELPERS_LIBRARY", _init_helper_dylib]
-
-def _init_helper_dylib() -> OwnedDLHandle:
-    return _find_dylib["libduckdb_mojo_helpers"](materialize[DUCKDB_HELPERS_PATHS]())
-
-struct _dylib_helpers_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
-    comptime fn_type = Self.type
-
-    @staticmethod
-    def load() raises -> Self.type:
-        return DUCKDB_HELPERS_LIBRARY.get_or_create_ptr()[]
             .borrow()._get_function[Self.fn_name, Self.type]()"""
 
 
@@ -1314,9 +1135,6 @@ def _generate_libduckdb_struct(
         for entry in entries:
             all_fn_names.append(entry["name"])
 
-    # Collect workaround function names
-    workaround_fn_names = list(STRUCT_WORKAROUNDS.values())
-
     lines.append("struct LibDuckDB(Movable):")
     lines.append("")
 
@@ -1324,13 +1142,6 @@ def _generate_libduckdb_struct(
     # Include ALL original functions (for ext API compatibility)
     for name in all_fn_names:
         lines.append(f"    var _{name}: _{name}.fn_type")
-
-    # Workaround function vars only needed in DLHandle mode
-    lines.append("")
-    lines.append("    # Workaround functions for Mojo FFI byval struct issues (from libduckdb_mojo_helpers)")
-    lines.append("    # Only used when USE_DLHANDLE is True; external_call mode calls C directly.")
-    for workaround_name in sorted(workaround_fn_names):
-        lines.append(f"    var _{workaround_name}: _{workaround_name}.fn_type")
     lines.append("")
 
     def _emit_init_body(lines: list[str], fn_loader: dict[str, str]):
@@ -1338,15 +1149,18 @@ def _generate_libduckdb_struct(
 
         fn_loader maps function name → load expression.
         """
-        lines.append("        try:")
+        # If no loader expression calls .load(), we don't need try/except.
+        has_dlsym_fallback = any(name not in fn_loader for name in all_fn_names)
+        if has_dlsym_fallback:
+            lines.append("        try:")
+            indent = "            "
+        else:
+            indent = "        "
         for name in all_fn_names:
-            lines.append(f"            self._{name} = {fn_loader.get(name, f'_{name}.load()')}")
-        lines.append("            # Load workaround functions from C shim library.")
-        lines.append("            # Always loaded to initialize struct vars; only called when USE_DLHANDLE is True.")
-        for workaround_name in sorted(workaround_fn_names):
-            lines.append(f"            self._{workaround_name} = _{workaround_name}.load()")
-        lines.append("        except e:")
-        lines.append("            abort(String(e))")
+            lines.append(f"{indent}self._{name} = {fn_loader.get(name, f'_{name}.load()')}")
+        if has_dlsym_fallback:
+            lines.append("        except e:")
+            lines.append("            abort(String(e))")
         lines.append("")
 
     # ---- __init__ (dlopen/dlsym based) ----
@@ -1377,13 +1191,9 @@ def _generate_libduckdb_struct(
     _emit_init_body(lines, unstable_loader)
 
     # ---- move-init (unified __init__ in Mojo 1.0+) ----
-    # Always copy all vars unconditionally — the workaround vars hold garbage
-    # in external_call mode but that's fine since they're never called.
     lines.append("    def __init__(out self, *, deinit take: Self):")
     for name in all_fn_names:
         lines.append(f"        self._{name} = take._{name}")
-    for workaround_name in sorted(workaround_fn_names):
-        lines.append(f"        self._{workaround_name} = take._{workaround_name}")
     lines.append("")
 
     # ---- Methods ----
@@ -1396,12 +1206,7 @@ def _generate_libduckdb_struct(
         lines.append(format_comment_header(title))
 
         for entry in entries:
-            name = entry["name"]
-
-            if name in STRUCT_WORKAROUNDS:
-                lines.append(_generate_dual_method(entry, STRUCT_WORKAROUNDS[name]))
-            else:
-                lines.append(_generate_normal_method(entry))
+            lines.append(_generate_normal_method(entry))
             lines.append("")
 
     return "\n".join(lines)
@@ -1445,136 +1250,8 @@ def _generate_normal_method(entry: dict) -> str:
         if pname in MOJO_RESERVED_PARAM_NAMES:
             pname = pname + "_"
         args.append(pname)
+    # Default: direct struct-field call
     lines.append(f"        return self._{name}({', '.join(args)})")
-
-    return "\n".join(lines)
-
-
-def _default_value_for_type(mojo_type: str) -> str:
-    """Return a sensible zero-value expression for a Mojo type (used for out-param init)."""
-    defaults: dict[str, str] = {
-        "duckdb_date_struct": "duckdb_date_struct(year=Int32(0), month=Int8(0), day=Int8(0))",
-        "duckdb_time_struct": "duckdb_time_struct(hour=Int8(0), min=Int8(0), sec=Int8(0), micros=Int32(0))",
-        "duckdb_timestamp_struct": (
-            "duckdb_timestamp_struct("
-            "date=duckdb_date_struct(year=Int32(0), month=Int8(0), day=Int8(0)), "
-            "time=duckdb_time_struct(hour=Int8(0), min=Int8(0), sec=Int8(0), micros=Int32(0)))"
-        ),
-        "duckdb_time_tz_struct": (
-            "duckdb_time_tz_struct("
-            "time=duckdb_time_struct(hour=Int8(0), min=Int8(0), sec=Int8(0), micros=Int32(0)), "
-            "offset=Int32(0))"
-        ),
-        "duckdb_decimal": "duckdb_decimal(width=UInt8(0), scale=UInt8(0), value=Int128(0))",
-        "duckdb_query_progress_type": (
-            "duckdb_query_progress_type(percentage=Float64(0), "
-            "rows_processed=UInt64(0), total_rows_to_process=UInt64(0))"
-        ),
-    }
-    return defaults.get(mojo_type, f"{mojo_type}()")
-
-
-def _dlhandle_body_lines(entry: dict, workaround_name: str, indent: str = "        ") -> list[str]:
-    """Generate the DLHandle+shim call body (without signature/docstring)."""
-    params = entry.get("params", [])
-    ret = entry["return_type"].strip()
-    returns_multi = ret in MULTI_FIELD_STRUCTS
-    returns_single = ret in SINGLE_FIELD_STRUCT_UNWRAP
-    mojo_ret = c_type_to_mojo(ret, is_return=True)
-
-    lines: list[str] = []
-    args: list[str] = []
-    for p in params:
-        ptype = p["type"].strip()
-        pname = p["name"]
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        if ptype in MULTI_FIELD_STRUCTS:
-            copy_name = f"_{pname}_copy"
-            lines.append(f"{indent}var {copy_name} = {pname}")
-            args.append(f"UnsafePointer(to={copy_name}).bitcast[NoneType]().unsafe_origin_cast[MutAnyOrigin]()")
-        elif ptype in SINGLE_FIELD_STRUCT_UNWRAP:
-            _, field_name = SINGLE_FIELD_STRUCT_UNWRAP[ptype]
-            args.append(f"{pname}.{field_name}")
-        else:
-            args.append(pname)
-
-    if returns_multi:
-        lines.append(f"{indent}var result = {_default_value_for_type(mojo_ret)}")
-        args.append(f"UnsafePointer(to=result).bitcast[NoneType]().unsafe_origin_cast[MutAnyOrigin]()")
-        lines.append(f"{indent}self._{workaround_name}({', '.join(args)})")
-        lines.append(f"{indent}return result")
-    elif returns_single:
-        _, field_name = SINGLE_FIELD_STRUCT_UNWRAP[ret]
-        lines.append(f"{indent}return {mojo_ret}({field_name}=self._{workaround_name}({', '.join(args)}))")
-    else:
-        lines.append(f"{indent}return self._{workaround_name}({', '.join(args)})")
-
-    return lines
-
-
-def _external_call_body_lines(entry: dict, indent: str = "        ") -> list[str]:
-    """Generate an external_call body (without signature/docstring)."""
-    name = entry["name"]
-    params = entry.get("params", [])
-    ret = entry["return_type"].strip()
-    mojo_ret = c_type_to_mojo(ret, is_return=True)
-
-    # Build type args: return_type, then each param type
-    type_args = [mojo_ret]
-    call_args: list[str] = []
-    for p in params:
-        ptype = p["type"].strip()
-        pname = p["name"]
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        type_args.append(c_type_to_mojo(ptype))
-        call_args.append(pname)
-
-    type_str = ", ".join(type_args)
-    call_str = ", ".join(call_args)
-    if call_args:
-        return [f'{indent}return external_call["{name}", {type_str}]({call_str})']
-    else:
-        return [f'{indent}return external_call["{name}", {type_str}]()']
-
-
-def _generate_dual_method(entry: dict, workaround_name: str) -> str:
-    """Generate a method with comptime if switching between DLHandle shim and external_call."""
-    name = entry["name"]
-    params = entry.get("params", [])
-    ret = entry["return_type"].strip()
-    comment = entry.get("comment", {})
-    mojo_ret = c_type_to_mojo(ret, is_return=True)
-
-    lines: list[str] = []
-
-    # --- Signature (public API keeps original types) ---
-    sig_parts = [f"    def {name}(\n        self"]
-    for p in params:
-        ptype = p["type"].strip()
-        pname = p["name"]
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        mojo_type = c_type_to_mojo(ptype)
-        sig_parts.append(f",\n        {pname}: {mojo_type}")
-    lines.append("".join(sig_parts) + f",\n    ) -> {mojo_ret}:")
-
-    # --- Docstring ---
-    desc = comment.get("description", "").strip()
-    if desc:
-        desc_lines = _ensure_summary_period(desc.split("\n"))
-        lines.append('        """')
-        for line in desc_lines:
-            stripped = line.rstrip()
-            lines.append(f"        {stripped}" if stripped else "")
-        lines.append('        """')
-
-    # --- Dual body ---
-    lines.append("        comptime if USE_DLHANDLE:")
-    lines.extend(_dlhandle_body_lines(entry, workaround_name, indent="            "))
-    lines.append("        else:")
-    lines.extend(_external_call_body_lines(entry, indent="            "))
 
     return "\n".join(lines)
 
@@ -1659,48 +1336,6 @@ def _generate_ext_api_structs(
     return "\n".join(out_lines)
 
 
-def _workaround_fn_type(entry: dict, workaround_name: str) -> str:
-    """Build the Mojo fn type for a C shim function.
-
-    The shim signature is derived from the original:
-    - Multi-field struct params → UnsafePointer[NoneType, MutAnyOrigin] (opaque)
-    - Single-field struct params → unwrapped to raw scalar
-    - Multi-field struct return → void, with extra UnsafePointer[NoneType, MutAnyOrigin] out-param
-    - Single-field struct return → unwrapped to raw scalar
-
-    IMPORTANT: We use UnsafePointer[NoneType, MutAnyOrigin] rather than typed
-    pointers because the DLHandle ABI bug is triggered by TrivialRegisterPassable
-    types appearing anywhere in the function signature template, even as pointer
-    element types.
-    """
-    params = entry.get("params", [])
-    ret = entry["return_type"].strip()
-    returns_multi = ret in MULTI_FIELD_STRUCTS
-    returns_single = ret in SINGLE_FIELD_STRUCT_UNWRAP
-
-    mojo_params: list[str] = []
-    for p in params:
-        ptype = p["type"].strip()
-        if ptype in MULTI_FIELD_STRUCTS:
-            mojo_params.append("UnsafePointer[NoneType, MutAnyOrigin]")
-        elif ptype in SINGLE_FIELD_STRUCT_UNWRAP:
-            scalar_type, _ = SINGLE_FIELD_STRUCT_UNWRAP[ptype]
-            mojo_params.append(scalar_type)
-        else:
-            mojo_params.append(c_type_to_mojo(ptype))
-
-    if returns_multi:
-        mojo_params.append("UnsafePointer[NoneType, MutAnyOrigin]")
-        mojo_ret = "NoneType"
-    elif returns_single:
-        scalar_type, _ = SINGLE_FIELD_STRUCT_UNWRAP[ret]
-        mojo_ret = scalar_type
-    else:
-        mojo_ret = c_type_to_mojo(ret, is_return=True)
-
-    return f'def({", ".join(mojo_params)}) thin abi("C") -> {mojo_ret}'
-
-
 def _generate_dylib_declarations(
     grouped_entries: list[tuple[str, str, list[dict]]],
     ext_api_version_map: dict[str, str] | None = None,
@@ -1727,30 +1362,6 @@ def _generate_dylib_declarations(
             lines.append(f"    {fn_type}")
             lines.append("]")
             lines.append("")
-
-    # Workaround function declarations (from C shim library)
-    # These comptime declarations always exist so the struct vars can reference
-    # their fn_type. The actual loading only happens when USE_DLHANDLE is True.
-    lines.append(format_section_header("Struct Workaround Functions (libduckdb_mojo_helpers)"))
-    lines.append("# C shims for functions that pass/return multi-field structs by value.")
-    lines.append("# See https://github.com/modular/modular/issues/3144")
-    lines.append("")
-
-    # Build a lookup of all entries by name for the workaround generation
-    entry_map: dict[str, dict] = {}
-    for _, _, entries in grouped_entries:
-        for entry in entries:
-            entry_map[entry["name"]] = entry
-
-    for orig_name, workaround_name in sorted(STRUCT_WORKAROUNDS.items()):
-        if orig_name not in entry_map:
-            continue
-        entry = entry_map[orig_name]
-        wk_fn_type = _workaround_fn_type(entry, workaround_name)
-        lines.append(f'comptime _{workaround_name} = _dylib_helpers_function["{workaround_name}",')
-        lines.append(f"    {wk_fn_type}")
-        lines.append("]")
-        lines.append("")
 
     return "\n".join(lines)
 

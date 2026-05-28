@@ -1,4 +1,5 @@
 from duckdb._libduckdb import *
+from duckdb.database import _null_ptr
 from std.collections import List
 
 
@@ -53,9 +54,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took.
                 # Null sentinel — duckdb_destroy_logical_type is a no-op on NULL.
-                list_type._logical_type = duckdb_logical_type(
-                    unsafe_from_address=0
-                )
+                list_type._logical_type = _null_ptr[duckdb_logical_type.type, MutExternalOrigin]()
             elif copy.get_type_id() == DuckDBType.array:
                 # Deep copy array type: recreate from child type and size
                 var child = copy.array_type_child_type()

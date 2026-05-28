@@ -73,7 +73,7 @@ def test_vector_get_data() raises:
     var vec = chunk.get_vector(0)
 
     var data_ptr = vec.get_data()
-    assert_not_equal(data_ptr, UnsafePointer[NoneType, MutAnyOrigin]())
+    assert_not_equal(Int(data_ptr), 0)
     
     # Validate actual values
     var int_data = data_ptr.bitcast[Int32]()

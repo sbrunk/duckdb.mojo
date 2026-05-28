@@ -88,7 +88,7 @@ appender.end_row()
 
 from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
-from std.reflection import is_struct_type
+from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
@@ -97,6 +97,7 @@ from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface
 from duckdb.connection import Connection
+from duckdb.database import _null_ptr
 from duckdb.logical_type import LogicalType
 from duckdb.typed_api import (
     mojo_type_to_duckdb_type,
@@ -227,7 +228,7 @@ def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value
     else:
         raise Error(
             "Unsupported type for value creation: "
-            + String(reflect[T]().name())
+            + String(Reflected[T].name())
         )
 
 
@@ -474,15 +475,18 @@ __extension List(Appendable):
                 ),
             )
         elif _is_known_scalar_type[Self.T]():
-            # General list of known scalars — create a list or array value
+            # General list of known scalars — create a list or array value.
+            # Refine Self.T to Copyable & Movable so we can call _to_duckdb_value /
+            # mojo_type_to_duckdb_type — every known scalar satisfies both traits.
+            comptime CT = downcast[Self.T, Copyable & Movable]
             ref libduckdb = DuckDB().libduckdb()
-            var src_ptr = UnsafePointer(to=self).bitcast[List[Self.T]]()
+            var src_ptr = UnsafePointer(to=self).bitcast[List[CT]]()
             var n = len(src_ptr[])
 
             # Create duckdb_values for each element
             var values = alloc[duckdb_value](n)
             for i in range(n):
-                values[i] = _to_duckdb_value(src_ptr[][i])
+                values[i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
 
             # Check target column type to decide LIST vs ARRAY
             var col_type = libduckdb.duckdb_appender_column_type(
@@ -505,7 +509,7 @@ __extension List(Appendable):
             else:
                 # LIST (default)
                 var elem_type = LogicalType[True, MutExternalOrigin](
-                    mojo_type_to_duckdb_type[Self.T]()
+                    mojo_type_to_duckdb_type[CT]()
                 )
                 val = libduckdb.duckdb_create_list_value(
                     elem_type.internal_ptr(),
@@ -680,7 +684,7 @@ struct Appender(Movable):
         if schema == "":
             state = libduckdb.duckdb_appender_create(
                 con._conn,
-                UnsafePointer[c_char, ImmutAnyOrigin](unsafe_from_address=0),
+                _null_ptr[c_char, ImmutAnyOrigin](),
                 _table.as_c_string_slice().unsafe_ptr(),
                 UnsafePointer(to=self._appender),
             )
@@ -762,7 +766,7 @@ struct Appender(Movable):
         else:
             raise Error(
                 "Unsupported type for appender: "
-                + String(reflect[T]().name())
+                + String(Reflected[T].name())
             )
 
     # ── Row-level appending ───────────────────────────────────────
@@ -808,10 +812,10 @@ struct Appender(Movable):
 
     def _append_struct_fields[T: Copyable & Movable](mut self, ref row: T) raises:
         """Append all fields of a struct as values in the current row."""
-        comptime field_count = reflect[T]().field_count()
+        comptime field_count = Reflected[T].field_count()
 
         comptime for idx in range(field_count):
-            comptime FieldType = reflect[T]().field_types()[idx]
+            comptime FieldType = Reflected[T].field_types()[idx]
 
             comptime if conforms_to(FieldType, Appendable):
                 trait_downcast[Appendable](
@@ -819,7 +823,7 @@ struct Appender(Movable):
                 ).append(self)
                 self._current_col += 1
             else:
-                comptime field_name = reflect[T]().field_names()[idx]
+                comptime field_name = Reflected[T].field_names()[idx]
                 raise Error(
                     "Unsupported field type for appender: field '"
                     + String(field_name)
