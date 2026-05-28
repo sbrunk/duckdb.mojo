@@ -10,7 +10,7 @@ jobs:
       matrix:
         include:
           - { target: linux-64, os: ubuntu-22.04 }
-          - { target: linux-aarch64, os: ubuntu-22.04 }
+          - { target: linux-aarch64, os: ubuntu-22.04-arm }
           - { target: osx-arm64, os: macos-15 }
       fail-fast: false
 
@@ -42,9 +42,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .pixi/envs/default/share/max/cache
-          key: mojo-cache-${{ matrix.target }}-${{ hashFiles('pixi.lock') }}
+          # Bump the version suffix below to invalidate stale caches that
+          # outlived a Mojo compiler upgrade (older caches can crash the
+          # new compiler when restored).
+          key: mojo-cache-v2-${{ matrix.target }}-${{ hashFiles('pixi.lock') }}
           restore-keys: |
-            mojo-cache-${{ matrix.target }}-
+            mojo-cache-v2-${{ matrix.target }}-
 
       - name: Execute tests
         env:
