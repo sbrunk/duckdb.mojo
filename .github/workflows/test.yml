@@ -9,7 +9,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target: linux-64, os: ubuntu-22.04 }
+          - { target: linux-64, os: ubuntu-24.04 }
           - { target: linux-aarch64, os: ubuntu-22.04-arm }
           - { target: osx-arm64, os: macos-15 }
       fail-fast: false
