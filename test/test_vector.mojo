@@ -90,14 +90,15 @@ def test_vector_get_validity() raises:
 
     # Get validity mask and verify it's present for this case with NULLs
     var validity = vec.get_validity()
-    assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
-    
+    assert_true(validity is not None)
+    var mask = validity.value()
+
     # Validate the actual data and validity
     var data_ptr = vec.get_data().bitcast[Int32]()
-    assert_true(Bool((validity[0] >> 0) & 1))  # Row 0: valid
+    assert_true(Bool((mask[0] >> 0) & 1))  # Row 0: valid
     assert_equal(data_ptr[0], 1)
-    assert_false(Bool((validity[0] >> 1) & 1))  # Row 1: NULL
-    assert_true(Bool((validity[0] >> 2) & 1))  # Row 2: valid
+    assert_false(Bool((mask[0] >> 1) & 1))  # Row 1: NULL
+    assert_true(Bool((mask[0] >> 2) & 1))  # Row 2: valid
     assert_equal(data_ptr[2], 3)
 
 
@@ -109,9 +110,9 @@ def test_vector_ensure_validity_writable() raises:
     # Ensure validity is writable
     vec.ensure_validity_writable()
 
-    # After ensuring, get_validity should always return non-NULL
+    # After ensuring, get_validity should always return non-None
     var validity = vec.get_validity()
-    assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
+    assert_true(validity is not None)
 
 
 def test_vector_list_operations() raises:
@@ -401,16 +402,18 @@ def test_vector_mixed_nulls() raises:
     # Validate the actual data and validity mask
     var data_ptr = vec.get_data().bitcast[Int32]()
     var validity = vec.get_validity()
+    assert_true(validity is not None)
+    var mask = validity.value()
 
     # Row 0: value = 1, valid
-    assert_true(Bool((validity[0] >> 0) & 1))
+    assert_true(Bool((mask[0] >> 0) & 1))
     assert_equal(data_ptr[0], 1)
 
     # Row 1: NULL
-    assert_false(Bool((validity[0] >> 1) & 1))
+    assert_false(Bool((mask[0] >> 1) & 1))
 
     # Row 2: value = 3, valid
-    assert_true(Bool((validity[0] >> 2) & 1))
+    assert_true(Bool((mask[0] >> 2) & 1))
     assert_equal(data_ptr[2], 3)
 
 

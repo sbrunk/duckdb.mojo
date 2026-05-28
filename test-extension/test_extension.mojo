@@ -244,8 +244,8 @@ def test_ext_sum_empty() raises:
     var chunk = result.fetch_chunk()
     # Empty aggregate returns NULL (no valid rows)
     var validity = chunk.get_vector(0).get_validity()
-    assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
-    assert_false(Bool((validity[0] >> 0) & 1))
+    assert_true(validity is not None)
+    assert_false(Bool((validity.value()[0] >> 0) & 1))
 
 
 # ===--------------------------------------------------------------------===#

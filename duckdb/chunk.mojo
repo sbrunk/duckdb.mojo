@@ -13,12 +13,6 @@ from duckdb.typed_api import (
 from std.collections import Optional
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc
-from std.reflection import (
-    struct_field_count,
-    struct_field_types,
-    struct_field_names,
-    get_type_name,
-)
 from std.builtin.rebind import downcast, rebind_var
 from std.iter import Iterator, Iterable, StopIteration
 
@@ -197,9 +191,8 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
     def is_null(self, *, col: Int) -> Bool:
         """Check if all values at the given and column are NULL."""
         var validity_mask = self.get_vector(col).get_validity()
-        if (
-            not validity_mask
-        ):  # validity mask can be null if there are no NULL values
+        # validity mask is None if there are no NULL values
+        if validity_mask is None:
             return False
         # TODO check validity mask doesn't contain any 0 bits
         return False
@@ -207,13 +200,12 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
     def is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""
         var validity_mask = self.get_vector(col).get_validity()
-        if (
-            not validity_mask
-        ):  # validity mask can be null if there are no NULL values
+        # validity mask is None if there are no NULL values
+        if validity_mask is None:
             return False
         var entry_idx = row // 64
         var idx_in_entry = row % 64
-        var is_valid = validity_mask[entry_idx] & UInt64((1 << idx_in_entry))
+        var is_valid = validity_mask.value()[entry_idx] & UInt64((1 << idx_in_entry))
         return not is_valid
 
     def get[
@@ -328,7 +320,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     + ", row="
                     + String(row)
                     + ". Use get[Optional["
-                    + String(get_type_name[T]())
+                    + String(reflect[T]().name())
                     + "]](col=, row=) for nullable values."
                 )
             return _deserialize_table_field[T](self.get_vector(col), row)
@@ -447,7 +439,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         "NULL value at row "
                         + String(i)
                         + ". Use get[Optional["
-                        + String(get_type_name[T]())
+                        + String(reflect[T]().name())
                         + "]](col=) for nullable values."
                     )
                 result.append(opt_result[i].value().copy())
@@ -485,13 +477,13 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         if row < 0 or row >= len(self):
             raise Error(String("Row {} out of bounds.").format(row))
 
-        comptime field_count_ = struct_field_count[T]()
+        comptime field_count_ = reflect[T]().field_count()
 
         # Validate column count matches field count
         if self.column_count() != field_count_:
             raise Error(
                 "Column count mismatch: struct "
-                + String(get_type_name[T]())
+                + String(reflect[T]().name())
                 + " has "
                 + String(field_count_)
                 + " fields but chunk has "
@@ -501,7 +493,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         # Validate column types match field types
         comptime for idx in range(field_count_):
-            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FieldType = reflect[T]().field_types()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
             var actual_type = self.type(idx)
 
@@ -512,7 +504,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 if actual_type != expected:
                     if expected == DuckDBType.list:
                         if not _is_list_compatible_type(actual_type):
-                            comptime field_name = struct_field_names[T]()[idx]
+                            comptime field_name = reflect[T]().field_names()[idx]
                             raise Error(
                                 "Type mismatch for field '"
                                 + String(field_name)
@@ -522,7 +514,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                             )
                     elif expected == DuckDBType.struct_t:
                         if actual_type != DuckDBType.union:
-                            comptime field_name = struct_field_names[T]()[idx]
+                            comptime field_name = reflect[T]().field_names()[idx]
                             raise Error(
                                 "Type mismatch for field '"
                                 + String(field_name)
@@ -532,7 +524,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                             )
                     elif expected == DuckDBType.varchar:
                         if actual_type != DuckDBType.enum:
-                            comptime field_name = struct_field_names[T]()[idx]
+                            comptime field_name = reflect[T]().field_names()[idx]
                             raise Error(
                                 "Type mismatch for field '"
                                 + String(field_name)
@@ -542,7 +534,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                                 + String(actual_type)
                             )
                     else:
-                        comptime field_name = struct_field_names[T]()[idx]
+                        comptime field_name = reflect[T]().field_names()[idx]
                         raise Error(
                             "Type mismatch for field '"
                             + String(field_name)
@@ -555,7 +547,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
                 comptime if expected_db_type == DuckDBType.list:
                     if not _is_list_compatible_type(actual_type):
-                        comptime field_name = struct_field_names[T]()[idx]
+                        comptime field_name = reflect[T]().field_names()[idx]
                         raise Error(
                             "Type mismatch for field '"
                             + String(field_name)
@@ -567,7 +559,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     if actual_type != expected_db_type:
                         comptime if expected_db_type == DuckDBType.struct_t:
                             if actual_type != DuckDBType.union:
-                                comptime field_name = struct_field_names[T]()[idx]
+                                comptime field_name = reflect[T]().field_names()[idx]
                                 raise Error(
                                     "Type mismatch for field '"
                                     + String(field_name)
@@ -577,7 +569,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                                 )
                         elif expected_db_type == DuckDBType.varchar:
                             if actual_type != DuckDBType.enum:
-                                comptime field_name = struct_field_names[T]()[idx]
+                                comptime field_name = reflect[T]().field_names()[idx]
                                 raise Error(
                                     "Type mismatch for field '"
                                     + String(field_name)
@@ -587,7 +579,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                                     + String(actual_type)
                                 )
                         else:
-                            comptime field_name = struct_field_names[T]()[idx]
+                            comptime field_name = reflect[T]().field_names()[idx]
                             raise Error(
                                 "Type mismatch for field '"
                                 + String(field_name)
@@ -599,17 +591,17 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         # Check non-Optional fields for NULL before allocating
         comptime for idx in range(field_count_):
-            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FieldType = reflect[T]().field_types()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
 
             comptime if not conforms_to(FT, _NullableColumn):
                 if self.is_null(col=idx, row=row):
-                    comptime field_name = struct_field_names[T]()[idx]
+                    comptime field_name = reflect[T]().field_names()[idx]
                     raise Error(
                         "NULL value for non-optional field '"
                         + String(field_name)
                         + "'. Declare as Optional["
-                        + String(get_type_name[FT]())
+                        + String(reflect[FT]().name())
                         + "] to handle NULLs."
                     )
 
@@ -617,7 +609,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         var ptr = alloc[T](1)
 
         comptime for idx in range(field_count_):
-            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FieldType = reflect[T]().field_types()[idx]
             comptime FT = downcast[FieldType, Copyable & Movable]
             var vector = self.get_vector(idx)
             var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
@@ -797,7 +789,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                         "NULL value for non-optional tuple element "
                         + String(idx)
                         + ". Use Optional["
-                        + String(get_type_name[ETC]())
+                        + String(reflect[ETC]().name())
                         + "] to handle NULLs."
                     )
 

@@ -152,15 +152,16 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
             # if the element type is fixed size, we can directly get all values from the vector
             # that way we can avoid calling the constructor for each element
 
-            # validity mask can be null if there are no NULL values
-            if not validity_mask:
+            # validity mask is None if there are no NULL values
+            if validity_mask is None:
                 for idx in range(length):
                     self.value.append(Optional(data_ptr[idx + offset].copy()))
             else:  # otherwise we have to check the validity mask for each element
+                var mask = validity_mask.value()
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & UInt64((
+                    var is_valid = mask[entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:
@@ -168,15 +169,16 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.varchar:
-            # validity mask can be null if there are no NULL values
-            if not validity_mask:
+            # validity mask is None if there are no NULL values
+            if validity_mask is None:
                 for idx in range(length):
                     self.value.append(Optional(Self.T(vector, length=1, offset=offset + idx)))
             else:  # otherwise we have to check the validity mask for each element
+                var mask = validity_mask.value()
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & UInt64((
+                    var is_valid = mask[entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:
@@ -192,8 +194,8 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
             # The child vector holds the actual list data in variable size entries (list_entry.length)
             var child_vector = vector.list_get_child()
 
-            # validity mask can be null if there are no NULL values
-            if not validity_mask:
+            # validity mask is None if there are no NULL values
+            if validity_mask is None:
                 for idx in range(length):
                     var list_entry = data_ptr[offset + idx]
                     self.value.append(
@@ -206,10 +208,11 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
                         )
                     )
             else:  # otherwise we have to check the validity mask for each element
+                var mask = validity_mask.value()
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = validity_mask[entry_idx] & UInt64((
+                    var is_valid = mask[entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:

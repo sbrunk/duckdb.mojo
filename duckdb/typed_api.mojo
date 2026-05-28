@@ -69,14 +69,7 @@ Key features:
 
 from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
-from std.reflection import (
-    get_base_type_name,
-    get_type_name,
-    is_struct_type,
-    struct_field_count,
-    struct_field_names,
-    struct_field_types,
-)
+from std.reflection import is_struct_type
 from std.collections import Optional, List, Dict
 from std.utils import Variant
 from std.memory import alloc, memcpy
@@ -373,7 +366,7 @@ def mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
     elif _type_is_eq[T, Bit]():
         return DuckDBType.bit
     else:
-        comptime base_name = get_base_type_name[T]()
+        comptime base_name = reflect[T]().base_name()
         comptime if base_name == "List":
             return DuckDBType.list
         elif base_name == "Dict":
@@ -464,7 +457,7 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     elif _type_is_eq[T, Bit]():
         return DuckDBType.bit
     else:
-        comptime base_name = get_base_type_name[T]()
+        comptime base_name = reflect[T]().base_name()
         comptime if base_name == "List":
             return DuckDBType.list
         elif base_name == "Dict":
@@ -492,7 +485,7 @@ def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
     comptime if _is_known_scalar_type[T]():
         return MojoType(mojo_type_to_duckdb_type[T]())
     else:
-        comptime base_name = get_base_type_name[T]()
+        comptime base_name = reflect[T]().base_name()
         comptime if base_name == "List":
             # We know it's a list but can't yet extract T from List[T]
             # automatically. Return a bare list descriptor.
@@ -504,8 +497,8 @@ def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
             return MojoType(DuckDBType.union)
         else:
             # User-defined struct — reflect over fields
-            comptime field_count = struct_field_count[T]()
-            comptime field_type_arr = struct_field_types[T]()
+            comptime field_count = reflect[T]().field_count()
+            comptime field_type_arr = reflect[T]().field_types()
 
             var names = List[String]()
             var types = List[MojoType]()
@@ -513,7 +506,7 @@ def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
             comptime for idx in range(field_count):
                 # Extract individual field name at compile time (avoids
                 # materialising the whole InlineArray[StaticString, N])
-                comptime field_name = struct_field_names[T]()[idx]
+                comptime field_name = reflect[T]().field_names()[idx]
                 names.append(String(field_name))
                 comptime ft = field_type_arr[idx]
                 types.append(MojoType(_scalar_type_to_duckdb[ft]()))
@@ -759,16 +752,19 @@ def _deserialize_enum_column[
 # ──────────────────────────────────────────────────────────────────
 
 
-def _is_valid(validity_mask: UnsafePointer[UInt64, MutAnyOrigin], idx: Int) -> Bool:
+def _is_valid(
+    validity_mask: Optional[UnsafePointer[UInt64, MutAnyOrigin]], idx: Int
+) -> Bool:
     """Check if a value at idx is valid (non-NULL) given a validity mask.
 
-    If the mask is null, all values are valid.
+    If the mask is None, all values are valid.
     """
-    if not validity_mask:
+    if validity_mask is None:
         return True
+    var mask = validity_mask.value()
     var entry_idx = idx // 64
     var idx_in_entry = idx % 64
-    return Bool(validity_mask[entry_idx] & UInt64(1 << idx_in_entry))
+    return Bool(mask[entry_idx] & UInt64(1 << idx_in_entry))
 
 
 def _deserialize_struct_field[
@@ -814,14 +810,14 @@ def _deserialize_struct_row[
     Returns:
         An instance of T populated from the vector.
     """
-    comptime field_count = struct_field_count[T]()
+    comptime field_count = reflect[T]().field_count()
 
     # Allocate uninitialised memory — we fill every field below.
     var ptr = alloc[T](1)
 
     comptime for idx in range(field_count):
         var child_vec = vector.struct_get_child(idx_t(idx))
-        comptime FieldType = struct_field_types[T]()[idx]
+        comptime FieldType = reflect[T]().field_types()[idx]
         comptime FT = downcast[FieldType, Copyable & Movable]
 
         # Get raw pointer to the field's memory slot
@@ -904,7 +900,7 @@ def _deserialize_union_row[
     Returns:
         An instance of T with the active member set.
     """
-    comptime field_count = struct_field_count[T]()
+    comptime field_count = reflect[T]().field_count()
 
     # Read the tag from child 0 (UTINYINT)
     var tag_vec = vector.struct_get_child(0)
@@ -915,7 +911,7 @@ def _deserialize_union_row[
 
     comptime for idx in range(field_count):
         var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
-        comptime FieldType = struct_field_types[T]()[idx]
+        comptime FieldType = reflect[T]().field_types()[idx]
         comptime FT = downcast[FieldType, Copyable & Movable]
 
         # Each field must be Optional. Child vectors are 1-indexed
@@ -1224,7 +1220,7 @@ def _deserialize_list[
                 result.append(None)
     elif element_db_type.is_fixed_size():
         var data_ptr = vector.get_data().bitcast[ElementType]()
-        if not validity_mask:
+        if validity_mask is None:
             for idx in range(length):
                 result.append(Optional(data_ptr[offset + idx].copy()))
         else:
@@ -1234,7 +1230,7 @@ def _deserialize_list[
                 else:
                     result.append(None)
     elif element_db_type == DuckDBType.varchar:
-        if not validity_mask:
+        if validity_mask is None:
             for idx in range(length):
                 result.append(
                     Optional(_deserialize_scalar[ElementType](vector, offset + idx))
@@ -1254,7 +1250,7 @@ def _deserialize_list[
         # decompose ElementType (a List[...]) and recurse.
         var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
         var child_vec = vector.list_get_child()
-        if not validity_mask:
+        if validity_mask is None:
             for idx in range(length):
                 var entry = list_entries[offset + idx]
                 var inner = downcast[
@@ -1402,7 +1398,7 @@ def _deserialize_table_field[
         The deserialized value.
     """
     comptime db_type = mojo_type_to_duckdb_type[T]()
-    comptime base_name = get_base_type_name[T]()
+    comptime base_name = reflect[T]().base_name()
 
     comptime if base_name == "List":
         # List/Array/Map field — dispatch by actual vector type
@@ -1498,7 +1494,7 @@ def deserialize_from_vector[
         ```
     """
     comptime db_type = mojo_type_to_duckdb_type[T]()
-    comptime base_name = get_base_type_name[T]()
+    comptime base_name = reflect[T]().base_name()
 
     comptime if base_name == "List":
         # List/Array/Map deserialization — use the _VectorListConstructible

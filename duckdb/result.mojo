@@ -1066,7 +1066,7 @@ struct RowIter[
     ]: Iterator = Self
 
     var _result: Pointer[Result, Self.origin]
-    var _raw_chunk: duckdb_data_chunk
+    var _raw_chunk: Optional[duckdb_data_chunk]
     var _num_cols: Int
     var _chunk_row: Int
     var _chunk_size: Int
@@ -1074,7 +1074,7 @@ struct RowIter[
 
     def __init__(out self, result_ptr: Pointer[Result, Self.origin]):
         self._result = result_ptr
-        self._raw_chunk = duckdb_data_chunk()
+        self._raw_chunk = None
         self._num_cols = 0
         self._chunk_row = 0
         self._chunk_size = 0
@@ -1085,10 +1085,11 @@ struct RowIter[
 
     def _destroy_current_chunk(mut self):
         """Destroy the current chunk if it exists."""
-        if self._raw_chunk:
+        if self._raw_chunk is not None:
             ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._raw_chunk))
-            self._raw_chunk = duckdb_data_chunk()
+            var chunk = self._raw_chunk.value()
+            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=chunk))
+            self._raw_chunk = None
 
     def __next__(mut self) raises StopIteration -> Row:
         # Advance to next chunk if current one is exhausted
@@ -1097,21 +1098,24 @@ struct RowIter[
                 raise StopIteration()
             self._destroy_current_chunk()
             ref libduckdb = DuckDB().libduckdb()
-            var raw = libduckdb.duckdb_fetch_chunk(self._result[]._result)
-            if not raw:
+            var raw: Optional[duckdb_data_chunk] = (
+                libduckdb.duckdb_fetch_chunk(self._result[]._result)
+            )
+            if raw is None:
                 self._exhausted = True
                 raise StopIteration()
-            self._raw_chunk = raw
+            var chunk = raw.value()
+            self._raw_chunk = chunk
             self._num_cols = Int(
-                libduckdb.duckdb_data_chunk_get_column_count(raw)
+                libduckdb.duckdb_data_chunk_get_column_count(chunk)
             )
             self._chunk_row = 0
             self._chunk_size = Int(
-                libduckdb.duckdb_data_chunk_get_size(raw)
+                libduckdb.duckdb_data_chunk_get_size(chunk)
             )
 
         var row = Row(
-            self._raw_chunk,
+            self._raw_chunk.value(),
             self._chunk_row,
             self._num_cols,
         )

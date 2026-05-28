@@ -88,14 +88,7 @@ appender.end_row()
 
 from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
-from std.reflection import (
-    get_base_type_name,
-    get_type_name,
-    is_struct_type,
-    struct_field_count,
-    struct_field_names,
-    struct_field_types,
-)
+from std.reflection import is_struct_type
 from std.collections import Optional, List, Dict
 from std.utils import Variant
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
@@ -187,7 +180,7 @@ def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value
     elif _type_is_eq[T, String]():
         var s = String(vp.bitcast[String]()[])
         return libduckdb.duckdb_create_varchar_length(
-            s.as_c_string_slice().unsafe_ptr(), idx_t(len(s))
+            s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
         )
     elif _type_is_eq[T, Date]():
         return libduckdb.duckdb_create_date(vp.bitcast[Date]()[])
@@ -234,7 +227,7 @@ def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value
     else:
         raise Error(
             "Unsupported type for value creation: "
-            + String(get_type_name[T]())
+            + String(reflect[T]().name())
         )
 
 
@@ -268,10 +261,12 @@ def _get_appender_error(raw: duckdb_appender) -> String:
             UnsafePointer(to=error_data)
         )
         return ""
-    var msg_ptr = libduckdb.duckdb_error_data_message(error_data)
+    var msg_ptr: Optional[
+        UnsafePointer[c_char, ImmutAnyOrigin]
+    ] = libduckdb.duckdb_error_data_message(error_data)
     var msg = String("")
-    if msg_ptr:
-        msg = String(unsafe_from_utf8_ptr=msg_ptr)
+    if msg_ptr is not None:
+        msg = String(unsafe_from_utf8_ptr=msg_ptr.value())
     libduckdb.duckdb_destroy_error_data(UnsafePointer(to=error_data))
     return msg
 
@@ -614,9 +609,10 @@ __extension Variant(Appendable):
             appender._appender, idx_t(appender._current_col)
         )
 
-        # Find the active member using isa[] and create the member value
+        # Find the active member using isa[] and create the member value.
+        # Placeholder handle — overwritten in the loop below.
         var tag = 0
-        var member_val = duckdb_value()
+        var member_val = duckdb_value.unsafe_dangling()
         comptime for i in range(Self.Ts.size):
             comptime MemberType = Self.Ts[i]
             comptime MT = downcast[MemberType, Copyable & Movable]
@@ -674,7 +670,8 @@ struct Appender(Movable):
             table: The table name to append to.
             schema: The schema name (empty string for default schema).
         """
-        self._appender = duckdb_appender()
+        # Placeholder handle — duckdb_appender_create populates it via out-param.
+        self._appender = duckdb_appender.unsafe_dangling()
         self._current_col = 0
         var _table = table.copy()
         ref libduckdb = DuckDB().libduckdb()
@@ -683,7 +680,7 @@ struct Appender(Movable):
         if schema == "":
             state = libduckdb.duckdb_appender_create(
                 con._conn,
-                UnsafePointer[c_char, ImmutAnyOrigin](),
+                UnsafePointer[c_char, ImmutAnyOrigin](unsafe_from_address=0),
                 _table.as_c_string_slice().unsafe_ptr(),
                 UnsafePointer(to=self._appender),
             )
@@ -765,7 +762,7 @@ struct Appender(Movable):
         else:
             raise Error(
                 "Unsupported type for appender: "
-                + String(get_type_name[T]())
+                + String(reflect[T]().name())
             )
 
     # ── Row-level appending ───────────────────────────────────────
@@ -811,10 +808,10 @@ struct Appender(Movable):
 
     def _append_struct_fields[T: Copyable & Movable](mut self, ref row: T) raises:
         """Append all fields of a struct as values in the current row."""
-        comptime field_count = struct_field_count[T]()
+        comptime field_count = reflect[T]().field_count()
 
         comptime for idx in range(field_count):
-            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FieldType = reflect[T]().field_types()[idx]
 
             comptime if conforms_to(FieldType, Appendable):
                 trait_downcast[Appendable](
@@ -822,7 +819,7 @@ struct Appender(Movable):
                 ).append(self)
                 self._current_col += 1
             else:
-                comptime field_name = struct_field_names[T]()[idx]
+                comptime field_name = reflect[T]().field_names()[idx]
                 raise Error(
                     "Unsupported field type for appender: field '"
                     + String(field_name)

@@ -39,7 +39,8 @@ struct Config(Movable):
 
     def __init__(out self) raises:
         """Create an empty configuration."""
-        self._config = duckdb_config()
+        # Placeholder handle — duckdb_create_config populates it via out-param.
+        self._config = duckdb_config.unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if libduckdb.duckdb_create_config(UnsafePointer(to=self._config)) == DuckDBError:
             raise Error("Failed to create DuckDB config")
@@ -107,8 +108,9 @@ struct Config(Movable):
         var count = libduckdb.duckdb_config_count()
         var result = Dict[String, String]()
         for i in range(count):
-            var name_ptr = UnsafePointer[c_char, ImmutAnyOrigin]()
-            var desc_ptr = UnsafePointer[c_char, ImmutAnyOrigin]()
+            # Placeholders — duckdb_get_config_flag fills both via out-params.
+            var name_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
+            var desc_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
             if (
                 libduckdb.duckdb_get_config_flag(
                     UInt(i),

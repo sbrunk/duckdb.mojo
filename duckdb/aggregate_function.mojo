@@ -582,7 +582,8 @@ struct AggregateFunction(Movable):
         ):
             var out = result.get_data().bitcast[Scalar[D]]()
             result.ensure_validity_writable()
-            var validity = result.get_validity()
+            # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
                 if s[].count > 0:
@@ -683,7 +684,8 @@ struct AggregateFunction(Movable):
         ):
             var out = result.get_data().bitcast[Scalar[Out]]()
             result.ensure_validity_writable()
-            var validity = result.get_validity()
+            # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[_ReduceState[Out]]()
                 if s[].count > 0:
@@ -780,7 +782,8 @@ struct AggregateFunction(Movable):
         ):
             var out = result.get_data().bitcast[Scalar[D]]()
             result.ensure_validity_writable()
-            var validity = result.get_validity()
+            # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
                 if s[].count > 0:
@@ -968,7 +971,8 @@ struct AggregateFunction(Movable):
         ):
             var out = result.get_data().bitcast[Scalar[D]]()
             result.ensure_validity_writable()
-            var validity = result.get_validity()
+            # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
                 if s[].count > 0:

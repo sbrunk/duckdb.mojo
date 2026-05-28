@@ -169,7 +169,7 @@ struct Extension(Movable):
 
     def get_api(
         self, version: String = EXTENSION_API_VERSION
-    ) -> UnsafePointer[NoneType, ImmutExternalOrigin]:
+    ) -> Optional[UnsafePointer[NoneType, ImmutExternalOrigin]]:
         """Request the DuckDB C API function pointer struct (untyped).
 
         Returns an opaque pointer that can be bitcast to the appropriate
@@ -180,7 +180,7 @@ struct Extension(Movable):
                 Defaults to `EXTENSION_API_VERSION`.
 
         Returns:
-            An opaque pointer to the API struct, or null if unsupported.
+            An opaque pointer to the API struct, or `None` if unsupported.
         """
         var version_copy = version.copy()
         return self._access[].get_api(
@@ -191,7 +191,7 @@ struct Extension(Movable):
         ApiStruct: AnyType = ExtApi
     ](
         self, version: String = EXTENSION_API_VERSION
-    ) -> UnsafePointer[ApiStruct, ImmutExternalOrigin]:
+    ) -> Optional[UnsafePointer[ApiStruct, ImmutExternalOrigin]]:
         """Request the DuckDB C API as a typed struct pointer.
 
         Returns a pointer to the API struct with the expected struct layout.
@@ -206,19 +206,21 @@ struct Extension(Movable):
             version: The semver API version string to request.
 
         Returns:
-            A typed pointer to the API struct, or null if unsupported.
+            A typed pointer to the API struct, or `None` if unsupported.
 
         Example:
         ```mojo
         var api = ext.get_api_typed[ExtApi]()
-        if not api:
+        if api is None:
             ext.set_error("Unsupported API version")
             return False
-        # Access function pointers via api[].duckdb_open(...)
+        # Access function pointers via api.value()[].duckdb_open(...)
         ```
         """
         var raw = self.get_api(version)
-        return raw.bitcast[ApiStruct]()
+        if raw is None:
+            return None
+        return raw.value().bitcast[ApiStruct]()
 
     @staticmethod
     def run[
@@ -265,14 +267,14 @@ struct Extension(Movable):
         var ext = Extension(info, access)
 
         var api_ptr = ext.get_api_typed[ExtApi]()
-        if not api_ptr:
+        if api_ptr is None:
             ext.set_error(
                 "Incompatible DuckDB C API version (requested "
                 + EXTENSION_API_VERSION
                 + ")"
             )
             return False
-        _set_ext_api_ptr(api_ptr)
+        _set_ext_api_ptr(api_ptr.value())
 
         try:
             var conn = Connection[ApiLevel.EXT_STABLE](ext.database())
@@ -323,14 +325,14 @@ struct Extension(Movable):
         var ext = Extension(info, access)
 
         var api_ptr = ext.get_api_typed[ExtApiUnstable]()
-        if not api_ptr:
+        if api_ptr is None:
             ext.set_error(
                 "Incompatible DuckDB C API version (requested "
                 + EXTENSION_API_VERSION
                 + ")"
             )
             return False
-        _set_ext_api_unstable_ptr(api_ptr)
+        _set_ext_api_unstable_ptr(api_ptr.value())
 
         try:
             var conn = Connection[ApiLevel.EXT_UNSTABLE](ext.database())

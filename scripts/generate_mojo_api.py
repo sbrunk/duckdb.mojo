@@ -810,11 +810,12 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]")
     lines.append("")
     lines.append("    def __init__(out self):")
-    lines.append("        self.__deprecated_data = UnsafePointer[NoneType, MutExternalOrigin]()")
-    lines.append("        self.__deprecated_nullmask = UnsafePointer[Bool, MutExternalOrigin]()")
+    lines.append("        # All pointer fields are populated by DuckDB when fetched.")
+    lines.append("        self.__deprecated_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_nullmask = UnsafePointer[Bool, MutExternalOrigin].unsafe_dangling()")
     lines.append("        self.__deprecated_type = 0")
-    lines.append("        self.__deprecated_name = UnsafePointer[c_char, ImmutExternalOrigin]()")
-    lines.append("        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin]()")
+    lines.append("        self.__deprecated_name = UnsafePointer[c_char, ImmutExternalOrigin].unsafe_dangling()")
+    lines.append("        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()")
     lines.append("")
 
     # Opaque handle types: struct + comptime alias
@@ -864,12 +865,13 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]")
     lines.append("")
     lines.append("    def __init__(out self):")
+    lines.append("        # Pointer fields are populated by DuckDB when the result is filled.")
     lines.append("        self.__deprecated_column_count = 0")
     lines.append("        self.__deprecated_row_count = 0")
     lines.append("        self.__deprecated_rows_changed = 0")
-    lines.append("        self.__deprecated_columns = UnsafePointer[duckdb_column, MutExternalOrigin]()")
-    lines.append("        self.__deprecated_error_message = UnsafePointer[c_char, ImmutExternalOrigin]()")
-    lines.append("        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin]()")
+    lines.append("        self.__deprecated_columns = UnsafePointer[duckdb_column, MutExternalOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_error_message = UnsafePointer[c_char, ImmutExternalOrigin].unsafe_dangling()")
+    lines.append("        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()")
     lines.append("")
 
     # Opaque pointer types that need explicit destroy
@@ -1137,13 +1139,25 @@ def _generate_libduckdb_struct(
     def _emit_init_body(lines: list[str], fn_loader: dict[str, str]):
         """Emit function loading for an __init__ body.
 
-        fn_loader maps function name → load expression.
+        fn_loader maps function name → load expression. If every function has
+        an entry in fn_loader, no `_dylib_function.load()` calls are emitted,
+        so the body cannot raise and we skip the try/except wrapper.
         """
-        lines.append("        try:")
-        for name in all_fn_names:
-            lines.append(f"            self._{name} = {fn_loader.get(name, f'_{name}.load()')}")
-        lines.append("        except e:")
-        lines.append("            abort(String(e))")
+        # `.load()` raises (dlsym lookup may fail). Field reads from the ext
+        # API struct cannot raise. Only wrap in try/except if at least one
+        # function falls back to dlsym.
+        has_dlsym_fallback = any(
+            name not in fn_loader for name in all_fn_names
+        )
+        if has_dlsym_fallback:
+            lines.append("        try:")
+            for name in all_fn_names:
+                lines.append(f"            self._{name} = {fn_loader.get(name, f'_{name}.load()')}")
+            lines.append("        except e:")
+            lines.append("            abort(String(e))")
+        else:
+            for name in all_fn_names:
+                lines.append(f"        self._{name} = {fn_loader[name]}")
         lines.append("")
 
     # ---- __init__ (dlopen/dlsym based) ----

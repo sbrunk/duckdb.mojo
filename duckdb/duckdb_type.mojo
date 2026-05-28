@@ -582,7 +582,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         Args:
             s: A string of '0' and '1' characters.
         """
-        var n = len(s)
+        var n = s.byte_length()
         var padding = (8 - (n % 8)) % 8
         var num_data_bytes = (n + 7) // 8
         var data = List[UInt8](capacity=num_data_bytes + 1)

@@ -85,10 +85,10 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_data(self._vector)
 
-    def get_validity(self) -> UnsafePointer[UInt64, MutAnyOrigin]:
+    def get_validity(self) -> Optional[UnsafePointer[UInt64, MutAnyOrigin]]:
         """Retrieves the validity mask pointer of the specified vector.
 
-        If all values are valid, this function MIGHT return NULL!
+        Returns `None` if all values are valid (DuckDB elides the mask).
 
         The validity mask is a bitset that signifies null-ness within the data chunk.
         It is a series of UInt64 values, where each UInt64 value contains validity for 64 tuples.
@@ -102,7 +102,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
 
         Alternatively, the (slower) duckdb_validity_row_is_valid function can be used.
 
-        * returns: The pointer to the validity mask, or NULL if no validity mask is present
+        * returns: The pointer to the validity mask, or `None` if no validity mask is present.
         """
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_validity(self._vector)

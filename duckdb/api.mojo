@@ -31,11 +31,16 @@ def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin])
     _kgen_insert_global("DuckDB_ExtApiPtr", ptr)
 
 
-def _get_ext_api_ptr() -> UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]:
-    """Retrieve the previously stored stable extension API pointer, or null."""
+def _get_ext_api_ptr() -> Optional[
+    UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]
+]:
+    """Retrieve the previously stored stable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiPtr")
+    var addr = Int(raw)
+    if addr == 0:
+        return None
     return UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin](
-        unsafe_from_address=Int(raw)
+        unsafe_from_address=addr
     )
 
 
@@ -51,13 +56,16 @@ def _set_ext_api_unstable_ptr(
     _kgen_insert_global("DuckDB_ExtApiUnstablePtr", ptr)
 
 
-def _get_ext_api_unstable_ptr() -> UnsafePointer[
-    duckdb_ext_api_v1_unstable, ImmutExternalOrigin
+def _get_ext_api_unstable_ptr() -> Optional[
+    UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]
 ]:
-    """Retrieve the previously stored unstable extension API pointer, or null."""
+    """Retrieve the previously stored unstable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiUnstablePtr")
+    var addr = Int(raw)
+    if addr == 0:
+        return None
     return UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin](
-        unsafe_from_address=Int(raw)
+        unsafe_from_address=addr
     )
 
 
@@ -68,11 +76,11 @@ def _get_ext_api_unstable_ptr() -> UnsafePointer[
 def _init_duckdb_global() -> _DuckDBGlobal:
     # Check unstable first (superset of stable)
     var unstable_ptr = _get_ext_api_unstable_ptr()
-    if unstable_ptr:
-        return _DuckDBGlobal(unstable_ptr)
+    if unstable_ptr is not None:
+        return _DuckDBGlobal(unstable_ptr.value())
     var api_ptr = _get_ext_api_ptr()
-    if api_ptr:
-        return _DuckDBGlobal(api_ptr)
+    if api_ptr is not None:
+        return _DuckDBGlobal(api_ptr.value())
     return _DuckDBGlobal()
 
 
