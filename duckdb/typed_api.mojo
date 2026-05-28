@@ -1654,7 +1654,7 @@ def deserialize_from_vector[
     var result = List[Optional[T]](capacity=length)
     var validity_mask = vector.get_validity()
 
-    if not validity_mask:
+    if validity_mask is None:
         for idx in range(length):
             result.append(
                 Optional(_deserialize_scalar[T](vector, offset + idx))

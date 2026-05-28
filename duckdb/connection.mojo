@@ -49,9 +49,10 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def __init__(out self, path: String) raises:
         """Create a connection with a new database."""
         self._db = Database(path)
+        # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
             duckdb_connection.type, MutExternalOrigin
-        ]()
+        ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
             libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
@@ -66,9 +67,10 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             config: Startup configuration.
         """
         self._db = Database(path, config)
+        # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
             duckdb_connection.type, MutExternalOrigin
-        ]()
+        ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
             libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
@@ -82,9 +84,10 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             db: An existing database handle.
         """
         self._db = Database(_handle=db._db)
+        # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
             duckdb_connection.type, MutExternalOrigin
-        ]()
+        ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
             libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))

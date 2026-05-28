@@ -670,10 +670,12 @@ struct Result(Writable, Iterable, Movable):
             An owned Chunk.
         """
         ref libduckdb = DuckDB().libduckdb()
-        var raw = libduckdb.duckdb_fetch_chunk(self._result)
-        if not raw:
+        var raw: Optional[duckdb_data_chunk] = libduckdb.duckdb_fetch_chunk(
+            self._result
+        )
+        if raw is None:
             raise Error("No more chunks available")
-        return Chunk[is_owned=True](raw)
+        return Chunk[is_owned=True](raw.value())
 
     def chunks(ref self) -> ChunkIter[ImmutOrigin(origin_of(self))]:
         """Iterate over data chunks in this result.
@@ -1032,10 +1034,12 @@ struct ChunkIter[
 
     def __next__(mut self) raises StopIteration -> Chunk[is_owned=True]:
         ref libduckdb = DuckDB().libduckdb()
-        var raw = libduckdb.duckdb_fetch_chunk(self._result[]._result)
-        if not raw:
+        var raw: Optional[duckdb_data_chunk] = libduckdb.duckdb_fetch_chunk(
+            self._result[]._result
+        )
+        if raw is None:
             raise StopIteration()
-        return Chunk[is_owned=True](raw)
+        return Chunk[is_owned=True](raw.value())
 
 
 # ──────────────────────────────────────────────────────────────────
