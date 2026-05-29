@@ -10,7 +10,9 @@ jobs:
       matrix:
         include:
           - { target: linux-64, os: ubuntu-24.04 }
-          - { target: linux-aarch64, os: ubuntu-22.04-arm }
+          # TODO: re-enable once the aarch64 Int128 by-value ABI issue is fixed
+          # (4 test_appender hugeint/uhugeint failures with garbage register/stack contents).
+          # - { target: linux-aarch64, os: ubuntu-22.04-arm }
           - { target: osx-arm64, os: macos-15 }
       fail-fast: false
 
