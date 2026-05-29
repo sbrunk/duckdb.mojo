@@ -75,10 +75,15 @@ jobs:
           restore-keys: |
             mojo-cache-v2-${{ matrix.target }}-
 
-      - name: Execute tests
+      - name: Run test suite
         env:
           DUCKDB_MOJO_FULL_TESTS: "1"
         run: |
           source $HOME/.bash_profile
-          pixi run mojo run example.mojo
           pixi run test
+
+      - name: Run example (smoke test, needs network)
+        if: always()
+        run: |
+          source $HOME/.bash_profile
+          pixi run mojo run example.mojo
