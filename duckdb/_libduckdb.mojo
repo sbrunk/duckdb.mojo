@@ -101,6 +101,10 @@ comptime DUCKDB_TYPE_STRING_LITERAL = 37
 comptime DUCKDB_TYPE_INTEGER_LITERAL = 38
 # duckdb_time_ns (nanoseconds)
 comptime DUCKDB_TYPE_TIME_NS = 39
+# GEOMETRY type, WKB blob
+comptime DUCKDB_TYPE_GEOMETRY = 40
+# VARIANT type
+comptime DUCKDB_TYPE_VARIANT = 41
 
 #! An enum over the returned state of different functions.
 comptime duckdb_state = Int32
@@ -1095,7 +1099,7 @@ struct duckdb_ext_api_v1:
 struct duckdb_ext_api_v1_unstable:
     """DuckDB Extension C API function pointer table (duckdb_ext_api_v1_unstable).
 
-    Contains 545 function pointers.
+    Contains 546 function pointers.
     """
 
     # --- v1.2.0 ---
@@ -1612,6 +1616,9 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_file_handle_tell: def(duckdb_file_handle) thin abi("C") -> Int64
     var duckdb_file_handle_sync: def(duckdb_file_handle) thin abi("C") -> duckdb_state
     var duckdb_file_handle_size: def(duckdb_file_handle) thin abi("C") -> Int64
+
+    # --- unstable_new_geo_functions ---
+    var duckdb_geometry_type_get_crs: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
 
     # --- unstable_new_logger_functions ---
     var duckdb_create_log_storage: def() thin abi("C") -> duckdb_log_storage
@@ -2212,6 +2219,7 @@ struct LibDuckDB(Movable):
     var _duckdb_log_storage_set_extra_data: _duckdb_log_storage_set_extra_data.fn_type
     var _duckdb_log_storage_set_name: _duckdb_log_storage_set_name.fn_type
     var _duckdb_register_log_storage: _duckdb_register_log_storage.fn_type
+    var _duckdb_geometry_type_get_crs: _duckdb_geometry_type_get_crs.fn_type
 
     def __init__(out self):
         """Initialize LibDuckDB by loading functions via dlopen/dlsym.
@@ -2717,6 +2725,7 @@ struct LibDuckDB(Movable):
             self._duckdb_log_storage_set_extra_data = _duckdb_log_storage_set_extra_data.load()
             self._duckdb_log_storage_set_name = _duckdb_log_storage_set_name.load()
             self._duckdb_register_log_storage = _duckdb_register_log_storage.load()
+            self._duckdb_geometry_type_get_crs = _duckdb_geometry_type_get_crs.load()
         except e:
             abort(String(e))
 
@@ -3227,6 +3236,7 @@ struct LibDuckDB(Movable):
             self._duckdb_log_storage_set_extra_data = _duckdb_log_storage_set_extra_data.load()
             self._duckdb_log_storage_set_name = _duckdb_log_storage_set_name.load()
             self._duckdb_register_log_storage = _duckdb_register_log_storage.load()
+            self._duckdb_geometry_type_get_crs = _duckdb_geometry_type_get_crs.load()
         except e:
             abort(String(e))
 
@@ -3734,6 +3744,7 @@ struct LibDuckDB(Movable):
         self._duckdb_log_storage_set_extra_data = api[].duckdb_log_storage_set_extra_data
         self._duckdb_log_storage_set_name = api[].duckdb_log_storage_set_name
         self._duckdb_register_log_storage = api[].duckdb_register_log_storage
+        self._duckdb_geometry_type_get_crs = api[].duckdb_geometry_type_get_crs
 
     def __init__(out self, *, deinit take: Self):
         self._duckdb_create_instance_cache = take._duckdb_create_instance_cache
@@ -4235,6 +4246,7 @@ struct LibDuckDB(Movable):
         self._duckdb_log_storage_set_extra_data = take._duckdb_log_storage_set_extra_data
         self._duckdb_log_storage_set_name = take._duckdb_log_storage_set_name
         self._duckdb_register_log_storage = take._duckdb_register_log_storage
+        self._duckdb_geometry_type_get_crs = take._duckdb_geometry_type_get_crs
 
     # ===--------------------------------------------------------------------===#
     # Functions
@@ -9678,6 +9690,21 @@ struct LibDuckDB(Movable):
         return self._duckdb_register_log_storage(database, log_storage)
 
 
+    # ===--------------------------------------------------------------------===#
+    # Geometry Helpers
+    # ===--------------------------------------------------------------------===#
+
+    def duckdb_geometry_type_get_crs(
+        self,
+        type_: duckdb_logical_type,
+    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+        """
+        Gets the CRS (Coordinate Reference System) of a GEOMETRY type.
+        Result must be freed with `duckdb_free`.
+        """
+        return self._duckdb_geometry_type_get_crs(type_)
+
+
 
 # ===--------------------------------------------------------------------===#
 # Open Connect
@@ -12366,5 +12393,15 @@ comptime _duckdb_log_storage_set_name = _dylib_function["duckdb_log_storage_set_
 # [ext_api: unstable_new_logger_functions]
 comptime _duckdb_register_log_storage = _dylib_function["duckdb_register_log_storage",
     def(duckdb_database, duckdb_log_storage) thin abi("C") -> duckdb_state
+]
+
+
+# ===--------------------------------------------------------------------===#
+# Geometry Helpers
+# ===--------------------------------------------------------------------===#
+
+# [ext_api: unstable_new_geo_functions]
+comptime _duckdb_geometry_type_get_crs = _dylib_function["duckdb_geometry_type_get_crs",
+    def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
 ]
 

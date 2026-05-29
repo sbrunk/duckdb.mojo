@@ -1,6 +1,7 @@
 """Tests for duckdb_type conversions."""
 
 from duckdb.duckdb_type import (
+    DuckDBType,
     Bit,
     Date,
     Time,
@@ -542,6 +543,31 @@ def test_timestamp_epoch() raises:
     assert_equal(d.day(), Int8(1))
     var t = ts.time()
     assert_equal(t.hour(), Int8(0))
+
+
+# ─── DuckDBType enum ──────────────────────────────────────────────
+
+
+def test_variant_type_str() raises:
+    """DuckDBType.variant stringifies to "variant" (DuckDB 1.5+)."""
+    assert_equal(String(DuckDBType.variant), "variant")
+
+
+def test_variant_type_distinct() raises:
+    """DuckDBType.variant is distinct from the physically-similar struct."""
+    assert_true(DuckDBType.variant != DuckDBType.struct_t)
+    assert_true(DuckDBType.variant == DuckDBType.variant)
+
+
+def test_geometry_type_str() raises:
+    """DuckDBType.geometry stringifies to "geometry" (DuckDB 1.5+)."""
+    assert_equal(String(DuckDBType.geometry), "geometry")
+
+
+def test_geometry_type_distinct() raises:
+    """DuckDBType.geometry is distinct from blob (its WKB physical form)."""
+    assert_true(DuckDBType.geometry != DuckDBType.blob)
+    assert_true(DuckDBType.geometry != DuckDBType.variant)
 
 
 # ─── run_suite ────────────────────────────────────────────────────

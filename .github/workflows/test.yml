@@ -5,6 +5,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-generated-api:
+    # Verify duckdb/_libduckdb.mojo was regenerated after any DuckDB version bump.
+    # The bindings are platform-independent, so this only needs to run once.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup pixi
+        uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          pixi-version: v0.63.2
+          cache: true
+          environments: default
+
+      - name: Check generated bindings are up to date
+        run: |
+          source $HOME/.bash_profile
+          pixi run check-generated-api
+
   build:
     strategy:
       matrix:

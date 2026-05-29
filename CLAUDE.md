@@ -38,6 +38,7 @@ pixi run test                 # Run all tests (library + extensions)
 pixi run test-library         # Run library tests only
 pixi run mojo run example.mojo  # Run example
 pixi run generate-api         # Regenerate C API bindings from DuckDB source
+pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with DuckDB
 pixi build                    # Build conda package
 ```
 
@@ -51,7 +52,7 @@ pixi build                    # Build conda package
 ## Key Patterns
 
 - The `Connection` type is parameterized with `ApiLevel` (CLIENT, EXT_STABLE, EXT_UNSTABLE) to gate API access at compile time
-- `_libduckdb.mojo` is auto-generated - regenerate with `pixi run generate-api` after bumping DuckDB version
+- `_libduckdb.mojo` is auto-generated - regenerate with `pixi run generate-api` after bumping DuckDB version. CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main.
 - Extensions use the DuckDB Extension C API with stable/unstable split
 
 ## FFI Struct ABI Workaround
