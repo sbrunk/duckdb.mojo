@@ -37,17 +37,17 @@ import std.benchmark
 # No scale adjustment (division) is needed — exactly matching DuckDB internals.
 
 
-fn simd_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL add: same-scale Int64 addition."""
     return a + b
 
 
-fn simd_subtract[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_subtract[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL subtract: same-scale Int64 subtraction."""
     return a - b
 
 
-fn simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL multiply with scale correction.
 
     Both inputs are scale-4, so raw multiply gives scale 8.
@@ -60,7 +60,7 @@ fn simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SI
 # we keep DOUBLE since DuckDB itself casts DECIMAL→DOUBLE for '/'.
 
 
-fn simd_divide_f64[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def simd_divide_f64[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     """DOUBLE division — DuckDB uses DOUBLE for DECIMAL division too."""
     return a / b
 
@@ -69,7 +69,7 @@ fn simd_divide_f64[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w])
 # Registration
 # ===--------------------------------------------------------------------===#
 
-fn register_functions(conn: Connection) raises:
+def register_functions(conn: Connection) raises:
     """Register mojo_add, mojo_subtract, mojo_multiply, mojo_divide.
 
     DECIMAL functions use set_simd_function with manual type setup (DECIMAL
@@ -232,7 +232,7 @@ WHERE
 # Benchmark runner
 # ===--------------------------------------------------------------------===#
 
-fn run_benchmark(
+def run_benchmark(
     name: String,
     conn: Connection,
     query_standard: String,
@@ -248,7 +248,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_standard)
 
-    fn bench_standard() capturing raises:
+    def bench_standard() capturing raises:
         _ = conn.execute(query_standard)
 
     var std_report = benchmark.run[bench_standard](max_iters=max_iters)
@@ -259,7 +259,7 @@ fn run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_mojo)
 
-    fn bench_mojo() capturing raises:
+    def bench_mojo() capturing raises:
         _ = conn.execute(query_mojo)
 
     var mojo_report = benchmark.run[bench_mojo](max_iters=max_iters)
@@ -277,7 +277,7 @@ fn run_benchmark(
 # Main
 # ===--------------------------------------------------------------------===#
 
-fn main() raises:
+def main() raises:
     var scale_factor = 1
     var max_iters = 50
     var warmup_iters = 3

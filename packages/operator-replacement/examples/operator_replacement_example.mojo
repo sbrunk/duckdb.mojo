@@ -21,7 +21,7 @@ import std.benchmark
 # NOTE: SIMD width can be tuned - benchmarks show optimal width varies by operation
 comptime simd_width = 1
 
-fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD addition."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -43,7 +43,7 @@ fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = a_data[i] + b_data[i]
 
-fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD subtraction."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -65,7 +65,7 @@ fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = a_data[i] - b_data[i]
 
-fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD multiplication."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -87,7 +87,7 @@ fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: d
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = a_data[i] * b_data[i]
 
-fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD division."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -109,7 +109,7 @@ fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duc
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = a_data[i] / b_data[i]
 
-fn mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD square root."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -128,7 +128,7 @@ fn mojo_sqrt(info: duckdb_function_info, input: duckdb_data_chunk, output: duckd
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = math.sqrt(a_data[i])
 
-fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD natural logarithm."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -147,7 +147,7 @@ fn mojo_log(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = math.log(a_data[i])
 
-fn mojo_cos(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_cos(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD cosine."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -166,7 +166,7 @@ fn mojo_cos(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = math.cos(a_data[i])
 
-fn mojo_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD sine."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -185,7 +185,7 @@ fn mojo_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
     for i in range(num_simd * simd_width, Int(size)):
         result_data[i] = math.sin(a_data[i])
 
-fn mojo_cos_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_cos_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """Fast SIMD fused cosine + sine (computes cos(x) + sin(x))."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -211,7 +211,7 @@ fn mojo_cos_sin(info: duckdb_function_info, input: duckdb_data_chunk, output: du
 # Registration helpers
 # ===--------------------------------------------------------------------===#
 
-fn register_binary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
+def register_binary_op[func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
     """Register a binary operator function (FLOAT, FLOAT -> FLOAT)."""
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
@@ -232,7 +232,7 @@ fn register_binary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_v
     
     lib.duckdb_destroy_scalar_function(UnsafePointer(to=function))
 
-fn register_unary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
+def register_unary_op[func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None](name: String, conn: duckdb_connection) raises:
     """Register a unary operator function (FLOAT -> FLOAT)."""
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
@@ -257,7 +257,7 @@ fn register_unary_op[func: fn(duckdb_function_info, duckdb_data_chunk, duckdb_ve
 # Main example
 # ===--------------------------------------------------------------------===#
 
-fn main() raises:
+def main() raises:
     print("\n" + "=" * 70)
     print("=== DuckDB Operator Replacement with Mojo ===")
     print("=" * 70)
@@ -277,28 +277,28 @@ fn main() raises:
     print("✓ Table created\n")
     
     # Define benchmarks that can be used both before and after replacement
-    fn bench_add() capturing raises:
+    def bench_add() capturing raises:
         _ = conn.execute("SELECT SUM(x + y) FROM numbers")
     
-    fn bench_multiply() capturing raises:
+    def bench_multiply() capturing raises:
         _ = conn.execute("SELECT SUM(x * y) FROM numbers")
     
-    fn bench_complex() capturing raises:
+    def bench_complex() capturing raises:
         _ = conn.execute("SELECT SUM(x * y + x - y / 2.0) FROM numbers")
     
-    fn bench_sqrt() capturing raises:
+    def bench_sqrt() capturing raises:
         _ = conn.execute("SELECT SUM(sqrt(x)) FROM numbers")
     
-    fn bench_log() capturing raises:
+    def bench_log() capturing raises:
         _ = conn.execute("SELECT SUM(ln(x + 1.0)) FROM numbers")
     
-    fn bench_cos() capturing raises:
+    def bench_cos() capturing raises:
         _ = conn.execute("SELECT SUM(cos(x)) FROM numbers")
     
-    fn bench_sin() capturing raises:
+    def bench_sin() capturing raises:
         _ = conn.execute("SELECT SUM(sin(x)) FROM numbers")
     
-    fn bench_cos_sin() capturing raises:
+    def bench_cos_sin() capturing raises:
         _ = conn.execute("SELECT SUM(cos(x) + sin(x)) FROM numbers")
     
     # =========================================================================
@@ -364,28 +364,28 @@ fn main() raises:
     print("✓ Registered 9 custom functions\n")
     
     # Define benchmarks that explicitly call Mojo functions by name
-    fn bench_mojo_add_explicit() capturing raises:
+    def bench_mojo_add_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_add(x, y)) FROM numbers")
     
-    fn bench_mojo_multiply_explicit() capturing raises:
+    def bench_mojo_multiply_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_multiply(x, y)) FROM numbers")
     
-    fn bench_mojo_sqrt_explicit() capturing raises:
+    def bench_mojo_sqrt_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_sqrt(x)) FROM numbers")
     
-    fn bench_mojo_log_explicit() capturing raises:
+    def bench_mojo_log_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_log(x + 1.0)) FROM numbers")
     
-    fn bench_mojo_cos_explicit() capturing raises:
+    def bench_mojo_cos_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_cos(x)) FROM numbers")
     
-    fn bench_mojo_sin_explicit() capturing raises:
+    def bench_mojo_sin_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_sin(x)) FROM numbers")
     
-    fn bench_mojo_cos_sin_explicit() capturing raises:
+    def bench_mojo_cos_sin_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_add(mojo_cos(x), mojo_sin(x))) FROM numbers")
     
-    fn bench_mojo_cos_sin_fused_explicit() capturing raises:
+    def bench_mojo_cos_sin_fused_explicit() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_cos_sin(x)) FROM numbers")
     
     print("[Mojo Functions - Explicit Calls]")
@@ -449,7 +449,7 @@ fn main() raises:
     print("✓ Optimizer extension activated\n")
     
     # Define fused benchmark (uses replacement)
-    fn bench_cos_sin_fused() capturing raises:
+    def bench_cos_sin_fused() capturing raises:
         _ = conn.execute("SELECT SUM(mojo_cos_sin(x)) FROM numbers")
     
     # =========================================================================
@@ -504,7 +504,7 @@ fn main() raises:
     print("=" * 70)
     print()
     
-    fn show_speedup_with_overhead(name: String, std_time: benchmark.Report, explicit_time: benchmark.Report, replacement_time: benchmark.Report):
+    def show_speedup_with_overhead(name: String, std_time: benchmark.Report, explicit_time: benchmark.Report, replacement_time: benchmark.Report):
         var std_ms = std_time.mean("ms")
         var explicit_ms = explicit_time.mean("ms")
         var replacement_ms = replacement_time.mean("ms")

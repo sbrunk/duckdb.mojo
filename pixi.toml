@@ -1,6 +1,6 @@
 [workspace]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max/"]
+channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max-nightly/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -12,13 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=0.26.2.0"
+mojo-compiler = "=1.0.0b2.dev2026052706"
 
 [package.build-dependencies]
-mojo-compiler = "=0.26.2.0"
-
-[package.run-dependencies]
-duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
+mojo-compiler = "=1.0.0b2.dev2026052706"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -43,19 +40,17 @@ build-demo-extension = { cmd = "mkdir -p demo-extension/build && mojo build demo
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
 # Test extension
-build-test-extension = { cmd = "mkdir -p test-extension/build && mojo build test-extension/src/test_mojo_extension.mojo --emit shared-lib -o test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo.duckdb_extension && mojo build test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/bad_api.duckdb_extension", depends-on = ["build"] }
+build-test-extension = { cmd = "mkdir -p test-extension/build && mojo build test-extension/src/test_mojo_extension.mojo --emit shared-lib -o test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo.duckdb_extension && mojo build test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/bad_api.duckdb_extension && mojo build test-extension/src/test_mojo_unstable_extension.mojo --emit shared-lib -o test-extension/build/mojo_unstable.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo_unstable.duckdb_extension --abi-type C_STRUCT_UNSTABLE", depends-on = ["build"] }
 test-extension = { cmd = "mojo run test-extension/test_extension.mojo", depends-on = ["build-test-extension"] }
 
-test-external-call = { cmd = "bash scripts/run_tests_external_call.sh" }
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
 # for local development
 [dependencies]
 libduckdb-devel = "=1.5.1"
 duckdb-cli = "=1.5.1"
-mojo = "=0.26.2.0"
+mojo = "=1.0.0b2.dev2026052706"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
-duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
 # The source directory is named `duckdb/` so mojo resolves `from duckdb import ...` directly.
@@ -67,8 +62,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
-duckdb-mojo-helpers = { path = "packages/duckdb-mojo-helpers" }
-mojo = "=0.26.2.0"
+mojo = "=1.0.0b2.dev2026052706"
 
 # Environments
 # 

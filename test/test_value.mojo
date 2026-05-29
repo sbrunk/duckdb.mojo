@@ -8,13 +8,13 @@ from std.collections import List
 from duckdb.logical_type import enum_type
 
 
-fn test_null_value() raises:
+def test_null_value() raises:
     """Test creating and checking NULL values."""
     var null_val = DuckDBValue.null()
     assert_true(null_val.is_null(), "NULL value should be null")
 
 
-fn test_bool_values() raises:
+def test_bool_values() raises:
     """Test creating and extracting boolean values."""
     var true_val = DuckDBValue.from_bool(True)
     var false_val = DuckDBValue.from_bool(False)
@@ -24,7 +24,7 @@ fn test_bool_values() raises:
     assert_false(false_val.as_bool(), "False value should be False")
 
 
-fn test_int8_values() raises:
+def test_int8_values() raises:
     """Test creating and extracting int8 values."""
     var val_pos = DuckDBValue.from_int8(42)
     var val_neg = DuckDBValue.from_int8(-42)
@@ -37,7 +37,7 @@ fn test_int8_values() raises:
     assert_equal(val_max.as_int8(), 127, "Max int8 should match")
 
 
-fn test_uint8_values() raises:
+def test_uint8_values() raises:
     """Test creating and extracting uint8 values."""
     var val_zero = DuckDBValue.from_uint8(0)
     var val_mid = DuckDBValue.from_uint8(128)
@@ -48,7 +48,7 @@ fn test_uint8_values() raises:
     assert_equal(val_max.as_uint8(), 255, "Max uint8 should match")
 
 
-fn test_int16_values() raises:
+def test_int16_values() raises:
     """Test creating and extracting int16 values."""
     var val_pos = DuckDBValue.from_int16(1000)
     var val_neg = DuckDBValue.from_int16(-1000)
@@ -61,7 +61,7 @@ fn test_int16_values() raises:
     assert_equal(val_max.as_int16(), 32767, "Max int16 should match")
 
 
-fn test_uint16_values() raises:
+def test_uint16_values() raises:
     """Test creating and extracting uint16 values."""
     var val_zero = DuckDBValue.from_uint16(0)
     var val_mid = DuckDBValue.from_uint16(32768)
@@ -72,7 +72,7 @@ fn test_uint16_values() raises:
     assert_equal(val_max.as_uint16(), 65535, "Max uint16 should match")
 
 
-fn test_int32_values() raises:
+def test_int32_values() raises:
     """Test creating and extracting int32 values."""
     var val_pos = DuckDBValue.from_int32(100000)
     var val_neg = DuckDBValue.from_int32(-100000)
@@ -85,7 +85,7 @@ fn test_int32_values() raises:
     assert_equal(val_max.as_int32(), 2147483647, "Max int32 should match")
 
 
-fn test_uint32_values() raises:
+def test_uint32_values() raises:
     """Test creating and extracting uint32 values."""
     var val_zero = DuckDBValue.from_uint32(0)
     var val_mid = DuckDBValue.from_uint32(2147483648)
@@ -96,7 +96,7 @@ fn test_uint32_values() raises:
     assert_equal(val_max.as_uint32(), 4294967295, "Max uint32 should match")
 
 
-fn test_int64_values() raises:
+def test_int64_values() raises:
     """Test creating and extracting int64 values."""
     var val_pos = DuckDBValue.from_int64(9223372036854775807)
     var val_neg = DuckDBValue.from_int64(-9223372036854775808)
@@ -111,7 +111,7 @@ fn test_int64_values() raises:
     assert_equal(val_zero.as_int64(), 0, "Zero int64 should match")
 
 
-fn test_uint64_values() raises:
+def test_uint64_values() raises:
     """Test creating and extracting uint64 values."""
     var val_zero = DuckDBValue.from_uint64(0)
     var val_mid = DuckDBValue.from_uint64(9223372036854775808)
@@ -126,7 +126,7 @@ fn test_uint64_values() raises:
     )
 
 
-fn test_hugeint_values() raises:
+def test_hugeint_values() raises:
     """Test creating and extracting hugeint values."""
     # Construct hugeint from upper (int64) and lower (uint64) parts manually
     # duckdb_hugeint is aliased to Int128
@@ -172,7 +172,7 @@ fn test_hugeint_values() raises:
     assert_equal(val_below_min_64.as_hugeint(), val_below_min_64_int128, "Below min int64 hugeint should match")
 
 
-fn test_uhugeint_values() raises:
+def test_uhugeint_values() raises:
     """Test creating and extracting uhugeint values."""
     # duckdb_uhugeint is aliased to UInt128
     
@@ -200,7 +200,7 @@ fn test_uhugeint_values() raises:
     assert_equal(val_above_64.as_uhugeint(), val_above_64_uint128, "Above 2^64 uhugeint should match")
 
 
-fn test_float32_values() raises:
+def test_float32_values() raises:
     """Test creating and extracting float32 values."""
     var val_pos = DuckDBValue.from_float32(3.14)
     var val_neg = DuckDBValue.from_float32(-3.14)
@@ -223,7 +223,7 @@ fn test_float32_values() raises:
     assert_equal(zero_result, 0.0, "Zero float32 should be exactly 0.0")
 
 
-fn test_float64_values() raises:
+def test_float64_values() raises:
     """Test creating and extracting float64 values."""
     var val_pos = DuckDBValue.from_float64(3.141592653589793)
     var val_neg = DuckDBValue.from_float64(-3.141592653589793)
@@ -246,7 +246,7 @@ fn test_float64_values() raises:
     assert_equal(zero_result, 0.0, "Zero float64 should be exactly 0.0")
 
 
-fn test_string_values() raises:
+def test_string_values() raises:
     """Test creating and extracting string values."""
     var val_hello = DuckDBValue.from_string("Hello, DuckDB!")
     var val_empty = DuckDBValue.from_string("")
@@ -259,7 +259,7 @@ fn test_string_values() raises:
     )
 
 
-fn test_date_values() raises:
+def test_date_values() raises:
     """Test creating and extracting date values."""
     # Date is stored as days since 1970-01-01
     var date_epoch = duckdb_date(days=0)  # 1970-01-01
@@ -269,7 +269,7 @@ fn test_date_values() raises:
     assert_equal(result.days, 0, "Epoch date should have 0 days")
 
 
-fn test_timestamp_values() raises:
+def test_timestamp_values() raises:
     """Test creating and extracting timestamp values."""
     # Timestamp is stored as microseconds since epoch
     # Use a known timestamp value: 1 million microseconds = 1 second
@@ -282,7 +282,7 @@ fn test_timestamp_values() raises:
     assert_equal(result, ts)
 
 
-fn test_time_values() raises:
+def test_time_values() raises:
     """Test creating and extracting time values."""
     # Time is stored as microseconds since midnight
     var t = duckdb_time(micros=123456000)
@@ -294,7 +294,7 @@ fn test_time_values() raises:
     assert_equal(result, t)
 
 
-fn test_interval_values() raises:
+def test_interval_values() raises:
     var interval = Interval(
         months=1, days=2, micros=3000000
     )  # 1 month, 2 days, 3 seconds
@@ -304,7 +304,7 @@ fn test_interval_values() raises:
     assert_equal(result, interval)
 
 
-fn test_decimal_values() raises:
+def test_decimal_values() raises:
     """Test creating and extracting decimal values."""
     # Create a decimal with width 18, scale 3.
     # Value is (internal) 123456 -> 123.456
@@ -318,7 +318,7 @@ fn test_decimal_values() raises:
     assert_equal(result.scale, 3, "Scale should match")
     assert_equal(result.value(), 123456, "Value should match")
 
-fn test_enum_values() raises:
+def test_enum_values() raises:
     """Test creating and extracting enum values."""
     # Create logic type enum
     var names: List[String] = ["Apple", "Banana", "Cherry"]
@@ -330,7 +330,7 @@ fn test_enum_values() raises:
     var result = val.as_enum_value()
     assert_equal(result, 1, "Enum index should be 1")
 
-fn test_blob_values() raises:
+def test_blob_values() raises:
     """Test creating and extracting blob values."""
     var data: List[UInt8] = [1, 2, 3, 4, 5]
     var span = Span[UInt8, ImmutAnyOrigin](
@@ -343,7 +343,7 @@ fn test_blob_values() raises:
     assert_false(val_blob.is_null(), "Blob value should not be null")
 
 
-fn test_sql_string_representation() raises:
+def test_sql_string_representation() raises:
     """Test SQL string representation of values."""
     print("Testing SQL string representation...")
     var val_int = DuckDBValue.from_int64(42)
@@ -362,7 +362,7 @@ fn test_sql_string_representation() raises:
     print("  ✓ SQL string representations work correctly")
 
 
-fn test_type_information() raises:
+def test_type_information() raises:
     """Test getting type information from values."""
     var val_int = DuckDBValue.from_int64(42)
     var val_str = DuckDBValue.from_string("test")
@@ -375,7 +375,7 @@ fn test_type_information() raises:
     assert_false(val_bool.is_null(), "Bool value should not be null")
 
 
-fn test_value_conversions() raises:
+def test_value_conversions() raises:
     """Test implicit conversions between types."""
 
     # Int to larger int should work
@@ -390,7 +390,7 @@ fn test_value_conversions() raises:
     assert_equal(num_str, "123", "Number should convert to string")
 
 
-fn test_logical_type_ownership() raises:
+def test_logical_type_ownership() raises:
     """Test that LogicalType returned from get_type is properly borrowed and tied to the value's lifetime.
     """
 
@@ -409,7 +409,7 @@ fn test_logical_type_ownership() raises:
     )
 
 
-fn test_bit_values() raises:
+def test_bit_values() raises:
     """Test creating and extracting bit values."""
     var bit_data: List[UInt8] = [0b10101010, 0b01010101]
     var val = DuckDBValue.from_bit(bit_data)
@@ -419,7 +419,7 @@ fn test_bit_values() raises:
     assert_equal(result[1], 0b01010101)
 
 
-fn test_uuid_values() raises:
+def test_uuid_values() raises:
     """Test creating and extracting uuid values."""
     var uuid_val = UInt128(12345678901234567890)
     var val = DuckDBValue.from_uuid(uuid_val)

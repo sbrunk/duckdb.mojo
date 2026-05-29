@@ -39,7 +39,7 @@ struct ApiLevel(Equatable, Writable, ImplicitlyCopyable):
     """Extension with unstable API — all functions available."""
 
     @always_inline
-    fn includes_unstable(self) -> Bool:
+    def includes_unstable(self) -> Bool:
         """Returns True when unstable C API functions are available.
 
         True for ``CLIENT`` and ``EXT_UNSTABLE``, False for ``EXT_STABLE``.
@@ -48,19 +48,19 @@ struct ApiLevel(Equatable, Writable, ImplicitlyCopyable):
 
     # ── Equatable ───────────────────────────────────────────────────────
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         return self._value == other._value
 
-    fn __ne__(self, other: Self) -> Bool:
+    def __ne__(self, other: Self) -> Bool:
         return self._value != other._value
 
     # ── Writable / Stringable ───────────────────────────────────────────
 
     @always_inline("nodebug")
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self == Self.CLIENT:
             writer.write("CLIENT")
         elif self == Self.EXT_STABLE:

@@ -88,23 +88,16 @@ appender.end_row()
 
 from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
-from std.reflection import (
-    get_base_type_name,
-    get_type_name,
-    is_struct_type,
-    struct_field_count,
-    struct_field_names,
-    struct_field_types,
-)
+from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
-from std.builtin.variadics import Variadic
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
 from std.memory.unsafe_pointer import alloc
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface
 from duckdb.connection import Connection
+from duckdb.database import _null_ptr
 from duckdb.logical_type import LogicalType
 from duckdb.typed_api import (
     mojo_type_to_duckdb_type,
@@ -118,7 +111,7 @@ from duckdb.typed_api import (
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
+def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     """Convert a Mojo value to a duckdb_value.
 
     Supports scalar types (Bool, integers, floats, String),
@@ -188,7 +181,7 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     elif _type_is_eq[T, String]():
         var s = String(vp.bitcast[String]()[])
         return libduckdb.duckdb_create_varchar_length(
-            s.as_c_string_slice().unsafe_ptr(), idx_t(len(s))
+            s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
         )
     elif _type_is_eq[T, Date]():
         return libduckdb.duckdb_create_date(vp.bitcast[Date]()[])
@@ -235,7 +228,7 @@ fn _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
     else:
         raise Error(
             "Unsupported type for value creation: "
-            + String(get_type_name[T]())
+            + String(Reflected[T].name())
         )
 
 
@@ -250,7 +243,7 @@ trait Appendable:
     Implement this trait to make a type appendable via `Appender.append_value`.
     """
 
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         """Append this value to the given appender."""
         ...
 
@@ -260,7 +253,7 @@ trait Appendable:
 # ──────────────────────────────────────────────────────────────────
 
 
-fn _get_appender_error(raw: duckdb_appender) -> String:
+def _get_appender_error(raw: duckdb_appender) -> String:
     """Return the current appender error message, or empty string."""
     ref libduckdb = DuckDB().libduckdb()
     var error_data = libduckdb.duckdb_appender_error_data(raw)
@@ -269,10 +262,12 @@ fn _get_appender_error(raw: duckdb_appender) -> String:
             UnsafePointer(to=error_data)
         )
         return ""
-    var msg_ptr = libduckdb.duckdb_error_data_message(error_data)
+    var msg_ptr: Optional[
+        UnsafePointer[c_char, ImmutAnyOrigin]
+    ] = libduckdb.duckdb_error_data_message(error_data)
     var msg = String("")
-    if msg_ptr:
-        msg = String(unsafe_from_utf8_ptr=msg_ptr)
+    if msg_ptr is not None:
+        msg = String(unsafe_from_utf8_ptr=msg_ptr.value())
     libduckdb.duckdb_destroy_error_data(UnsafePointer(to=error_data))
     return msg
 
@@ -283,7 +278,7 @@ fn _get_appender_error(raw: duckdb_appender) -> String:
 
 
 __extension Bool(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         appender._check(libduckdb.duckdb_append_bool(appender._appender, self))
 
@@ -291,7 +286,7 @@ __extension Bool(Appendable):
 # Use SIMD extension to cover all numeric types at once:
 # Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64
 __extension SIMD(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         comptime assert size == 1, "Only scalar SIMD (size=1) can be appended"
         ref libduckdb = DuckDB().libduckdb()
         var raw = appender._appender
@@ -326,7 +321,7 @@ __extension SIMD(Appendable):
 
 # Mojo's native Int/UInt are __mlir_type.index, not SIMD — need separate extensions.
 __extension Int(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = appender._appender
 
@@ -337,7 +332,7 @@ __extension Int(Appendable):
 
 
 __extension String(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var copy = String(self)
         appender._check(
@@ -348,19 +343,19 @@ __extension String(Appendable):
 
 
 __extension Date(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         appender._check(libduckdb.duckdb_append_date(appender._appender, self))
 
 
 __extension Time(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         appender._check(libduckdb.duckdb_append_time(appender._appender, self))
 
 
 __extension Timestamp(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         appender._check(
             libduckdb.duckdb_append_timestamp(appender._appender, self)
@@ -368,7 +363,7 @@ __extension Timestamp(Appendable):
 
 
 __extension Interval(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         # Interval (months: Int32, days: Int32, micros: Int64) must be
         # reinterpreted as duckdb_interval (months_days: Int64, micros: Int64)
@@ -382,7 +377,7 @@ __extension Interval(Appendable):
 
 
 __extension Decimal(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         # No dedicated duckdb_append_decimal — use value-based appending.
         var val = libduckdb.duckdb_create_decimal(self)
@@ -391,7 +386,7 @@ __extension Decimal(Appendable):
 
 
 __extension TimestampS(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_timestamp_s(self.seconds)
         var val = libduckdb.duckdb_create_timestamp_s(raw)
@@ -400,7 +395,7 @@ __extension TimestampS(Appendable):
 
 
 __extension TimestampMS(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_timestamp_ms(self.millis)
         var val = libduckdb.duckdb_create_timestamp_ms(raw)
@@ -409,7 +404,7 @@ __extension TimestampMS(Appendable):
 
 
 __extension TimestampNS(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_timestamp_ns(self.nanos)
         var val = libduckdb.duckdb_create_timestamp_ns(raw)
@@ -418,7 +413,7 @@ __extension TimestampNS(Appendable):
 
 
 __extension TimestampTZ(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var ts = Timestamp(self.micros)
         var val = libduckdb.duckdb_create_timestamp_tz(ts)
@@ -427,7 +422,7 @@ __extension TimestampTZ(Appendable):
 
 
 __extension TimeTZ(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_time_tz(self.bits)
         var val = libduckdb.duckdb_create_time_tz_value(raw)
@@ -436,7 +431,7 @@ __extension TimeTZ(Appendable):
 
 
 __extension UUID(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var val = libduckdb.duckdb_create_uuid(self.value)
         appender._check(libduckdb.duckdb_append_value(appender._appender, val))
@@ -444,7 +439,7 @@ __extension UUID(Appendable):
 
 
 __extension TimeNS(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var raw = duckdb_time_ns(self.nanos)
         var val = libduckdb.duckdb_create_time_ns(raw)
@@ -453,7 +448,7 @@ __extension TimeNS(Appendable):
 
 
 __extension Bit(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
         var buf = alloc[UInt8](len(self._data))
         for i in range(len(self._data)):
@@ -466,7 +461,7 @@ __extension Bit(Appendable):
 
 
 __extension List(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         comptime if _type_is_eq[Self.T, UInt8]():
             ref libduckdb = DuckDB().libduckdb()
             # Access the underlying data pointer directly via UnsafePointer
@@ -480,15 +475,18 @@ __extension List(Appendable):
                 ),
             )
         elif _is_known_scalar_type[Self.T]():
-            # General list of known scalars — create a list or array value
+            # General list of known scalars — create a list or array value.
+            # Refine Self.T to Copyable & Movable so we can call _to_duckdb_value /
+            # mojo_type_to_duckdb_type — every known scalar satisfies both traits.
+            comptime CT = downcast[Self.T, Copyable & Movable]
             ref libduckdb = DuckDB().libduckdb()
-            var src_ptr = UnsafePointer(to=self).bitcast[List[Self.T]]()
+            var src_ptr = UnsafePointer(to=self).bitcast[List[CT]]()
             var n = len(src_ptr[])
 
             # Create duckdb_values for each element
             var values = alloc[duckdb_value](n)
             for i in range(n):
-                values[i] = _to_duckdb_value(src_ptr[][i])
+                values[i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
 
             # Check target column type to decide LIST vs ARRAY
             var col_type = libduckdb.duckdb_appender_column_type(
@@ -511,7 +509,7 @@ __extension List(Appendable):
             else:
                 # LIST (default)
                 var elem_type = LogicalType[True, MutExternalOrigin](
-                    mojo_type_to_duckdb_type[Self.T]()
+                    mojo_type_to_duckdb_type[CT]()
                 )
                 val = libduckdb.duckdb_create_list_value(
                     elem_type.internal_ptr(),
@@ -539,7 +537,7 @@ __extension List(Appendable):
 
 
 __extension Optional(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         if self:
             comptime if conforms_to(Self.T, Appendable):
                 trait_downcast[Appendable](self.value()).append(appender)
@@ -552,7 +550,7 @@ __extension Optional(Appendable):
 
 
 __extension Dict(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         """Append a Dict value to a MAP column.
 
         The MAP logical type is obtained from the target table's column
@@ -597,7 +595,7 @@ __extension Dict(Appendable):
 
 
 __extension Variant(Appendable):
-    fn append(ref self, mut appender: Appender) raises:
+    def append(ref self, mut appender: Appender) raises:
         """Append a Variant value to a UNION column.
 
         The UNION logical type (including member names) is obtained from the
@@ -615,10 +613,11 @@ __extension Variant(Appendable):
             appender._appender, idx_t(appender._current_col)
         )
 
-        # Find the active member using isa[] and create the member value
+        # Find the active member using isa[] and create the member value.
+        # Placeholder handle — overwritten in the loop below.
         var tag = 0
-        var member_val = duckdb_value()
-        comptime for i in range(Variadic.size(Self.Ts)):
+        var member_val = duckdb_value.unsafe_dangling()
+        comptime for i in range(Self.Ts.size):
             comptime MemberType = Self.Ts[i]
             comptime MT = downcast[MemberType, Copyable & Movable]
             if self.isa[MT]():
@@ -667,7 +666,7 @@ struct Appender(Movable):
 
     # ── Construction / Destruction ────────────────────────────────
 
-    fn __init__(out self, ref con: Connection, table: String, schema: String = "") raises:
+    def __init__(out self, ref con: Connection, table: String, schema: String = "") raises:
         """Create an appender for the given table.
 
         Args:
@@ -675,7 +674,8 @@ struct Appender(Movable):
             table: The table name to append to.
             schema: The schema name (empty string for default schema).
         """
-        self._appender = duckdb_appender()
+        # Placeholder handle — duckdb_appender_create populates it via out-param.
+        self._appender = duckdb_appender.unsafe_dangling()
         self._current_col = 0
         var _table = table.copy()
         ref libduckdb = DuckDB().libduckdb()
@@ -684,7 +684,7 @@ struct Appender(Movable):
         if schema == "":
             state = libduckdb.duckdb_appender_create(
                 con._conn,
-                UnsafePointer[c_char, ImmutAnyOrigin](),
+                _null_ptr[c_char, ImmutAnyOrigin](),
                 _table.as_c_string_slice().unsafe_ptr(),
                 UnsafePointer(to=self._appender),
             )
@@ -702,37 +702,37 @@ struct Appender(Movable):
             _ = libduckdb.duckdb_appender_destroy(UnsafePointer(to=self._appender))
             raise Error("Failed to create appender: " + err)
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self._appender = take._appender
         self._current_col = take._current_col
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
         # duckdb_appender_destroy flushes, closes, and frees
         _ = libduckdb.duckdb_appender_destroy(UnsafePointer(to=self._appender))
 
     # ── Error handling ────────────────────────────────────────────
 
-    fn _check(self, state: duckdb_state) raises:
+    def _check(self, state: duckdb_state) raises:
         """Check a return state and raise on error."""
         if state == DuckDBError:
             raise Error("Appender error: " + _get_appender_error(self._appender))
 
     # ── Low-level value appending ─────────────────────────────────
 
-    fn append_null(mut self) raises:
+    def append_null(mut self) raises:
         """Append a NULL value for the current column."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_append_null(self._appender))
         self._current_col += 1
 
-    fn append_default(mut self) raises:
+    def append_default(mut self) raises:
         """Append the DEFAULT value for the current column."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_append_default(self._appender))
         self._current_col += 1
 
-    fn append_value[T: Copyable & Movable](mut self, value: T) raises:
+    def append_value[T: Copyable & Movable](mut self, value: T) raises:
         """Append a single typed value to the current row.
 
         Supports all DuckDB-mappable scalar types, String, and Optional[T]
@@ -766,24 +766,24 @@ struct Appender(Movable):
         else:
             raise Error(
                 "Unsupported type for appender: "
-                + String(get_type_name[T]())
+                + String(Reflected[T].name())
             )
 
     # ── Row-level appending ───────────────────────────────────────
 
-    fn end_row(mut self) raises:
+    def end_row(mut self) raises:
         """Finish the current row and advance to the next."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_end_row(self._appender))
         self._current_col = 0
 
-    fn begin_row(mut self) raises:
+    def begin_row(mut self) raises:
         """Begin a new row (optional — rows begin automatically)."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_begin_row(self._appender))
         self._current_col = 0
 
-    fn append_row[T: Copyable & Movable](mut self, row: T) raises:
+    def append_row[T: Copyable & Movable](mut self, row: T) raises:
         """Append a struct as a complete table row.
 
         Each struct field is mapped to a column by position. Field types
@@ -810,12 +810,12 @@ struct Appender(Movable):
         self._append_struct_fields(row)
         self.end_row()
 
-    fn _append_struct_fields[T: Copyable & Movable](mut self, ref row: T) raises:
+    def _append_struct_fields[T: Copyable & Movable](mut self, ref row: T) raises:
         """Append all fields of a struct as values in the current row."""
-        comptime field_count = struct_field_count[T]()
+        comptime field_count = Reflected[T].field_count()
 
         comptime for idx in range(field_count):
-            comptime FieldType = struct_field_types[T]()[idx]
+            comptime FieldType = Reflected[T].field_types()[idx]
 
             comptime if conforms_to(FieldType, Appendable):
                 trait_downcast[Appendable](
@@ -823,14 +823,14 @@ struct Appender(Movable):
                 ).append(self)
                 self._current_col += 1
             else:
-                comptime field_name = struct_field_names[T]()[idx]
+                comptime field_name = Reflected[T].field_names()[idx]
                 raise Error(
                     "Unsupported field type for appender: field '"
                     + String(field_name)
                     + "'"
                 )
 
-    fn append_tuple_row[*Ts: Copyable & Movable](mut self, row: Tuple[*Ts]) raises:
+    def append_tuple_row[*Ts: Copyable & Movable](mut self, row: Tuple[*Ts]) raises:
         """Append a tuple as a complete table row.
 
         Each tuple element maps to a column by position.
@@ -849,7 +849,7 @@ struct Appender(Movable):
         self._append_tuple_elements(row)
         self.end_row()
 
-    fn _append_tuple_elements[
+    def _append_tuple_elements[
         *Ts: Copyable & Movable
     ](mut self, ref row: Tuple[*Ts]) raises:
         """Append all elements of a tuple as values in the current row."""
@@ -872,7 +872,7 @@ struct Appender(Movable):
 
     # ── Bulk appending ────────────────────────────────────────────
 
-    fn append_rows[T: Copyable & Movable](mut self, rows: List[T]) raises:
+    def append_rows[T: Copyable & Movable](mut self, rows: List[T]) raises:
         """Append multiple structs as table rows.
 
         Parameters:
@@ -892,7 +892,7 @@ struct Appender(Movable):
 
     # ── Flush / Close ─────────────────────────────────────────────
 
-    fn flush(mut self) raises:
+    def flush(mut self) raises:
         """Flush the appender to the table, forcing the cache of the
         appender to be cleared. If flushing fails, the appender remains
         valid. Subsequent rows can still be appended after flushing.
@@ -900,7 +900,7 @@ struct Appender(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_flush(self._appender))
 
-    fn close(mut self) raises:
+    def close(mut self) raises:
         """Close the appender. Unflushed data is flushed first.
 
         After closing, no more rows can be appended.
@@ -910,7 +910,7 @@ struct Appender(Movable):
 
     # ── Metadata ──────────────────────────────────────────────────
 
-    fn column_count(self) -> Int:
+    def column_count(self) -> Int:
         """Return the number of columns in the appender's target table."""
         ref libduckdb = DuckDB().libduckdb()
         return Int(libduckdb.duckdb_appender_column_count(self._appender))

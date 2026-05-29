@@ -19,13 +19,16 @@ comptime EXT_PATH = "test-extension/build/mojo.duckdb_extension"
 comptime BAD_API_EXT_PATH = "test-extension/build/bad_api.duckdb_extension"
 
 
-fn _open_unsigned() raises -> Database:
+comptime UNSTABLE_EXT_PATH = "test-extension/build/mojo_unstable.duckdb_extension"
+
+
+def _open_unsigned() raises -> Database:
     """Open an in-memory database with allow_unsigned_extensions enabled."""
     var config = Config({"allow_unsigned_extensions": "true"})
     return Database(":memory:", config)
 
 
-fn _connect() raises -> Connection[ApiLevel.CLIENT]:
+def _connect() raises -> Connection[ApiLevel.CLIENT]:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()
@@ -244,8 +247,8 @@ def test_ext_sum_empty() raises:
     var chunk = result.fetch_chunk()
     # Empty aggregate returns NULL (no valid rows)
     var validity = chunk.get_vector(0).get_validity()
-    assert_not_equal(validity, UnsafePointer[UInt64, MutAnyOrigin]())
-    assert_false(Bool((validity[0] >> 0) & 1))
+    assert_true(validity is not None)
+    assert_false(Bool((validity.value()[0] >> 0) & 1))
 
 
 # ===--------------------------------------------------------------------===#
@@ -330,6 +333,31 @@ def test_ext_across_connections() raises:
     var result = conn2.execute("SELECT test_ext_add(10, 20)")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(30))
+
+
+# ===--------------------------------------------------------------------===#
+# Unstable API extension path
+# ===--------------------------------------------------------------------===#
+
+
+def test_ext_unstable_loads_and_invokes() raises:
+    """Extension built with `Extension.run_unstable[init]` loads and runs.
+
+    Exercises the unstable-API codegen path:
+    - `_get_ext_api_unstable_ptr` returning Some(ptr) (rather than the
+      no-ptr-set None branch)
+    - `LibDuckDB.__init__(api: UnsafePointer[duckdb_ext_api_v1_unstable, ...])`
+      (the no-try/except, all-field-read constructor)
+    - `Connection[ApiLevel.EXT_UNSTABLE]` used for registration
+
+    Without this test, the unstable path compiles but is never executed.
+    """
+    var db = _open_unsigned()
+    var conn = Connection(db^)
+    _ = conn.execute("LOAD '" + UNSTABLE_EXT_PATH + "'")
+    var result = conn.execute("SELECT test_ext_unstable_triple(14) AS r")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 
 
 # ===--------------------------------------------------------------------===#

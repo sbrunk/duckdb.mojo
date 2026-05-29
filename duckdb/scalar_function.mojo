@@ -41,7 +41,7 @@ struct FunctionInfo:
     
     var _info: duckdb_function_info
     
-    fn __init__(out self, info: duckdb_function_info):
+    def __init__(out self, info: duckdb_function_info):
         """Creates a FunctionInfo from a duckdb_function_info pointer.
         
         This is a non-owning wrapper - the pointer is managed by DuckDB.
@@ -51,7 +51,7 @@ struct FunctionInfo:
         """
         self._info = info
     
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `ScalarFunction.set_extra_info()`.
         
         Returns:
@@ -60,7 +60,7 @@ struct FunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_scalar_function_get_extra_info(self._info)
     
-    fn get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the bind data set during the bind phase.
         
         Note that the bind data is read-only during execution.
@@ -71,7 +71,7 @@ struct FunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_scalar_function_get_bind_data(self._info)
     
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports an error during function execution.
         
         This should be called when the function encounters an error.
@@ -132,7 +132,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     var _function: duckdb_scalar_function
 
-    fn __init__(out self):
+    def __init__(out self):
         """Creates a new scalar function.
         
         The function must be destroyed with `__del__` or by letting it go out of scope.
@@ -140,16 +140,16 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_scalar_function()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function = take._function
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the scalar function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_scalar_function(UnsafePointer(to=self._function))
 
-    fn set_name(self, name: String):
+    def set_name(self, name: String):
         """Sets the name of the scalar function.
 
         * name: The name of the scalar function.
@@ -161,7 +161,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             name_copy.as_c_string_slice().unsafe_ptr()
         )
 
-    fn set_varargs(self, type: LogicalType):
+    def set_varargs(self, type: LogicalType):
         """Sets the scalar function as varargs.
         
         This allows the function to accept a variable number of arguments of the specified type.
@@ -171,7 +171,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_varargs(self._function, type._logical_type)
 
-    fn set_special_handling(self):
+    def set_special_handling(self):
         """Sets the scalar function to use special handling.
         
         This is used for functions that require special handling during binding or execution.
@@ -179,7 +179,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_special_handling(self._function)
 
-    fn set_volatile(self):
+    def set_volatile(self):
         """Sets the scalar function as volatile.
         
         Volatile functions can return different results for the same input (e.g., random(), now()).
@@ -188,7 +188,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_volatile(self._function)
 
-    fn add_parameter(self, type: LogicalType):
+    def add_parameter(self, type: LogicalType):
         """Adds a parameter to the scalar function.
 
         * type: The type of the parameter to add.
@@ -196,7 +196,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_add_parameter(self._function, type._logical_type)
 
-    fn set_return_type(self, type: LogicalType):
+    def set_return_type(self, type: LogicalType):
         """Sets the return type of the scalar function.
 
         * type: The return type of the scalar function.
@@ -204,7 +204,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_return_type(self._function, type._logical_type)
 
-    fn set_extra_info(
+    def set_extra_info(
         self, 
         extra_info: UnsafePointer[NoneType, MutAnyOrigin], 
         destroy: duckdb_delete_callback_t
@@ -223,7 +223,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             destroy
         )
 
-    fn set_bind(self, bind: duckdb_scalar_function_bind_t):
+    def set_bind(self, bind: duckdb_scalar_function_bind_t):
         """Sets the bind function of the scalar function.
         
         The bind function is called during query planning and can be used to:
@@ -241,8 +241,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
-    fn set_function[
-        func: fn(FunctionInfo, mut Chunk, Vector) -> None
+    def set_function[
+        func: def(FunctionInfo, mut Chunk, Vector) thin -> None
     ](self):
         """Sets the main execution function using high-level Mojo types.
         
@@ -269,9 +269,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         * func: Your function with signature fn(FunctionInfo, mut Chunk, Vector)..
         """
         # Create a wrapper function that converts FFI types to high-level types
-        fn wrapper(raw_info: duckdb_function_info, 
-                   raw_input: duckdb_data_chunk, 
-                   raw_output: duckdb_vector):
+        def wrapper(raw_info: duckdb_function_info,
+                   raw_input: duckdb_data_chunk,
+                   raw_output: duckdb_vector) abi("C"):
             # Wrap FFI types in high-level non-owning wrappers
             var info = FunctionInfo(raw_info)
             var input_chunk = Chunk[is_owned=False](raw_input)
@@ -285,10 +285,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_function(self._function, wrapper)
 
-    fn set_simd_function[
+    def set_simd_function[
         In1: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ](self):
         """Sets a unary SIMD-vectorized function as the execution function.
 
@@ -322,23 +322,23 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
             var out_data = output.get_data().bitcast[Scalar[Out]]()
 
-            fn apply[w: Int](idx: Int) unified {mut}:
+            def apply[w: Int](idx: Int) {mut}:
                 (out_data + idx).store(func((in_data + idx).load[width=w]()))
 
             vectorize[simd_width_of[In1]()](size, apply)
 
         self.set_function[wrapper]()
 
-    fn set_simd_function[
+    def set_simd_function[
         In1: DType,
         In2: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ](self):
         """Sets a binary SIMD-vectorized function as the execution function.
 
@@ -373,13 +373,13 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
             var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
             var out_data = output.get_data().bitcast[Scalar[Out]]()
 
-            fn apply[w: Int](idx: Int) unified {mut}:
+            def apply[w: Int](idx: Int) {mut}:
                 (out_data + idx).store(
                     func(
                         (in1_data + idx).load[width=w](),
@@ -393,12 +393,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         self.set_function[wrapper]()
 
     # --- Overloads accepting stdlib math function signatures ----------------
-    # These accept fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]
+    # These accept def[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]
     # so you can pass math.sqrt, math.sin, etc. directly.
 
-    fn set_simd_function[
+    def set_simd_function[
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](self):
         """Sets a unary SIMD function using the stdlib math function signature.
 
@@ -426,21 +426,21 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
             var out_data = output.get_data().bitcast[Scalar[D]]()
 
-            fn apply[w: Int](idx: Int) unified {mut}:
+            def apply[w: Int](idx: Int) {mut}:
                 (out_data + idx).store(func((in_data + idx).load[width=w]()))
 
             vectorize[simd_width_of[D]()](size, apply)
 
         self.set_function[wrapper]()
 
-    fn set_simd_function[
+    def set_simd_function[
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](self):
         """Sets a binary SIMD function using the stdlib math function signature.
 
@@ -470,13 +470,13 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
             var in2_data = input.get_vector(1).get_data().bitcast[Scalar[D]]()
             var out_data = output.get_data().bitcast[Scalar[D]]()
 
-            fn apply[w: Int](idx: Int) unified {mut}:
+            def apply[w: Int](idx: Int) {mut}:
                 (out_data + idx).store(
                     func(
                         (in1_data + idx).load[width=w](),
@@ -488,7 +488,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
         self.set_function[wrapper]()
 
-    fn register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection[_]) raises:
         """Registers the scalar function within the given connection.
 
         The function requires at least a name, a function, and a return type.
@@ -509,9 +509,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn create[
+    def create[
         name: StringLiteral,
-        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
         Out: DType,
     ](conn: Connection[_]) raises:
         """Create and register a zero-parameter scalar function.
@@ -546,9 +546,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn create[
+    def create[
         name: StringLiteral,
-        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
         In1: DType,
         Out: DType,
     ](conn: Connection[_]) raises:
@@ -588,9 +588,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn create[
+    def create[
         name: StringLiteral,
-        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
         In1: DType,
         In2: DType,
         Out: DType,
@@ -632,9 +632,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn create[
+    def create[
         name: StringLiteral,
-        func: fn (FunctionInfo, mut Chunk, Vector) -> None,
+        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
         In1: DType,
         In2: DType,
         In3: DType,
@@ -664,11 +664,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_function[
+    def from_function[
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: fn (Scalar[In1]) -> Scalar[Out],
+        func: def(Scalar[In1]) thin -> Scalar[Out],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a simple row-at-a-time function.
 
@@ -693,7 +693,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
             var out_data = output.get_data().bitcast[Scalar[Out]]()
@@ -708,11 +708,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_function[
+    def from_function[
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: fn (Scalar[In1]) -> Scalar[Out],
+        func: def(Scalar[In1]) thin -> Scalar[Out],
     ](conn: Connection[_]) raises:
         """Create and register a scalar function from a simple row-at-a-time function.
 
@@ -738,12 +738,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn from_function[
+    def from_function[
         name: StringLiteral,
         In1: DType,
         In2: DType,
         Out: DType,
-        func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
+        func: def(Scalar[In1], Scalar[In2]) thin -> Scalar[Out],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a simple row-at-a-time function.
 
@@ -765,7 +765,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func.register(conn)
         ```
         """
-        fn wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
             var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
@@ -782,12 +782,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_function[
+    def from_function[
         name: StringLiteral,
         In1: DType,
         In2: DType,
         Out: DType,
-        func: fn (Scalar[In1], Scalar[In2]) -> Scalar[Out],
+        func: def(Scalar[In1], Scalar[In2]) thin -> Scalar[Out],
     ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a simple row-at-a-time function.
 
@@ -818,11 +818,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a SIMD-vectorized function.
 
@@ -851,11 +851,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ](conn: Connection[_]) raises:
         """Create and register a scalar function from a SIMD-vectorized function.
 
@@ -881,12 +881,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         In1: DType,
         In2: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a SIMD-vectorized function.
 
@@ -917,12 +917,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         In1: DType,
         In2: DType,
         Out: DType,
-        func: fn[width: Int] (SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width],
+        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a SIMD-vectorized function.
 
@@ -951,10 +951,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     # --- Overloads accepting stdlib math function signatures ----------------
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a unary scalar function from a stdlib math function.
 
@@ -985,10 +985,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](conn: Connection[_]) raises:
         """Create and register a unary scalar function from a stdlib math function.
 
@@ -1012,10 +1012,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a stdlib math function.
 
@@ -1045,10 +1045,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return sf^
 
     @staticmethod
-    fn from_simd_function[
+    def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: fn[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width],
+        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a stdlib math function.
 
@@ -1071,7 +1071,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    fn get_extra_info(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `set_extra_info`.
         
         This can be called during function execution.
@@ -1083,7 +1083,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return libduckdb.duckdb_scalar_function_get_extra_info(info)
 
     @staticmethod
-    fn get_bind_data(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Gets the bind data set during binding.
         
         This can be called during function execution to access data stored during binding.
@@ -1096,7 +1096,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return libduckdb.duckdb_scalar_function_get_bind_data(info)
 
     @staticmethod
-    fn set_error(info: duckdb_function_info, error: String):
+    def set_error(info: duckdb_function_info, error: String):
         """Reports that an error has occurred during function execution.
 
         * info: The function info object.
@@ -1116,14 +1116,14 @@ struct BindInfo:
 
     var _info: duckdb_bind_info
 
-    fn __init__(out self, info: duckdb_bind_info):
+    def __init__(out self, info: duckdb_bind_info):
         """Creates a BindInfo wrapper.
 
         * info: The bind info pointer from DuckDB.
         """
         self._info = info
 
-    fn set_bind_data(
+    def set_bind_data(
         self, 
         bind_data: UnsafePointer[NoneType, MutAnyOrigin], 
         destroy: duckdb_delete_callback_t
@@ -1138,7 +1138,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind_data(self._info, bind_data, destroy)
 
-    fn set_bind_data_copy(self, copy: duckdb_copy_callback_t):
+    def set_bind_data_copy(self, copy: duckdb_copy_callback_t):
         """Sets the bind data copy function.
         
         This function is called to copy the bind data when needed (e.g., for parallel execution).
@@ -1148,7 +1148,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind_data_copy(self._info, copy)
 
-    fn set_error(self, error: String):
+    def set_error(self, error: String):
         """Reports that an error has occurred during binding.
 
         * error: The error message.
@@ -1157,7 +1157,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_bind_set_error(self._info, error_copy.as_c_string_slice().unsafe_ptr())
 
-    fn get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
         """Retrieves the extra info set via `ScalarFunction.set_extra_info`.
 
         * returns: The extra info pointer.
@@ -1165,7 +1165,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_scalar_function_bind_get_extra_info(self._info)
 
-    fn get_argument_count(self) -> idx_t:
+    def get_argument_count(self) -> idx_t:
         """Gets the number of arguments passed to the scalar function.
 
         * returns: The number of arguments.
@@ -1173,7 +1173,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_scalar_function_bind_get_argument_count(self._info)
 
-    fn get_argument(self, index: idx_t) -> duckdb_expression:
+    def get_argument(self, index: idx_t) -> duckdb_expression:
         """Gets the argument expression at the specified index.
 
         * index: The index of the argument.
@@ -1223,7 +1223,7 @@ struct ScalarFunctionSet(Movable):
 
     var _function_set: duckdb_scalar_function_set
 
-    fn __init__(out self, name: String):
+    def __init__(out self, name: String):
         """Creates a new scalar function set.
 
         * name: The name for all functions in this set.
@@ -1232,16 +1232,16 @@ struct ScalarFunctionSet(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._function_set = libduckdb.duckdb_create_scalar_function_set(name_copy.as_c_string_slice().unsafe_ptr())
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         """Destroys the scalar function set and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_scalar_function_set(UnsafePointer(to=self._function_set))
 
-    fn add_function(self, function: ScalarFunction) raises:
+    def add_function(self, function: ScalarFunction) raises:
         """Adds a scalar function as a new overload to the function set.
 
         IMPORTANT: The function must have its name set to match the function set's name
@@ -1261,7 +1261,7 @@ struct ScalarFunctionSet(Movable):
         if status != DuckDBSuccess:
             raise Error("Failed to add function to set - overload may already exist")
 
-    fn register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection[_]) raises:
         """Registers the scalar function set within the given connection.
 
         The set requires at least one valid overload.

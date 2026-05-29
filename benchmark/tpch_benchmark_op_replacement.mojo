@@ -37,7 +37,7 @@ comptime SIMD_WIDTH = 8
 # For add/sub the raw integers share the same scale, so we just add/sub.
 # For multiply we need scale correction: (scale4 × scale4) / 10000 → scale4.
 
-fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """SIMD addition on scaled Int64 DECIMAL values."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -59,7 +59,7 @@ fn mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb
         result_data[i] = a_data[i] + b_data[i]
 
 
-fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """SIMD subtraction on scaled Int64 DECIMAL values."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -81,7 +81,7 @@ fn mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: d
         result_data[i] = a_data[i] - b_data[i]
 
 
-fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """SIMD multiplication on scaled Int64 DECIMAL values.
 
     Both inputs are DECIMAL(18,4) — scale 4 each. Raw multiply gives scale 8.
@@ -109,7 +109,7 @@ fn mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: d
         result_data[i] = a_data[i] * b_data[i] // 10000
 
 
-fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
     """SIMD division (DOUBLE) — DuckDB uses DOUBLE for DECIMAL division too."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -135,8 +135,8 @@ fn mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duc
 # Registration helpers (low-level FFI)
 # ===--------------------------------------------------------------------===#
 
-fn register_decimal_op[
-    func: fn (duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
+def register_decimal_op[
+    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
 ](name: String, conn: duckdb_connection) raises:
     """Register a binary operator function as (DECIMAL(18,4), DECIMAL(18,4)) -> DECIMAL(18,4)."""
     ref lib = DuckDB().libduckdb()
@@ -159,8 +159,8 @@ fn register_decimal_op[
     lib.duckdb_destroy_scalar_function(UnsafePointer(to=function))
 
 
-fn register_double_op[
-    func: fn (duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
+def register_double_op[
+    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
 ](name: String, conn: duckdb_connection) raises:
     """Register a binary operator function as (DOUBLE, DOUBLE) -> DOUBLE."""
     ref lib = DuckDB().libduckdb()
@@ -187,12 +187,12 @@ fn register_double_op[
 # Benchmark helpers
 # ===--------------------------------------------------------------------===#
 
-fn run_tpch_query(conn: Connection, query_nr: Int) raises:
+def run_tpch_query(conn: Connection, query_nr: Int) raises:
     """Run a TPC-H query by number using PRAGMA tpch(N)."""
     _ = conn.execute("PRAGMA tpch(" + String(query_nr) + ");")
 
 
-fn bench_single_query(
+def bench_single_query(
     name: String,
     conn: Connection,
     query_nr: Int,
@@ -203,7 +203,7 @@ fn bench_single_query(
     for _ in range(warmup_iters):
         run_tpch_query(conn, query_nr)
 
-    fn bench_fn() capturing raises:
+    def bench_fn() capturing raises:
         run_tpch_query(conn, query_nr)
 
     return benchmark.run[bench_fn](max_iters=max_iters)
@@ -213,7 +213,7 @@ fn bench_single_query(
 # Main
 # ===--------------------------------------------------------------------===#
 
-fn main() raises:
+def main() raises:
     var scale_factor = 0.1
     var max_iters = 50
     var warmup_iters = 3

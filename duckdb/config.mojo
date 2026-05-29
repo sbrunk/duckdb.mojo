@@ -37,14 +37,15 @@ struct Config(Movable):
 
     var _config: duckdb_config
 
-    fn __init__(out self) raises:
+    def __init__(out self) raises:
         """Create an empty configuration."""
-        self._config = duckdb_config()
+        # Placeholder handle — duckdb_create_config populates it via out-param.
+        self._config = duckdb_config.unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if libduckdb.duckdb_create_config(UnsafePointer(to=self._config)) == DuckDBError:
             raise Error("Failed to create DuckDB config")
 
-    fn __init__(out self, options: Dict[String, String]) raises:
+    def __init__(out self, options: Dict[String, String]) raises:
         """Create a configuration from a dictionary of option name/value pairs.
 
         Args:
@@ -55,14 +56,14 @@ struct Config(Movable):
         for entry in options.items():
             self.set(entry.key, entry.value)
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self._config = take._config
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_config(UnsafePointer(to=self._config))
 
-    fn set(mut self, name: String, value: String) raises:
+    def set(mut self, name: String, value: String) raises:
         """Set a configuration option.
 
         Args:
@@ -91,7 +92,7 @@ struct Config(Movable):
             )
 
     @staticmethod
-    fn available_options() raises -> Dict[String, String]:
+    def available_options() raises -> Dict[String, String]:
         """Return all available configuration options as ``{name: description}``.
 
         This queries the DuckDB library for every known startup flag.
@@ -107,8 +108,9 @@ struct Config(Movable):
         var count = libduckdb.duckdb_config_count()
         var result = Dict[String, String]()
         for i in range(count):
-            var name_ptr = UnsafePointer[c_char, ImmutAnyOrigin]()
-            var desc_ptr = UnsafePointer[c_char, ImmutAnyOrigin]()
+            # Placeholders — duckdb_get_config_flag fills both via out-params.
+            var name_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
+            var desc_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
             if (
                 libduckdb.duckdb_get_config_flag(
                     UInt(i),
@@ -121,7 +123,7 @@ struct Config(Movable):
                 result[name] = desc
         return result^
 
-    fn _handle(self) -> duckdb_config:
+    def _handle(self) -> duckdb_config:
         """Return the underlying duckdb_config handle.
 
         The Config instance retains ownership — the handle is only borrowed.

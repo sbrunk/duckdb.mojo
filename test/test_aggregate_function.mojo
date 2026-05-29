@@ -30,17 +30,17 @@ struct SumState(Copyable, Movable):
 # ===--------------------------------------------------------------------===#
 
 
-fn sum_state_size(info: AggregateFunctionInfo) -> idx_t:
+def sum_state_size(info: AggregateFunctionInfo) -> idx_t:
     """Returns the size of the SUM state."""
     return idx_t(size_of[SumState]())
 
 
-fn sum_state_init(info: AggregateFunctionInfo, state: AggregateState):
+def sum_state_init(info: AggregateFunctionInfo, state: AggregateState):
     """Initializes a SUM state to zero."""
     state.get_data().bitcast[SumState]().init_pointee_move(SumState(total=0))
 
 
-fn sum_update(
+def sum_update(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     """Updates SUM states with integer input values."""
@@ -51,7 +51,7 @@ fn sum_update(
         s[].total += Int64(data[i])
 
 
-fn sum_combine(
+def sum_combine(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     target: AggregateStateArray,
@@ -64,7 +64,7 @@ fn sum_combine(
         t[].total += s[].total
 
 
-fn sum_finalize(
+def sum_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     result: Vector,
@@ -78,7 +78,7 @@ fn sum_finalize(
         out[offset + i] = s[].total
 
 
-fn sum_destroy(states: AggregateStateArray):
+def sum_destroy(states: AggregateStateArray):
     """Destroys SUM states."""
     for i in range(len(states)):
         states.get_state(i).get_data().bitcast[SumState]().destroy_pointee()
@@ -101,17 +101,17 @@ struct CountState(Copyable, Movable):
 # ===--------------------------------------------------------------------===#
 
 
-fn count_state_size(info: AggregateFunctionInfo) -> idx_t:
+def count_state_size(info: AggregateFunctionInfo) -> idx_t:
     return idx_t(size_of[CountState]())
 
 
-fn count_state_init(info: AggregateFunctionInfo, state: AggregateState):
+def count_state_init(info: AggregateFunctionInfo, state: AggregateState):
     state.get_data().bitcast[CountState]().init_pointee_move(
         CountState(count=0)
     )
 
 
-fn count_update(
+def count_update(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     var size = len(input)
@@ -120,7 +120,7 @@ fn count_update(
         s[].count += 1
 
 
-fn count_combine(
+def count_combine(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     target: AggregateStateArray,
@@ -132,7 +132,7 @@ fn count_combine(
         t[].count += s[].count
 
 
-fn count_finalize(
+def count_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     result: Vector,
@@ -158,17 +158,17 @@ struct AvgState(Copyable, Movable):
     var count: Int64
 
 
-fn avg_state_size(info: AggregateFunctionInfo) -> idx_t:
+def avg_state_size(info: AggregateFunctionInfo) -> idx_t:
     return idx_t(size_of[AvgState]())
 
 
-fn avg_state_init(info: AggregateFunctionInfo, state: AggregateState):
+def avg_state_init(info: AggregateFunctionInfo, state: AggregateState):
     state.get_data().bitcast[AvgState]().init_pointee_move(
         AvgState(sum=0.0, count=0)
     )
 
 
-fn avg_update_double(
+def avg_update_double(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     var size = len(input)
@@ -179,7 +179,7 @@ fn avg_update_double(
         s[].count += 1
 
 
-fn avg_combine(
+def avg_combine(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     target: AggregateStateArray,
@@ -192,7 +192,7 @@ fn avg_combine(
         t[].count += s[].count
 
 
-fn avg_finalize(
+def avg_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     result: Vector,
@@ -218,17 +218,17 @@ struct SumDoubleState(Copyable, Movable):
     var total: Float64
 
 
-fn sum_double_state_size(info: AggregateFunctionInfo) -> idx_t:
+def sum_double_state_size(info: AggregateFunctionInfo) -> idx_t:
     return idx_t(size_of[SumDoubleState]())
 
 
-fn sum_double_state_init(info: AggregateFunctionInfo, state: AggregateState):
+def sum_double_state_init(info: AggregateFunctionInfo, state: AggregateState):
     state.get_data().bitcast[SumDoubleState]().init_pointee_move(
         SumDoubleState(total=0.0)
     )
 
 
-fn sum_double_update(
+def sum_double_update(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     var size = len(input)
@@ -238,7 +238,7 @@ fn sum_double_update(
         s[].total += data[i]
 
 
-fn sum_double_combine(
+def sum_double_combine(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     target: AggregateStateArray,
@@ -250,7 +250,7 @@ fn sum_double_combine(
         t[].total += s[].total
 
 
-fn sum_double_finalize(
+def sum_double_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
     result: Vector,
