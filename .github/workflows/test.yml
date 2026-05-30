@@ -32,16 +32,25 @@ jobs:
   build:
     strategy:
       matrix:
+        # mojo_target_flags pins a conservative codegen target on linux-64 to
+        # dodge a Mojo bug on GitHub's AMD EPYC 9V74 runners: host-CPU codegen
+        # emits AVX-512 that Azure has masked off, causing SIGILL. Every CI
+        # runner has AVX2, so x86-64-v3 is safe. Empty elsewhere (e.g. arm).
         include:
-          - { target: linux-64, os: ubuntu-24.04 }
+          - { target: linux-64, os: ubuntu-24.04, mojo_target_flags: "--target-cpu=x86-64-v3" }
           # TODO: re-enable once the aarch64 Int128 by-value ABI issue is fixed
           # (4 test_appender hugeint/uhugeint failures with garbage register/stack contents).
-          # - { target: linux-aarch64, os: ubuntu-22.04-arm }
-          - { target: osx-arm64, os: macos-15 }
+          # - { target: linux-aarch64, os: ubuntu-22.04-arm, mojo_target_flags: "" }
+          - { target: osx-arm64, os: macos-15, mojo_target_flags: "" }
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+
+    # Consumed by scripts/run_tests.sh, the extension pixi tasks, and the
+    # example step below. Only set here (CI), so local builds stay native.
+    env:
+      MOJO_TARGET_FLAGS: ${{ matrix.mojo_target_flags }}
 
     defaults:
       run:
@@ -86,9 +95,5 @@ jobs:
         if: always()
         run: |
           source $HOME/.bash_profile
-          # See scripts/run_tests.sh for why linux-x86_64 pins a conservative CPU.
-          MOJO_TARGET=()
-          if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
-            MOJO_TARGET=(--target-cpu x86-64-v3)
-          fi
-          pixi run mojo run "${MOJO_TARGET[@]}" example.mojo
+          # $MOJO_TARGET_FLAGS is set at the job level (CI only); empty off-CI.
+          pixi run mojo run $MOJO_TARGET_FLAGS example.mojo

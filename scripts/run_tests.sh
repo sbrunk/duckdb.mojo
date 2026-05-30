@@ -3,15 +3,11 @@
 # The mojopkg must exist in CWD before this script runs.
 set -e
 
-# Workaround for a Mojo toolchain bug on GitHub's AMD EPYC 9V74 runners:
-# Mojo's host-CPU codegen detects znver4 and emits AVX-512 instructions, but
-# Azure masks AVX-512 on those VMs (avx512f absent in /proc/cpuinfo), so the
-# emitted code hits SIGILL. Pin a conservative x86-64 baseline — every CI
-# runner has AVX2, so x86-64-v3 is safe and AVX-512-free.
-MOJO_TARGET=()
-if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
-    MOJO_TARGET=(--target-cpu x86-64-v3)
-fi
+# Optional Mojo codegen target override. Set ONLY in CI (see
+# .github/workflows/test.yml) to work around a Mojo bug on GitHub's AMD EPYC
+# 9V74 runners, where host-CPU codegen emits AVX-512 that Azure has masked,
+# causing SIGILL. Unset locally → no override, so local builds stay native.
+read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
 if [ ! -f "./duckdb.mojopkg" ]; then
     echo "ERROR: duckdb.mojopkg not found in CWD. Run 'pixi run build' first."
