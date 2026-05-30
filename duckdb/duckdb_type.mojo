@@ -89,6 +89,19 @@ struct DuckDBType(
     """DuckDB type: TIMESTAMP_TZ."""
     comptime time_ns = DuckDBType(DUCKDB_TYPE_TIME_NS)
     """DuckDB type: TIME_NS, time in nanoseconds."""
+    comptime geometry = DuckDBType(DUCKDB_TYPE_GEOMETRY)
+    """DuckDB type: GEOMETRY (DuckDB 1.5+), stored as a WKB blob.
+
+    The C API exposes `duckdb_geometry_type_get_crs` for reading the
+    Coordinate Reference System; see `LogicalType.geometry_type_crs`.
+    """
+    comptime variant = DuckDBType(DUCKDB_TYPE_VARIANT)
+    """DuckDB type: VARIANT (DuckDB 1.5+), a self-describing nested value.
+
+    Physically a STRUCT; the C API has no dedicated VARIANT helpers yet, so
+    there is no native value decoding. Read values by casting to VARCHAR/JSON
+    in SQL (e.g. `SELECT my_variant::VARCHAR`).
+    """
 
     # def __init__(out self, value: LogicalType):
     #     """Create a DuckDBType from a LogicalType."""
@@ -222,6 +235,10 @@ struct DuckDBType(
             return writer.write("timestamp_tz")
         if self == DuckDBType.time_ns:
             return writer.write("time_ns")
+        if self == DuckDBType.geometry:
+            return writer.write("geometry")
+        if self == DuckDBType.variant:
+            return writer.write("variant")
         return writer.write("<<unknown>>")
 
     def __eq__(self, rhs: DuckDBType) -> Bool:

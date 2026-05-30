@@ -3,6 +3,12 @@
 # The mojopkg must exist in CWD before this script runs.
 set -e
 
+# Optional Mojo codegen target override. Set ONLY in CI (see
+# .github/workflows/test.yml) to work around a Mojo bug on GitHub's AMD EPYC
+# 9V74 runners, where host-CPU codegen emits AVX-512 that Azure has masked,
+# causing SIGILL. Unset locally → no override, so local builds stay native.
+read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
+
 if [ ! -f "./duckdb.mojopkg" ]; then
     echo "ERROR: duckdb.mojopkg not found in CWD. Run 'pixi run build' first."
     exit 1
@@ -53,7 +59,7 @@ GENERIC_TESTS=(
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
-    mojo run "$f"
+    mojo run "${MOJO_TARGET[@]}" "$f"
 done
 
 if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "Linux" ]]; then
@@ -61,6 +67,6 @@ if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "
 else
     for f in "${GENERIC_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"
-        mojo run -j 2 "$f"
+        mojo run -j 2 "${MOJO_TARGET[@]}" "$f"
     done
 fi

@@ -1,6 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.database import _null_ptr
-from std.collections import List
+from std.collections import List, Optional
 
 
 
@@ -195,6 +195,27 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         return LogicalType[is_owned=True, origin=MutExternalOrigin](
             libduckdb.duckdb_struct_type_child_type(self._logical_type, index)
         )
+
+    def geometry_type_crs(self) -> Optional[String]:
+        """Retrieves the CRS (Coordinate Reference System) of a GEOMETRY type.
+
+        Returns `None` if this type is not a GEOMETRY or has no CRS set.
+        Requires DuckDB 1.5+ (`duckdb_geometry_type_get_crs`).
+
+        * returns: The CRS string, or `None`.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        # A NULL char* (not a GEOMETRY / no CRS) converts to a `None` Optional
+        # via the pointer null-niche encoding.
+        var c_str: Optional[UnsafePointer[c_char, MutExternalOrigin]] = (
+            libduckdb.duckdb_geometry_type_get_crs(self._logical_type)
+        )
+        if not c_str:
+            return None
+        var ptr = c_str.value()
+        var result = String(unsafe_from_utf8_ptr=ptr)
+        libduckdb.duckdb_free(ptr.bitcast[NoneType]())
+        return result
 
     def __eq__(self, other: Self) -> Bool:
         if self.get_type_id() != other.get_type_id():
