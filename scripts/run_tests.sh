@@ -3,6 +3,16 @@
 # The mojopkg must exist in CWD before this script runs.
 set -e
 
+# Workaround for a Mojo toolchain bug on GitHub's AMD EPYC 9V74 runners:
+# Mojo's host-CPU codegen detects znver4 and emits AVX-512 instructions, but
+# Azure masks AVX-512 on those VMs (avx512f absent in /proc/cpuinfo), so the
+# emitted code hits SIGILL. Pin a conservative x86-64 baseline — every CI
+# runner has AVX2, so x86-64-v3 is safe and AVX-512-free.
+MOJO_TARGET=()
+if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
+    MOJO_TARGET=(--target-cpu x86-64-v3)
+fi
+
 if [ ! -f "./duckdb.mojopkg" ]; then
     echo "ERROR: duckdb.mojopkg not found in CWD. Run 'pixi run build' first."
     exit 1
@@ -53,7 +63,7 @@ GENERIC_TESTS=(
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
-    mojo run "$f"
+    mojo run "${MOJO_TARGET[@]}" "$f"
 done
 
 if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "Linux" ]]; then
@@ -61,6 +71,6 @@ if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "
 else
     for f in "${GENERIC_TESTS[@]}"; do
         echo "--- Running (-j 2): $f ---"
-        mojo run -j 2 "$f"
+        mojo run -j 2 "${MOJO_TARGET[@]}" "$f"
     done
 fi

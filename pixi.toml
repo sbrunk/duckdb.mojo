@@ -48,6 +48,15 @@ test-extension = { cmd = "mojo run test-extension/test_extension.mojo", depends-
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
+# linux-64 overrides: pin a conservative target CPU for the extension builds.
+# Mirrors the base tasks above with `--target-cpu=x86-64-v3` added to each mojo
+# invocation — see scripts/run_tests.sh for why (Mojo emits AVX-512 on GitHub's
+# AMD EPYC 9V74 runners where Azure masks it, causing SIGILL). Keep in sync.
+[target.linux-64.tasks]
+build-demo-extension = { cmd = "mkdir -p demo-extension/build && mojo build --target-cpu=x86-64-v3 demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py demo-extension/build/demo_mojo.duckdb_extension", depends-on = ["build"] }
+build-test-extension = { cmd = "mkdir -p test-extension/build && mojo build --target-cpu=x86-64-v3 test-extension/src/test_mojo_extension.mojo --emit shared-lib -o test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo.duckdb_extension && mojo build --target-cpu=x86-64-v3 test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/bad_api.duckdb_extension && mojo build --target-cpu=x86-64-v3 test-extension/src/test_mojo_unstable_extension.mojo --emit shared-lib -o test-extension/build/mojo_unstable.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo_unstable.duckdb_extension --abi-type C_STRUCT_UNSTABLE", depends-on = ["build"] }
+test-extension = { cmd = "mojo run --target-cpu=x86-64-v3 test-extension/test_extension.mojo", depends-on = ["build-test-extension"] }
+
 # for local development
 [dependencies]
 libduckdb-devel = "=1.5.3"

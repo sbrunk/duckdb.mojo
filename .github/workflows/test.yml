@@ -86,4 +86,9 @@ jobs:
         if: always()
         run: |
           source $HOME/.bash_profile
-          pixi run mojo run example.mojo
+          # See scripts/run_tests.sh for why linux-x86_64 pins a conservative CPU.
+          MOJO_TARGET=()
+          if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
+            MOJO_TARGET=(--target-cpu x86-64-v3)
+          fi
+          pixi run mojo run "${MOJO_TARGET[@]}" example.mojo
