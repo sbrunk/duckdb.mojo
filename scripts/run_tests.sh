@@ -1,6 +1,6 @@
 #!/bin/bash
-# Run tests against the pre-built duckdb.mojopkg (created by the build task).
-# The mojopkg must exist in CWD before this script runs.
+# Run tests against the pre-built duckdb.mojoc (created by the build task).
+# The package must exist in CWD before this script runs.
 set -e
 
 # Optional Mojo codegen target override. Set ONLY in CI (see
@@ -9,12 +9,12 @@ set -e
 # causing SIGILL. Unset locally → no override, so local builds stay native.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
-if [ ! -f "./duckdb.mojopkg" ]; then
-    echo "ERROR: duckdb.mojopkg not found in CWD. Run 'pixi run build' first."
+if [ ! -f "./duckdb.mojoc" ]; then
+    echo "ERROR: duckdb.mojoc not found in CWD. Run 'pixi run build' first."
     exit 1
 fi
 
-# On CI, hide duckdb/ so mojo uses the pre-built mojopkg instead of recompiling
+# On CI, hide duckdb/ so mojo uses the pre-built package instead of recompiling
 # from source for each test file (saves 9+ GB peak memory).
 if [[ "${CI:-}" == "true" ]]; then
     mv duckdb duckdb.bak
