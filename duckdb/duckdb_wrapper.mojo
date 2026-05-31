@@ -60,7 +60,8 @@ comptime Float64Val = DTypeValue[DuckDBType.double]
 
 @fieldwise_init
 struct FixedSizeValue[
-    duckdb_type: DuckDBType, underlying: Writable & ImplicitlyCopyable & Movable
+    duckdb_type: DuckDBType,
+    underlying: Writable & ImplicitlyCopyable & Movable & ImplicitlyDestructible,
 ](DuckDBWrapper & ImplicitlyCopyable):
     comptime Type = Self.duckdb_type
     var value: Self.underlying

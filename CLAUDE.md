@@ -61,7 +61,7 @@ Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >1
 
 ## Updating Mojo Nightly
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0b2.dev2026052706` from the `https://conda.modular.com/max-nightly/` channel, set in both `package.host-dependencies` and `package.build-dependencies`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0b2.dev2026053106` from the `https://conda.modular.com/max-nightly/` channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`). To update:
 
 1. Check available versions: query `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (or `linux-64`/`linux-aarch64`) for `mojo-compiler` packages
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`)
