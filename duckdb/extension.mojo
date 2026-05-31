@@ -30,11 +30,11 @@ fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
         "add_one", DType.int64, DType.int64, add_one
     ](conn)
 
-@export("my_extension_init_c_api", ABI="C")
+@export("my_extension_init_c_api")
 fn my_extension_init(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access],
-) -> Bool:
+) abi("C") -> Bool:
     return Extension.run[init](info, access)
 ```
 
@@ -113,11 +113,11 @@ struct Extension(Movable):
 
     Example:
     ```mojo
-    @export("my_ext_init_c_api", ABI="C")
+    @export("my_ext_init_c_api")
     fn my_ext_init(
         info: duckdb_extension_info,
         access: UnsafePointer[duckdb_extension_access],
-    ) -> Bool:
+    ) abi("C") -> Bool:
         var ext = Extension(info, access)
         try:
             var conn = ext.connect()
@@ -256,11 +256,11 @@ struct Extension(Movable):
                 "add_one", DType.int64, DType.int64, add_one
             ](conn)
 
-        @export("my_ext_init_c_api", ABI="C")
+        @export("my_ext_init_c_api")
         fn my_ext_init(
             info: duckdb_extension_info,
             access: UnsafePointer[duckdb_extension_access],
-        ) -> Bool:
+        ) abi("C") -> Bool:
             return Extension.run[init](info, access)
         ```
         """
@@ -314,11 +314,11 @@ struct Extension(Movable):
             # Can use unstable API here
             ...
 
-        @export("my_ext_init_c_api", ABI="C")
+        @export("my_ext_init_c_api")
         fn my_ext_init(
             info: duckdb_extension_info,
             access: UnsafePointer[duckdb_extension_access],
-        ) -> Bool:
+        ) abi("C") -> Bool:
             return Extension.run_unstable[init](info, access)
         ```
         """

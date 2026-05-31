@@ -105,8 +105,8 @@ fn init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
     sf.set_bind(my_bind)  # ← OK
     ...
 
-@export("my_ext_init_c_api", ABI="C")
-fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]) -> Bool:
+@export("my_ext_init_c_api")
+fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]) abi("C") -> Bool:
     return Extension.run_unstable[init](info, access)
 ```
 
@@ -127,7 +127,7 @@ To create your own Mojo extension for DuckDB:
 1. **Copy this directory** as a starting point
 2. **Write your functions** using the duckdb.mojo API (`ScalarFunction`, `AggregateFunction`, `TableFunction`)
 3. **Create an init function** that registers them via a `Connection`
-4. **Export the entry point** using `@export("{name}_init_c_api", ABI="C")`
+4. **Export the entry point** using `@export("{name}_init_c_api")` with the `abi("C")` effect
 5. **Build and load** using the pixi tasks or manual steps above
 
 ### Entry Point Convention
@@ -135,11 +135,11 @@ To create your own Mojo extension for DuckDB:
 The entry point function must be named `{extension_name}_init_c_api` and have this signature:
 
 ```mojo
-@export("my_extension_init_c_api", ABI="C")
+@export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) -> Bool:
+) abi("C") -> Bool:
     ...
 ```
 
@@ -166,11 +166,11 @@ fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
 
-@export("my_extension_init_c_api", ABI="C")
+@export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) -> Bool:
+) abi("C") -> Bool:
     return Extension.run[init](info, access)
 ```
 
@@ -193,11 +193,11 @@ For more control (e.g. to access the `Database` handle or report custom errors),
 create an `Extension` manually:
 
 ```mojo
-@export("my_extension_init_c_api", ABI="C")
+@export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) -> Bool:
+) abi("C") -> Bool:
     var ext = Extension(info, access)
     try:
         var conn = ext.connect()

@@ -84,11 +84,11 @@ fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
 
-@export("my_ext_init_c_api", ABI="C")
+@export("my_ext_init_c_api")
 fn my_ext_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) -> Bool:
+) abi("C") -> Bool:
     return Extension.run[init](info, access)
 ```
 
@@ -119,11 +119,11 @@ fn init_unstable(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
     # Unstable methods like ScalarFunction.set_bind() are available here
     ...
 
-@export("my_ext_init_c_api", ABI="C")
+@export("my_ext_init_c_api")
 fn my_ext_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) -> Bool:
+) abi("C") -> Bool:
     return Extension.run_unstable[init_unstable](info, access)
 ```
 
