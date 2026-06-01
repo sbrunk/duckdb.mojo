@@ -63,7 +63,67 @@ def main():
         print(stations[i])
 ```
 
-### Extension
+### Parameterized queries
+
+Bind parameters positionally (`?` / `$1`) or by name (`$name`). Plain Mojo
+scalars are bound directly; `Optional[T]` binds SQL `NULL` for `None`:
+
+```mojo
+from duckdb import *
+
+var con = DuckDB.connect(":memory:")
+_ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
+
+# Positional parameters
+_ = con.execute("INSERT INTO t VALUES (?, ?)", 1, String("Mark"))
+
+# Bulk insert: prepares once, re-binds per row
+var rows: List[Tuple[Int32, String]] = [
+    (Int32(2), String("Hannes")),
+    (Int32(3), String("Pedro")),
+]
+con.executemany("INSERT INTO t VALUES (?, ?)", rows)
+
+# Named parameters
+var r = con.execute_named(
+    "SELECT name FROM t WHERE id = $id", {"id": 1}
+).fetchall()
+
+# Or prepare explicitly and reuse
+var stmt = con.prepare("SELECT $1 + $2")
+stmt.bind(1, Int32(40))
+stmt.bind(2, Int32(2))
+var sum = stmt.execute().fetchall()
+```
+
+### Module-level API and result helpers
+
+A Python-style top-level API runs against a lazily-created, process-wide
+in-memory default connection:
+
+```mojo
+import duckdb
+
+# Default connection
+duckdb.sql("CREATE TABLE t AS SELECT * FROM range(5) r(i)")
+duckdb.sql("SELECT * FROM t").show()        # formatted table
+
+var con = duckdb.connect("my.db", read_only=True)
+
+# Read files directly
+var csv = con.read_csv("data.csv").fetchall()
+
+# DB-API-style fetching (column types given as parameters)
+var result = con.execute("SELECT i FROM t")
+var first = result.fetchone[Int64]()        # Optional[Tuple[Int64]]
+var batch = result.fetchmany[Int64](size=2)
+
+# Column metadata
+print(result.columns())                     # List[String] of names
+print(result.description())                 # List[Column] (index/name/type)
+```
+
+### Extensions
 
 Build DuckDB extensions as shared libraries in Mojo. Write an init function
 that receives a `Connection` and registers your functions, then pass it to
@@ -137,9 +197,6 @@ SELECT mojo_add_numbers(40, 2);  -- 42
 ```
 
 See the [demo extension](demo-extension/) for a full working example.
-
-## Status
-- The [FFI bindings](duckdb/_libduckdb.mojo) should be complete as they are auto-generated but the high-level Mojo API is still work in progress.
 
 
 ## Installation

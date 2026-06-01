@@ -82,6 +82,132 @@ from duckdb.logical_type import LogicalType, struct_type
 
 
 # ──────────────────────────────────────────────────────────────────
+# Value conversion — create duckdb_value from Mojo types
+# ──────────────────────────────────────────────────────────────────
+
+
+def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
+    """Convert a Mojo value to a duckdb_value.
+
+    Supports scalar types (Bool, integers, floats, String),
+    Date/Time/Timestamp/Interval, Decimal, UUID, and timestamp variants.
+
+    The caller is responsible for calling `duckdb_destroy_value` on the result.
+
+    Parameters:
+        T: The Mojo type of the value.
+
+    Args:
+        value: The value to convert.
+
+    Returns:
+        A new duckdb_value that must be destroyed by the caller.
+    """
+    ref libduckdb = DuckDB().libduckdb()
+    # Use UnsafePointer.bitcast to reinterpret ref value as the concrete
+    # type without requiring ImplicitlyCopyable.
+    var vp = UnsafePointer(to=value)
+
+    comptime if _type_is_eq[T, Bool]():
+        return libduckdb.duckdb_create_bool(vp.bitcast[Bool]()[])
+    elif _type_is_eq[T, Int8]():
+        return libduckdb.duckdb_create_int8(vp.bitcast[Int8]()[])
+    elif _type_is_eq[T, Int16]():
+        return libduckdb.duckdb_create_int16(vp.bitcast[Int16]()[])
+    elif _type_is_eq[T, Int32]():
+        return libduckdb.duckdb_create_int32(vp.bitcast[Int32]()[])
+    elif _type_is_eq[T, Int64]():
+        return libduckdb.duckdb_create_int64(vp.bitcast[Int64]()[])
+    elif _type_is_eq[T, Int]():
+        # Int is platform-dependent: cast to the appropriate fixed-width type
+        comptime if size_of[Int]() == 4:
+            return libduckdb.duckdb_create_int32(
+                Int32(vp.bitcast[Int]()[])
+            )
+        else:
+            return libduckdb.duckdb_create_int64(
+                Int64(vp.bitcast[Int]()[])
+            )
+    elif _type_is_eq[T, UInt8]():
+        return libduckdb.duckdb_create_uint8(vp.bitcast[UInt8]()[])
+    elif _type_is_eq[T, UInt16]():
+        return libduckdb.duckdb_create_uint16(vp.bitcast[UInt16]()[])
+    elif _type_is_eq[T, UInt32]():
+        return libduckdb.duckdb_create_uint32(vp.bitcast[UInt32]()[])
+    elif _type_is_eq[T, UInt64]():
+        return libduckdb.duckdb_create_uint64(vp.bitcast[UInt64]()[])
+    elif _type_is_eq[T, UInt]():
+        comptime if size_of[UInt]() == 4:
+            return libduckdb.duckdb_create_uint32(
+                UInt32(vp.bitcast[UInt]()[])
+            )
+        else:
+            return libduckdb.duckdb_create_uint64(
+                UInt64(vp.bitcast[UInt]()[])
+            )
+    elif _type_is_eq[T, Float32]():
+        return libduckdb.duckdb_create_float(vp.bitcast[Float32]()[])
+    elif _type_is_eq[T, Float64]():
+        return libduckdb.duckdb_create_double(vp.bitcast[Float64]()[])
+    elif _type_is_eq[T, Int128]():
+        return libduckdb.duckdb_create_hugeint(vp.bitcast[Int128]()[])
+    elif _type_is_eq[T, UInt128]():
+        return libduckdb.duckdb_create_uhugeint(vp.bitcast[UInt128]()[])
+    elif _type_is_eq[T, String]():
+        var s = String(vp.bitcast[String]()[])
+        return libduckdb.duckdb_create_varchar_length(
+            s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
+        )
+    elif _type_is_eq[T, Date]():
+        return libduckdb.duckdb_create_date(vp.bitcast[Date]()[])
+    elif _type_is_eq[T, Time]():
+        return libduckdb.duckdb_create_time(vp.bitcast[Time]()[])
+    elif _type_is_eq[T, Timestamp]():
+        return libduckdb.duckdb_create_timestamp(vp.bitcast[Timestamp]()[])
+    elif _type_is_eq[T, Interval]():
+        return libduckdb.duckdb_create_interval(
+            vp.bitcast[duckdb_interval]()[]
+        )
+    elif _type_is_eq[T, Decimal]():
+        return libduckdb.duckdb_create_decimal(vp.bitcast[Decimal]()[])
+    elif _type_is_eq[T, TimestampS]():
+        var raw = duckdb_timestamp_s(vp.bitcast[TimestampS]()[].seconds)
+        return libduckdb.duckdb_create_timestamp_s(raw)
+    elif _type_is_eq[T, TimestampMS]():
+        var raw = duckdb_timestamp_ms(vp.bitcast[TimestampMS]()[].millis)
+        return libduckdb.duckdb_create_timestamp_ms(raw)
+    elif _type_is_eq[T, TimestampNS]():
+        var raw = duckdb_timestamp_ns(vp.bitcast[TimestampNS]()[].nanos)
+        return libduckdb.duckdb_create_timestamp_ns(raw)
+    elif _type_is_eq[T, TimestampTZ]():
+        var ts = Timestamp(vp.bitcast[TimestampTZ]()[].micros)
+        return libduckdb.duckdb_create_timestamp_tz(ts)
+    elif _type_is_eq[T, TimeTZ]():
+        var raw = duckdb_time_tz(vp.bitcast[TimeTZ]()[].bits)
+        return libduckdb.duckdb_create_time_tz_value(raw)
+    elif _type_is_eq[T, UUID]():
+        return libduckdb.duckdb_create_uuid(vp.bitcast[UUID]()[].value)
+    elif _type_is_eq[T, TimeNS]():
+        var raw = duckdb_time_ns(vp.bitcast[TimeNS]()[].nanos)
+        return libduckdb.duckdb_create_time_ns(raw)
+    elif _type_is_eq[T, Bit]():
+        var bit_ref = vp.bitcast[Bit]()[].copy()
+        # Allocate temp buffer for duckdb_bit.data — padding byte + bit bytes
+        var buf = alloc[UInt8](len(bit_ref._data))
+        for i in range(len(bit_ref._data)):
+            buf[i] = bit_ref._data[i]
+        var raw = duckdb_bit(buf, idx_t(len(bit_ref._data)))
+        var val = libduckdb.duckdb_create_bit(raw)
+        buf.free()
+        return val
+    else:
+        raise Error(
+            "Unsupported type for value creation: "
+            + String(Reflected[T].name())
+        )
+
+
+# ──────────────────────────────────────────────────────────────────
 # MojoType — a pure Mojo representation of DuckDB logical types
 # ──────────────────────────────────────────────────────────────────
 
