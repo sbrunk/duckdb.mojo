@@ -1,5 +1,6 @@
 from duckdb._libduckdb import *
 from duckdb.chunk import Chunk, Row
+from duckdb.duckdb_type import DuckDBType
 from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector
 from std.collections import Optional
 from std.builtin.error import StackTrace
@@ -582,17 +583,22 @@ struct Result(Writable, Iterable, Movable):
     ]: Iterator = RowIter[ImmutOrigin(iterable_origin)]
 
     var _result: duckdb_result
-    var columns: List[Column]
+    var _columns: List[Column]
+    # Streaming cursor for fetchone/fetchmany (shared, DBAPI-style).
+    var _cur_chunk: Optional[Chunk[is_owned=True]]
+    var _cur_row: Int
 
     def __init__(out self, result: duckdb_result):
         self._result = result
-        self.columns = List[Column]()
+        self._cur_chunk = None
+        self._cur_row = 0
+        self._columns = List[Column]()
         for i in range(self.column_count()):
             var borrowed_type = self.column_type(i)
             var col = Column(
                 index=i, name=self.column_name(i), type=LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id())
             )
-            self.columns.append(col^)
+            self._columns.append(col^)
 
     def column_count(self) -> Int:
         ref libduckdb = DuckDB().libduckdb()
@@ -643,11 +649,36 @@ struct Result(Writable, Iterable, Movable):
         return Int(libduckdb.duckdb_rows_changed(UnsafePointer(to=self._result)))
 
     def write_to[W: Writer](self, mut writer: W):
-        for col in self.columns:
+        for col in self._columns:
             writer.write(col, ", ")
 
     def __str__(self) -> String:
         return String.write(self)
+
+    # ── Column metadata (Python-style) ────────────────────────────
+
+    def columns(self) -> List[String]:
+        """Column names, in order (Python ``rel.columns``)."""
+        var names = List[String](capacity=len(self._columns))
+        for col in self._columns:
+            names.append(col.name.copy())
+        return names^
+
+    def types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+        """Column logical types, in order (Python ``rel.dtypes``).
+
+        Alias for `column_types`.
+        """
+        return self.column_types()
+
+    def description(self) -> List[Column]:
+        """Per-column metadata as `Column` structs (index, name, type).
+
+        The Python analog is ``con.description``, a list of 7-tuples; duckdb.mojo
+        provides the meaningful subset (name + type). Display size, precision,
+        scale and null_ok are not reported.
+        """
+        return self._columns.copy()
 
     def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
         """Iterate over rows in this result.
@@ -719,13 +750,90 @@ struct Result(Writable, Iterable, Movable):
         """
         return MaterializedResult(self^)
 
+    def fetchone[
+        *Ts: Copyable & Movable
+    ](mut self) raises -> Optional[Tuple[*Ts]]:
+        """Fetch the next row as an owned tuple, or ``None`` if exhausted.
+
+        Column types are supplied as parameters (Mojo is statically typed,
+        unlike Python's untyped ``fetchone``):
+
+            var row = result.fetchone[String, Int64]()
+            if row:
+                print(row.value()[0], row.value()[1])
+
+        Advances an internal cursor.  ``fetchone``/``fetchmany`` consume the
+        same cursor and must not be mixed with ``__iter__``/``rows``/``chunks``/
+        ``fetchall`` on the same ``Result``.
+
+        Parameters:
+            Ts: The Mojo type of each column, in order.
+        """
+        while True:
+            if self._cur_chunk is None:
+                try:
+                    self._cur_chunk = self.fetch_chunk()
+                    self._cur_row = 0
+                except:
+                    return None
+            if self._cur_row >= len(self._cur_chunk.value()):
+                self._cur_chunk = None
+                continue
+            var t = self._cur_chunk.value().get_tuple[*Ts](row=self._cur_row)
+            self._cur_row += 1
+            return t^
+
+    def fetchmany[
+        *Ts: Copyable & Movable
+    ](mut self, size: Int = 1) raises -> List[Tuple[*Ts]]:
+        """Fetch up to ``size`` rows as owned tuples, advancing the cursor.
+
+        Returns fewer than ``size`` rows (possibly empty) when the result is
+        exhausted.  See `fetchone` for cursor semantics.
+
+        Parameters:
+            Ts: The Mojo type of each column, in order.
+
+        Args:
+            size: Maximum number of rows to fetch.
+        """
+        var out = List[Tuple[*Ts]]()
+        var n = 0
+        while n < size:
+            if self._cur_chunk is None:
+                try:
+                    self._cur_chunk = self.fetch_chunk()
+                    self._cur_row = 0
+                except:
+                    break
+            if self._cur_row >= len(self._cur_chunk.value()):
+                self._cur_chunk = None
+                continue
+            out.append(self._cur_chunk.value().get_tuple[*Ts](row=self._cur_row))
+            self._cur_row += 1
+            n += 1
+        return out^
+
+    def show(var self, *, max_rows: Int = 40, max_col_width: Int = 32) raises:
+        """Print the result as a formatted table (Python ``rel.show()``).
+
+        Materializes the result, so it consumes ``self``.
+
+        Args:
+            max_rows: Maximum number of data rows to display.
+            max_col_width: Maximum width of any single column.
+        """
+        self^.fetchall().show(max_rows=max_rows, max_col_width=max_col_width)
+
     def __del__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_result(UnsafePointer(to=self._result))
 
     def __init__(out self, *, deinit take: Self):
         self._result = take._result^
-        self.columns = take.columns^
+        self._columns = take._columns^
+        self._cur_chunk = take._cur_chunk^
+        self._cur_row = take._cur_row
 
 
 @fieldwise_init
@@ -874,8 +982,17 @@ struct MaterializedResult(Sized, Movable):
     def column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self.result)]:
         return self.result.column_type(col)
 
-    def columns(self) -> List[Column]:
-        return self.result.columns.copy()
+    def columns(self) -> List[String]:
+        """Column names, in order (Python ``rel.columns``)."""
+        return self.result.columns()
+
+    def types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+        """Column logical types, in order (Python ``rel.dtypes``)."""
+        return self.result.column_types()
+
+    def description(self) -> List[Column]:
+        """Per-column metadata as `Column` structs (index, name, type)."""
+        return self.result.description()
 
     def __len__(self) -> Int:
         return self.size
@@ -912,6 +1029,22 @@ struct MaterializedResult(Sized, Movable):
             result.extend(chunk_ptr[].get[T](col=col))
         return result^
 
+    def _locate(self, row: Int) raises -> Tuple[Int, Int]:
+        """Map a global row index to a ``(chunk_index, offset_in_chunk)`` pair.
+
+        Walks chunks by their actual sizes — chunks are not assumed to all be
+        ``vector_size`` rows (e.g. ``UNION ALL`` can yield small chunks).
+        """
+        if row < 0 or row >= self.size:
+            raise Error("Row index out of bounds")
+        var remaining = row
+        for i in range(len(self.chunks)):
+            var clen = len(self.chunks[i][])
+            if remaining < clen:
+                return (i, remaining)
+            remaining -= clen
+        raise Error("Row index out of bounds")
+
     def get[
         T: Copyable & Movable
     ](self, *, col: Int, row: Int) raises -> T:
@@ -936,12 +1069,8 @@ struct MaterializedResult(Sized, Movable):
             var value = result.get[Int64](col=0, row=5)
             ```
         """
-        ref libduckdb = DuckDB().libduckdb()
-        if row < 0 or row >= self.size:
-            raise Error("Row index out of bounds")
-        var chunk_idx = Int(UInt64(row) // libduckdb.duckdb_vector_size())
-        var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
-        return self.chunks[chunk_idx][].get[T](col=col, row=chunk_offset)
+        var loc = self._locate(row)
+        return self.chunks[loc[0]][].get[T](col=col, row=loc[1])
 
     def get[
         T: Copyable & Movable
@@ -966,12 +1095,8 @@ struct MaterializedResult(Sized, Movable):
             var user = result.get[User](row=0)
             ```
         """
-        ref libduckdb = DuckDB().libduckdb()
-        if row < 0 or row >= self.size:
-            raise Error("Row index out of bounds")
-        var chunk_idx = Int(UInt64(row) // libduckdb.duckdb_vector_size())
-        var chunk_offset = Int(UInt64(row) % libduckdb.duckdb_vector_size())
-        return self.chunks[chunk_idx][].get[T](row=chunk_offset)
+        var loc = self._locate(row)
+        return self.chunks[loc[0]][].get[T](row=loc[1])
 
     def get[
         T: Copyable & Movable
@@ -994,6 +1119,271 @@ struct MaterializedResult(Sized, Movable):
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[].get[T]())
         return result^
+
+    # ── Pretty printing ───────────────────────────────────────────
+
+    def _cell_str(self, col: Int, row: Int) raises -> String:
+        """Stringify a single cell, dispatching on the column's runtime type.
+
+        Best-effort: common scalar types are rendered exactly, NULL as the
+        literal ``NULL``, and unsupported/nested types as a ``<type>``
+        placeholder (Mojo's typed ``get`` can't render arbitrary runtime types
+        generically).
+        """
+        var tid = self.result._columns[col].type.get_type_id()
+        if tid == DuckDBType.boolean:
+            var v = self.get[Optional[Bool]](col=col, row=row)
+            if not v:
+                return String("NULL")
+            return String("true") if v.value() else String("false")
+        elif tid == DuckDBType.tinyint:
+            var v = self.get[Optional[Int8]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.smallint:
+            var v = self.get[Optional[Int16]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.integer:
+            var v = self.get[Optional[Int32]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.bigint:
+            var v = self.get[Optional[Int64]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.utinyint:
+            var v = self.get[Optional[UInt8]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.usmallint:
+            var v = self.get[Optional[UInt16]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.uinteger:
+            var v = self.get[Optional[UInt32]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.ubigint:
+            var v = self.get[Optional[UInt64]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.hugeint:
+            var v = self.get[Optional[Int128]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.uhugeint:
+            var v = self.get[Optional[UInt128]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.float:
+            var v = self.get[Optional[Float32]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.double:
+            var v = self.get[Optional[Float64]](col=col, row=row)
+            return String(v.value()) if v else String("NULL")
+        elif tid == DuckDBType.varchar:
+            var v = self.get[Optional[String]](col=col, row=row)
+            return v.value().copy() if v else String("NULL")
+        else:
+            return String("<", Self._type_name(tid), ">")
+
+    @staticmethod
+    def _type_name(tid: DuckDBType) -> String:
+        """The DuckDB-CLI type label for a type id (e.g. INTEGER -> ``int32``)."""
+        if tid == DuckDBType.tinyint:
+            return String("int8")
+        elif tid == DuckDBType.smallint:
+            return String("int16")
+        elif tid == DuckDBType.integer:
+            return String("int32")
+        elif tid == DuckDBType.bigint:
+            return String("int64")
+        elif tid == DuckDBType.hugeint:
+            return String("int128")
+        elif tid == DuckDBType.utinyint:
+            return String("uint8")
+        elif tid == DuckDBType.usmallint:
+            return String("uint16")
+        elif tid == DuckDBType.uinteger:
+            return String("uint32")
+        elif tid == DuckDBType.ubigint:
+            return String("uint64")
+        elif tid == DuckDBType.uhugeint:
+            return String("uint128")
+        else:
+            return String(tid)
+
+    @staticmethod
+    def _is_right_aligned(tid: DuckDBType) -> Bool:
+        """Numeric types are right-aligned, like the DuckDB CLI."""
+        return (
+            tid == DuckDBType.tinyint
+            or tid == DuckDBType.smallint
+            or tid == DuckDBType.integer
+            or tid == DuckDBType.bigint
+            or tid == DuckDBType.hugeint
+            or tid == DuckDBType.utinyint
+            or tid == DuckDBType.usmallint
+            or tid == DuckDBType.uinteger
+            or tid == DuckDBType.ubigint
+            or tid == DuckDBType.uhugeint
+            or tid == DuckDBType.decimal
+            or tid == DuckDBType.float
+            or tid == DuckDBType.double
+        )
+
+    @staticmethod
+    def _spaces(n: Int) -> String:
+        var s = String("")
+        for _ in range(n if n > 0 else 0):
+            s += " "
+        return s^
+
+    @staticmethod
+    def _truncate(value: String, max_width: Int) -> String:
+        if value.count_codepoints() <= max_width:
+            return value.copy()
+        var out = String("")
+        var count = 0
+        for cp in value.codepoint_slices():
+            if count >= max_width - 1:
+                break
+            out += String(cp)
+            count += 1
+        out += "…"
+        return out^
+
+    @staticmethod
+    def _field(content: String, w: Int, right_aligned: Bool) -> String:
+        """A value cell: 1 space of padding each side, aligned within ``w``."""
+        var extra = w - content.count_codepoints()
+        if extra < 0:
+            extra = 0
+        if right_aligned:
+            return String(" ", Self._spaces(extra), content, " ")
+        return String(" ", content, Self._spaces(extra), " ")
+
+    @staticmethod
+    def _center_field(content: String, w: Int) -> String:
+        """A header/separator cell: content centered within ``w`` (extra on right)."""
+        var extra = w - content.count_codepoints()
+        if extra < 0:
+            extra = 0
+        var left = extra // 2
+        return String(" ", Self._spaces(left), content, Self._spaces(extra - left), " ")
+
+    @staticmethod
+    def _center_line(text: String, width: Int) -> String:
+        var extra = width - text.count_codepoints()
+        if extra <= 0:
+            return text.copy()
+        return Self._spaces(extra // 2) + text
+
+    @staticmethod
+    def _border(
+        widths: List[Int], left: String, mid: String, right: String
+    ) -> String:
+        var line = left.copy()
+        var ncols = len(widths)
+        for c in range(ncols):
+            for _ in range(widths[c] + 2):
+                line += "─"
+            line += right if c == ncols - 1 else mid
+        return line^
+
+    def _render_table(self, *, max_rows: Int, max_col_width: Int) raises -> String:
+        var ncols = self.column_count()
+        var names = self.result.columns()
+
+        # Per-column type label and alignment.
+        var type_names = List[String](capacity=ncols)
+        var right = List[Bool](capacity=ncols)
+        for c in range(ncols):
+            var tid = self.result._columns[c].type.get_type_id()
+            type_names.append(Self._type_name(tid))
+            right.append(Self._is_right_aligned(tid))
+
+        # Truncation: show everything when the result barely exceeds max_rows
+        # (DuckDB CLI rule), else top + bottom halves with a `·` separator.
+        var truncated = self.size > max_rows + 3
+        var top: Int
+        var bottom: Int
+        if not truncated:
+            top = self.size
+            bottom = 0
+        else:
+            top = max_rows // 2 + (1 if max_rows % 2 != 0 else 0)
+            bottom = max_rows - top
+
+        var row_indices = List[Int]()
+        for r in range(top):
+            row_indices.append(r)
+        for r in range(self.size - bottom, self.size):
+            row_indices.append(r)
+
+        # Column widths, seeded by header name and type label.
+        var widths = List[Int](capacity=ncols)
+        for c in range(ncols):
+            var w = names[c].count_codepoints()
+            var tw = type_names[c].count_codepoints()
+            if tw > w:
+                w = tw
+            widths.append(w if w < max_col_width else max_col_width)
+
+        # Materialize displayed cells, growing widths as needed.
+        var cells = List[List[String]]()
+        for ri in row_indices:
+            var row_cells = List[String]()
+            for c in range(ncols):
+                var s = Self._truncate(self._cell_str(c, ri), max_col_width)
+                var cw = s.count_codepoints()
+                if cw > widths[c]:
+                    widths[c] = cw
+                row_cells.append(s^)
+            cells.append(row_cells^)
+
+        var table = String("")
+        table += Self._border(widths, "┌", "┬", "┐") + "\n"
+        # Header: column names, then type labels (both centered).
+        table += "│"
+        for c in range(ncols):
+            table += Self._center_field(
+                Self._truncate(names[c], max_col_width), widths[c]
+            ) + "│"
+        table += "\n│"
+        for c in range(ncols):
+            table += Self._center_field(
+                Self._truncate(type_names[c], max_col_width), widths[c]
+            ) + "│"
+        table += "\n" + Self._border(widths, "├", "┼", "┤") + "\n"
+        # Data rows, with a 3-row `·` separator between top and bottom halves.
+        for i in range(len(cells)):
+            if truncated and i == top:
+                for _d in range(3):
+                    table += "│"
+                    for c in range(ncols):
+                        table += Self._center_field("·", widths[c]) + "│"
+                    table += "\n"
+            table += "│"
+            for c in range(ncols):
+                table += Self._field(cells[i][c], widths[c], right[c]) + "│"
+            table += "\n"
+        table += Self._border(widths, "└", "┴", "┘")
+        if truncated:
+            var total_w = ncols + 1  # vertical borders
+            for c in range(ncols):
+                total_w += widths[c] + 2
+            table += "\n" + Self._center_line(String(self.size, " rows"), total_w)
+            table += "\n" + Self._center_line(
+                String("(", top + bottom, " shown)"), total_w
+            )
+        return table^
+
+    def show(self, *, max_rows: Int = 40, max_col_width: Int = 32) raises:
+        """Print the result as a formatted table, à la the DuckDB CLI.
+
+        The header carries the column name and its type (e.g. ``int32``).
+        Numeric columns are right-aligned, others left-aligned.  Large results
+        are truncated to the first and last rows with a ``·`` separator and a
+        row-count footer.  Rendering is best-effort for common scalar types;
+        nested/unsupported types appear as ``<type>`` placeholders.
+
+        Args:
+            max_rows: Maximum number of data rows to display before truncating.
+            max_col_width: Maximum display width of any single column.
+        """
+        print(self._render_table(max_rows=max_rows, max_col_width=max_col_width))
 
     def __del__(deinit self):
         for chunk_ptr in self.chunks:

@@ -37,6 +37,7 @@ TESTS=(
     test/test_aggregate_function.mojo
     test/test_table_function.mojo
     test/test_appender.mojo
+    test/test_module_api.mojo
 )
 
 # Generic tests require expensive monomorphization. The lightest ones
@@ -46,6 +47,8 @@ TESTS=(
 GENERIC_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
+    test/test_prepared_statement.mojo
+    test/test_result_fetch.mojo
 )
 # These tests need too much memory for CI runners (>21 GB peak).
 # Run locally with: pixi run mojo run test/test_<name>.mojo

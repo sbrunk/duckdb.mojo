@@ -157,3 +157,53 @@ struct DuckDB(ImplicitlyCopyable):
         """
         var cfg = Config(config)
         return Connection(db_path, cfg)
+
+    @staticmethod
+    def connect(
+        db_path: String, *, read_only: Bool
+    ) raises -> Connection[ApiLevel.CLIENT]:
+        """Open a connection, optionally in read-only mode.
+
+        Args:
+            db_path: Database path (e.g. ``":memory:"`` or a file path).
+            read_only: If True, open the database with ``access_mode=READ_ONLY``.
+        """
+        return Connection(db_path, read_only=read_only)
+
+
+# ===--------------------------------------------------------------------===#
+# Default (process-wide) connection — mirrors Python's ``:default:`` connection
+# ===--------------------------------------------------------------------===#
+
+comptime _DEFAULT_CONN_GLOBAL = _Global["DuckDBDefaultConn", _init_default_conn]
+
+
+def _init_default_conn() -> _DefaultConnGlobal:
+    return _DefaultConnGlobal()
+
+
+struct _DefaultConnGlobal(Defaultable, Movable):
+    var conn: Connection[ApiLevel.CLIENT]
+
+    def __init__(out self):
+        try:
+            self.conn = Connection(":memory:")
+        except e:
+            abort(String("Failed to create default DuckDB connection: ", e))
+
+
+def _get_default_connection() raises -> Pointer[
+    Connection[ApiLevel.CLIENT], StaticConstantOrigin
+]:
+    """Return a static pointer to the lazily-created default connection.
+
+    The default connection is a single, process-wide in-memory connection,
+    created on first use and living until process exit (its destructor is never
+    run, same as the ``LibDuckDB`` global). It is NOT
+    thread-safe for concurrent use; open an explicit `connect()` for that.
+    """
+    var ptr = _DEFAULT_CONN_GLOBAL.get_or_create_ptr()
+    var conn_ptr = UnsafePointer(to=ptr[].conn).as_immutable().unsafe_origin_cast[
+        StaticConstantOrigin
+    ]()
+    return Pointer(to=conn_ptr[])

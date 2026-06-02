@@ -1,0 +1,9 @@
+service_id,date,type,train_number,station_code,station_name,departure_time,arrival_time
+11196117,2023-05-15,Intercity,1410,RTD,Rotterdam Centraal,2023-05-15 00:00:00,
+11196117,2023-05-15,Intercity,1410,DT,Delft,2023-05-15 00:13:00,2023-05-15 00:13:00
+11196117,2023-05-15,Intercity,1410,GV,Den Haag HS,2023-05-15 00:29:00,2023-05-15 00:21:00
+11196117,2023-05-15,Intercity,1410,LEDN,Leiden Centraal,2023-05-15 00:45:00,2023-05-15 00:44:00
+11196117,2023-05-15,Intercity,1410,SHL,Schiphol Airport,2023-05-15 01:03:00,2023-05-15 01:01:00
+11196117,2023-05-15,Intercity,1410,ASD,Amsterdam Centraal,2023-05-15 01:19:00,2023-05-15 01:17:00
+11196117,2023-05-15,Intercity,1410,UT,Utrecht Centraal,,2023-05-15 01:48:00
+11196118,2023-05-15,Nightjet,420,NURNB,Nürnberg Hbf,2023-05-15 00:01:00,
