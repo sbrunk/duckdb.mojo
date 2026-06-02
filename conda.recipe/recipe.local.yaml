@@ -18,14 +18,14 @@ build:
 
 requirements:
   build:
-    - mojo-compiler =1.0.0b2.dev2026053106
+    - mojo-compiler =1.0.0b2.dev2026060206
   host:
-    - mojo-compiler =1.0.0b2.dev2026053106
+    - mojo-compiler =1.0.0b2.dev2026060206
   run:
     # Exact pin, NOT pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would allow a newer
     # nightly at install time, which fails with a version-mismatch error.
-    - mojo-compiler ==1.0.0b2.dev2026053106
+    - mojo-compiler ==1.0.0b2.dev2026060206
     - libduckdb >=1.5.3,<1.6
 
 tests:

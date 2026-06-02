@@ -23,15 +23,15 @@ requirements:
   build:
     # Pinned to the compiler in pixi.toml. .mojoc artifacts are compiler-version
     # specific, so this must match the version used to build the package.
-    - mojo-compiler =1.0.0b2.dev2026053106
+    - mojo-compiler =1.0.0b2.dev2026060206
   host:
-    - mojo-compiler =1.0.0b2.dev2026053106
+    - mojo-compiler =1.0.0b2.dev2026060206
   run:
     # Exact pin, NOT pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. With nightly builds, pin_compatible
     # would let a newer nightly satisfy the install and fail with a
     # version-mismatch error at import time.
-    - mojo-compiler ==1.0.0b2.dev2026053106
+    - mojo-compiler ==1.0.0b2.dev2026060206
     # The bindings dlopen libduckdb at runtime (duckdb/_libduckdb.mojo), so the
     # shared library must be present. Track the DuckDB minor the FFI bindings
     # were generated against.
