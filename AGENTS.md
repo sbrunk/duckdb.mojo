@@ -57,7 +57,7 @@ pixi build                    # Build conda package
 
 ## FFI Struct ABI Workaround
 
-Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >16-byte by-value struct arguments when the struct type lacks `TrivialRegisterPassable`. As a workaround, the generator emits `duckdb_result` with `TrivialRegisterPassable` in its trait list — this routes it through the working ABI path. The trait isn't accurate semantically (a 48-byte struct can't actually fit in registers under System V x86_64); it's purely a marker for selecting Mojo's correct lowering. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for the `TrivialRegisterPassable` case; a follow-up is needed for non-TRP structs).
+Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >16-byte by-value struct arguments when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list — this routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on nightly `1.0.0b2.dev2026060206`); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
 
 ## Updating Mojo Nightly
 
