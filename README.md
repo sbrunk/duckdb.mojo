@@ -1,5 +1,7 @@
 # duckdb.mojo
 
+[![CodeQL](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml)
+
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
 duckdb.mojo can be used in two ways:
@@ -201,7 +203,33 @@ See the [demo extension](demo-extension/) for a full working example.
 
 ## Installation
 
-Currently, you'll need to checkout the source. We'll publish a Conda package soon to make it easier to use from another Mojo project.
+### Use in your own project (conda package)
+
+`duckdb-mojo` is published on the
+[modular-community](https://prefix.dev/channels/modular-community) channel. Add
+the channels to your project's `pixi.toml` and install it:
+
+```toml title="pixi.toml"
+[workspace]
+channels = [
+  "https://conda.modular.com/max-nightly",
+  "https://repo.prefix.dev/modular-community",
+  "conda-forge",
+]
+```
+
+```shell
+pixi add duckdb-mojo
+```
+
+The `libduckdb` runtime library is pulled in automatically as a dependency.
+Import it in Mojo as usual:
+
+```mojo
+from duckdb import *
+```
+
+### Develop from source
 
 1. [Install Pixi](https://pixi.sh/latest/installation/).
 2. Checkout this repo

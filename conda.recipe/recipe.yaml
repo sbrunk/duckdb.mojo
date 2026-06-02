@@ -1,0 +1,61 @@
+context:
+  version: "0.1.0"
+
+package:
+  name: duckdb-mojo
+  version: ${{ version }}
+
+source:
+  # modular-community requires a full 40-char commit SHA (not a branch/tag) so
+  # the build is reproducible. Bump this to the release commit before each PR to
+  # modular-community, and keep `context.version` / `build.number` in sync.
+  - git: https://github.com/sbrunk/duckdb.mojo.git
+    rev: "REPLACE_WITH_FULL_40_CHAR_RELEASE_SHA"
+
+build:
+  number: 0
+  script:
+    # Precompile the `duckdb` package into $PREFIX/lib/mojo/ — this path is what
+    # makes the package auto-discoverable by the Mojo compiler once installed.
+    - mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
+
+requirements:
+  build:
+    # Pinned to the compiler in pixi.toml. .mojoc artifacts are compiler-version
+    # specific, so this must match the version used to build the package.
+    - mojo-compiler =1.0.0b2.dev2026053106
+  host:
+    - mojo-compiler =1.0.0b2.dev2026053106
+  run:
+    # Exact pin, NOT pin_compatible: a precompiled .mojoc only loads under the
+    # exact compiler it was built with. With nightly builds, pin_compatible
+    # would let a newer nightly satisfy the install and fail with a
+    # version-mismatch error at import time.
+    - mojo-compiler ==1.0.0b2.dev2026053106
+    # The bindings dlopen libduckdb at runtime (duckdb/_libduckdb.mojo), so the
+    # shared library must be present. Track the DuckDB minor the FFI bindings
+    # were generated against.
+    - libduckdb >=1.5.3,<1.6
+
+tests:
+  - script:
+      - if: unix
+        then:
+          - mojo run smoke_test.mojo
+    files:
+      recipe:
+        - smoke_test.mojo
+    requirements:
+      run:
+        - libduckdb >=1.5.3,<1.6
+
+about:
+  homepage: https://github.com/sbrunk/duckdb.mojo
+  repository: https://github.com/sbrunk/duckdb.mojo
+  license: MIT
+  license_file: LICENSE
+  summary: DuckDB bindings for Mojo.
+
+extra:
+  maintainers:
+    - sbrunk
