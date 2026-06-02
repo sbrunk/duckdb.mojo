@@ -97,3 +97,39 @@ jobs:
           source $HOME/.bash_profile
           # $MOJO_TARGET_FLAGS is set at the job level (CI only); empty off-CI.
           pixi run mojo run $MOJO_TARGET_FLAGS example.mojo
+
+  # Verify the rattler-build recipe still builds and its in-package smoke test
+  # passes. Builds recipe.local.yaml (source = working tree) so it tests THIS
+  # commit; recipe.yaml pins a fixed SHA and is only used for the actual
+  # modular-community publish. Keep the mojo-compiler pin in the recipe in sync
+  # with pixi.toml or this job will fail to resolve.
+  conda-recipe:
+    strategy:
+      matrix:
+        include:
+          - { target: linux-64, os: ubuntu-24.04 }
+          - { target: osx-arm64, os: macos-15 }
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build and test conda recipe
+        uses: prefix-dev/rattler-build-action@v0.2.38
+        with:
+          recipe-path: conda.recipe/recipe.local.yaml
+          # Channels rattler-build resolves dependencies from (mojo-compiler +
+          # libduckdb). Matches the local build command in the README.
+          build-args: >-
+            -c conda-forge
+            -c https://conda.modular.com/max-nightly
+            -c https://repo.prefix.dev/modular-community
+          upload-artifact: false
