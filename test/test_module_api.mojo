@@ -38,17 +38,20 @@ def test_sql_quote() raises:
     assert_equal(_sql_quote("o''reilly"), "'o''''reilly'")
 
 
+comptime _CSV_FIXTURE = "test/data/train_services.csv"
+"""Test asset, resolved relative to the repo root (the test working dir)."""
+
+
 def test_read_csv() raises:
-    # train_services.csv lives in the repo root (the test working directory).
     var con = connect()
-    var r = con.read_csv("train_services.csv").fetchall()
+    var r = con.read_csv(_CSV_FIXTURE).fetchall()
     assert_true(len(r) > 0)
     var names = r.columns()
     assert_equal(names[0], "service_id")
 
 
 def test_read_csv_module_level() raises:
-    var r = read_csv("train_services.csv").fetchall()
+    var r = read_csv(_CSV_FIXTURE).fetchall()
     assert_true(len(r) > 0)
 
 
