@@ -61,13 +61,23 @@ Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >1
 
 ## Updating Mojo Nightly
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0b2.dev2026053106` from the `https://conda.modular.com/max-nightly/` channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0b2.dev2026053106` from the `https://conda.modular.com/max-nightly/` channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) **and** in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
 
 1. Check available versions: query `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (or `linux-64`/`linux-aarch64`) for `mojo-compiler` packages
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`)
-3. Run `pixi install` to update the lockfile
-4. Run `pixi run test-library` to verify compatibility
-5. Nightly builds can have breaking changes — if the latest fails, try earlier nightlies
+3. Update the same pin in `conda.recipe/recipe.yaml` and `conda.recipe/recipe.local.yaml` (all three of `build`/`host`/`run`) — otherwise `pixi build` and the published conda package will disagree
+4. Run `pixi install` to update the lockfile
+5. Run `pixi run test-library` to verify compatibility
+6. Nightly builds can have breaking changes — if the latest fails, try earlier nightlies
+
+## Packaging / publishing
+
+Two independent paths build a conda package of the bindings, and they must be kept in sync (see the pin checklist above):
+
+- **`pixi build`** — the `[package]` block + `pixi-build-mojo` backend in `pixi.toml`. The backend infers the build steps (no recipe). Used for local builds and for consuming duckdb.mojo as a source dependency from other Pixi workspaces.
+- **`conda.recipe/recipe.yaml`** (rattler-build) — an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. Key points: the `run` dependency pins `mojo-compiler` **exactly** (a precompiled `.mojoc` only loads under the exact compiler it was built with — `pin_compatible` would let a newer nightly fail at import); `libduckdb` is a `run` dependency (the bindings `dlopen` it). Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
+
+The sub-packages in `packages/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`) — unrelated to publishing the `duckdb-mojo` package.
 
 ## Environments
 

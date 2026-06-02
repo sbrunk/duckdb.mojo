@@ -10,7 +10,7 @@ source:
   # the build is reproducible. Bump this to the release commit before each PR to
   # modular-community, and keep `context.version` / `build.number` in sync.
   - git: https://github.com/sbrunk/duckdb.mojo.git
-    rev: "REPLACE_WITH_FULL_40_CHAR_RELEASE_SHA"
+    rev: "de5eb4bc1f392d9793aaac0d12411d02eb70d01b"
 
 build:
   number: 0

@@ -244,9 +244,37 @@ pixi run test
 
 ### Build a conda package
 
+There are two ways to build a conda package of the bindings, for two different
+purposes:
+
+**`pixi build`** uses the `[package]` block in `pixi.toml` (the
+`pixi-build-mojo` backend, which infers the build steps from the project
+layout). Produces a local `.conda` and lets other Pixi workspaces depend on
+duckdb.mojo as a source dependency. No recipe needed:
+
 ```shell
 pixi build
 ```
+
+**`rattler-build`** builds from the explicit recipe in `conda.recipe/`. This
+is the path used to publish to the
+[modular-community](https://prefix.dev/channels/modular-community) channel,
+whose CI runs `rattler-build` on the submitted `conda.recipe/recipe.yaml`. To
+verify the recipe locally, build the `recipe.local.yaml` variant (it builds
+from the working tree instead of a pushed git SHA):
+
+```shell
+rattler-build build \
+  --recipe conda.recipe/recipe.local.yaml \
+  -c conda-forge \
+  -c https://conda.modular.com/max-nightly \
+  -c https://repo.prefix.dev/modular-community
+```
+
+A successful build runs the in-package smoke test and writes the `.conda` under
+`output/<platform>/`. `conda.recipe/recipe.yaml` is the file submitted to
+modular-community; bump its `mojo-compiler` pin together with `pixi.toml` on
+every nightly update.
 
 ### (Re-)generate the C API bindings
 
