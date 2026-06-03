@@ -856,14 +856,16 @@ def _generate_types(duckdb_dir: str) -> str:
 
     # duckdb_result
     lines.append("@fieldwise_init")
-    # WORKAROUND: TrivialRegisterPassable is required for `abi("C")` to
-    # lower the by-value struct ABI correctly on Linux x86_64 with the nightly
-    # compiler (1.0.0b2.dev2026052706). Without it, calls like
-    # `duckdb_fetch_chunk(result)` either return NULL or crash. The first fix
-    # for the abi("C") lowering bug (https://github.com/modular/modular/issues/6511)
-    # only covered the case where the struct happens to be
-    # TrivialRegisterPassable. Filed follow-up needed for non-TRP structs.
-    lines.append("struct duckdb_result(TrivialRegisterPassable, ImplicitlyCopyable & Movable):")
+    # WORKAROUND: a register-passable marker is required for `abi("C")` to
+    # lower the by-value struct ABI correctly on Linux x86_64 (verified through
+    # nightly 1.0.0b2.dev2026060206). Without it, calls like
+    # `duckdb_fetch_chunk(result)` either return NULL or crash. The fix for the
+    # abi("C") lowering bug (https://github.com/modular/modular/issues/6511)
+    # only covers structs that carry a register-passable marker; plain
+    # (unmarked) structs still miscompile, so an upstream follow-up is still
+    # needed. `RegisterPassable` and `TrivialRegisterPassable` both select the
+    # working path.
+    lines.append("struct duckdb_result(RegisterPassable, ImplicitlyCopyable & Movable):")
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")

@@ -1,5 +1,7 @@
 # duckdb.mojo
 
+[![CodeQL](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml)
+
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
 duckdb.mojo can be used in two ways:
@@ -201,7 +203,33 @@ See the [demo extension](demo-extension/) for a full working example.
 
 ## Installation
 
-Currently, you'll need to checkout the source. We'll publish a Conda package soon to make it easier to use from another Mojo project.
+### Use in your own project (conda package)
+
+`duckdb-mojo` is published on the
+[modular-community](https://prefix.dev/channels/modular-community) channel. Add
+the channels to your project's `pixi.toml` and install it:
+
+```toml title="pixi.toml"
+[workspace]
+channels = [
+  "https://conda.modular.com/max-nightly",
+  "https://repo.prefix.dev/modular-community",
+  "conda-forge",
+]
+```
+
+```shell
+pixi add duckdb-mojo
+```
+
+The `libduckdb` runtime library is pulled in automatically as a dependency.
+Import it in Mojo as usual:
+
+```mojo
+from duckdb import *
+```
+
+### Develop from source
 
 1. [Install Pixi](https://pixi.sh/latest/installation/).
 2. Checkout this repo
@@ -216,9 +244,37 @@ pixi run test
 
 ### Build a conda package
 
+There are two ways to build a conda package of the bindings, for two different
+purposes:
+
+**`pixi build`** uses the `[package]` block in `pixi.toml` (the
+`pixi-build-mojo` backend, which infers the build steps from the project
+layout). Produces a local `.conda` and lets other Pixi workspaces depend on
+duckdb.mojo as a source dependency. No recipe needed:
+
 ```shell
 pixi build
 ```
+
+**`rattler-build`** builds from the explicit recipe in `conda.recipe/`. This
+is the path used to publish to the
+[modular-community](https://prefix.dev/channels/modular-community) channel,
+whose CI runs `rattler-build` on the submitted `conda.recipe/recipe.yaml`. To
+verify the recipe locally, build the `recipe.local.yaml` variant (it builds
+from the working tree instead of a pushed git SHA):
+
+```shell
+rattler-build build \
+  --recipe conda.recipe/recipe.local.yaml \
+  -c conda-forge \
+  -c https://conda.modular.com/max-nightly \
+  -c https://repo.prefix.dev/modular-community
+```
+
+A successful build runs the in-package smoke test and writes the `.conda` under
+`output/<platform>/`. `conda.recipe/recipe.yaml` is the file submitted to
+modular-community; bump its `mojo-compiler` pin together with `pixi.toml` on
+every nightly update.
 
 ### (Re-)generate the C API bindings
 
