@@ -19,7 +19,7 @@ from duckdb import *
 from duckdb.api import DuckDB
 from duckdb._libduckdb import *
 from operator_replacement import OperatorReplacementLib
-import std.benchmark
+from std import benchmark
 
 
 # ===--------------------------------------------------------------------===#
@@ -37,7 +37,7 @@ comptime SIMD_WIDTH = 8
 # For add/sub the raw integers share the same scale, so we just add/sub.
 # For multiply we need scale correction: (scale4 × scale4) / 10000 → scale4.
 
-def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD addition on scaled Int64 DECIMAL values."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -59,7 +59,7 @@ def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckd
         result_data[i] = a_data[i] + b_data[i]
 
 
-def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD subtraction on scaled Int64 DECIMAL values."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -81,7 +81,7 @@ def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: 
         result_data[i] = a_data[i] - b_data[i]
 
 
-def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD multiplication on scaled Int64 DECIMAL values.
 
     Both inputs are DECIMAL(18,4) — scale 4 each. Raw multiply gives scale 8.
@@ -109,7 +109,7 @@ def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: 
         result_data[i] = a_data[i] * b_data[i] // 10000
 
 
-def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
+def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD division (DOUBLE) — DuckDB uses DOUBLE for DECIMAL division too."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
@@ -136,7 +136,7 @@ def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: du
 # ===--------------------------------------------------------------------===#
 
 def register_decimal_op[
-    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
+    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> None
 ](name: String, conn: duckdb_connection) raises:
     """Register a binary operator function as (DECIMAL(18,4), DECIMAL(18,4)) -> DECIMAL(18,4)."""
     ref lib = DuckDB().libduckdb()
@@ -160,7 +160,7 @@ def register_decimal_op[
 
 
 def register_double_op[
-    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) -> None
+    func: def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> None
 ](name: String, conn: duckdb_connection) raises:
     """Register a binary operator function as (DOUBLE, DOUBLE) -> DOUBLE."""
     ref lib = DuckDB().libduckdb()
