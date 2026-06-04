@@ -1,6 +1,11 @@
 #!/bin/bash
-# Run tests against the pre-built duckdb.mojoc (created by the build task).
-# The package must exist in CWD before this script runs.
+# Run tests, compiling the duckdb package from source for each test file.
+#
+# EXPERIMENT (branch experiment/build-from-source): previously this required a
+# pre-built duckdb.mojoc and hid duckdb/ on CI so mojo would use it instead of
+# recompiling from source for every test file — claimed to save 9+ GB peak
+# memory with older Mojo compilers. We're testing whether that's still needed:
+# no prebuild, no mv trick, just `mojo run` from source. Watch CI memory/time.
 set -e
 
 # Optional Mojo codegen target override. Set ONLY in CI (see
@@ -8,18 +13,6 @@ set -e
 # 9V74 runners, where host-CPU codegen emits AVX-512 that Azure has masked,
 # causing SIGILL. Unset locally → no override, so local builds stay native.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
-
-if [ ! -f "./duckdb.mojoc" ]; then
-    echo "ERROR: duckdb.mojoc not found in CWD. Run 'pixi run build' first."
-    exit 1
-fi
-
-# On CI, hide duckdb/ so mojo uses the pre-built package instead of recompiling
-# from source for each test file (saves 9+ GB peak memory).
-if [[ "${CI:-}" == "true" ]]; then
-    mv duckdb duckdb.bak
-    trap "mv duckdb.bak duckdb" EXIT
-fi
 
 # Tests that compile quickly (no heavy generic monomorphization)
 TESTS=(
