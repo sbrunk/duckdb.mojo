@@ -8,18 +8,13 @@
 # which is all we want from a guard against API/ABI drift.
 #
 # Usage: scripts/compile_check.sh <dir> [<dir> ...]
-# Runs via `pixi run compile-benchmarks` (see pixi.toml), which builds the
-# duckdb.mojoc package first.
+# Runs via `pixi run compile-benchmarks` (see pixi.toml). Compiles the duckdb
+# package from source per file (see the EXPERIMENT note in run_tests.sh).
 set -e
 
 # Optional Mojo codegen target override, set ONLY in CI — see run_tests.sh and
 # .github/workflows/test.yml for the rationale. Unset locally → native build.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
-
-if [ ! -f "./duckdb.mojoc" ]; then
-    echo "ERROR: duckdb.mojoc not found in CWD. Run 'pixi run build' first."
-    exit 1
-fi
 
 # Files that can't be compiled in the default environment. Keep this list short
 # and explain every entry — anything excluded here is NOT guarded against drift.
@@ -39,20 +34,7 @@ is_excluded() {
 }
 
 OUT_DIR="$(mktemp -d)"
-HID_DUCKDB=0
-cleanup() {
-    rm -rf "$OUT_DIR"
-    [[ "$HID_DUCKDB" == "1" ]] && mv duckdb.bak duckdb
-}
-trap cleanup EXIT
-
-# On CI, hide duckdb/ so mojo uses the pre-built package instead of recompiling
-# it from source for every file (saves 9+ GB peak memory) — same trick as
-# run_tests.sh.
-if [[ "${CI:-}" == "true" ]]; then
-    mv duckdb duckdb.bak
-    HID_DUCKDB=1
-fi
+trap 'rm -rf "$OUT_DIR"' EXIT
 
 shopt -s nullglob
 failed=0
@@ -64,7 +46,13 @@ for dir in "$@"; do
             continue
         fi
         echo "--- Compiling: $f ---"
-        if mojo build "${MOJO_TARGET[@]}" "$f" -o "$OUT_DIR/$(basename "$f").bin"; then
+        # --emit object: compile through codegen but skip the executable link.
+        # All the drift we guard against (imports, renamed APIs, ABI signatures)
+        # is caught at compile time, so linking adds nothing and a full link
+        # spuriously fails on linux for math-using files (mojo doesn't put -lm on
+        # the link line: "libm.so.6: DSO missing from command line"). Skipping
+        # the link sidesteps that and is faster.
+        if mojo build --emit object "${MOJO_TARGET[@]}" "$f" -o "$OUT_DIR/$(basename "$f").o"; then
             checked=$((checked + 1))
         else
             echo "ERROR: failed to compile $f"
