@@ -31,7 +31,7 @@ path = "duckdb"
 
 [tasks]
 build = "pixi run mojo precompile duckdb -o duckdb.mojoc"
-test-library = { cmd = "bash scripts/run_tests.sh", depends-on = ["build"] }
+test-library = { cmd = "bash scripts/run_tests.sh" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
 generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckdb-src --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
 # Fails if duckdb/_libduckdb.mojo is out of sync with the DuckDB version
@@ -51,6 +51,11 @@ test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS test-extension/te
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
+# Compile-check (no run) the benchmarks so they can't silently rot when the
+# stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
+# environment and is excluded here (see scripts/compile_check.sh).
+compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
+
 # for local development
 [dependencies]
 libduckdb-devel = "=1.5.3"
@@ -69,6 +74,13 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
 mojo = "=1.0.0b2.dev2026060206"
+
+# The `full` environment sets no-default-feature = true, so the top-level
+# [activation.env] above does not apply. Re-declare the import path here so
+# `mojo` finds both the `duckdb` package (project root) and the installed
+# packages — stdlib + operator_replacement — under $CONDA_PREFIX/lib/mojo.
+[feature.operator-replacement.activation.env]
+MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
 
 # Environments
 # 

@@ -21,7 +21,7 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, FunctionIn
 from duckdb.logical_type import LogicalType, decimal_type
 from duckdb._libduckdb import *
 from std.sys import simd_width_of
-import std.benchmark
+from std import benchmark
 
 
 # ===--------------------------------------------------------------------===#
@@ -332,8 +332,8 @@ def main() raises:
 
     # Validate Q1 results
     print("  Validating Q1 results match...")
-    var std_result = conn.execute(Q1_STANDARD).fetch_all()
-    var mojo_result = conn.execute(Q1_MOJO).fetch_all()
+    var std_result = conn.execute(Q1_STANDARD).fetchall()
+    var mojo_result = conn.execute(Q1_MOJO).fetchall()
     print("    Standard Q1 rows: " + String(len(std_result)))
     print("    Mojo Q1 rows:     " + String(len(mojo_result)))
 

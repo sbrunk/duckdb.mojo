@@ -1,8 +1,6 @@
 from std.ffi import c_char
 from std.pathlib import Path
-from std.ffi import _find_dylib
-from std.ffi import _Global, OwnedDLHandle
-from std.ffi import _get_dylib_function as _ffi_get_dylib_function
+from std.ffi import _find_dylib, _Global, OwnedDLHandle
 
 # ===-----------------------------------------------------------------------===#
 # FFI definitions for the DuckDB Operator Replacement C API.
@@ -25,33 +23,24 @@ comptime OPERATOR_REPLACEMENT_LIBRARY = _Global["OPERATOR_REPLACEMENT_LIBRARY", 
 def _init_dylib() -> OwnedDLHandle:
     return _find_dylib["libduckdb_operator_replacement"](materialize[OPERATOR_REPLACEMENT_PATHS]())
 
-@always_inline
-def _get_dylib_function[
-    func_name: StaticString, result_type: __TypeOfAllTypes
-]() raises -> result_type:
-    return _ffi_get_dylib_function[
-        OPERATOR_REPLACEMENT_LIBRARY(),
-        func_name,
-        result_type,
-    ]()
-
-struct _dylib_function[fn_name: StaticString, type: __TypeOfAllTypes](TrivialRegisterPassable):
+struct _dylib_function[fn_name: StaticString, type: TrivialRegisterPassable](TrivialRegisterPassable):
     comptime fn_type = Self.type
 
     @staticmethod
     def load() raises -> Self.type:
-        return _get_dylib_function[Self.fn_name, Self.type]()
+        return OPERATOR_REPLACEMENT_LIBRARY.get_or_create_ptr()[]
+            .borrow()._get_function[Self.fn_name, Self.type]()
 
 # ===--------------------------------------------------------------------===#
 # Function bindings
 # ===--------------------------------------------------------------------===#
 
 comptime _register_function_replacement = _dylib_function["register_function_replacement",
-    def(UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) -> NoneType
+    def(UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
 ]
 
 comptime _register_operator_replacement = _dylib_function["register_operator_replacement",
-    def(UnsafePointer[NoneType, MutAnyOrigin]) -> NoneType
+    def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType
 ]
 
 # ===--------------------------------------------------------------------===#
