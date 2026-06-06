@@ -21,12 +21,13 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
   - `scalar_function.mojo`, `aggregate_function.mojo`, `table_function.mojo` - UDF registration
   - `extension.mojo`, `api_level.mojo` - Extension development support
   - `chunk.mojo`, `vector.mojo`, `value.mojo`, `logical_type.mojo` - Data types
+  - `kernels/` - reusable Mojo SIMD kernels (`simd.mojo`) + `register_simd_math` scalar UDF helpers
 - `test/` - Test files (one per module, named `test_*.mojo`)
 - `demo-extension/` - Working example DuckDB extension in Mojo
 - `test-extension/` - Extension used for testing
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
-- `packages/` - Sub-packages (duckdb-from-source, operator-replacement)
+- `packages/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides)
 
 ## Development Commands
 
@@ -40,6 +41,8 @@ pixi run mojo run example.mojo  # Run example
 pixi run generate-api         # Regenerate C API bindings from DuckDB source
 pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with DuckDB
 pixi build                    # Build conda package
+pixi run overrides-build      # Build the mojo-kernel-overrides extension
+pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
 ```
 
 ## Testing
@@ -54,6 +57,23 @@ pixi build                    # Build conda package
 - The `Connection` type is parameterized with `ApiLevel` (CLIENT, EXT_STABLE, EXT_UNSTABLE) to gate API access at compile time
 - `_libduckdb.mojo` is auto-generated - regenerate with `pixi run generate-api` after bumping DuckDB version. CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main.
 - Extensions use the DuckDB Extension C API with stable/unstable split
+
+## SIMD kernels and the override extension
+
+Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
+
+- **Named UDFs (part of the package):** `duckdb.kernels.register_simd_math(conn)` registers
+  `mojo_sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` as scalar functions. The kernels ship inside the
+  precompiled `duckdb-mojo` package, so there is nothing extra to build or `LOAD`.
+- **Built-in overrides (`packages/mojo-kernel-overrides`):** a self-contained CPP-ABI DuckDB
+  extension that rewrites the built-in `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` and
+  `sum`/`avg`/`min`/`max` in place via catalog mutation, with stock fallback for non-FLAT /
+  null / grouped input. The kernels are emitted as an object (`src/capi_shim.mojo`) and linked
+  straight into the one `.so`, so there is no separate kernel lib and no `dlopen`. Build with
+  `pixi run overrides-build`; activate via `LOAD` (it is unsigned, so allow unsigned extensions)
+  or the exported `register_mojo_overrides(duckdb_connection)`. It is **not** part of the conda
+  package and is **version-locked** to the exact DuckDB it was built against (CPP ABI + internal
+  headers).
 
 ## FFI Struct ABI Workaround
 

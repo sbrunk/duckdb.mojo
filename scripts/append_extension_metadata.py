@@ -233,7 +233,7 @@ def main():
     parser.add_argument(
         "--abi-type",
         default="C_STRUCT",
-        choices=["C_STRUCT", "C_STRUCT_UNSTABLE"],
+        choices=["C_STRUCT", "C_STRUCT_UNSTABLE", "CPP"],
         help="ABI type (default: C_STRUCT)",
     )
 
