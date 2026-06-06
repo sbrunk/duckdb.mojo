@@ -43,6 +43,8 @@ pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with Duck
 pixi build                    # Build conda package
 pixi run overrides-build      # Build the mojo-kernel-overrides extension
 pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
+pixi run overrides-bench-runner-build     # Build ext + DuckDB benchmark_runner (w/ load-ext hook)
+pixi run overrides-bench-runner '<regex>' # Run DuckDB's benchmark suite stock-vs-overrides
 ```
 
 ## Testing
@@ -73,7 +75,11 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
   `pixi run overrides-build`; activate via `LOAD` (it is unsigned, so allow unsigned extensions)
   or the exported `register_mojo_overrides(duckdb_connection)`. It is **not** part of the conda
   package and is **version-locked** to the exact DuckDB it was built against (CPP ABI + internal
-  headers).
+  headers). It can be driven through DuckDB's own benchmark suite
+  (`pixi run overrides-bench-runner-build` then `overrides-bench-runner '<regex>'`): a stock
+  `benchmark_runner` built from `.duckdb-src` with a ~13-line `interpreted_benchmark.cpp` hook
+  (`packages/mojo-kernel-overrides/benchmark/runner_load_extension.patch`) that `LOAD`s the
+  extension via the `DUCKDB_BENCH_EXTENSION` env-var toggle — no libduckdb fork.
 
 ## FFI Struct ABI Workaround
 

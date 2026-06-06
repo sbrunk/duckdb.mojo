@@ -1,0 +1,13 @@
+# name: benchmark/micro/mojo_simd/ln.benchmark
+# description: Mojo SIMD patch target — ln(x)
+# group: [mojo_simd]
+
+name ln(x)
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT ((i % 1000) + 1)::DOUBLE AS x, (((i*7) % 1000) + 1)::DOUBLE AS y FROM range(50000000) tbl(i);
+
+run
+SELECT SUM(ln(x)) FROM t;

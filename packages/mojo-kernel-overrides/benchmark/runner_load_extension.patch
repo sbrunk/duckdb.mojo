@@ -1,0 +1,41 @@
+# Runner-only convenience: let DuckDB's benchmark_runner LOAD a local extension at init.
+#
+# benchmark_runner has no --load-extension flag, and allow_unsigned_extensions is a
+# startup-only DBConfig option (it cannot be flipped with SET at runtime, so a .benchmark
+# `load` block can't enable it). This ~13-line hook to interpreted_benchmark.cpp:
+#   (1) allows unsigned extensions when the DB is constructed, and
+#   (2) LOADs $DUCKDB_BENCH_EXTENSION (if set) once at Initialize,
+# so the extension's catalog overrides apply to every benchmark.
+#
+# It is generic (loads any extension by path) and independent of the SIMD source patch.
+# Apply against a v1.5.3 DuckDB checkout:  git apply runner_load_extension.patch
+diff --git a/benchmark/interpreted_benchmark.cpp b/benchmark/interpreted_benchmark.cpp
+index 2e4a902..0e36f72 100644
+--- a/benchmark/interpreted_benchmark.cpp
++++ b/benchmark/interpreted_benchmark.cpp
+@@ -62,6 +62,8 @@ struct InterpretedBenchmarkState : public BenchmarkState {
+ 			result->options.serialization_compatibility = SerializationCompatibility::FromString(version);
+ 		}
+ 		result->options.load_extensions = false;
++		// Allow loading a local unsigned extension at init (see DUCKDB_BENCH_EXTENSION below).
++		result->SetOptionByName("allow_unsigned_extensions", Value::BOOLEAN(true));
+ 		return result;
+ 	}
+ };
+@@ -530,6 +532,16 @@ unique_ptr<BenchmarkState> InterpretedBenchmark::Initialize(BenchmarkConfigurati
+ 	AddExtension("parquet", false);
+
+ 	LoadExtensions(*state, false);
++
++	// Optionally load a local extension by path at init (e.g. mojo_overrides), so its
++	// catalog overrides apply to every benchmark. Not a DuckDB change — a runner convenience.
++	const char *bench_ext = std::getenv("DUCKDB_BENCH_EXTENSION");
++	if (bench_ext && bench_ext[0]) {
++		auto ext_result = state->con.Query("LOAD '" + string(bench_ext) + "'");
++		if (ext_result->HasError()) {
++			throw InvalidInputException("DUCKDB_BENCH_EXTENSION load failed: " + ext_result->GetError());
++		}
++	}
+ 	if (queries.find("init") != queries.end()) {
+ 		string init_query = queries["init"];
+ 		result = state->con.Query(init_query);

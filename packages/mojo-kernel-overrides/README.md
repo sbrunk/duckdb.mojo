@@ -42,14 +42,35 @@ pixi run overrides-clean
 ```
 
 Artifacts land in `build/`:
-- `mojo_overrides.duckdb_extension` — the loadable extension (CPP ABI), self-contained:
+- `mojo_overrides.duckdb_extension`: the loadable extension (CPP ABI), self-contained:
   the Mojo SIMD kernels are emitted as an object (`capi.o`) and linked straight in, so
   there is no separate kernel lib and no runtime `dlopen` of one.
-- `libmojo_simd.dylib` (`.so` on Linux) — the same kernels as a standalone C-ABI lib,
+- `libmojo_simd.dylib|.so`: the same kernels as a standalone C-ABI lib,
   built for direct kernel use / the source-patch path; not needed by the extension.
 
 Builds against the default pixi env's libduckdb (`$CONDA_PREFIX/include` + `/lib`). Override
 with `DUCKDB_INCLUDE` / `DUCKDB_LIB` / `DUCKDB_VERSION` to target another DuckDB tree.
+
+## Run DuckDB's own benchmark suite
+
+You can run the extension through [DuckDB's benchmark suite](https://duckdb.org/docs/current/dev/benchmark)
+(`benchmark_runner`) — TPC-H plus a committed `mojo_simd` micro group in
+[`benchmark/micro/mojo_simd/`](benchmark/micro/mojo_simd/) that targets the exact overridden ops.
+
+```bash
+pixi run overrides-bench-runner-build                           # build ext + benchmark_runner (once)
+pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*'  --threads=1   # mojo micro group
+pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'         # official TPC-H queries Q1-Q22
+```
+
+`overrides-bench-runner` runs the runner twice (stock vs. with the extension loaded) and prints
+a `stock / mojo / speedup` table.
+
+Because the override is a DuckDB extension, `overrides-bench-runner-build` currently needs to
+apply a small patch to add a hook
+[`benchmark/runner_load_extension.patch`](benchmark/runner_load_extension.patch),
+to `interpreted_benchmark.cpp` that allows unsigned extensions and `LOAD`s
+`$DUCKDB_BENCH_EXTENSION` at init.
 
 ## Use from the DuckDB CLI / any libduckdb
 
@@ -65,7 +86,8 @@ duckdb -unsigned -c "
 
 ## Use from the Mojo client
 
-Build the extension first (`pixi run overrides-build`), then load it like any other
+You need to build the extension first (`pixi run overrides-build`),
+then load it like any other
 extension by allowing unsigned extensions at connect and issuing `LOAD`:
 
 ```mojo
@@ -94,7 +116,7 @@ catalog holds function pointers into it.
 
 - **Version/ABI locked**: a CPP-ABI extension only loads into the exact DuckDB version it was
   built against (footer is `--duckdb-version`, default `v1.5.3`). Rebuild per version.
-- Needs the C++ **internal** headers + an ABI-matched libduckdb — not the stable C extension API.
+- Needs the C++ internal headers + an ABI-matched libduckdb, not the stable C extension API.
 - **State-layout coupling**: the mirrored aggregate state structs must match DuckDB's; the
   `state_size` runtime check guards gross mismatches but not silent field-order changes.
 - Requires `allow_unsigned_extensions` (set in the benchmark driver; use `-unsigned` in the CLI).
@@ -108,7 +130,7 @@ catalog holds function pointers into it.
 The SIMD kernels themselves live in [`duckdb/kernels`](../../duckdb/kernels) and are
 shared with the scalar UDF helpers; this package only adds the C++ override glue.
 
-- `src/capi_shim.mojo` — `@export` C-ABI wrappers over `duckdb.kernels.simd`, emitted as an object and linked into the extension
-- `src/mojo_overrides.cpp` — the C++ extension (catalog mutation + wrappers, two entry points)
-- `bench/benchmark.cpp` — standalone stock-vs-Mojo timing driver
-- `build.sh` / `run-benchmark.sh` — invoked by the pixi tasks
+- `src/capi_shim.mojo`: `@export` C-ABI wrappers over `duckdb.kernels.simd`, emitted as an object and linked into the extension
+- `src/mojo_overrides.cpp`: the C++ extension (catalog mutation + wrappers, two entry points)
+- `bench/benchmark.cpp`: standalone stock-vs-Mojo timing driver
+- `build.sh` / `run-benchmark.sh`: invoked by the pixi tasks

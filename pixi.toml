@@ -59,6 +59,14 @@ overrides-build = "bash packages/mojo-kernel-overrides/build.sh"
 # Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
 overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
 overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
+# Run the overrides through DuckDB's own benchmark suite (https://duckdb.org/docs/current/dev/benchmark).
+# `overrides-bench-runner-build` builds the extension + a stock benchmark_runner with a one-line
+# "LOAD an extension at init" hook (reuses .duckdb-src); `overrides-bench-runner` runs the suite
+# stock-vs-overrides and prints a speedup table. Pass a benchmark regex + runner args, e.g.:
+#   pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*' --threads=1
+#   pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'   # TPC-H Q1-Q22
+overrides-bench-runner-build = { cmd = "bash packages/mojo-kernel-overrides/benchmark/build_runner.sh", depends-on = ["overrides-build", "clone-duckdb"] }
+overrides-bench-runner = "bash packages/mojo-kernel-overrides/benchmark/run_runner_compare.sh"
 
 # Compile-check (no run) the benchmarks so they can't silently rot when the
 # stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
