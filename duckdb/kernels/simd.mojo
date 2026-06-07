@@ -8,6 +8,7 @@ Two shapes from the same math:
   C++ for transparent built-in replacement.
 """
 
+from std.collections import InlineArray
 from std.math import sqrt, sin, cos, log, exp, min, max
 
 comptime INV_LN10 = 0.4342944819032518
@@ -91,6 +92,49 @@ def reduce_max_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64
         s = max(s, a[i])
         i += 1
     return s
+
+
+def reduce_sum_i128(
+    a: UnsafePointer[Int128, ImmutAnyOrigin],
+    n: Int,
+    out_val: UnsafePointer[Int128, MutAnyOrigin],
+    out_overflow: UnsafePointer[Int32, MutAnyOrigin],
+):
+    """Sum of a FLAT int128 column with multiple independent accumulators.
+
+    DuckDB's HUGEINT / high-precision DECIMAL sum (HugeintSumOperation) adds each
+    element via the overflow-checked, non-inlined `Hugeint::Add` (a function call
+    per element). This inlines the add and breaks the latency chain
+    with `K` accumulators. Signed overflow is detected branchlessly: the sign bit
+    of `(acc ^ s) & (x ^ s)` is set if `acc + x` overflowed. On any overflow the
+    caller falls back to stock (preserving the exact throw semantics). Because
+    integer addition is exact and associative, a non-overflowing reduce returns
+    the same total as stock regardless of accumulator partitioning.
+    """
+    comptime K = 4
+    var acc = InlineArray[Int128, K](fill=Int128(0))
+    var ovf = Int128(0)
+    var i = 0
+    while i + K <= n:
+        comptime for k in range(K):
+            var x = a[i + k]
+            var s = acc[k] + x
+            ovf |= (acc[k] ^ s) & (x ^ s)
+            acc[k] = s
+        i += K
+    var total = Int128(0)
+    comptime for k in range(K):
+        var s = total + acc[k]
+        ovf |= (total ^ s) & (acc[k] ^ s)
+        total = s
+    while i < n:
+        var x = a[i]
+        var s = total + x
+        ovf |= (total ^ s) & (x ^ s)
+        total = s
+        i += 1
+    out_val[0] = total
+    out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
 
 
 def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:

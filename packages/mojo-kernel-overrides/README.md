@@ -10,7 +10,15 @@ it into a normal libduckdb and the rewrites apply for the rest of the session.
 |---|---|---|
 | `sqrt sin cos ln exp log10` | scalar `DOUBLE→DOUBLE` | swap `function` |
 | `sum` `avg` | aggregate `DOUBLE` | swap `simple_update` (ungrouped) |
+| `sum` `avg` | aggregate `HUGEINT` + `DECIMAL(19..38)` (INT128-backed) | direct swap (`HUGEINT`) / wrap `bind` (`DECIMAL`), swap `simple_update` (ungrouped) |
 | `min` `max` | aggregate `DOUBLE` + `FLOAT` | wrap the `bind` callback, swap resolved `simple_update` |
+
+The INT128 sum/avg is the one *decimal* aggregate with real headroom: DuckDB's
+`HugeintSumOperation` adds each element via the overflow-checked, non-inlined
+`Hugeint::Add` (a function call per element, ~5 ns/elem). The Mojo kernel inlines
+the add and uses multiple accumulators (~7.5× single-threaded on 50M rows). The
+int64-backed `DECIMAL` / `BIGINT` sum is **not** overridden — it already runs at
+~1 cycle/elem (memory-bound), so there is nothing to win.
 
 Everything else, and any non-FLAT / null-containing / grouped input, falls back to the
 original built-in (the original pointer is captured at load), so results are unchanged.
@@ -124,6 +132,12 @@ catalog holds function pointers into it.
 - **Correctness**: SIMD reductions sum/compare in a different order, so floating-point results
   can differ from stock in the last ~1 ULP (verified within 1e-6 relative). Domain checks on
   the fast path are skipped (e.g. `sqrt`/`ln` of negatives return NaN instead of throwing).
+- **INT128 overflow**: the int128 sum/avg kernel detects per-add signed overflow and falls back
+  to the stock (throwing) path on any overflow, so normal results and the overflow exception are
+  identical to stock. Integer addition is exact, so a non-overflowing
+  reduce returns the same total regardless of accumulator order, but if the data overflows int128
+  only on an intermediate prefix (not in the final total), stock throws while the kernel returns
+  the (mathematically correct) total. Only reachable near the ±1.7e38 int128 limit.
 
 ## Files
 

@@ -14,6 +14,7 @@ from duckdb.kernels.simd import (
     klog10,
     map_unary,
     reduce_sum_f64,
+    reduce_sum_i128,
     reduce_min_f64,
     reduce_max_f64,
     reduce_min_f32,
@@ -54,6 +55,16 @@ def mojo_log10_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], dst: UnsafePointer
 @export("mojo_sum_f64")
 def mojo_sum_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
     return reduce_sum_f64(a, n)
+
+
+@export("mojo_sum_i128")
+def mojo_sum_i128(
+    a: UnsafePointer[Int128, ImmutAnyOrigin],
+    n: Int,
+    out_val: UnsafePointer[Int128, MutAnyOrigin],
+    out_overflow: UnsafePointer[Int32, MutAnyOrigin],
+) abi("C"):
+    reduce_sum_i128(a, n, out_val, out_overflow)
 
 
 @export("mojo_min_f64")

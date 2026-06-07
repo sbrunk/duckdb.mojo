@@ -70,7 +70,11 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
 - **Built-in overrides (`packages/mojo-kernel-overrides`):** a self-contained CPP-ABI DuckDB
   extension that rewrites the built-in `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` and
   `sum`/`avg`/`min`/`max` in place via catalog mutation, with stock fallback for non-FLAT /
-  null / grouped input. The kernels are emitted as an object (`src/capi_shim.mojo`) and linked
+  null / grouped input. `sum`/`avg` cover `DOUBLE` plus the INT128-backed `HUGEINT` /
+  `DECIMAL(19..38)` path — the one decimal aggregate with real headroom (stock uses an
+  overflow-checked per-element `Hugeint::Add`; the kernel inlines it with multi-accumulators
+  + overflow-fallback, ~7.5× single-threaded). The int64-backed `DECIMAL`/`BIGINT` sum is
+  left untouched (already memory-bound). The kernels are emitted as an object (`src/capi_shim.mojo`) and linked
   straight into the one `.so`, so there is no separate kernel lib and no `dlopen`. Build with
   `pixi run overrides-build`; activate via `LOAD` (it is unsigned, so allow unsigned extensions)
   or the exported `register_mojo_overrides(duckdb_connection)`. It is **not** part of the conda
