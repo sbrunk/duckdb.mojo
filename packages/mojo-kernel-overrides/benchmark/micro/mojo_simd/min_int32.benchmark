@@ -1,0 +1,12 @@
+# name: benchmark/micro/mojo_simd/min_int32.benchmark
+# group: [mojo_simd]
+
+name min_int32
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT ((i*2654435761) % 1000000)::INTEGER AS x FROM range(50000000) tbl(i);
+
+run
+SELECT MIN(x) FROM t;

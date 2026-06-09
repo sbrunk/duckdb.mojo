@@ -354,6 +354,45 @@ and binary functions (hypot, atan2). Change the `F` constant to switch between
 pixi run mojo run benchmark/math_benchmark.mojo
 ```
 
+### Accelerating DuckDB with Mojo SIMD kernels
+
+There are two ways to run Mojo SIMD kernels inside DuckDB. Both use the kernels
+in [duckdb/kernels](duckdb/kernels); they differ in what ships where.
+
+**1. Named UDFs (part of this package).** `duckdb.kernels.register_simd_math(conn)`
+registers `mojo_sqrt`, `mojo_sin`, ... as scalar functions you call by name. The
+kernels and this helper are part of the `duckdb` package itself: the conda
+`duckdb-mojo` package precompiles all of `duckdb/` (including `duckdb/kernels`),
+so there is nothing extra to build, ship, or `LOAD`. Install the package, import,
+call:
+
+```mojo
+from duckdb.kernels import register_simd_math
+register_simd_math(conn)
+_ = conn.execute("SELECT mojo_sqrt(x) FROM t")
+```
+
+You can also use the kernels (`duckdb.kernels.simd`) directly in your own UDFs.
+
+**2. Built-in overrides (a separate extension).** To make existing queries faster
+without renaming functions, the
+[mojo-kernel-overrides](packages/mojo-kernel-overrides/README.md) extension
+rewrites the built-in `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` and
+`sum`/`avg`/`min`/`max` in place, without forking DuckDB. This is a separate C++
+extension and is **not** part of the conda package. You need to build it with
+`pixi run overrides-build`, then `LOAD` it like any extension (it is currently
+unsigned, so you need to allow unsigned extensions at connect):
+
+```mojo
+from duckdb.config import Config
+var config = Config()
+config.set("allow_unsigned_extensions", "true")
+var conn = DuckDB.connect(":memory:", config)
+_ = conn.execute("LOAD 'packages/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
+```
+
+`pixi run overrides-bench` builds it and prints a stock-vs-Mojo table.
+
 ## Table Functions
 
 Register Mojo functions as DuckDB table functions that generate rows.

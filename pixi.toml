@@ -51,6 +51,52 @@ test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS test-extension/te
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
+# Mojo kernel overrides (packages/mojo-kernel-overrides): a DuckDB extension that
+# rewrites built-in scalar/aggregate functions to Mojo SIMD kernels at load time,
+# with NO patch to DuckDB. Builds against the default env's libduckdb headers/lib.
+overrides-build = "bash packages/mojo-kernel-overrides/build.sh"
+# Build + load the extension and print a stock-vs-Mojo benchmark table.
+# Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
+overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
+overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
+# Run the overrides through DuckDB's own benchmark suite (https://duckdb.org/docs/current/dev/benchmark).
+# `overrides-bench-runner-build` builds the extension + a stock benchmark_runner with a one-line
+# "LOAD an extension at init" hook (reuses .duckdb-src); `overrides-bench-runner` runs the suite
+# stock-vs-overrides and prints a speedup table. Pass a benchmark regex + runner args, e.g.:
+#   pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*' --threads=1
+#   pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'   # TPC-H Q1-Q22
+overrides-bench-runner-build = { cmd = "bash packages/mojo-kernel-overrides/benchmark/build_runner.sh", depends-on = ["overrides-build", "clone-duckdb"] }
+overrides-bench-runner = "bash packages/mojo-kernel-overrides/benchmark/run_runner_compare.sh"
+
+# mojo-gpu-operator: transparent GPU offload (array_cosine_distance + TPC-H Q1/Q3/Q5/Q6/Q14)
+# via an optimizer extension, with Mojo GPU kernels. See packages/mojo-gpu-operator/README.md.
+gpu-op-build = "bash packages/mojo-gpu-operator/build.sh"
+gpu-op-clean = "rm -rf packages/mojo-gpu-operator/build"
+# Phase-0 de-risking probes: 0a (does a scanned column flow through DBConfig.allocator?),
+# 0b (is a DB-wide unified allocator viable, or must we pin?).
+gpu-op-probe-alloc = "clang++ -std=c++17 -O2 packages/mojo-gpu-operator/bench/alloc_probe.cpp -I $CONDA_PREFIX/include -L $CONDA_PREFIX/lib -lduckdb -Wl,-rpath,$CONDA_PREFIX/lib -o packages/mojo-gpu-operator/build/alloc_probe && packages/mojo-gpu-operator/build/alloc_probe"
+gpu-op-probe-route = "mojo run packages/mojo-gpu-operator/bench/apple_alloc_route_probe.mojo"
+# Phase 2: quantify the pin-resident win (GPU pinned vs re-upload vs CPU SIMD, K sweep).
+gpu-op-bench = "mojo run packages/mojo-gpu-operator/bench/pin_resident_bench.mojo"
+# TPC-H Q6: de-risk the exact-decimal filter+sum GPU kernel (bit-exact vs CPU int128).
+gpu-op-q6test = "mojo run packages/mojo-gpu-operator/bench/q6_kernel_test.mojo"
+# TPC-H Q1: de-risk the exact-decimal grouped-aggregation GPU kernel (bit-exact vs CPU int128).
+gpu-op-q1test = "mojo run packages/mojo-gpu-operator/bench/q1_kernel_test.mojo"
+# TPC-H Q14: de-risk the GPU hash-probe join kernel (bit-exact vs CPU int128, zero misses).
+gpu-op-q14test = "mojo run packages/mojo-gpu-operator/bench/q14_kernel_test.mojo"
+# TPC-H Q3: de-risk the GPU multi-way-join + per-order atomic accumulation (bit-exact vs CPU).
+gpu-op-q3test = "mojo run packages/mojo-gpu-operator/bench/q3_kernel_test.mojo"
+# TPC-H Q3: de-risk the GPU segmented-reduction group-by (one warp per order segment, bit-exact vs CPU int128).
+gpu-op-q3groupby = "mojo run packages/mojo-gpu-operator/bench/q3_groupby_test.mojo"
+# TPC-H Q5: de-risk the GPU 6-table-join grouped aggregation (correlated condition, per-block-partials, bit-exact vs CPU).
+gpu-op-q5test = "mojo run packages/mojo-gpu-operator/bench/q5_kernel_test.mojo"
+# Stage-2 shuttle tests: drive the FULL descriptor C-ABI (build->materialize->feed
+# ->finalize) bit-exact vs a CPU int128 reference. Q14 adds the FK-join dim path.
+gpu-op-q6shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo"
+gpu-op-q14shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q14_shuttle_test.mojo"
+gpu-op-q3shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q3_shuttle_test.mojo"
+gpu-op-q5shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q5_shuttle_test.mojo"
+
 # Compile-check (no run) the benchmarks so they can't silently rot when the
 # stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
 # environment and is excluded here (see scripts/compile_check.sh).

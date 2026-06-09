@@ -179,3 +179,4 @@ cython_debug/
 # DuckDB source checkout for code generation
 .duckdb-src/
 
+experiments/

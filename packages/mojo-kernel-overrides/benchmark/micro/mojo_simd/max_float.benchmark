@@ -1,0 +1,12 @@
+# name: benchmark/micro/mojo_simd/max_float.benchmark
+# group: [mojo_simd]
+
+name max_float
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT (((i*2654435761) % 1000000))::FLOAT AS x FROM range(50000000) tbl(i);
+
+run
+SELECT MAX(x) FROM t;
