@@ -23,6 +23,10 @@ from gpu_kernels import (
     mojo_gpu_pin_query_topk,
     mojo_gpu_pin_query_topk_batch,
     mojo_gpu_pin_free,
+    mojo_gpu_pin_f16,
+    mojo_gpu_pin_query_topk_f16,
+    mojo_gpu_pin_query_topk_batch_f16,
+    mojo_gpu_pin_free_f16,
 )
 
 comptime N = 50_000

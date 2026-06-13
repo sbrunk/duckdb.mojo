@@ -797,6 +797,24 @@ def _topk_nblocks(n_rows: Int, k: Int) -> Int:
     return nb
 
 
+# Number of blocks for the BATCHED fused kernel. Unlike the single-query top-k
+# (whose candidate set is just nblocks*k, so 256 blocks suffices), the batched
+# kernel does M dot products per row, so it is COMPUTE-bound: it must launch
+# enough warps to saturate the GPU's SMs, or per-query latency plateaus far above
+# the bandwidth floor. We therefore use a much higher block cap (one warp per
+# ~rows_per_block rows). The candidate set is nblocks*qcount*k -- still a bounded
+# host transfer because qcount*k <= TOPK_BATCH_CAND_CAP and nblocks is capped.
+def _topk_nblocks_batch(n_rows: Int) -> Int:
+    var nb = (n_rows + WARP - 1) // WARP
+    if nb < 1:
+        nb = 1
+    # ~4096 warps keeps a modern GPU's SMs busy while bounding nblocks*qcount*k.
+    var cap = 4096
+    if nb > cap:
+        nb = cap
+    return nb
+
+
 # Single-query exact top-k. Only the K-float query uploads per call; the embedding
 # stays resident. Returns the k smallest into out_ids/out_dists (ascending).
 @export("mojo_gpu_pin_query_topk")
@@ -867,12 +885,540 @@ def mojo_gpu_pin_query_topk(
         return 3
 
 
-# Batched exact top-k. M query vectors (row-major M*K) are scored against the
-# resident matrix; results are written row-major M*k into out_ids/out_dists. The
-# embedding stays resident across all M queries; only the M*K query floats upload.
-# Implemented by looping the single-query device path (one cosine + one partial
-# kernel launch per query) while reusing one resident dist buffer + one candidate
-# buffer -- so the per-query launches are amortized over the single resident pin.
+# ===-------------------------------------------------------------------===#
+# TRUE BATCHED EXACT TOP-K: read the resident N*K matrix ONCE per query-tile.
+#
+# The old batched entry just looped the single-query path: it re-read the whole
+# N*K matrix M times (one cosine kernel launch per query) -- wasting the dominant
+# bandwidth cost, which is exactly the regime where the GPU should crush a per-
+# query index (HNSW can't use its index for batched queries at all).
+#
+# The fused kernel below amortizes that read. Layout:
+#   * Grid  = nblocks (same cap as _topk_nblocks); one WARP per block.
+#   * Each block strides over its assigned embedding rows. For each row it loads
+#     the row's lane-strided slice into REGISTERS once and computes the L2 norm
+#     once (norm is query-independent), then loops over the QCOUNT queries in this
+#     tile, reusing the in-register row slice to form each query's dot product.
+#     => every matrix element crosses the memory bus exactly ONCE per query-tile,
+#        not once per query.
+#   * Per-block, per-query top-k lives in SHARED memory: sd[QCOUNT*k] distances +
+#     si[QCOUNT*k] rowids + scnt[QCOUNT] fills, each kept ascending by the SAME
+#     (dist, rowid) tie-break as topk_partial_kernel / the single-query path, so a
+#     batched result for query j is bit-for-bit the single-query result for j.
+#   * The kernel emits nblocks*QCOUNT*k candidates (per query, per block); the host
+#     merges per query exactly as the single-query path does.
+#
+# Query tiling: the per-block shared top-k is QCOUNT*(4+8) bytes + QCOUNT*4. To
+# stay within a safe shared budget for ALL k up to TOPK_MAX we cap the live tile
+# at TOPK_BATCH_CAND_CAP = QCOUNT*k candidate slots; the host splits M into tiles
+# of qtile = min(M, TOPK_BATCH_CAND_CAP // k) queries and launches the fused
+# kernel once per tile. So the matrix is read ceil(M / qtile) times, NOT M times:
+# at k=10 a tile is ~410 queries (one matrix read for the whole M<=410 batch); at
+# k=100 it is ~40; the read is amortized across the tile either way.
+#
+# The query vectors stay in GLOBAL memory (they are tiny, M*K, and after the
+# first row they live in L2); only their per-element reads recur, never the N*K
+# matrix.
+# ===-------------------------------------------------------------------===#
+
+# Max candidate slots (QCOUNT*k) kept live in one block's shared top-k. Bounds the
+# shared-memory footprint per block: sd (4B) + si (8B) per slot + scnt (4B/query,
+# and a tile holds at most CAP queries when k==1) => CAP*(4+8) + CAP*4 = 16*CAP
+# bytes. 1536 => 24 KB, safely within a block's shared memory on ALL targets
+# (Apple ~32 KB threadgroup; NVIDIA/AMD 48 KB+). Caps the per-tile query count.
+comptime TOPK_BATCH_CAND_CAP = 1536
+# Max embedding dims the in-register row cache holds per lane: ceil(K/WARP). At
+# WARP=32 this supports K up to 32*64 = 2048 (covers 384/768/1024/1536 embeddings).
+comptime BATCH_MAX_LANE_DIMS = 64
+
+
+# Fused batched distance + per-query partial top-k over a query-tile.
+#
+# `qs` is the FULL M*K query buffer; `q0` is this tile's first query index and
+# `qcount` (<= qtile, and qtile*k <= TOPK_BATCH_CAND_CAP) the number of queries in
+# the tile. `qnorms` holds all M precomputed query norms. Candidates are written
+# row-major [block*qcount*k + local_q*k + slot] into cand_dist/cand_id.
+def topk_batch_kernel(
+    emb: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    qs: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    qnorms: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    K: Int,
+    q0: Int,
+    qcount: Int,
+    k: Int,
+    nblocks: Int,
+):
+    # Per-block per-query shared top-k: sd/si laid out [local_q*k + slot], kept
+    # ascending by (dist, rowid). scnt[local_q] is the current fill for query q.
+    var sd = stack_allocation[
+        TOPK_BATCH_CAND_CAP,
+        Scalar[DType.float32],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var si = stack_allocation[
+        TOPK_BATCH_CAND_CAP,
+        Scalar[DType.int64],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var scnt = stack_allocation[
+        TOPK_BATCH_CAND_CAP, Scalar[DType.int32], address_space = AddressSpace.SHARED
+    ]()
+
+    var lane = Int(thread_idx.x)
+    var bid = Int(block_idx.x)
+    # Lane 0 initializes the per-query fill counters.
+    if lane == 0:
+        for lq in range(qcount):
+            scnt[lq] = 0
+    barrier()
+
+    # In-register cache of this lane's strided slice of the CURRENT embedding row
+    # (lane i holds dims i, i+WARP, ...). Loaded ONCE per row, reused for every
+    # query in the tile -- this is the amortization: each matrix element crosses
+    # the bus once per tile, not once per query.
+    var rowvals = stack_allocation[BATCH_MAX_LANE_DIMS, Scalar[DType.float32]]()
+
+    # One WARP cooperates on ONE row at a time (lanes stride over K, warp.sum
+    # reduces). The block sweeps rows bid, bid+nblocks, bid+2*nblocks, ...
+    var row = bid
+    while row < n_rows:
+        var base = row * K
+        # Load this lane's strided row slice into registers + partial L2 norm once.
+        var na = Float32(0)
+        var nd = 0
+        var i = lane
+        while i < K:
+            var av = emb[base + i]
+            rowvals[nd] = av
+            na += av * av
+            nd += 1
+            i += WARP
+        na = warp.sum(na)  # full row norm^2 (all lanes participate)
+
+        # Score this row against every query in the tile, reusing rowvals.
+        for lq in range(qcount):
+            var qbase = (q0 + lq) * K
+            var dot = Float32(0)
+            var ii = lane
+            var c = 0
+            while ii < K:
+                dot += rowvals[c] * qs[qbase + ii]
+                c += 1
+                ii += WARP
+            dot = warp.sum(dot)
+            # Lane 0 forms the distance (identical formula + tie-break to the
+            # single-query kernel) and inserts into query lq's shared top-k.
+            if lane == 0:
+                var denom = sqrt(na) * qnorms[q0 + lq]
+                var cd = (
+                    Float32(1) - dot / denom if denom != 0 else Float32(0)
+                )
+                var ci = Int64(row)
+                var off = lq * k
+                var cnt = Int(scnt[lq])
+                var accept = True
+                if cnt >= k:
+                    var wd = sd[off + k - 1]
+                    var wi = si[off + k - 1]
+                    if cd > wd or (cd == wd and ci >= wi):
+                        accept = False
+                if accept:
+                    var pos = cnt if cnt < k else k - 1
+                    while pos > 0:
+                        var pd = sd[off + pos - 1]
+                        var pi = si[off + pos - 1]
+                        if pd > cd or (pd == cd and pi > ci):
+                            sd[off + pos] = pd
+                            si[off + pos] = pi
+                            pos -= 1
+                        else:
+                            break
+                    sd[off + pos] = cd
+                    si[off + pos] = ci
+                    if cnt < k:
+                        scnt[lq] = Int32(cnt + 1)
+        # Only lane 0 reads/writes the shared top-k; warp.sum already synchronizes
+        # the warp each query, so no extra barrier is needed between rows.
+        row += nblocks
+
+    # Emit each query's k candidates for this block. Pad unused slots (+inf / -1).
+    # Only lane 0 owns the shared buffers, so it writes the emit (the other lanes
+    # would race lane 0's last inserts without a barrier); k <= TOPK_MAX is small.
+    if lane == 0:
+        for lq in range(qcount):
+            var cnt = Int(scnt[lq])
+            var soff = lq * k
+            var out_base = (bid * qcount + lq) * k
+            for j in range(k):
+                if j < cnt:
+                    cand_dist[out_base + j] = sd[soff + j]
+                    cand_id[out_base + j] = si[soff + j]
+                else:
+                    cand_dist[out_base + j] = Float32(3.0e38)
+                    cand_id[out_base + j] = Int64(-1)
+
+
+# fp16-resident variant of topk_batch_kernel: the matrix is read as halves and
+# each element cast to fp32 before any arithmetic (math stays fp32). Identical
+# tiling, tie-break and amortization to the fp32 kernel above.
+def topk_batch_kernel_f16(
+    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
+    qs: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    qnorms: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    K: Int,
+    q0: Int,
+    qcount: Int,
+    k: Int,
+    nblocks: Int,
+):
+    var sd = stack_allocation[
+        TOPK_BATCH_CAND_CAP,
+        Scalar[DType.float32],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var si = stack_allocation[
+        TOPK_BATCH_CAND_CAP,
+        Scalar[DType.int64],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var scnt = stack_allocation[
+        TOPK_BATCH_CAND_CAP, Scalar[DType.int32], address_space = AddressSpace.SHARED
+    ]()
+
+    var lane = Int(thread_idx.x)
+    var bid = Int(block_idx.x)
+    if lane == 0:
+        for lq in range(qcount):
+            scnt[lq] = 0
+    barrier()
+
+    var rowvals = stack_allocation[BATCH_MAX_LANE_DIMS, Scalar[DType.float32]]()
+
+    var row = bid
+    while row < n_rows:
+        var base = row * K
+        var na = Float32(0)
+        var nd = 0
+        var i = lane
+        while i < K:
+            # Cast the stored half to fp32 BEFORE arithmetic (storage-only loss).
+            var av = emb[base + i].cast[DType.float32]()
+            rowvals[nd] = av
+            na += av * av
+            nd += 1
+            i += WARP
+        na = warp.sum(na)
+
+        for lq in range(qcount):
+            var qbase = (q0 + lq) * K
+            var dot = Float32(0)
+            var ii = lane
+            var c = 0
+            while ii < K:
+                dot += rowvals[c] * qs[qbase + ii]
+                c += 1
+                ii += WARP
+            dot = warp.sum(dot)
+            if lane == 0:
+                var denom = sqrt(na) * qnorms[q0 + lq]
+                var cd = (
+                    Float32(1) - dot / denom if denom != 0 else Float32(0)
+                )
+                var ci = Int64(row)
+                var off = lq * k
+                var cnt = Int(scnt[lq])
+                var accept = True
+                if cnt >= k:
+                    var wd = sd[off + k - 1]
+                    var wi = si[off + k - 1]
+                    if cd > wd or (cd == wd and ci >= wi):
+                        accept = False
+                if accept:
+                    var pos = cnt if cnt < k else k - 1
+                    while pos > 0:
+                        var pd = sd[off + pos - 1]
+                        var pi = si[off + pos - 1]
+                        if pd > cd or (pd == cd and pi > ci):
+                            sd[off + pos] = pd
+                            si[off + pos] = pi
+                            pos -= 1
+                        else:
+                            break
+                    sd[off + pos] = cd
+                    si[off + pos] = ci
+                    if cnt < k:
+                        scnt[lq] = Int32(cnt + 1)
+        row += nblocks
+
+    if lane == 0:
+        for lq in range(qcount):
+            var cnt = Int(scnt[lq])
+            var soff = lq * k
+            var out_base = (bid * qcount + lq) * k
+            for j in range(k):
+                if j < cnt:
+                    cand_dist[out_base + j] = sd[soff + j]
+                    cand_id[out_base + j] = si[soff + j]
+                else:
+                    cand_dist[out_base + j] = Float32(3.0e38)
+                    cand_id[out_base + j] = Int64(-1)
+
+
+# GPU second-stage merge: one block (one WARP) per query reduces that query's
+# nblocks*k scattered per-block candidates down to the final k, in shared memory,
+# under the SAME (dist, rowid) tie-break as topk_partial_kernel / the host merge.
+# This keeps the cross-block merge on the GPU so the host only ever receives the
+# final M*k results -- without it, the host merge over nblocks*k candidates per
+# query (nblocks is large to saturate the GPU) becomes the throughput wall.
+#
+# Candidate layout (from topk_batch_kernel): for query lq in this tile, block b's
+# k candidates live at cand[(b*qcount + lq)*k + j]. The merged final k for query
+# lq are written to out[lq*k + j].
+def topk_batch_merge_kernel(
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    out_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    out_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    qcount: Int,
+    nblocks: Int,
+    k: Int,
+):
+    var sd = stack_allocation[
+        TOPK_MAX, Scalar[DType.float32], address_space = AddressSpace.SHARED
+    ]()
+    var si = stack_allocation[
+        TOPK_MAX, Scalar[DType.int64], address_space = AddressSpace.SHARED
+    ]()
+    var scnt = stack_allocation[
+        1, Scalar[DType.int32], address_space = AddressSpace.SHARED
+    ]()
+
+    var lane = Int(thread_idx.x)
+    var lq = Int(block_idx.x)  # this block merges query lq
+    if lq >= qcount:
+        return
+    if lane == 0:
+        scnt[0] = 0
+    barrier()
+
+    # Total candidates for this query: nblocks blocks * k each. Lane-strided scan,
+    # warp-serialized insert into the shared k-best (same pattern as the partial).
+    var ncand = nblocks * k
+    var nwaves = (ncand + WARP - 1) // WARP
+    for w in range(nwaves):
+        var c = lane + w * WARP
+        var valid = c < ncand
+        var my_d = Float32(3.0e38)
+        var my_id = Int64(-1)
+        if valid:
+            # candidate c => block b = c // k, slot j = c % k.
+            var b = c // k
+            var j = c % k
+            var idx = (b * qcount + lq) * k + j
+            my_id = cand_id[idx]
+            my_d = cand_dist[idx]
+        for src in range(WARP):
+            barrier()
+            if lane == src and my_id >= 0:
+                var cnt = Int(scnt[0])
+                var cd = my_d
+                var ci = my_id
+                var accept = True
+                if cnt >= k:
+                    var wd = sd[k - 1]
+                    var wi = si[k - 1]
+                    if cd > wd or (cd == wd and ci >= wi):
+                        accept = False
+                if accept:
+                    var pos = cnt if cnt < k else k - 1
+                    while pos > 0:
+                        var pd = sd[pos - 1]
+                        var pi = si[pos - 1]
+                        if pd > cd or (pd == cd and pi > ci):
+                            sd[pos] = pd
+                            si[pos] = pi
+                            pos -= 1
+                        else:
+                            break
+                    sd[pos] = cd
+                    si[pos] = ci
+                    if cnt < k:
+                        scnt[0] = Int32(cnt + 1)
+    barrier()
+
+    # Emit this query's final k (ascending; pad with +inf / -1 if fewer than k).
+    var cnt = Int(scnt[0])
+    var j = lane
+    while j < k:
+        if j < cnt:
+            out_dist[lq * k + j] = sd[j]
+            out_id[lq * k + j] = si[j]
+        else:
+            out_dist[lq * k + j] = Float32(3.0e38)
+            out_id[lq * k + j] = Int64(-1)
+        j += WARP
+
+
+# Number of queries to score per matrix read-pass: as many as fit the shared
+# candidate budget (qtile*k <= TOPK_BATCH_CAND_CAP), capped at M. >=1 always.
+def _batch_qtile(M: Int, k: Int) -> Int:
+    var qt = TOPK_BATCH_CAND_CAP // k
+    if qt < 1:
+        qt = 1
+    if qt > M:
+        qt = M
+    return qt
+
+
+# Shared device-side driver for both precisions: allocates a per-tile candidate
+# buffer sized nblocks*qtile*k, launches the fused kernel once per query-tile
+# (reading the matrix once per tile), and host-merges each query's k candidates.
+# `is_f16` selects which resident matrix / fused kernel to use; exactly one of
+# emb32/emb16 is the resident buffer (the other is a 0-length placeholder view).
+def _run_topk_batch[
+    is_f16: Bool
+](
+    ctx: DeviceContext,
+    emb32: DeviceBuffer[DType.float32],
+    emb16: DeviceBuffer[DType.float16],
+    n_rows: Int,
+    K: Int,
+    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    M: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) raises:
+    # The fused kernel caches each lane's strided row slice (ceil(K/WARP) dims) in
+    # a fixed BATCH_MAX_LANE_DIMS register array; reject K that would overflow it.
+    if (K + WARP - 1) // WARP > BATCH_MAX_LANE_DIMS:
+        raise Error("batch top-k: K too large for the in-register row cache")
+    var nblocks = _topk_nblocks_batch(n_rows)
+    var qtile = _batch_qtile(M, k)
+
+    # Precompute all M query norms on the host (matches the kernel denom) and
+    # upload the M*K queries + M norms once for the whole batch.
+    var qnorms_h = alloc[Float32](M)
+    for m in range(M):
+        var s = Float32(0)
+        var qoff = m * K
+        for i in range(K):
+            s += qs[qoff + i] * qs[qoff + i]
+        qnorms_h[m] = sqrt(s)
+
+    var qs_dev = ctx.enqueue_create_buffer[DType.float32](M * K)
+    var qnorm_dev = ctx.enqueue_create_buffer[DType.float32](M)
+    var cand_cap = nblocks * qtile * k
+    var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
+    var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
+    # Final merged results for one tile (qtile*k) live on the device; only these
+    # M*k (NOT the nblocks*qtile*k candidates) ever cross PCIe -- the cross-block
+    # merge runs on the GPU (topk_batch_merge_kernel), so the host does no top-k.
+    var merged_dist_dev = ctx.enqueue_create_buffer[DType.float32](qtile * k)
+    var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](qtile * k)
+    var merged_dist_h = alloc[Float32](qtile * k)
+    var merged_id_h = alloc[Int64](qtile * k)
+    ctx.synchronize()
+    ctx.enqueue_copy(qs_dev, qs)
+    var qnorm_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+        unsafe_from_address=Int(qnorms_h)
+    )
+    ctx.enqueue_copy(qnorm_dev, qnorm_imm)
+    ctx.synchronize()
+
+    var q0 = 0
+    while q0 < M:
+        var qcount = qtile
+        if q0 + qcount > M:
+            qcount = M - q0
+        var ncand_tile = nblocks * qcount * k
+        var cd_view = DeviceBuffer(
+            ctx, cand_dist_dev.unsafe_ptr(), ncand_tile, owning=False
+        )
+        var cid_view = DeviceBuffer(
+            ctx, cand_id_dev.unsafe_ptr(), ncand_tile, owning=False
+        )
+        var md_view = DeviceBuffer(
+            ctx, merged_dist_dev.unsafe_ptr(), qcount * k, owning=False
+        )
+        var mid_view = DeviceBuffer(
+            ctx, merged_id_dev.unsafe_ptr(), qcount * k, owning=False
+        )
+
+        # Stage 1: fused distance + per-block per-query top-k (matrix read once).
+        comptime if is_f16:
+            ctx.enqueue_function[topk_batch_kernel_f16](
+                emb16,
+                qs_dev,
+                qnorm_dev,
+                cd_view,
+                cid_view,
+                n_rows,
+                K,
+                q0,
+                qcount,
+                k,
+                nblocks,
+                grid_dim=nblocks,
+                block_dim=WARP,
+            )
+        else:
+            ctx.enqueue_function[topk_batch_kernel](
+                emb32,
+                qs_dev,
+                qnorm_dev,
+                cd_view,
+                cid_view,
+                n_rows,
+                K,
+                q0,
+                qcount,
+                k,
+                nblocks,
+                grid_dim=nblocks,
+                block_dim=WARP,
+            )
+        # Stage 2 (GPU): merge each query's nblocks*k candidates to the final k.
+        ctx.enqueue_function[topk_batch_merge_kernel](
+            cd_view,
+            cid_view,
+            md_view,
+            mid_view,
+            qcount,
+            nblocks,
+            k,
+            grid_dim=qcount,
+            block_dim=WARP,
+        )
+        ctx.enqueue_copy(merged_dist_h, md_view)
+        ctx.enqueue_copy(merged_id_h, mid_view)
+        ctx.synchronize()
+
+        # The GPU merge already produced exact ascending top-k per query; just copy
+        # each query's k results into the caller's row-major M*k output.
+        for lq in range(qcount):
+            var m = q0 + lq
+            for j in range(k):
+                out_ids[m * k + j] = merged_id_h[lq * k + j]
+                out_dists[m * k + j] = merged_dist_h[lq * k + j]
+        q0 += qtile
+
+    qnorms_h.free()
+    merged_dist_h.free()
+    merged_id_h.free()
+
+
+# Batched exact top-k (fp32-resident). M query vectors (row-major M*K) scored
+# against the resident matrix, results row-major M*k into out_ids/out_dists. The
+# matrix is read ONCE per query-tile (see topk_batch_kernel), so the dominant
+# bandwidth cost is amortized across the batch -- batch-M per-query latency drops
+# sharply with M. Returns the SAME exact (ids, dists) as M single-query calls.
 @export("mojo_gpu_pin_query_topk_batch")
 def mojo_gpu_pin_query_topk_batch(
     handle: UnsafePointer[NoneType, MutAnyOrigin],
@@ -889,61 +1435,58 @@ def mojo_gpu_pin_query_topk_batch(
     try:
         var s = handle.bitcast[PinState]()
         ref st = s[]
-        var nblocks = _topk_nblocks(st.n_rows, k)
-        var ncand = nblocks * k
-        # Reuse the resident candidate scratch across all M queries; no per-call
-        # (and no per-batch) device or host allocation.
-        var cand_dist_dev = DeviceBuffer(
-            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
+        # 0-length fp16 placeholder (unused on the fp32 path).
+        var emb16 = st.ctx.enqueue_create_buffer[DType.float16](1)
+        _run_topk_batch[False](
+            st.ctx,
+            st.emb_dev,
+            emb16,
+            st.n_rows,
+            st.K,
+            qs,
+            M,
+            k,
+            out_ids,
+            out_dists,
         )
-        var cand_id_dev = DeviceBuffer(
-            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
+        return 0
+    except:
+        return 3
+
+
+# Batched exact top-k (fp16-resident). Same contract + exact results as
+# mojo_gpu_pin_query_topk_batch, but reads the resident matrix as halves (fp32
+# accumulate). Free the handle with mojo_gpu_pin_free_f16.
+@export("mojo_gpu_pin_query_topk_batch_f16")
+def mojo_gpu_pin_query_topk_batch_f16(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    M: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    if Int(handle) == 0:
+        return 1
+    if k <= 0 or k > TOPK_MAX or M <= 0:
+        return 2
+    try:
+        var s = handle.bitcast[PinStateF16]()
+        ref st = s[]
+        # 0-length fp32 placeholder (unused on the fp16 path).
+        var emb32 = st.ctx.enqueue_create_buffer[DType.float32](1)
+        _run_topk_batch[True](
+            st.ctx,
+            emb32,
+            st.emb_dev,
+            st.n_rows,
+            st.K,
+            qs,
+            M,
+            k,
+            out_ids,
+            out_dists,
         )
-
-        for m in range(M):
-            var qoff = m * st.K
-            var qnorm = Float32(0)
-            for i in range(st.K):
-                qnorm += qs[qoff + i] * qs[qoff + i]
-            qnorm = sqrt(qnorm)
-            var q_imm = UnsafePointer[Float32, ImmutAnyOrigin](
-                unsafe_from_address=Int(qs) + qoff * 4
-            )
-            st.ctx.enqueue_copy(st.q_dev, q_imm)
-            st.ctx.enqueue_function[cosine_kernel_warp](
-                st.emb_dev,
-                st.q_dev,
-                st.out_dev,
-                st.n_rows,
-                st.K,
-                qnorm,
-                grid_dim=st.n_rows,
-                block_dim=WARP,
-            )
-            st.ctx.enqueue_function[topk_partial_kernel](
-                st.out_dev,
-                cand_dist_dev,
-                cand_id_dev,
-                st.n_rows,
-                k,
-                nblocks,
-                grid_dim=nblocks,
-                block_dim=WARP,
-            )
-            st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
-            st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
-            # One sync per query: the host merge for query m must see query m's
-            # candidates (the candidate scratch is reused across the M queries).
-            st.ctx.synchronize()
-            _host_merge_topk(
-                st.cand_dist_h,
-                st.cand_id_h,
-                ncand,
-                k,
-                out_ids + m * k,
-                out_dists + m * k,
-            )
-
         return 0
     except:
         return 3

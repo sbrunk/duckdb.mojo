@@ -80,6 +80,15 @@ int64_t mojo_gpu_pin_f16(const float *emb, int64_t n_rows, int64_t K);
 int32_t mojo_gpu_pin_query_topk_f16(void *handle, const float *q, int64_t k,
                                     int64_t *out_ids, float *out_dists);
 void mojo_gpu_pin_free_f16(void *handle);
+// TRUE batched exact top-k: score M query vectors (row-major M*K floats) against
+// the resident matrix, reading that matrix ONCE per query-tile (not once per
+// query). out_ids/out_dists are caller-allocated, length M*k, row-major
+// [query*k + slot]; padded slots carry id = -1. Returns the SAME exact (ids,
+// dists) as M single-query calls. rc: 0 ok; 1 null handle; 2 bad k/M; 3 internal.
+int32_t mojo_gpu_pin_query_topk_batch(void *handle, const float *qs, int64_t M,
+                                      int64_t k, int64_t *out_ids, float *out_dists);
+int32_t mojo_gpu_pin_query_topk_batch_f16(void *handle, const float *qs, int64_t M,
+                                          int64_t k, int64_t *out_ids, float *out_dists);
 // TPC-H Q6 engine: pin the 4 lineitem columns, run filter+exact-decimal-sum.
 int64_t mojo_q6_pin(const int32_t *ship, const int64_t *disc, const int64_t *ext,
                     const int64_t *qty, int64_t n_rows, int32_t timing);
@@ -741,6 +750,133 @@ void RegisterGpuCosineTopkTableFunction(ExtensionLoader &loader) {
                    GpuCosineTopkFunc, GpuCosineTopkBind, GpuCosineInit);
   // Optional precision selector: default 'fp16' (resident half-precision path);
   // 'fp32'/'exact' for full-precision exact distances.
+  tf.named_parameters["precision"] = LogicalType::VARCHAR;
+  loader.RegisterFunction(tf);
+}
+
+// ---------------------------------------------------------------------------
+// gpu_cosine_topk_batch() table function: TRUE batched kNN. vss_join-style — the
+// QUERY SET comes from a table column (also FLOAT[K] ARRAY), so M queries are
+// scored against the resident emb matrix in ONE batched kernel call that reads
+// the matrix once per query-tile (the regime where the GPU decisively beats a
+// per-query index: HNSW can't use its index for batched queries at all).
+//
+//   SELECT * FROM gpu_cosine_topk_batch('emb','v','queries','qv', k [, precision]);
+//     -> (query_rowid BIGINT, rowid BIGINT, dist FLOAT)
+//
+// query_rowid is the scan position of the query row in `query_table` (0..M-1);
+// rowid is the scan position of the emb row (0..N-1), matching gpu_cosine_topk.
+// Emits up to M*k rows (k nearest emb rows per query; fewer if N < k). The emb
+// matrix is pinned + cached exactly like gpu_cosine_topk (fp16 default).
+// ---------------------------------------------------------------------------
+struct GpuCosineTopkBatchBindData : public TableFunctionData {
+  vector<int64_t> query_rowids;  // row-major, one per emitted row
+  vector<int64_t> ids;
+  vector<float> dists;
+  idx_t n_emitted = 0;
+};
+
+unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFunctionBindInput &input,
+                                                vector<LogicalType> &return_types, vector<string> &names) {
+  auto emb_table = input.inputs[0].GetValue<string>();
+  auto emb_col = input.inputs[1].GetValue<string>();
+  auto query_table = input.inputs[2].GetValue<string>();
+  auto query_col = input.inputs[3].GetValue<string>();
+  auto k = input.inputs[4].GetValue<int64_t>();
+
+  if (k < 1 || k > GPU_TOPK_MAX) {
+    throw InvalidInputException("gpu_cosine_topk_batch: k must be in [1, " + std::to_string(GPU_TOPK_MAX) +
+                                "], got " + std::to_string(k));
+  }
+
+  bool use_fp16 = true;
+  auto np = input.named_parameters.find("precision");
+  if (np != input.named_parameters.end() && !np->second.IsNull()) {
+    std::string prec = StringUtil::Lower(np->second.GetValue<string>());
+    if (prec == "fp16" || prec == "half") {
+      use_fp16 = true;
+    } else if (prec == "fp32" || prec == "exact" || prec == "f32") {
+      use_fp16 = false;
+    } else {
+      throw InvalidInputException("gpu_cosine_topk_batch: unknown precision '" + prec +
+                                  "' (expected 'fp16' or 'fp32')");
+    }
+  }
+
+  // Pin (or reuse the cached) resident emb matrix, same as gpu_cosine_topk.
+  PinEntry pe = use_fp16 ? EnsurePinnedF16(context, emb_table, emb_col)
+                         : EnsurePinned(context, emb_table, emb_col);
+  if (!pe.handle) { throw InvalidInputException("gpu_cosine_topk_batch: GPU pin failed"); }
+
+  // Materialize the M query vectors from the query table column (FLOAT[K] ARRAY).
+  vector<float> qs;
+  idx_t qK = 0, M = 0;
+  MaterializeFloatColumn(context, query_table, query_col, "gpu_cosine_topk_batch", qs, qK, M);
+  if (qK != pe.K) {
+    throw InvalidInputException("gpu_cosine_topk_batch: query dim " + std::to_string(qK) +
+                                " != emb column K " + std::to_string(pe.K));
+  }
+  if (M == 0) {
+    auto bd = make_uniq<GpuCosineTopkBatchBindData>();
+    return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::FLOAT};
+    names = {"query_rowid", "rowid", "dist"};
+    return std::move(bd);
+  }
+
+  // ONE batched kernel call: M*k results row-major [query*k + slot].
+  vector<int64_t> out_ids(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
+  vector<float> out_dists(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
+  int32_t rc = use_fp16
+                   ? mojo_gpu_pin_query_topk_batch_f16(pe.handle, qs.data(),
+                                                       NumericCast<int64_t>(M), k,
+                                                       out_ids.data(), out_dists.data())
+                   : mojo_gpu_pin_query_topk_batch(pe.handle, qs.data(),
+                                                   NumericCast<int64_t>(M), k,
+                                                   out_ids.data(), out_dists.data());
+  if (rc != 0) {
+    throw InvalidInputException("gpu_cosine_topk_batch: GPU batched top-k failed (rc " +
+                                std::to_string(rc) + ")");
+  }
+
+  auto bd = make_uniq<GpuCosineTopkBatchBindData>();
+  for (idx_t m = 0; m < M; m++) {
+    for (idx_t j = 0; j < NumericCast<idx_t>(k); j++) {
+      idx_t pos = m * NumericCast<idx_t>(k) + j;
+      if (out_ids[pos] < 0) { continue; }  // padded slot (N < k)
+      bd->query_rowids.push_back(NumericCast<int64_t>(m));
+      bd->ids.push_back(out_ids[pos]);
+      bd->dists.push_back(out_dists[pos]);
+    }
+  }
+  bd->n_emitted = bd->ids.size();
+
+  return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::FLOAT};
+  names = {"query_rowid", "rowid", "dist"};
+  return std::move(bd);
+}
+
+void GpuCosineTopkBatchFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuCosineTopkBatchBindData>();
+  auto &gs = data.global_state->Cast<GpuCosineTFGlobalState>();
+  idx_t n = MinValue<idx_t>(bd.n_emitted - gs.offset, STANDARD_VECTOR_SIZE);
+  if (n == 0) { output.SetCardinality(0); return; }
+  auto qrow = FlatVector::GetData<int64_t>(output.data[0]);
+  auto rowid = FlatVector::GetData<int64_t>(output.data[1]);
+  auto dist = FlatVector::GetData<float>(output.data[2]);
+  for (idx_t i = 0; i < n; i++) {
+    qrow[i] = bd.query_rowids[gs.offset + i];
+    rowid[i] = bd.ids[gs.offset + i];
+    dist[i] = bd.dists[gs.offset + i];
+  }
+  output.SetCardinality(n);
+  gs.offset += n;
+}
+
+void RegisterGpuCosineTopkBatchTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_cosine_topk_batch",
+                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+                    LogicalType::VARCHAR, LogicalType::BIGINT},
+                   GpuCosineTopkBatchFunc, GpuCosineTopkBatchBind, GpuCosineInit);
   tf.named_parameters["precision"] = LogicalType::VARCHAR;
   loader.RegisterFunction(tf);
 }
@@ -1813,6 +1949,7 @@ void LoadInternal(ExtensionLoader &loader) {
   RegisterGpuOperator(loader.GetDatabaseInstance());  // transparent cosine operator
   RegisterGpuCosineTableFunction(loader);             // pin-resident cosine TF
   RegisterGpuCosineTopkTableFunction(loader);         // pin-resident cosine top-k TF
+  RegisterGpuCosineTopkBatchTableFunction(loader);    // batched (table-of-queries) cosine top-k TF
 }
 
 }  // namespace

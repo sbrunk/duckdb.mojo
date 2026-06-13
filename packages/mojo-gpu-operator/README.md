@@ -65,6 +65,22 @@ group-by/aggregate** plans; the five TPC-H queries below are instances of it, no
 separate code paths. Cosine distance is a separate `GPU_COSINE` operator (also
 exposed as the `gpu_cosine(table, column, query)` table function).
 
+**Vector search (kNN) table functions.** The embedding matrix is pinned resident
+on the GPU once (cached process-wide, fp16 by default) and reused across queries:
+
+- `gpu_cosine_topk('emb','v', <FLOAT[K]>, k [, precision])` → `(rowid, dist)` —
+  exact top-k cosine for a **single** query; only k rows cross PCIe.
+- `gpu_cosine_topk_batch('emb','v','queries','qv', k [, precision])` →
+  `(query_rowid, rowid, dist)` — **true batched** kNN: the query set is a column
+  of another table (also `FLOAT[K]`). All M queries are scored in one batched
+  kernel that reads the resident N×K matrix **once per query-tile** (not once per
+  query) and merges per-query top-k entirely on the GPU, so the dominant matrix-
+  read bandwidth is amortized across the whole batch — per-query latency drops
+  sharply with M. This is the regime where the GPU most decisively beats a per-
+  query index (HNSW cannot use its index for batched queries at all). `precision`
+  is `'fp16'` (default) or `'fp32'`/`'exact'`; results are bit-for-bit identical
+  to M single-query `gpu_cosine_topk` calls.
+
 | Workload | Operator |
 |---|---|
 | `array_cosine_distance(col, <const FLOAT[K]>)` | `GPU_COSINE` |
@@ -116,8 +132,19 @@ DUCKDB_BENCH_EXTENSION=$PWD/packages/mojo-gpu-operator/build/mojo_gpu_operator.d
 ## Status
 
 Transparent, decimal-exact GPU execution via one descriptor-driven engine for
-`array_cosine_distance` and TPC-H Q1/Q3/Q5/Q6/Q14, correct under warm/repeated
-execution. At sf1 (warm) it beats stock on Q1/Q5/Q14 (~1.6–2.0×), is ~parity on Q6,
-and trails on Q3. **Open frontier:** the cold-pin cost (GPU-direct scan / load-time
-residency), a faster high-cardinality group-by (GPU radix sort), and NVIDIA/Linux
-hardware validation. See [DESIGN.md](DESIGN.md#limitations--open-frontier).
+TPC-H Q1/Q3/Q5/Q6/Q14, correct under warm/repeated execution; validated on Apple
+(Metal) and NVIDIA (RTX 4090). TPC-H sf1 warm vs stock: Apple ~1.6–2.0× on
+Q1/Q5/Q14, ~parity Q6, Q3 trails; NVIDIA larger (Q14 ~11×, Q5 ~7×, Q6 ~3.8×,
+Q1 ~2×, Q3 ~0.85×).
+
+**Vector search** (`gpu_cosine_topk` / `_batch`, fp16 default): exact GPU kNN
+beats CPU exact brute-force ~40–57× warm, and is competitive-to-faster than
+vss/HNSW single-query up to ~1M rows while being effectively exact, zero-build,
+and half the memory (fp16, recall ≥0.99 with no genuine misses). HNSW pulls
+ahead only at many-millions of rows / recall-tolerant, write-once workloads.
+
+**Open frontier:** the cold-pin cost (GPU-direct scan / load-time residency); a
+faster high-cardinality group-by (Q3 — NVIDIA GPU hash-aggregate now that 64-bit
+atomics are confirmed); a tensor-core GEMM for the batched kNN (the current
+batch kernel amortizes the matrix read but isn't compute-optimal at large M).
+See [DESIGN.md](DESIGN.md#limitations--open-frontier).
