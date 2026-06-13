@@ -193,11 +193,40 @@ kernel argument. Hence the pin-resident route — the same choice Sirius makes.
 
 ## Performance characteristics
 
-At TPC-H sf1 (warm, validated vs stock answers): **Q1 ~2.0×, Q14 ~1.75×, Q5
-~1.6×** over stock, **Q6 ~parity**, and **Q3 below stock** (~0.5×). Stock DuckDB
-at sf1 is only ~2–13 ms (small, multithreaded), so the wins are real on the
-join/group-heavy queries but Q3's sort-segreduce path is still behind. Larger
-scale factors and a faster high-cardinality grouping path are where Q3 would move.
+**TPC-H sf1, warm, validated vs stock answers** (RTX 4090 benchmark_runner medians):
+**Q14 ~11×, Q5 ~7×, Q6 ~3.8×, Q1 ~2×** over 16-thread stock. (Apple is smaller:
+~1.6–2.0× on Q1/Q5/Q14, ~parity Q6.) The GPU wins where there's real per-row /
+join work and a small output. **Q3 is the exception and is now kept on the CPU**
+(see the cost heuristic below): it's a light-per-row, high-cardinality-output
+(~1.5M groups) shape that DuckDB's multithreaded join+hash-aggregate does better —
+measured GPU 0.87× at sf1 and **0.54× at sf10** (the gap *widens* with scale: the
+single-threaded GPU source op scans ~linearly while 16-thread stock has headroom).
+The right GPU algorithm (a hash-aggregate, implemented) can't change that — it's
+the query shape, not the algorithm.
+
+### Vector search (kNN) — the strongest GPU regime
+`gpu_cosine_topk` / `_batch` do **exact** top-k cosine over a GPU-resident
+embedding matrix (pinned once, fp16 by default). Measured on the RTX 4090
+(clustered unit-norm embeddings, warm):
+- **vs CPU exact brute-force: ~40–57× faster** (the fair fight). The cold pin
+  amortizes in ~12 queries.
+- **vs DuckDB's vss/HNSW:** competitive-to-faster single-query up to ~1M rows
+  (fp16: 1M×384 ~1.3 ms, 1M×768 ~2.1 ms) while being **exact, zero-build, and
+  half the index memory**. fp16 recall@10 ≥0.99 with *zero genuine misses*
+  (sub-1.0 is boundary FP-tie reordering). HNSW pulls ahead only at
+  many-millions-of-rows / recall-tolerant, write-once-query-forever workloads
+  (its query is sublinear; ours is an O(N) scan, and the resident pin is capped by
+  VRAM — ~3 GB at 1M×768).
+- The GPU **single-query kNN is already bandwidth-optimal** (~912 GB/s, one matrix
+  read). A *batched* throughput blowout (read the matrix once, score all M
+  queries) is gated on a tensor-core GEMM — see Limitations.
+
+### The cost heuristic (default-on engine, no cost model)
+The engine is default-on and otherwise cost-blind. To avoid making a query
+*slower* by offloading it, `build_descriptor` **declines high-cardinality
+group-by** (`SORT_SEGREDUCE`/`HASH_GROUP`, i.e. the Q3 shape) → it falls back to
+stock CPU. UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14) are unaffected.
+`GPU_OP_FORCE_HIGHCARD=1` overrides for A/B measurement.
 
 ## Hardware portability
 
@@ -230,11 +259,19 @@ Linux build notes:
 
 - **Cold path** dominates a first-touch query (CPU materialize + upload); removing
   it needs a GPU-direct scan (no Mojo/Metal columnar decoder today) or persistent
-  load-time residency.
-- **Q3 high-cardinality group-by** (sort-segreduce) trails stock — a fully-GPU
-  radix sort or a uint32-spinlock hash aggregate (within the atomics constraint)
-  would help.
-- **Discrete-GPU cold path** is heavier than Apple's (full PCIe upload of every
-  table on first touch); the warm win needs a repeated workload to amortize it.
-- The accepted class is FK-join + filter + group-by/aggregate; shapes outside it
-  fall back to CPU by design.
+  load-time residency. Heavier on a discrete GPU (full PCIe upload) than on Apple's
+  unified memory; the warm win needs a repeated workload to amortize it.
+- **High-cardinality group-by (Q3) is CPU-favorable** — light per-row work + large
+  group output. A GPU hash-aggregate is implemented (NVIDIA, `STRAT_HASH_GROUP`)
+  and is the right algorithm, but it still loses to multithreaded stock at sf1 and
+  sf10, so the cost heuristic keeps this shape on the CPU. Not an open task —
+  measured and settled.
+- **Batched kNN throughput** is gated on a **tensor-core GEMM** (queries·embᵀ).
+  Single-query is bandwidth-optimal; the naive batch kernel and a hand-tiled
+  shared-memory GEMM only reach ~1.1–1.4× because the Mojo compiler doesn't emit
+  efficient vectorized-fp16 FMA from scalar tiling. `layout.tensor_core` is
+  importable but its MMA API is compiled-only/opaque — authoring a correct+fast MMA
+  + fused top-k is the substantial next step for the batched blowout (the bit-exact
+  gate tolerates fp32 reorder, so it can be pursued safely).
+- The accepted class is FK-join + filter + group-by/aggregate (+ the cosine kNN
+  path); shapes outside it fall back to CPU by design.

@@ -65,6 +65,7 @@ from raw_plan_tags import (
     IDX_NONE,
 )
 from std.memory import alloc
+from std.os import setenv
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -236,6 +237,11 @@ def build_string_t(
 
 def main() raises:
     comptime assert has_accelerator(), "q3_shuttle_test requires a GPU"
+
+    # The cost heuristic declines high-cardinality group-by (Q3's shape) by
+    # default so it stays on the CPU. This test validates the Q3 GPU EXECUTION
+    # path, so force-enable it.
+    _ = setenv("GPU_OP_FORCE_HIGHCARD", "1", True)
 
     var l_cutoff = 9204  # 1995-03-15 as DATE days (value is arbitrary here)
     var o_cutoff = 9204
