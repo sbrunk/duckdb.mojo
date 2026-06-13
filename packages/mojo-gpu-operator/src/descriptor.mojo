@@ -19,6 +19,7 @@ from std.sys.info import (
     has_nvidia_gpu_accelerator,
     has_amd_gpu_accelerator,
 )
+from std.os import getenv
 from raw_plan_tags import (
     RP_MAGIC,
     TYPE_INTEGER,
@@ -376,6 +377,7 @@ def _cond_touches(
 # ---------------------------------------------------------------------------
 def build_descriptor_impl(
     mut r: RawPlanReader,
+    force_highcard: Bool = False,
 ) raises -> Optional[GpuPlanDescriptor]:
     var desc: GpuPlanDescriptor
     try:
@@ -530,6 +532,22 @@ def build_descriptor_impl(
     desc.dim_edges = dim_edges^
     desc.strategy = strategy
     desc.kind = kind
+
+    # Cost heuristic: DECLINE high-cardinality group-by (SORT_SEGREDUCE / HASH_GROUP)
+    # so it falls back to stock DuckDB CPU. This shape — light per-row work over a
+    # large fact table producing many groups (e.g. TPC-H Q3, ~1.5M order groups) —
+    # is CPU-favorable: DuckDB's multithreaded join+hash-aggregate beats the
+    # single-threaded GPU source op at every measured scale (Q3 RTX 4090: 0.87x vs
+    # 16-thread stock at sf1, 0.54x at sf10 — the gap widens with scale). The engine
+    # is otherwise cost-blind and would offload Q3 and make it slower; returning None
+    # keeps it on the CPU. UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14 — few groups or
+    # join-heavy, which the GPU wins) are unaffected. Set GPU_OP_FORCE_HIGHCARD=1 to
+    # force-offload anyway (for A/B measurement of the GPU path), and tests pass
+    # force_highcard=True to validate classification without the policy.
+    if strategy == STRAT_SORT_SEGREDUCE or strategy == STRAT_HASH_GROUP:
+        if not force_highcard and getenv("GPU_OP_FORCE_HIGHCARD", "") == "":
+            return None
+
     return desc^
 
 

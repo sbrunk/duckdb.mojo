@@ -434,7 +434,10 @@ def check(
     exp_dims: Int,
     exp_aggs: Int,
 ) raises:
-    var maybe = build_descriptor_impl(r)
+    # force_highcard=True so we validate CLASSIFICATION for every shape (incl. Q3's
+    # high-cardinality group-by), independent of the cost policy that otherwise
+    # declines high-card group-by to keep it on the CPU.
+    var maybe = build_descriptor_impl(r, force_highcard=True)
     assert_true(Bool(maybe), name + ": expected a descriptor, got None")
     ref d = maybe.value()
     assert_equal(d.kind, exp_kind, name + ": kind")
