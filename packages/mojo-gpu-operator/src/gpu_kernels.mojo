@@ -19,14 +19,15 @@ The compute core is the proven warp kernel from
 `benchmark/gpu_table_function_poc.mojo`, with K promoted to a runtime argument.
 """
 
-from std.gpu import block_idx, thread_idx
+from std.gpu import block_idx, thread_idx, barrier
 from std.gpu.primitives import warp
+from std.gpu.memory import AddressSpace
 from gpu_platform import WARP
 from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
 from std.os import abort
 from std.math import sqrt
-from std.memory import alloc, memcpy
+from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
 
 import descriptor
@@ -141,6 +142,46 @@ def cosine_kernel_warp(
     var i = lane
     while i < K:
         var av = emb[base + i]
+        dot += av * q[i]
+        na += av * av
+        i += WARP
+    dot = warp.sum(dot)
+    na = warp.sum(na)
+    if lane == 0:
+        var denom = sqrt(na) * qnorm
+        res[row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
+
+
+# ---------------------------------------------------------------------------
+# fp16-resident variant of `cosine_kernel_warp`.
+#
+# Identical algorithm and tie-break to the fp32 kernel, but the embedding matrix
+# is RESIDENT as float16 (half the VRAM, half the bandwidth of the dominant
+# scan). Storage is half; MATH stays fp32: each float16 element is loaded and
+# immediately cast to Float32, so the dot product and the L2-norm accumulate in
+# fp32. The query stays fp32 (it is tiny and per-call). This preserves nearly all
+# accuracy for unit-normalized embeddings while halving the bandwidth-bound read.
+# ---------------------------------------------------------------------------
+def cosine_kernel_warp_f16(
+    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
+    q: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    res: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    n_rows: Int,
+    K: Int,
+    qnorm: Float32,
+):
+    var row = Int(block_idx.x)
+    if row >= n_rows:
+        return
+    var lane = Int(thread_idx.x)
+    var base = row * K
+    var dot = Float32(0)
+    var na = Float32(0)
+    var i = lane
+    while i < K:
+        # Load the stored half, cast to fp32 BEFORE any arithmetic so the dot and
+        # norm accumulate in fp32 (only the storage/read is half-width).
+        var av = emb[base + i].cast[DType.float32]()
         dot += av * q[i]
         na += av * av
         i += WARP
@@ -283,7 +324,16 @@ struct PinState(Movable):
         DType.float32
     ]  # resident column: n_rows * K floats
     var q_dev: DeviceBuffer[DType.float32]
-    var out_dev: DeviceBuffer[DType.float32]
+    var out_dev: DeviceBuffer[DType.float32]  # resident dist scratch: n_rows
+    # Resident top-k scratch, allocated ONCE at pin time and reused every query
+    # so the warm top-k path does ZERO per-call device/host allocation. Sized for
+    # the worst case at this n_rows: nblocks (capped, depends only on n_rows/k) at
+    # the largest k we support (TOPK_MAX) => cand_cap candidates.
+    var cand_dist_dev: DeviceBuffer[DType.float32]
+    var cand_id_dev: DeviceBuffer[DType.int64]
+    var cand_dist_h: UnsafePointer[Float32, MutAnyOrigin]
+    var cand_id_h: UnsafePointer[Int64, MutAnyOrigin]
+    var cand_cap: Int  # capacity of the candidate buffers (>= nblocks*k)
     var n_rows: Int
     var K: Int
 
@@ -293,6 +343,11 @@ struct PinState(Movable):
         var emb_dev: DeviceBuffer[DType.float32],
         var q_dev: DeviceBuffer[DType.float32],
         var out_dev: DeviceBuffer[DType.float32],
+        var cand_dist_dev: DeviceBuffer[DType.float32],
+        var cand_id_dev: DeviceBuffer[DType.int64],
+        cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
+        cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+        cand_cap: Int,
         n_rows: Int,
         K: Int,
     ):
@@ -300,6 +355,11 @@ struct PinState(Movable):
         self.emb_dev = emb_dev^
         self.q_dev = q_dev^
         self.out_dev = out_dev^
+        self.cand_dist_dev = cand_dist_dev^
+        self.cand_id_dev = cand_id_dev^
+        self.cand_dist_h = cand_dist_h
+        self.cand_id_h = cand_id_h
+        self.cand_cap = cand_cap
         self.n_rows = n_rows
         self.K = K
 
@@ -317,12 +377,33 @@ def mojo_gpu_pin(
         var emb_dev = ctx.enqueue_create_buffer[DType.float32](n_rows * K)
         var q_dev = ctx.enqueue_create_buffer[DType.float32](K)
         var out_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
+        # Resident top-k candidate scratch, sized ONCE for the worst case at this
+        # n_rows: nblocks depends only on n_rows/k (capped in _topk_nblocks), so the
+        # max candidate count is at the largest k we support (TOPK_MAX). Every warm
+        # top-k query reuses these instead of allocating per call.
+        var cand_cap = _topk_nblocks(n_rows, TOPK_MAX) * TOPK_MAX
+        var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
+        var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
         ctx.synchronize()
         ctx.enqueue_copy(emb_dev, emb)  # the one-time pin upload
         ctx.synchronize()
+        var cand_dist_h = alloc[Float32](cand_cap)
+        var cand_id_h = alloc[Int64](cand_cap)
         var p = alloc[PinState](1)
         p.init_pointee_move(
-            PinState(ctx^, emb_dev^, q_dev^, out_dev^, n_rows, K)
+            PinState(
+                ctx^,
+                emb_dev^,
+                q_dev^,
+                out_dev^,
+                cand_dist_dev^,
+                cand_id_dev^,
+                cand_dist_h,
+                cand_id_h,
+                cand_cap,
+                n_rows,
+                K,
+            )
         )
         return Int(p.bitcast[NoneType]())
     except:
@@ -369,8 +450,542 @@ def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
     if Int(handle) == 0:
         return
     var p = handle.bitcast[PinState]()
+    # Free the cached host candidate buffers; the device buffers are owned by the
+    # PinState's DeviceBuffer fields and released by destroy_pointee.
+    ref st = p[]
+    st.cand_dist_h.free()
+    st.cand_id_h.free()
     p.destroy_pointee()
     p.free()
+
+
+# ===-------------------------------------------------------------------===#
+# fp16-resident pin engine (additive; the fp32 path above is unchanged).
+#
+# Same contract as PinState/mojo_gpu_pin/mojo_gpu_pin_query_topk, but the
+# resident embedding matrix is stored as float16: half the VRAM (doubling the
+# max N at a given budget) and half the read bandwidth of the distance scan,
+# which is the bandwidth floor at 1M rows. The fp32->fp16 conversion is done
+# ONCE on the host at pin time (one-time cost), then uploaded as half. The
+# distance kernel (`cosine_kernel_warp_f16`) casts each half back to fp32 and
+# accumulates the dot/norm in fp32, so only storage is lossy. The candidate
+# scratch, top-k partial kernel, and host merge are shared with the fp32 path.
+#
+# fp16 handles are a DISTINCT struct from PinState; free them via
+# `mojo_gpu_pin_free_f16` (mojo_gpu_pin_free stays the fp32 free, unchanged).
+# ===-------------------------------------------------------------------===#
+struct PinStateF16(Movable):
+    var ctx: DeviceContext
+    var emb_dev: DeviceBuffer[DType.float16]  # resident column: n_rows*K halves
+    var q_dev: DeviceBuffer[DType.float32]  # query stays fp32
+    var out_dev: DeviceBuffer[DType.float32]  # resident dist scratch: n_rows
+    var cand_dist_dev: DeviceBuffer[DType.float32]
+    var cand_id_dev: DeviceBuffer[DType.int64]
+    var cand_dist_h: UnsafePointer[Float32, MutAnyOrigin]
+    var cand_id_h: UnsafePointer[Int64, MutAnyOrigin]
+    var cand_cap: Int
+    var n_rows: Int
+    var K: Int
+
+    def __init__(
+        out self,
+        var ctx: DeviceContext,
+        var emb_dev: DeviceBuffer[DType.float16],
+        var q_dev: DeviceBuffer[DType.float32],
+        var out_dev: DeviceBuffer[DType.float32],
+        var cand_dist_dev: DeviceBuffer[DType.float32],
+        var cand_id_dev: DeviceBuffer[DType.int64],
+        cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
+        cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+        cand_cap: Int,
+        n_rows: Int,
+        K: Int,
+    ):
+        self.ctx = ctx^
+        self.emb_dev = emb_dev^
+        self.q_dev = q_dev^
+        self.out_dev = out_dev^
+        self.cand_dist_dev = cand_dist_dev^
+        self.cand_id_dev = cand_id_dev^
+        self.cand_dist_h = cand_dist_h
+        self.cand_id_h = cand_id_h
+        self.cand_cap = cand_cap
+        self.n_rows = n_rows
+        self.K = K
+
+
+# Pin a column as fp16: takes the SAME fp32 host embedding data, converts it to
+# float16 on the host once, and uploads the halves to a resident device buffer.
+# Returns the handle as an integer address (0 == failure).
+@export("mojo_gpu_pin_f16")
+def mojo_gpu_pin_f16(
+    emb: UnsafePointer[Float32, ImmutAnyOrigin],
+    n_rows: Int,
+    K: Int,
+) abi("C") -> Int:
+    try:
+        var ctx = shared_device_context()
+        var emb_dev = ctx.enqueue_create_buffer[DType.float16](n_rows * K)
+        var q_dev = ctx.enqueue_create_buffer[DType.float32](K)
+        var out_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
+        var cand_cap = _topk_nblocks(n_rows, TOPK_MAX) * TOPK_MAX
+        var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
+        var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
+        ctx.synchronize()
+
+        # One-time host fp32->fp16 conversion straight into the mapped upload
+        # staging of the resident half buffer (the conversion cost is paid once
+        # at pin; every query then reads half the bytes).
+        with emb_dev.map_to_host() as h:
+            var hp = h.unsafe_ptr()
+            var total = n_rows * K
+            for j in range(total):
+                hp[j] = emb[j].cast[DType.float16]()
+        ctx.synchronize()
+
+        var cand_dist_h = alloc[Float32](cand_cap)
+        var cand_id_h = alloc[Int64](cand_cap)
+        var p = alloc[PinStateF16](1)
+        p.init_pointee_move(
+            PinStateF16(
+                ctx^,
+                emb_dev^,
+                q_dev^,
+                out_dev^,
+                cand_dist_dev^,
+                cand_id_dev^,
+                cand_dist_h,
+                cand_id_h,
+                cand_cap,
+                n_rows,
+                K,
+            )
+        )
+        return Int(p.bitcast[NoneType]())
+    except:
+        return 0
+
+
+# Single-query exact top-k over the fp16-resident column. Same contract as
+# `mojo_gpu_pin_query_topk`: query is fp32, only k (ids+dists) crosses PCIe, the
+# (dist, rowid) tie-break and host merge are identical. The only difference is
+# the distance kernel reads halves and casts to fp32 (math stays fp32).
+@export("mojo_gpu_pin_query_topk_f16")
+def mojo_gpu_pin_query_topk_f16(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    if Int(handle) == 0:
+        return 1
+    if k <= 0 or k > TOPK_MAX:
+        return 2
+    try:
+        var s = handle.bitcast[PinStateF16]()
+        ref st = s[]
+        # qnorm computed in fp32 from the fp32 query (matches the kernel denom).
+        var qnorm = Float32(0)
+        for i in range(st.K):
+            qnorm += q[i] * q[i]
+        qnorm = sqrt(qnorm)
+        st.ctx.enqueue_copy(st.q_dev, q)
+
+        var nblocks = _topk_nblocks(st.n_rows, k)
+        var ncand = nblocks * k
+        var cand_dist_dev = DeviceBuffer(
+            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
+        )
+        var cand_id_dev = DeviceBuffer(
+            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
+        )
+
+        st.ctx.enqueue_function[cosine_kernel_warp_f16](
+            st.emb_dev,
+            st.q_dev,
+            st.out_dev,
+            st.n_rows,
+            st.K,
+            qnorm,
+            grid_dim=st.n_rows,
+            block_dim=WARP,
+        )
+        st.ctx.enqueue_function[topk_partial_kernel](
+            st.out_dev,
+            cand_dist_dev,
+            cand_id_dev,
+            st.n_rows,
+            k,
+            nblocks,
+            grid_dim=nblocks,
+            block_dim=WARP,
+        )
+        st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
+        st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
+        st.ctx.synchronize()
+
+        _host_merge_topk(
+            st.cand_dist_h, st.cand_id_h, ncand, k, out_ids, out_dists
+        )
+        return 0
+    except:
+        return 3
+
+
+@export("mojo_gpu_pin_free_f16")
+def mojo_gpu_pin_free_f16(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C"):
+    if Int(handle) == 0:
+        return
+    var p = handle.bitcast[PinStateF16]()
+    ref st = p[]
+    st.cand_dist_h.free()
+    st.cand_id_h.free()
+    p.destroy_pointee()
+    p.free()
+
+
+# ===-------------------------------------------------------------------===#
+# GPU EXACT TOP-K over the pinned column.
+#
+# The plain `mojo_gpu_pin_query` returns ALL N distances to the host (DuckDB then
+# does ORDER BY ... LIMIT k). For kNN that streams N floats across PCIe per query
+# just to throw all but k away. The top-k path computes the same exact cosine
+# distances on the GPU but returns ONLY the k nearest rows, so the transfer is
+# ~nblocks*k (or k) floats+ids, never N.
+#
+# Algorithm (per-block k-best -> host merge), correctness-first:
+#   1. Kernel A == the proven `cosine_kernel_warp`: compute all N distances into
+#      a RESIDENT device `dist` buffer (no host transfer).
+#   2. Kernel B (`topk_partial_kernel`): one block (WARP_SIZE lanes) per strided
+#      row range maintains a per-block k-best in SHARED memory (sorted ascending
+#      by the (dist, rowid) tie-break key) via threshold-insert, and writes its k
+#      candidates as (dist, rowid) into a device `cand` buffer of size nblocks*k.
+#   3. Host: copy the nblocks*k candidates back (nblocks*k << N) and stable-select
+#      the final k under the SAME (dist asc, rowid asc) comparator. This guarantees
+#      the result equals a CPU stable top-k bit-for-bit.
+#
+# Tie-break: every comparison is "smaller key wins", key = (dist, rowid). Equal
+# distances are broken by ascending rowid, both in the GPU shared-buffer insert
+# and the host merge, so it matches a CPU `stable_sort by (dist, id)` exactly.
+#
+# k is small (<= ~256 in practice; assume <= TOPK_MAX). The shared k-best is
+# WARP_SIZE waves wide: at most TOPK_MAX dist floats + TOPK_MAX int rowids per
+# block (the C++ wiring must keep k <= TOPK_MAX; the entry points return an error
+# code otherwise).
+# ===-------------------------------------------------------------------===#
+comptime TOPK_MAX = 1024
+
+
+# Per-block partial top-k over a resident `dist` buffer.
+#
+# Shared layout: `sd[k]` (distances) + `si[k]` (rowids), kept sorted ASCENDING by
+# (dist, rowid) with `sd[cnt-1]` the current worst kept. A candidate row beats the
+# buffer iff it is smaller than the worst (or the buffer isn't yet full); inserts
+# are serialized across the warp's lanes (one lane at a time) so the shared buffer
+# stays consistent without atomics. The expensive cosine math already ran in
+# kernel A; this is a cheap scan over N float distances.
+def topk_partial_kernel(
+    dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    k: Int,
+    nblocks: Int,
+):
+    # Raw-pointer shared memory (std.memory.stack_allocation) — avoids a dependency
+    # on the `layout` package (TileTensor), which isn't installed in every Mojo env.
+    var sd = stack_allocation[
+        TOPK_MAX, Scalar[DType.float32], address_space = AddressSpace.SHARED
+    ]()
+    var si = stack_allocation[
+        TOPK_MAX, Scalar[DType.int64], address_space = AddressSpace.SHARED
+    ]()
+    # `cnt` (current fill of the shared buffer) lives in a 1-elem shared slot so a
+    # single lane owns the insert state and all lanes can read it after a barrier.
+    var scnt = stack_allocation[
+        1, Scalar[DType.int32], address_space = AddressSpace.SHARED
+    ]()
+
+    var lane = Int(thread_idx.x)
+    var bid = Int(block_idx.x)
+    if lane == 0:
+        scnt[0] = 0
+    barrier()
+
+    # Uniform wave count across the WHOLE block: every lane runs the same number
+    # of waves and reaches every `barrier()` (a barrier with divergent
+    # participation is undefined). Lanes whose row is out of range carry an
+    # "invalid" candidate (rowid -1) that the insert step skips.
+    var stride = nblocks * WARP
+    var span = (n_rows - bid * WARP)  # rows from this block's first row onward
+    var nwaves = 0
+    if span > 0:
+        nwaves = (span + stride - 1) // stride
+    for w in range(nwaves):
+        # Each lane reads its own candidate (dist, rowid) for this wave. The warp
+        # then folds the (up to WARP) candidates into the one shared k-buffer, with
+        # each lane inserting its OWN candidate when it is that lane's turn -- the
+        # inserting lane holds the values in registers, so no cross-lane shuffle is
+        # needed. Serializing by lane keeps the shared buffer consistent without
+        # atomics. A barrier between turns publishes the previous insert.
+        var i = bid * WARP + lane + w * stride
+        var valid = i < n_rows
+        var my_d = dist[i] if valid else Float32(3.0e38)
+        var my_id = Int64(i) if valid else Int64(-1)
+        for src in range(WARP):
+            barrier()
+            if lane == src and my_id >= 0:
+                var cnt = Int(scnt[0])
+                var cd = my_d
+                var ci = my_id
+                # Reject early iff buffer full and candidate not better than the
+                # worst kept (the (dist, rowid) tie-break: smaller key wins).
+                var accept = True
+                if cnt >= k:
+                    var wd = sd[k - 1]
+                    var wi = si[k - 1]
+                    if cd > wd or (cd == wd and ci >= wi):
+                        accept = False
+                if accept:
+                    # Insertion-sort into the ascending (dist, rowid) buffer,
+                    # shifting larger keys right (dropping the worst if full).
+                    var pos = cnt if cnt < k else k - 1
+                    while pos > 0:
+                        var pd = sd[pos - 1]
+                        var pi = si[pos - 1]
+                        if pd > cd or (pd == cd and pi > ci):
+                            sd[pos] = pd
+                            si[pos] = pi
+                            pos -= 1
+                        else:
+                            break
+                    sd[pos] = cd
+                    si[pos] = ci
+                    if cnt < k:
+                        scnt[0] = Int32(cnt + 1)
+    barrier()
+
+    # Emit this block's k candidates (pad unused slots with +inf / -1 so the host
+    # merge ignores them deterministically).
+    var cnt = Int(scnt[0])
+    var out_base = bid * k
+    var j = lane
+    while j < k:
+        if j < cnt:
+            cand_dist[out_base + j] = sd[j]
+            cand_id[out_base + j] = si[j]
+        else:
+            cand_dist[out_base + j] = Float32(3.0e38)
+            cand_id[out_base + j] = Int64(-1)
+        j += WARP
+
+
+# Number of blocks the partial top-k launches with. Capped so nblocks*k stays a
+# small host transfer; one warp per block.
+def _topk_nblocks(n_rows: Int, k: Int) -> Int:
+    var nb = (n_rows + WARP - 1) // WARP
+    if nb < 1:
+        nb = 1
+    # Keep the candidate set small: at most ~256 blocks => nblocks*k transfer.
+    var cap = 256
+    # ...but never fewer rows-per-block-worth of parallelism than makes sense.
+    if nb > cap:
+        nb = cap
+    return nb
+
+
+# Single-query exact top-k. Only the K-float query uploads per call; the embedding
+# stays resident. Returns the k smallest into out_ids/out_dists (ascending).
+@export("mojo_gpu_pin_query_topk")
+def mojo_gpu_pin_query_topk(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    if Int(handle) == 0:
+        return 1
+    if k <= 0 or k > TOPK_MAX:
+        return 2
+    try:
+        var s = handle.bitcast[PinState]()
+        ref st = s[]
+        # qnorm on the host (matches the cosine kernel's denom).
+        var qnorm = Float32(0)
+        for i in range(st.K):
+            qnorm += q[i] * q[i]
+        qnorm = sqrt(qnorm)
+        st.ctx.enqueue_copy(st.q_dev, q)
+
+        var nblocks = _topk_nblocks(st.n_rows, k)
+        var ncand = nblocks * k
+        # Sub-views over the resident candidate scratch (sized for TOPK_MAX at pin
+        # time, so ncand <= cand_cap always); no per-call device allocation.
+        var cand_dist_dev = DeviceBuffer(
+            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
+        )
+        var cand_id_dev = DeviceBuffer(
+            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
+        )
+
+        # Enqueue the whole pipeline on the stream, then a SINGLE synchronize
+        # before the host merge: q H->D, distance kernel, partial top-k kernel,
+        # candidate D->H -- one sync per warm query (was two), zero allocations.
+        st.ctx.enqueue_function[cosine_kernel_warp](
+            st.emb_dev,
+            st.q_dev,
+            st.out_dev,
+            st.n_rows,
+            st.K,
+            qnorm,
+            grid_dim=st.n_rows,
+            block_dim=WARP,
+        )
+        st.ctx.enqueue_function[topk_partial_kernel](
+            st.out_dev,
+            cand_dist_dev,
+            cand_id_dev,
+            st.n_rows,
+            k,
+            nblocks,
+            grid_dim=nblocks,
+            block_dim=WARP,
+        )
+        st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
+        st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
+        st.ctx.synchronize()
+
+        _host_merge_topk(
+            st.cand_dist_h, st.cand_id_h, ncand, k, out_ids, out_dists
+        )
+        return 0
+    except:
+        return 3
+
+
+# Batched exact top-k. M query vectors (row-major M*K) are scored against the
+# resident matrix; results are written row-major M*k into out_ids/out_dists. The
+# embedding stays resident across all M queries; only the M*K query floats upload.
+# Implemented by looping the single-query device path (one cosine + one partial
+# kernel launch per query) while reusing one resident dist buffer + one candidate
+# buffer -- so the per-query launches are amortized over the single resident pin.
+@export("mojo_gpu_pin_query_topk_batch")
+def mojo_gpu_pin_query_topk_batch(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    M: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    if Int(handle) == 0:
+        return 1
+    if k <= 0 or k > TOPK_MAX or M <= 0:
+        return 2
+    try:
+        var s = handle.bitcast[PinState]()
+        ref st = s[]
+        var nblocks = _topk_nblocks(st.n_rows, k)
+        var ncand = nblocks * k
+        # Reuse the resident candidate scratch across all M queries; no per-call
+        # (and no per-batch) device or host allocation.
+        var cand_dist_dev = DeviceBuffer(
+            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
+        )
+        var cand_id_dev = DeviceBuffer(
+            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
+        )
+
+        for m in range(M):
+            var qoff = m * st.K
+            var qnorm = Float32(0)
+            for i in range(st.K):
+                qnorm += qs[qoff + i] * qs[qoff + i]
+            qnorm = sqrt(qnorm)
+            var q_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+                unsafe_from_address=Int(qs) + qoff * 4
+            )
+            st.ctx.enqueue_copy(st.q_dev, q_imm)
+            st.ctx.enqueue_function[cosine_kernel_warp](
+                st.emb_dev,
+                st.q_dev,
+                st.out_dev,
+                st.n_rows,
+                st.K,
+                qnorm,
+                grid_dim=st.n_rows,
+                block_dim=WARP,
+            )
+            st.ctx.enqueue_function[topk_partial_kernel](
+                st.out_dev,
+                cand_dist_dev,
+                cand_id_dev,
+                st.n_rows,
+                k,
+                nblocks,
+                grid_dim=nblocks,
+                block_dim=WARP,
+            )
+            st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
+            st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
+            # One sync per query: the host merge for query m must see query m's
+            # candidates (the candidate scratch is reused across the M queries).
+            st.ctx.synchronize()
+            _host_merge_topk(
+                st.cand_dist_h,
+                st.cand_id_h,
+                ncand,
+                k,
+                out_ids + m * k,
+                out_dists + m * k,
+            )
+
+        return 0
+    except:
+        return 3
+
+
+# Host final merge: stable-select the k smallest (dist asc, rowid asc) from the
+# `ncand` candidates produced by the partial kernel. Padded slots carry rowid -1
+# and are skipped. k is small, so a simple k-pass selection is exact + cheap.
+def _host_merge_topk(
+    cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
+    cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+    ncand: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var taken = alloc[Bool](ncand if ncand > 0 else 1)
+    for c in range(ncand):
+        taken[c] = False
+    for slot in range(k):
+        var best = -1
+        var best_d = Float32(3.0e38)
+        var best_id = Int64(-1)
+        for c in range(ncand):
+            if taken[c]:
+                continue
+            var cid = cand_id_h[c]
+            if cid < 0:
+                continue
+            var cd = cand_dist_h[c]
+            if best < 0 or cd < best_d or (cd == best_d and cid < best_id):
+                best = c
+                best_d = cd
+                best_id = cid
+        if best < 0:
+            out_ids[slot] = Int64(-1)
+            out_dists[slot] = Float32(0)
+        else:
+            taken[best] = True
+            out_ids[slot] = best_id
+            out_dists[slot] = best_d
+    taken.free()
 
 
 
