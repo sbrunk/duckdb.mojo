@@ -44,6 +44,7 @@ from raw_plan_tags import (
     STRAT_UNGROUPED,
     STRAT_DENSE_GROUP,
     STRAT_SORT_SEGREDUCE,
+    STRAT_HASH_GROUP,
     IDX_NONE,
     TYPE_DATE,
     TYPE_INTEGER,
@@ -71,7 +72,13 @@ from raw_plan_tags import (
     OP_LOAD_DIM,
     OP_EQ,
 )
-from segreduce import segreduce_upload, segreduce_run, SegResident
+from segreduce import (
+    segreduce_upload,
+    segreduce_run,
+    segreduce_run_hash,
+    HashGroupResult,
+    SegResident,
+)
 from std.collections import Dict
 
 
@@ -1873,6 +1880,14 @@ struct GpuPinned(Movable):
     # i128 sum gates emission. `emit_gt0` => emit iff sum > 0 (Q3/Q5).
     var emit_agg: Int
     var emit_gt0: Bool
+    # --- HASH_GROUP extra state (mode == STRAT_HASH_GROUP) ---
+    # The fact integer group key's packed-column slot, the hash-table capacity,
+    # and host copies of the carried dim arrays (one per group key; empty for a
+    # fact group key) so result assembly can look up o_orderdate/o_shippriority
+    # by the kernel-discovered group key without re-reading device memory.
+    var hash_gk_slot: Int
+    var hash_cap: Int
+    var hash_gk_dim_arr: List[List[Int64]]  # per group key; carried dim array
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -1899,6 +1914,9 @@ struct GpuPinned(Movable):
         self.n_cand = 0
         self.emit_agg = -1
         self.emit_gt0 = False
+        self.hash_gk_slot = 0
+        self.hash_cap = 0
+        self.hash_gk_dim_arr = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -1968,6 +1986,93 @@ def _assemble(mut dst: GpuExecState, mut gp: GpuPinned) raises:
                 res_lo[base + col] = v0.cast[DType.int64]()
             elif gp.agg_kind[ai] == AGG_AVG:
                 var cnt = sums[g * gp.M + gp.agg_m1[ai]].cast[DType.int64]()
+                var sumf = Float64(v0.cast[DType.int64]())
+                var scale_div = Float64(1)
+                for _ in range(Int(gp.agg_scale[ai])):
+                    scale_div *= 10.0
+                res_f64[base + col] = (
+                    sumf / scale_div / Float64(cnt)
+                ) if cnt != 0 else 0.0
+            else:  # AGG_SUM -> i128 limbs at ret_scale
+                res_lo[base + col] = v0.cast[DType.int64]()
+                res_hi[base + col] = (v0 >> 64).cast[DType.int64]()
+        out_rows += 1
+
+    dst.res_rows = out_rows
+    dst.res_cols = n_cols
+    dst.res_lo = res_lo^
+    dst.res_hi = res_hi^
+    dst.res_f64 = res_f64^
+    dst.res_str = res_str^
+
+
+# Re-run the HASH_GROUP kernel + assemble. Used by BOTH cold and warm Q3 paths
+# on NVIDIA/AMD. The kernel discovers the occupied groups (l_orderkey), atomic-
+# accumulates the int64 revenue per group, and we widen to int128 here (the same
+# exactness contract: per-order revenue fits int64; see _pin_finalize). For each
+# group we emit one row iff its gated SUM > 0, look up the dim-carried group keys
+# (o_orderdate / o_shippriority) by the group key from the cached host dim arrays
+# (constant within an orderkey), and place the aggregate cells exactly as
+# `_assemble` does. Output row ORDER is unspecified (the parent ORDER BY sorts).
+def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
+    var hr = segreduce_run_hash(
+        gp.res,
+        gp.hash_gk_slot,
+        gp.hash_cap,
+        gp.pass_prog.unsafe_ptr(),
+        gp.pass_len,
+        gp.metric_ops.unsafe_ptr(),
+        gp.n_ops_total,
+        gp.metric_offsets.unsafe_ptr(),
+        gp.metric_lens.unsafe_ptr(),
+        gp.M,
+    )
+    var n_groups = len(hr.keys)
+
+    var n_cols = gp.n_cols
+    var n_keys = gp.n_keys
+    var res_lo: List[Int64] = []
+    var res_hi: List[Int64] = []
+    var res_f64: List[Float64] = []
+    var res_str: List[String] = []
+    var out_rows = 0
+    for g in range(n_groups):
+        # Emit rule: gate on a SUM aggregate's freshly-computed group sum.
+        if gp.emit_agg >= 0:
+            var gv = hr.sums[g * gp.M + gp.agg_m0[gp.emit_agg]]
+            if gp.emit_gt0:
+                if gv <= Int128(0):
+                    continue
+            else:
+                if gv == Int128(0):
+                    continue
+        for _ in range(n_cols):
+            res_lo.append(0)
+            res_hi.append(0)
+            res_f64.append(0.0)
+            res_str.append(String(""))
+        var base = out_rows * n_cols
+        var gkey = hr.keys[g]
+        # group-key cells: the fact key == gkey; dim-carried keys gathered from
+        # the cached host dim array indexed by gkey (constant within an orderkey).
+        for gk in range(n_keys):
+            if gk < len(gp.hash_gk_dim_arr) and len(gp.hash_gk_dim_arr[gk]) > 0:
+                ref arr = gp.hash_gk_dim_arr[gk]
+                var idx = Int(gkey)
+                var v = Int64(0)
+                if idx >= 0 and idx < len(arr):
+                    v = arr[idx]
+                res_lo[base + gk] = v
+            else:
+                res_lo[base + gk] = gkey  # the fact group key
+        # aggregate cells (mirrors _assemble; Q3 has one DECIMAL SUM, no AVG).
+        for ai in range(len(gp.agg_kind)):
+            var col = n_keys + ai
+            var v0 = hr.sums[g * gp.M + gp.agg_m0[ai]]
+            if gp.agg_kind[ai] == AGG_COUNT_STAR:
+                res_lo[base + col] = v0.cast[DType.int64]()
+            elif gp.agg_kind[ai] == AGG_AVG:
+                var cnt = hr.sums[g * gp.M + gp.agg_m1[ai]].cast[DType.int64]()
                 var sumf = Float64(v0.cast[DType.int64]())
                 var scale_div = Float64(1)
                 for _ in range(Int(gp.agg_scale[ai])):
@@ -3602,7 +3707,10 @@ def _pin_finalize_generic_dims(
     ref p2 = _pin2_ptr()[]
     if sig in p2:
         ref dst = m[key]
-        _assemble(dst, p2[sig])
+        if p2[sig].mode == STRAT_HASH_GROUP:
+            _assemble_hash(dst, p2[sig])
+        else:
+            _assemble(dst, p2[sig])
         return 0
 
     # COLD: build dim arrays + packed columns from fed host columns, upload once.
@@ -3977,6 +4085,128 @@ def _pin_finalize_generic_dims(
     var n_keys = len(d.group_keys)
 
     # =====================================================================
+    # HASH_GROUP branch (Q3 on NVIDIA / AMD): one-pass GPU hash-aggregate keyed
+    # by the integer fact group key (l_orderkey). No sort, no ORDER BY, no 1-warp
+    # -per-tiny-segment launch. The kernel atomic-accumulates each order's int64
+    # revenue into an open-addressing hash slot; we read back the occupied slots,
+    # widen to int128 on host, gate emit on revenue>0 (== stock GROUP BY), and
+    # look up the dim-carried group keys (o_orderdate / o_shippriority) by the
+    # orderkey from the host carried dim arrays (constant within an orderkey).
+    #
+    # EXACTNESS BOUND: each group's revenue must fit int64. Per-order revenue is
+    # SUM(l_extendedprice*(100-l_discount)) over an order's few lineitems: per
+    # lineitem < 1e7(price,scale2) * 100 < 1e9, and orders have O(1..10) lineitems
+    # at TPC-H scale => well under 9.2e18 (int64 max). If a single group could
+    # overflow int64 the matcher must NOT route here (it would need int128
+    # atomics, which this path does not provide). For the supported Q3 shape this
+    # holds by construction; the int128 widening on read-back keeps the OUTPUT
+    # decimal-exact.
+    # =====================================================================
+    if d.strategy == STRAT_HASH_GROUP and n_keys > 0:
+        var fact_gk = String("")
+        for gk in range(n_keys):
+            if d.group_keys[gk].table == d.fact_table:
+                fact_gk = d.group_keys[gk].column
+                break
+        if fact_gk == "" or fact_gk not in col_slot:
+            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            return 10
+        var gk_slot = col_slot[fact_gk]
+
+        # Capacity bound on DISTINCT groups. The fact group key (l_orderkey) joins
+        # to the orders dim, whose row count is a tight upper bound on the number
+        # of distinct orderkeys among the fact rows (every fact group key value is
+        # one orders PK). Prefer that; fall back to the fact row count `n` (always
+        # a safe superset) if no dim carries the key. cap = next pow2 >= 2*bound
+        # keeps the open-addressing load factor <= 0.5 so probe chains stay short
+        # AND keeps the device table + D->H read-back proportional to the group
+        # universe, not the (much larger) fact row count.
+        var group_bound = n  # safe fallback
+        for gk in range(n_keys):
+            if d.group_keys[gk].table != d.fact_table:
+                var gde = _de_of_table(d, d.group_keys[gk].table)
+                if gde >= 0 and st.dim_n_rows[gde] > 0:
+                    group_bound = st.dim_n_rows[gde]
+                    break
+        var cap = 1
+        var target = 2 * group_bound + 1
+        while cap < target:
+            cap <<= 1
+        if cap < 2:
+            cap = 2
+
+        # Locate the single SUM metric (Q3 revenue) for the emit-rule gate.
+        var rev_ai = -1
+        for ai in range(len(d.aggregates)):
+            if agg_kind[ai] == AGG_SUM:
+                rev_ai = ai
+                break
+
+        # Carried dim arrays (host copies) for each dim-carried group key, so
+        # _assemble_hash can look up o_orderdate / o_shippriority by orderkey.
+        var hash_gk_dim_arr: List[List[Int64]] = []
+        for gk in range(n_keys):
+            if gkey_dim_arr[gk] >= 0:
+                hash_gk_dim_arr.append(dim_arrays[gkey_dim_arr[gk]].copy())
+            else:
+                hash_gk_dim_arr.append(List[Int64]())
+
+        # Upload resident buffers once (no seg offsets needed for hash).
+        var seg_off_dummy_h = alloc[Int64](1)
+        seg_off_dummy_h[0] = 0
+        var resident = segreduce_upload(
+            ctx, cols, n_slots, n, seg_off_dummy_h, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
+        seg_off_dummy_h.free()
+        cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+
+        var agg_scale: List[Int64] = []
+        var agg_m1: List[Int] = []
+        for ai in range(len(d.aggregates)):
+            agg_scale.append(d.aggregates[ai].ret_scale)
+            agg_m1.append(-1)
+
+        # Group-key placement: all int64 (l_orderkey BIGINT, o_orderdate DATE,
+        # o_shippriority INTEGER). _assemble_hash places them via res_lo.
+        var gk_is_str: List[Bool] = []
+        for _ in range(n_keys):
+            gk_is_str.append(False)
+
+        var gp = GpuPinned(resident^)
+        gp.mode = STRAT_HASH_GROUP
+        gp.G = 1
+        gp.gid_slot = 0
+        gp.M = M
+        gp.pass_prog = pass_prog^
+        gp.pass_len = pass_len
+        gp.metric_ops = metric_ops^
+        gp.n_ops_total = n_ops_total
+        gp.metric_offsets = metric_offsets^
+        gp.metric_lens = metric_lens^
+        gp.n_seg = 0
+        gp.n_cols = n_cols
+        gp.n_keys = n_keys
+        gp.agg_kind = agg_kind^
+        gp.agg_scale = agg_scale^
+        gp.agg_m0 = agg_m0^
+        gp.agg_m1 = agg_m1^
+        gp.gk_is_str = gk_is_str^
+        gp.gk_str_vals = []
+        gp.gk_i64_vals = []
+        gp.n_cand = 0
+        gp.emit_agg = rev_ai
+        gp.emit_gt0 = True
+        gp.hash_gk_slot = gk_slot
+        gp.hash_cap = cap
+        gp.hash_gk_dim_arr = hash_gk_dim_arr^
+        p2[sig] = gp^
+
+        ref dst = m[key]
+        _assemble_hash(dst, p2[sig])
+        return 0
+
+    # =====================================================================
     # SORT_SEGREDUCE branch (Q3): the fact is materialized ORDER BY the fact
     # group key (l_orderkey); build segments from it, one warp per order, and
     # emit one output row per order with revenue > 0 (matching stock's
@@ -4177,11 +4407,14 @@ def mojo_gpu_pin_finalize(
         if d.kind == KIND_Q5 and d.strategy == STRAT_DENSE_GROUP:
             return _pin_finalize_q5(handle)
 
-        # FK-join (Q14 UNGROUPED, Q3 SORT_SEGREDUCE): generic descriptor-driven
-        # path with on-GPU dim gather (OP_LOAD_DIM) + transitive dim->dim folds.
+        # FK-join (Q14 UNGROUPED, Q3 SORT_SEGREDUCE / HASH_GROUP): generic
+        # descriptor-driven path with on-GPU dim gather (OP_LOAD_DIM) +
+        # transitive dim->dim folds. HASH_GROUP is the NVIDIA/AMD Q3 path (one-
+        # pass GPU hash-aggregate instead of sort+segreduce).
         if len(d.dim_edges) > 0 and (
             d.strategy == STRAT_UNGROUPED
             or d.strategy == STRAT_SORT_SEGREDUCE
+            or d.strategy == STRAT_HASH_GROUP
         ):
             return _pin_finalize_generic_dims(handle)
 

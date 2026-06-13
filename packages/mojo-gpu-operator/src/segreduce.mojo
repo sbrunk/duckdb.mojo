@@ -45,19 +45,27 @@ row-major as result[g * M + m]. For UNGROUPED n_out_groups == 1; for DENSE_GROUP
 n_out_groups == G; for SORT_SEGREDUCE n_out_groups == n_seg.
 """
 
-from std.gpu import block_idx, thread_idx
+from std.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim
 from std.gpu.primitives import warp
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
+from std.atomic import Atomic
+from std.os import abort
+from std.sys.info import is_nvidia_gpu, is_amd_gpu
 from gpu_platform import WARP
 from raw_plan_tags import (
     STRAT_UNGROUPED,
     STRAT_DENSE_GROUP,
     STRAT_SORT_SEGREDUCE,
+    STRAT_HASH_GROUP,
 )
 from expr_vm import eval_program
 
 comptime SEG_NBLOCKS = 4096  # one warp per block (matches the existing kernels)
+comptime HASH_BLOCK = 256  # threads/block for the one-thread-per-row hash kernel
+# Sentinel marking an empty hash slot. l_orderkey (and every TPC-H group key the
+# host routes here) is >= 1, so INT64_MIN can never be a real key.
+comptime HASH_EMPTY: Int64 = -0x8000_0000_0000_0000
 comptime SEG_MAX_METRICS = 8  # per-lane accumulator cap for the grid kernels
 
 
@@ -208,6 +216,89 @@ def seg_sort_kernel(
         var tot = warp.sum(acc[m])
         if lane == 0:
             seg_out[s * M + m] = tot
+
+
+# ---------------------------------------------------------------------------
+# HASH_GROUP kernel (NVIDIA / AMD only; needs 64-bit atomics).
+#
+# An open-addressing (linear-probe) hash table lives on the device:
+#   slot_key[cap]      : the claimed group key, or HASH_EMPTY if free.
+#   slot_acc[cap * M]   : M int64 metric accumulators per slot.
+# One THREAD per fact row (grid-stride). A passing row computes its group key
+# (the integer fact group key, in column slot `gk_slot`) and each metric value
+# via the expr VM, then linear-probes from hash(key): at each probe it tries to
+# CLAIM the slot with an atomic compare-exchange of the key word (EMPTY->key);
+# success or finding the slot already holding `key` both stop the probe, and the
+# row Atomic.fetch_adds its metric int64s into that slot. Per-group totals fit
+# int64 (see the exactness bound in run_hashgroup), so the device side is pure
+# int64 atomics; the int128 widening happens on the host read-back exactly like
+# the other modes. No sort, no ORDER BY, single pass.
+#
+# 64-bit atomics gate: the ENTIRE body is wrapped in
+# `comptime if is_nvidia_gpu() or is_amd_gpu()`. On Apple (no 64-bit atomics)
+# the body compiles to an empty/abort kernel and the host never launches it (it
+# keeps SORT_SEGREDUCE), so the comptime-false branch is never reached.
+# ---------------------------------------------------------------------------
+def seg_hash_kernel(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gk_slot: Int,
+    cap: Int,  # hash table capacity (power of two)
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    slot_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    slot_acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    comptime if is_nvidia_gpu() or is_amd_gpu():
+        # grid-stride: global_idx folds block_idx*block_dim + thread_idx; stride
+        # by the full launched thread count each step.
+        var i = Int(global_idx.x)
+        var grid = Int(block_dim.x) * Int(grid_dim.x)
+        var mask = cap - 1  # cap is pow2 => key & mask == key % cap
+        while i < n_rows:
+            if _row_passes(
+                pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+            ):
+                var key = cols[gk_slot * n_rows + i]
+                # mix the key (Knuth multiplicative) then mask to [0, cap).
+                var h = Int((UInt64(key) * 0x9E3779B97F4A7C15) >> 33) & mask
+                # linear probe to claim or find the slot for `key`.
+                var slot = h
+                var placed = False
+                var guard = 0
+                while guard <= cap:
+                    var expected = HASH_EMPTY
+                    # Try to claim an empty slot for this key.
+                    if Atomic[DType.int64].compare_exchange(
+                        slot_key + slot, expected, key
+                    ):
+                        placed = True  # we claimed it
+                    elif expected == key:
+                        placed = True  # already ours (claimed by another row)
+                    if placed:
+                        var base = slot * M
+                        for m in range(M):
+                            var prog = metric_progs + 3 * Int(metric_offsets[m])
+                            var v = eval_program(
+                                prog, Int(metric_lens[m]), cols, n_rows, i,
+                                dims, dim_offsets,
+                            )
+                            _ = Atomic[DType.int64].fetch_add(
+                                slot_acc + base + m, v
+                            )
+                        break
+                    slot = (slot + 1) & mask
+                    guard += 1
+            i += grid
+    else:
+        # Apple has no 64-bit atomics; the host never routes here.
+        abort("seg_hash_kernel requires 64-bit atomics (NVIDIA/AMD)")
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +497,114 @@ def segreduce_run(
         result.append(acc)
     part_h.free()
     return result^
+
+
+# ---------------------------------------------------------------------------
+# HASH_GROUP result: the occupied-slot group keys + their int128 metric sums,
+# laid out sums[g * M + m] (same row-major shape segreduce_run returns), with
+# `keys[g]` the integer group key of output group g. Order is hash-slot order
+# (unspecified); the caller (and the parent ORDER BY) does not depend on it.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct HashGroupResult(Movable):
+    var keys: List[Int64]
+    var sums: List[Int128]
+    var M: Int
+
+
+# ---------------------------------------------------------------------------
+# segreduce_run_hash: the HASH_GROUP driver. NVIDIA/AMD only (the kernel body is
+# comptime-gated on 64-bit atomics; the host must only call this when
+# has_nvidia_gpu_accelerator()/has_amd_gpu_accelerator()).
+#
+# Allocates a device hash table (slot_key[cap] init HASH_EMPTY, slot_acc[cap*M]
+# init 0), launches one thread per fact row (grid-stride) to atomic-accumulate
+# each group's metric int64s, then reads back the occupied slots and widens to
+# int128 on the host (same exactness contract as the other modes: per-row + per-
+# group values fit int64; the int128 widening is host-side).
+#
+# `cap` must be a power of two and a safe bound on the distinct group count
+# (caller picks next_pow2 >= 2 * n_distinct_estimate; see run_hashgroup caller).
+# ---------------------------------------------------------------------------
+def segreduce_run_hash(
+    mut res: SegResident,
+    gk_slot: Int,
+    cap: Int,
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_n_ops: Int,
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+) raises -> HashGroupResult:
+    var ctx = res.ctx
+    var cols_d = res.cols_d
+    var n_rows = res.n_rows
+    var dims_d = res.dims_d
+
+    # ---- small per-run program buffers (mirrors segreduce_run) ----
+    var doff_n = res.n_dims + 1 if res.n_dims > 0 else 1
+    var doff_d = ctx.enqueue_create_buffer[DType.int64](doff_n)
+    if res.n_dims > 0:
+        ctx.enqueue_copy(doff_d, res.dim_offsets.unsafe_ptr())
+
+    var pass_n = pass_len * 3 if pass_len > 0 else 1
+    var pass_d = ctx.enqueue_create_buffer[DType.int64](pass_n)
+    if pass_len > 0:
+        ctx.enqueue_copy(pass_d, pass_prog_host)
+
+    var mp_n = metric_progs_n_ops * 3 if metric_progs_n_ops > 0 else 1
+    var mp_d = ctx.enqueue_create_buffer[DType.int64](mp_n)
+    if metric_progs_n_ops > 0:
+        ctx.enqueue_copy(mp_d, metric_progs_host)
+    var moff_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(moff_d, metric_offsets_host)
+    var mlen_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(mlen_d, metric_lens_host)
+
+    # ---- the device hash table: keys init to HASH_EMPTY, accumulators to 0 ----
+    var slot_key_d = ctx.enqueue_create_buffer[DType.int64](cap)
+    var slot_acc_d = ctx.enqueue_create_buffer[DType.int64](cap * M)
+    slot_key_d.enqueue_fill(HASH_EMPTY)
+    slot_acc_d.enqueue_fill(Int64(0))
+    ctx.synchronize()
+
+    # ---- launch: one thread per row, grid-stride over n_rows ----
+    var nblocks = (n_rows + HASH_BLOCK - 1) // HASH_BLOCK
+    if nblocks < 1:
+        nblocks = 1
+    # Cap the grid so the stride loop stays efficient (still covers all rows).
+    if nblocks > SEG_NBLOCKS:
+        nblocks = SEG_NBLOCKS
+    ctx.enqueue_function[seg_hash_kernel](
+        cols_d, n_rows, gk_slot, cap,
+        pass_d, pass_len,
+        mp_d, moff_d, mlen_d, M,
+        dims_d, doff_d,
+        slot_key_d, slot_acc_d,
+        grid_dim=nblocks, block_dim=HASH_BLOCK,
+    )
+    ctx.synchronize()
+
+    # ---- read back occupied slots, widen int64 -> int128 on the host ----
+    var key_h = alloc[Int64](cap)
+    var acc_h = alloc[Int64](cap * M)
+    ctx.enqueue_copy(key_h, slot_key_d)
+    ctx.enqueue_copy(acc_h, slot_acc_d)
+    ctx.synchronize()
+
+    var keys = List[Int64]()
+    var sums = List[Int128]()
+    for slot in range(cap):
+        if key_h[slot] == HASH_EMPTY:
+            continue
+        keys.append(key_h[slot])
+        for m in range(M):
+            sums.append(Int128(acc_h[slot * M + m]))
+    key_h.free()
+    acc_h.free()
+    return HashGroupResult(keys^, sums^, M)
 
 
 # ---------------------------------------------------------------------------

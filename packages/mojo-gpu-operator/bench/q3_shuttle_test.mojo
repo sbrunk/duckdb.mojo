@@ -31,6 +31,7 @@ from gpu_kernels import (
     mojo_gpu_build_descriptor,
     mojo_gpu_desc_free,
     mojo_gpu_desc_kind,
+    mojo_gpu_desc_strategy,
     mojo_gpu_desc_n_dims,
     mojo_gpu_desc_out_arity,
     mojo_gpu_desc_materialize_count,
@@ -60,6 +61,7 @@ from raw_plan_tags import (
     OP_MUL,
     KIND_Q3,
     STRAT_SORT_SEGREDUCE,
+    STRAT_HASH_GROUP,
     IDX_NONE,
 )
 from std.memory import alloc
@@ -342,13 +344,27 @@ def main() raises:
     var cap = 512
     var sql_buf = alloc[UInt8](cap)
 
-    # request 0: fact SQL (must ORDER BY l_orderkey + name fact cols).
+    # Strategy is platform-dependent: SORT_SEGREDUCE on Apple (no 64-bit atomics),
+    # HASH_GROUP on NVIDIA/AMD (one-pass GPU hash-aggregate, no sort).
+    var strat = Int64(mojo_gpu_desc_strategy(h))
+    var is_hash = strat == STRAT_HASH_GROUP
+    print("strategy:", strat, "(2=SORT_SEGREDUCE, 3=HASH_GROUP)")
+
+    # request 0: fact SQL. SORT_SEGREDUCE must ORDER BY l_orderkey; HASH_GROUP
+    # must NOT inject an ORDER BY (no sorted input needed).
     var sql0_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     var sql0 = String("")
     for k in range(sql0_len):
         sql0 += chr(Int(sql_buf[k]))
     print("fact SQL:", sql0)
-    assert_true("ORDER BY l_orderkey" in sql0, "fact SQL missing ORDER BY l_orderkey")
+    if is_hash:
+        assert_true(
+            "ORDER BY" not in sql0, "HASH_GROUP fact SQL must NOT have ORDER BY"
+        )
+    else:
+        assert_true(
+            "ORDER BY l_orderkey" in sql0, "fact SQL missing ORDER BY l_orderkey"
+        )
     assert_true("l_orderkey" in sql0, "fact SQL missing l_orderkey")
     var fact_order = _parse_order(sql0)
 

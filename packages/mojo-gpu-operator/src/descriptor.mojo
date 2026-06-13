@@ -15,6 +15,10 @@ Exercised directly by `bench/raw_plan_roundtrip_test.mojo` and the Stage-2
 shuttle test `bench/q6_shuttle_test.mojo`.
 """
 
+from std.sys.info import (
+    has_nvidia_gpu_accelerator,
+    has_amd_gpu_accelerator,
+)
 from raw_plan_tags import (
     RP_MAGIC,
     TYPE_INTEGER,
@@ -488,7 +492,16 @@ def build_descriptor_impl(
                 if tt == TYPE_BIGINT or tt == TYPE_INTEGER:
                     has_int_fact_key = True
         if has_int_fact_key:
-            strategy = STRAT_SORT_SEGREDUCE
+            # High-cardinality integer fact group key (Q3: l_orderkey). On a GPU
+            # with 64-bit atomics (NVIDIA / AMD) prefer a single-pass GPU hash-
+            # aggregate (no sort, no ORDER BY, no 1-warp-per-tiny-segment launch).
+            # Apple has no 64-bit atomics, so it MUST keep sort+segreduce. This is
+            # a HOST capability check (`has_*_accelerator`), not a kernel target
+            # check, so it is correct to evaluate here in strategy selection.
+            if has_nvidia_gpu_accelerator() or has_amd_gpu_accelerator():
+                strategy = STRAT_HASH_GROUP
+            else:
+                strategy = STRAT_SORT_SEGREDUCE
         else:
             # Small group-key count / VARCHAR dimension keys -> dense group.
             # (Q1: 2 VARCHAR fact keys; Q5: 1 VARCHAR dim key.)
