@@ -124,8 +124,23 @@ CPU-cycle-dominated**: see "Execution & the pin" below.
 `ExpressionExecutor` interprets bound trees on vectors; we can't ship that to the
 GPU, so the planner compiles the filter + aggregate arguments into a tiny
 **postfix integer program** run by `expr_vm` ([src/expr_vm.mojo](src/expr_vm.mojo)):
-`LOAD_COL / PUSH_CONST / ADD / SUB / MUL / SELECT / OP_LOAD_DIM / OP_EQ`. Two
-GPU-specific lowerings fall out:
+`LOAD_COL / PUSH_CONST / ADD / SUB / MUL / SELECT / OP_LOAD_DIM / OP_EQ`.
+
+> **Comptime-specialized kernels (Mojo's answer to runtime JIT).** The interpreter
+> is the *universal fallback*. For the recognized kinds (Q1/Q6/Q14/Q5) the per-row
+> program is instead compiled into a **stackless, branch-free, register-resident**
+> evaluator via Mojo `@parameter` specialization (`seg_*_kernel_q*` +
+> `eval_program_fast` in [src/segreduce.mojo](src/segreduce.mojo)), dispatched by
+> `desc.kind` from the single warm/cold `_assemble` site. This is what cuDF needs a
+> runtime `nvrtc` JIT (`AST_JIT`) for — Mojo does it at compile time, portable to
+> NVIDIA/Apple/AMD with no runtime compiler. Bit-identical to the interpreter
+> (asserted in `bench/expr_comptime_probe.mojo`), measured **4.7× (Q1) / 1.8× (Q6)
+> on Apple M3 Max** and **17.9× (Q1) / 5.5× (Q6) on RTX 4090** at the kernel level
+> (the wide SIMT machine pays more for the interpreter's branch divergence +
+> per-op global program reads). Any unrecognized shape runs the `expr_vm` path
+> unchanged, so a novel expression can never be wrong.
+
+Two GPU-specific lowerings fall out:
 - **Joins become gathers.** TPC-H FKs are dense surrogate PKs, so a join lowers to
   an on-GPU dense-array gather `OP_LOAD_DIM(dim[fact_key[row]])` rather than a hash
   probe.
@@ -289,5 +304,20 @@ Linux build notes:
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and
   sf10, so the cost heuristic keeps this shape on the CPU. Not an open task —
   measured and settled.
+- **Dynamic-filter / semi-join pushdown into the fact materialize is CPU-favorable
+  — measured and declined.** The idea (Sirius dynamic filters / Mordred semi-join
+  transfer): derive surviving join keys from the filtered dimensions and push a
+  `WHERE fact_fk IN (SELECT dim_key FROM dim WHERE …)` into the fact materialize
+  SQL so DuckDB prunes fact rows before they cross PCIe. The fact-row reduction is
+  huge (Q5: 33×, 6.0M→0.18M at sf1; same ratio at sf10), but the pushed query is
+  **1.4–5× slower** than the plain full scan at both scales: building the dim hash
+  tables + probing the fact dominates the saved output volume. Decisively,
+  `EXPLAIN ANALYZE` shows DuckDB **already pushes its own dynamic filters** from the
+  dimension hash-builds into the `lineitem` scan (227k rows read, not 6M) — the
+  optimization is something DuckDB's planner does better, and it *still* loses to a
+  plain scan. The win, if any, would be discrete-GPU cold-first-touch only (Q5
+  alone among default-offloaded kinds), and the cold path is amortized by the warm
+  pin and removed entirely by a GPU-direct scan (above). See
+  `bench/semijoin_pushdown_probe.mojo`. Not pursued.
 - The accepted class is FK-join + filter + group-by/aggregate (+ the cosine kNN
   path); shapes outside it fall back to CPU by design.
