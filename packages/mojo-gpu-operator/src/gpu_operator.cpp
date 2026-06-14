@@ -33,6 +33,24 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/types/date.hpp"
+// Storage-internal headers for the GPU-direct native-storage decode path
+// (Phase A reachability + Phase C end-to-end slice). These are DuckDB-internal
+// (CPP ABI), version-locked to the exact DuckDB this extension is built against.
+#include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
+#include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/table/row_group_collection.hpp"
+#include "duckdb/storage/table/row_group.hpp"
+#include "duckdb/storage/table/column_data.hpp"
+#include "duckdb/storage/table/column_segment.hpp"
+#include "duckdb/storage/table_storage_info.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
+#include "duckdb/storage/buffer/buffer_handle.hpp"
+#include "duckdb/storage/storage_manager.hpp"
+#include "duckdb/storage/block_manager.hpp"
+#include "duckdb/storage/storage_index.hpp"
+#include "duckdb/common/enums/compression_type.hpp"
+#include "duckdb/common/enum_util.hpp"
+#include "duckdb/main/attached_database.hpp"
 
 #include "raw_plan.h"
 
@@ -62,6 +80,13 @@ void mojo_gpu_ctx_init();
 int64_t mojo_gpu_cosine_init(const float *q, int64_t K, int64_t capacity_rows);
 int32_t mojo_gpu_cosine_run(void *handle, const float *emb, int64_t n_rows, float *out);
 void mojo_gpu_cosine_free(void *handle);
+// GPU-direct native-storage segment decode (Phase C). Uploads `seg_bytes`
+// (seg_nbytes raw bytes), decodes `n_rows` values on the GPU, writes them into
+// the host `out_ptr`. codec: 0=UNCOMPRESSED, 1=BITPACKING (CONSTANT/FOR);
+// type_code: 0=int32, 1=int64. rc: 0 ok; 1 bad args; 2 unsupported; 3 internal.
+int32_t mojo_gpu_decode_segment(const uint8_t *seg_bytes, int64_t seg_nbytes,
+                                int64_t n_rows, int64_t codec, int64_t type_code,
+                                void *out_ptr);
 // Pin-resident engine: pin the whole column once, query many times.
 int64_t mojo_gpu_pin(const float *emb, int64_t n_rows, int64_t K);
 int32_t mojo_gpu_pin_query(void *handle, const float *q, float *out);
@@ -2048,12 +2073,530 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   return true;
 }
 
+// ===-------------------------------------------------------------------===//
+// GPU-DIRECT NATIVE-STORAGE DECODE (debug-only entry points).
+//
+// Phase A: gpu_native_segment_info(table, column) -- run the in-process
+//          table->bytes reachability call chain and emit per-segment metadata
+//          (compression_type, mode, segment_start/count, block_id, and for the
+//          first group: frame + width parsed straight out of the pinned bytes).
+//          Proves byte reachability + that our byte-layout reading matches.
+//
+// Phase C: gpu_native_decode_check(table, column) -- pin each segment, decode
+//          it on the GPU via mojo_gpu_decode_segment into a contiguous output at
+//          segment_start, then compare every value against
+//          Connection::Query("SELECT <column> FROM <table>") (unfiltered scan
+//          order). Asserts every value is BIT-IDENTICAL.
+//
+// Both are additive, parallel to the existing CPU-materialize cold path; they
+// do not touch it. They use DuckDB-internal storage APIs (CPP ABI).
+// ===-------------------------------------------------------------------===//
+
+// Resolve the {DuckTableEntry, storage index, logical type} for table.column.
+struct NativeColumnRef {
+  DuckTableEntry *table = nullptr;
+  StorageIndex storage_index;
+  LogicalType type;
+  idx_t physical_type_size = 0;
+};
+
+NativeColumnRef ResolveNativeColumn(ClientContext &context, const std::string &table_name,
+                                    const std::string &column_name) {
+  auto &entry = Catalog::GetEntry<TableCatalogEntry>(context, INVALID_CATALOG, DEFAULT_SCHEMA, table_name);
+  auto &duck_table = entry.Cast<DuckTableEntry>();
+
+  std::string col = column_name;
+  auto logical = entry.GetColumnIndex(col, /*if_exists=*/true);
+  if (!logical.IsValid()) {
+    throw InvalidInputException("gpu_native: column '" + column_name + "' not found in '" + table_name + "'");
+  }
+  auto storage_index = entry.GetStorageIndex(ColumnIndex(logical.index));
+  const auto &cdef = entry.GetColumn(logical);
+
+  NativeColumnRef ref;
+  ref.table = &duck_table;
+  ref.storage_index = storage_index;
+  ref.type = cdef.GetType();
+  ref.physical_type_size = GetTypeIdSize(ref.type.InternalType());
+  return ref;
+}
+
+// One decoded-ready segment: the codec + a host pointer to the segment's raw
+// bytes (kept alive by the BufferHandle held in the caller's vector).
+struct PinnedSegment {
+  ColumnSegmentInfo info;        // metadata (compression_type, mode string, ...)
+  const_data_ptr_t base = nullptr;  // pointer to the segment's first byte
+  idx_t seg_bytes = 0;           // SegmentSize() of the persistent segment
+  unique_ptr<ColumnSegment> segment;  // owns nothing block-wise; keeps type alive
+  BufferHandle handle;           // KEEP ALIVE: the pinned block backing `base`
+};
+
+// Map a DuckDB CompressionType to the Mojo decode `codec` arg (0/1) or -1 if
+// this codec is not handled by the Phase-B kernels.
+int CodecToMojo(CompressionType ct) {
+  switch (ct) {
+  case CompressionType::COMPRESSION_UNCOMPRESSED:
+    return 0;
+  case CompressionType::COMPRESSION_BITPACKING:
+    return 1;
+  default:
+    return -1;
+  }
+}
+
+// type_code for the Mojo export: 0=int32 (4B), 1=int64 (8B). -1 if unsupported.
+int TypeCodeForSize(idx_t type_size) {
+  if (type_size == 4) return 0;
+  if (type_size == 8) return 1;
+  return -1;
+}
+
+// Enumerate + pin every persistent data segment of a column, in scan order.
+// Calls `fn(seg_index, PinnedSegment&)` for each. The BufferHandle inside each
+// PinnedSegment stays alive only within this call, so `fn` must consume `base`
+// before returning (decode / parse inline).
+template <typename FN>
+void ForEachColumnSegment(ClientContext &context, NativeColumnRef &ref, FN &&fn) {
+  auto &storage = ref.table->GetStorage();
+  auto &row_groups = *storage.GetRowGroupCollection();
+  auto &attached = storage.GetAttached();
+  auto &db = attached.GetDatabase();
+  auto &block_manager = attached.GetStorageManager().GetBlockManager();
+  auto &buffer_manager = BufferManager::GetBufferManager(context);
+
+  idx_t global_seg_index = 0;
+  idx_t rg_count = row_groups.GetRowGroupCount();
+  for (idx_t rg = 0; rg < rg_count; rg++) {
+    auto row_group = row_groups.GetRowGroup(NumericCast<int64_t>(rg));
+    if (!row_group) continue;
+    auto &column_data = row_group->GetRawColumnData(ref.storage_index);
+
+    vector<ColumnSegmentInfo> seg_infos;
+    column_data.GetColumnSegmentInfo(QueryContext(context), rg, {ref.storage_index.GetPrimaryIndex()},
+                                     seg_infos);
+
+    for (auto &si : seg_infos) {
+      PinnedSegment ps;
+      ps.info = si;
+      // CONSTANT segments live in-memory (block_id < 0): no on-disk bytes to
+      // pin. Skip them here -- they are decoded purely from stats by the
+      // bitpacking CONSTANT path only when bitpacked; a top-level CONSTANT
+      // compression segment has no packed bytes. Hand them to `fn` with a null
+      // base so the caller can handle (Phase A prints; Phase C is told).
+      auto ct = EnumUtil::FromString<CompressionType>(si.compression_type.c_str());
+      if (si.persistent && si.block_id >= 0) {
+        auto segment = ColumnSegment::CreatePersistentSegment(
+            db, block_manager, si.block_id, si.block_offset, ref.type,
+            si.segment_count, ct, BaseStatistics::CreateEmpty(ref.type),
+            /*segment_state=*/nullptr);
+        ps.seg_bytes = segment->SegmentSize();
+        ps.handle = buffer_manager.Pin(segment->block);
+        ps.base = ps.handle.Ptr() + segment->GetBlockOffset();
+        ps.segment = std::move(segment);
+      }
+      fn(global_seg_index, ps);
+      global_seg_index++;
+    }
+  }
+}
+
+// --- Phase A: gpu_native_segment_info(table, column) --------------------------
+struct GpuNativeSegInfoBindData : public TableFunctionData {
+  struct Row {
+    idx_t segment_index;
+    string compression_type;
+    string mode;            // group-0 mode string (e.g. "FOR") or segment_info
+    idx_t segment_start;
+    idx_t segment_count;
+    int64_t block_id;
+    int64_t frame0;         // group-0 frame (FOR) or constant value, else 0
+    int64_t width0;         // group-0 bit width (FOR), else -1
+  };
+  vector<Row> rows;
+};
+
+struct GpuNativeTFState : public GlobalTableFunctionState {
+  idx_t offset = 0;
+  idx_t MaxThreads() const override { return 1; }
+};
+
+// Parse one metadata group's mode/frame/width/data_off directly out of the
+// pinned bytes, matching the Mojo kernel's reader exactly (used by the debug
+// entry points to prove byte agreement). `group_idx` selects the group.
+void ParseBitpackingGroup(const_data_ptr_t base, idx_t seg_bytes, idx_t type_size, idx_t group_idx,
+                          string &out_mode, int64_t &out_frame, int64_t &out_width,
+                          int64_t &out_data_off) {
+  out_mode = "?"; out_frame = 0; out_width = -1; out_data_off = -1;
+  if (!base || seg_bytes < 8) return;
+  uint64_t metadata_end = 0;
+  std::memcpy(&metadata_end, base, sizeof(uint64_t));
+  if (metadata_end < 8 + (group_idx + 1) * 4 || metadata_end > seg_bytes) { out_mode = "BAD_META"; return; }
+  uint32_t encoded = 0;
+  std::memcpy(&encoded, base + metadata_end - (group_idx + 1) * 4, sizeof(uint32_t));
+  uint32_t data_off = encoded & 0x00FFFFFFu;
+  uint32_t pmode = (encoded >> 24) & 0xFFu;
+  out_data_off = static_cast<int64_t>(data_off);
+  // BitpackingMode: 0 INVALID,1 AUTO,2 CONSTANT,3 CONSTANT_DELTA,4 DELTA_FOR,5 FOR
+  static const char *kModeNames[] = {"INVALID", "AUTO", "CONSTANT", "CONSTANT_DELTA",
+                                     "DELTA_FOR", "FOR"};
+  out_mode = (pmode <= 5) ? kModeNames[pmode] : "UNKNOWN";
+  if (data_off + 2 * type_size > metadata_end) return;
+  auto rd = [&](idx_t off) -> int64_t {
+    int64_t v = 0;
+    if (type_size == 4) { int32_t t; std::memcpy(&t, base + off, 4); v = t; }
+    else { std::memcpy(&v, base + off, 8); }
+    return v;
+  };
+  if (pmode == 5 /*FOR*/) {
+    out_frame = rd(data_off);
+    out_width = static_cast<int64_t>(base[data_off + type_size]);  // width byte
+  } else if (pmode == 2 /*CONSTANT*/) {
+    out_frame = rd(data_off);
+  }
+}
+
+void ParseBitpackingGroup0(const_data_ptr_t base, idx_t seg_bytes, idx_t type_size,
+                           string &out_mode, int64_t &out_frame, int64_t &out_width) {
+  int64_t doff;
+  ParseBitpackingGroup(base, seg_bytes, type_size, 0, out_mode, out_frame, out_width, doff);
+}
+
+unique_ptr<FunctionData> GpuNativeSegInfoBind(ClientContext &context, TableFunctionBindInput &input,
+                                              vector<LogicalType> &return_types, vector<string> &names) {
+  auto table = input.inputs[0].GetValue<string>();
+  auto column = input.inputs[1].GetValue<string>();
+  auto ref = ResolveNativeColumn(context, table, column);
+
+  auto bd = make_uniq<GpuNativeSegInfoBindData>();
+  ForEachColumnSegment(context, ref, [&](idx_t idx, PinnedSegment &ps) {
+    GpuNativeSegInfoBindData::Row r;
+    r.segment_index = idx;
+    r.compression_type = ps.info.compression_type;
+    r.segment_start = ps.info.segment_start;
+    r.segment_count = ps.info.segment_count;
+    r.block_id = ps.info.block_id;
+    r.frame0 = 0; r.width0 = -1; r.mode = ps.info.segment_info;
+    if (ps.base && ps.info.compression_type == "BitPacking") {
+      string m; int64_t f, w;
+      ParseBitpackingGroup0(ps.base, ps.seg_bytes, ref.physical_type_size, m, f, w);
+      r.mode = m; r.frame0 = f; r.width0 = w;
+    }
+    bd->rows.push_back(std::move(r));
+  });
+
+  return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT};
+  names = {"segment_index", "compression_type", "mode", "segment_start",
+           "segment_count", "block_id", "frame0", "width0"};
+  return std::move(bd);
+}
+
+unique_ptr<GlobalTableFunctionState> GpuNativeTFInit(ClientContext &, TableFunctionInitInput &) {
+  return make_uniq<GpuNativeTFState>();
+}
+
+void GpuNativeSegInfoFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuNativeSegInfoBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  idx_t n = MinValue<idx_t>(bd.rows.size() - gs.offset, STANDARD_VECTOR_SIZE);
+  if (n == 0) { output.SetCardinality(0); return; }
+  auto c_idx = FlatVector::GetData<int64_t>(output.data[0]);
+  auto c_start = FlatVector::GetData<int64_t>(output.data[3]);
+  auto c_count = FlatVector::GetData<int64_t>(output.data[4]);
+  auto c_block = FlatVector::GetData<int64_t>(output.data[5]);
+  auto c_frame = FlatVector::GetData<int64_t>(output.data[6]);
+  auto c_width = FlatVector::GetData<int64_t>(output.data[7]);
+  for (idx_t i = 0; i < n; i++) {
+    auto &r = bd.rows[gs.offset + i];
+    c_idx[i] = NumericCast<int64_t>(r.segment_index);
+    output.data[1].SetValue(i, Value(r.compression_type));
+    output.data[2].SetValue(i, Value(r.mode));
+    c_start[i] = NumericCast<int64_t>(r.segment_start);
+    c_count[i] = NumericCast<int64_t>(r.segment_count);
+    c_block[i] = r.block_id;
+    c_frame[i] = r.frame0;
+    c_width[i] = r.width0;
+  }
+  output.SetCardinality(n);
+  gs.offset += n;
+}
+
+void RegisterGpuNativeSegInfoTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_native_segment_info", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                   GpuNativeSegInfoFunc, GpuNativeSegInfoBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+}
+
+// --- Debug: gpu_native_group_dump(table, column) ------------------------------
+// One row per 2048-row metadata group of every DATA segment, parsed straight
+// from the pinned bytes (mode/width/frame/data_off + seg_bytes). Used to pin
+// down per-group decode discrepancies.
+struct GpuNativeGroupDumpBindData : public TableFunctionData {
+  struct Row {
+    idx_t seg_index, group_idx, group_rows, global_start, seg_bytes;
+    string mode; int64_t frame, width, data_off;
+  };
+  vector<Row> rows;
+};
+
+unique_ptr<FunctionData> GpuNativeGroupDumpBind(ClientContext &context, TableFunctionBindInput &input,
+                                                vector<LogicalType> &return_types, vector<string> &names) {
+  auto table = input.inputs[0].GetValue<string>();
+  auto column = input.inputs[1].GetValue<string>();
+  auto ref = ResolveNativeColumn(context, table, column);
+  auto bd = make_uniq<GpuNativeGroupDumpBindData>();
+  idx_t global_row = 0;
+  ForEachColumnSegment(context, ref, [&](idx_t idx, PinnedSegment &ps) {
+    if (ps.info.column_path.find(',') != std::string::npos) return;  // data only
+    idx_t count = ps.info.segment_count;
+    idx_t seg_global = global_row;
+    global_row += count;
+    if (!ps.base || ps.info.compression_type != "BitPacking") return;
+    idx_t n_groups = (count + 2048 - 1) / 2048;
+    for (idx_t g = 0; g < n_groups; g++) {
+      idx_t grows = (g + 1 < n_groups) ? 2048 : count - g * 2048;
+      GpuNativeGroupDumpBindData::Row r;
+      r.seg_index = idx; r.group_idx = g; r.group_rows = grows;
+      r.global_start = seg_global + g * 2048; r.seg_bytes = ps.seg_bytes;
+      string m; int64_t f, w, doff;
+      ParseBitpackingGroup(ps.base, ps.seg_bytes, ref.physical_type_size, g, m, f, w, doff);
+      r.mode = m; r.frame = f; r.width = w; r.data_off = doff;
+      bd->rows.push_back(std::move(r));
+    }
+  });
+  return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT};
+  names = {"seg_index", "group_idx", "group_rows", "global_start", "mode", "frame", "width", "data_off"};
+  return std::move(bd);
+}
+
+void GpuNativeGroupDumpFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuNativeGroupDumpBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  idx_t n = MinValue<idx_t>(bd.rows.size() - gs.offset, STANDARD_VECTOR_SIZE);
+  if (n == 0) { output.SetCardinality(0); return; }
+  for (idx_t i = 0; i < n; i++) {
+    auto &r = bd.rows[gs.offset + i];
+    FlatVector::GetData<int64_t>(output.data[0])[i] = NumericCast<int64_t>(r.seg_index);
+    FlatVector::GetData<int64_t>(output.data[1])[i] = NumericCast<int64_t>(r.group_idx);
+    FlatVector::GetData<int64_t>(output.data[2])[i] = NumericCast<int64_t>(r.group_rows);
+    FlatVector::GetData<int64_t>(output.data[3])[i] = NumericCast<int64_t>(r.global_start);
+    output.data[4].SetValue(i, Value(r.mode));
+    FlatVector::GetData<int64_t>(output.data[5])[i] = r.frame;
+    FlatVector::GetData<int64_t>(output.data[6])[i] = r.width;
+    FlatVector::GetData<int64_t>(output.data[7])[i] = r.data_off;
+  }
+  output.SetCardinality(n);
+  gs.offset += n;
+}
+
+void RegisterGpuNativeGroupDumpTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_native_group_dump", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                   GpuNativeGroupDumpFunc, GpuNativeGroupDumpBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+}
+
+// --- Phase C: gpu_native_decode_check(table, column) --------------------------
+// Decodes every supported segment on the GPU and compares against the CPU scan.
+struct GpuNativeDecodeCheckBindData : public TableFunctionData {
+  int64_t total_rows = 0;
+  int64_t checked_rows = 0;
+  int64_t mismatches = 0;
+  int64_t skipped_segments = 0;
+  int64_t first_mismatch_row = -1;
+  int64_t first_got = 0;
+  int64_t first_want = 0;
+  int64_t deferred_rows = 0;   // rows in DELTA_FOR / CONSTANT_DELTA / unknown groups (not yet implemented)
+  string status;
+};
+
+unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+  auto table = input.inputs[0].GetValue<string>();
+  auto column = input.inputs[1].GetValue<string>();
+  auto ref = ResolveNativeColumn(context, table, column);
+
+  auto bd = make_uniq<GpuNativeDecodeCheckBindData>();
+  int type_code = TypeCodeForSize(ref.physical_type_size);
+  if (type_code < 0) {
+    bd->status = "unsupported physical type size " + std::to_string(ref.physical_type_size);
+    return_types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT,
+                    LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                    LogicalType::BIGINT};
+    names = {"status", "checked_rows", "mismatches", "first_mismatch_row", "skipped_segments",
+             "first_got", "first_want", "deferred_rows"};
+    return std::move(bd);
+  }
+
+  // CPU reference: materialize the column in unfiltered scan order as the
+  // physical storage integer (int32 for 4B types like DATE/INTEGER, int64 for
+  // 8B). We compare against the storage representation the kernel produces.
+  Connection con(*context.db);
+  auto res = con.Query("SELECT " + column + " FROM " + table);
+  if (res->HasError()) { throw InvalidInputException("gpu_native_decode_check: " + res->GetError()); }
+  vector<int64_t> reference;  // store as int64 regardless; compare per-width
+  while (true) {
+    auto chunk = res->Fetch();
+    if (!chunk || chunk->size() == 0) break;
+    auto n = chunk->size();
+    chunk->data[0].Flatten(n);
+    if (type_code == 0) {
+      // 4B physical: DATE -> int32 days, INTEGER -> int32. Read via the column's
+      // physical layout. We re-Flatten to a typed pointer of the right width.
+      auto pt = ref.type.InternalType();
+      if (pt == PhysicalType::INT32) {
+        auto d = FlatVector::GetData<int32_t>(chunk->data[0]);
+        for (idx_t i = 0; i < n; i++) reference.push_back(d[i]);
+      } else {
+        throw InvalidInputException("gpu_native_decode_check: 4B but not INT32 physical");
+      }
+    } else {
+      auto pt = ref.type.InternalType();
+      if (pt == PhysicalType::INT64) {
+        auto d = FlatVector::GetData<int64_t>(chunk->data[0]);
+        for (idx_t i = 0; i < n; i++) reference.push_back(d[i]);
+      } else {
+        throw InvalidInputException("gpu_native_decode_check: 8B but not INT64 physical");
+      }
+    }
+  }
+  bd->total_rows = NumericCast<int64_t>(reference.size());
+
+  // GPU decode per segment into a contiguous output at the GLOBAL row offset,
+  // comparing each decoded value against the reference.
+  //
+  // Two subtleties (verified against duckdb storage/table/column_data.cpp):
+  //   * GetColumnSegmentInfo recurses into the validity child, which appears as
+  //     a separate ColumnSegmentInfo with column_path "[N, 0]" (the data column
+  //     is "[N]", no comma). We decode ONLY the data column's segments.
+  //   * `segment_start` is row-group-relative (it resets each row group), so we
+  //     track our own running GLOBAL offset across accepted data segments.
+  vector<int32_t> dec32;
+  vector<int64_t> dec64;
+  idx_t global_row = 0;
+  ForEachColumnSegment(context, ref, [&](idx_t /*idx*/, PinnedSegment &ps) {
+    // Skip validity (or any nested-child) segments: only the top-level data
+    // column path "[N]" has no comma.
+    if (ps.info.column_path.find(',') != std::string::npos) { return; }
+    int codec = CodecToMojo(EnumUtil::FromString<CompressionType>(ps.info.compression_type.c_str()));
+    idx_t count = ps.info.segment_count;
+    idx_t start = global_row;     // GLOBAL output offset (running)
+    global_row += count;          // advance regardless, so offsets stay aligned
+    if (!ps.base || codec < 0) {
+      bd->skipped_segments++;
+      return;  // not a pinnable/handled segment (e.g. top-level CONSTANT)
+    }
+    // For BITPACKING segments, classify each 2048-group's mode so we can
+    // attribute the (expected) zero-filled DELTA_FOR / CONSTANT_DELTA / unknown
+    // groups to `deferred_rows` rather than counting them as decode failures.
+    // A `deferred` row is one whose group mode is NOT yet implemented (the
+    // kernel deterministically zero-fills it). FOR/CONSTANT groups must match
+    // bit-exact -- a mismatch there is a real bug.
+    auto group_deferred = [&](idx_t row_in_seg) -> bool {
+      if (codec != 1) return false;  // UNCOMPRESSED is always implemented
+      idx_t g = row_in_seg / 2048;
+      string m; int64_t f, w, doff;
+      ParseBitpackingGroup(ps.base, ps.seg_bytes, ref.physical_type_size, g, m, f, w, doff);
+      return !(m == "FOR" || m == "CONSTANT");
+    };
+
+    int32_t rc;
+    if (type_code == 0) {
+      dec32.assign(count, 0);
+      rc = mojo_gpu_decode_segment(ps.base, NumericCast<int64_t>(ps.seg_bytes),
+                                   NumericCast<int64_t>(count), codec, 0, dec32.data());
+      if (rc != 0) { bd->skipped_segments++; return; }
+      for (idx_t i = 0; i < count; i++) {
+        int64_t want = reference[start + i];
+        bool match = (static_cast<int64_t>(dec32[i]) == want);
+        if (!match) {
+          if (group_deferred(i)) { bd->deferred_rows++; }
+          else {
+            if (bd->first_mismatch_row < 0) {
+              bd->first_mismatch_row = NumericCast<int64_t>(start + i);
+              bd->first_got = dec32[i]; bd->first_want = want;
+            }
+            bd->mismatches++;
+          }
+        }
+        bd->checked_rows++;
+      }
+    } else {
+      dec64.assign(count, 0);
+      rc = mojo_gpu_decode_segment(ps.base, NumericCast<int64_t>(ps.seg_bytes),
+                                   NumericCast<int64_t>(count), codec, 1, dec64.data());
+      if (rc != 0) { bd->skipped_segments++; return; }
+      for (idx_t i = 0; i < count; i++) {
+        int64_t want = reference[start + i];
+        bool match = (dec64[i] == want);
+        if (!match) {
+          if (group_deferred(i)) { bd->deferred_rows++; }
+          else {
+            if (bd->first_mismatch_row < 0) {
+              bd->first_mismatch_row = NumericCast<int64_t>(start + i);
+              bd->first_got = dec64[i]; bd->first_want = want;
+            }
+            bd->mismatches++;
+          }
+        }
+        bd->checked_rows++;
+      }
+    }
+  });
+
+  int64_t implemented = bd->checked_rows - bd->deferred_rows;
+  if (bd->checked_rows == 0) {
+    bd->status = "NO_SEGMENTS_DECODED";
+  } else if (bd->mismatches != 0) {
+    bd->status = "FAIL: " + std::to_string(bd->mismatches) + " mismatches in implemented (FOR/CONSTANT) groups";
+  } else if (bd->deferred_rows == 0) {
+    bd->status = "PASS: " + std::to_string(bd->checked_rows) + " values bit-identical";
+  } else {
+    bd->status = "PASS (partial): " + std::to_string(implemented) +
+                 " FOR/CONSTANT values bit-identical; " + std::to_string(bd->deferred_rows) +
+                 " rows in deferred DELTA_FOR/CONSTANT_DELTA groups (zero-filled, not yet implemented)";
+  }
+
+  return_types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT};
+  names = {"status", "checked_rows", "mismatches", "first_mismatch_row", "skipped_segments",
+           "first_got", "first_want", "deferred_rows"};
+  return std::move(bd);
+}
+
+void GpuNativeDecodeCheckFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuNativeDecodeCheckBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  if (gs.offset > 0) { output.SetCardinality(0); return; }
+  output.data[0].SetValue(0, Value(bd.status));
+  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.checked_rows;
+  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.mismatches;
+  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.first_mismatch_row;
+  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.skipped_segments;
+  FlatVector::GetData<int64_t>(output.data[5])[0] = bd.first_got;
+  FlatVector::GetData<int64_t>(output.data[6])[0] = bd.first_want;
+  FlatVector::GetData<int64_t>(output.data[7])[0] = bd.deferred_rows;
+  output.SetCardinality(1);
+  gs.offset = 1;
+}
+
+void RegisterGpuNativeDecodeCheckTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_native_decode_check", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                   GpuNativeDecodeCheckFunc, GpuNativeDecodeCheckBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+}
+
 void LoadInternal(ExtensionLoader &loader) {
   mojo_gpu_ctx_init();                                 // pay the ~32 ms DeviceContext init once, at LOAD
   RegisterGpuOperator(loader.GetDatabaseInstance());  // transparent cosine operator
   RegisterGpuCosineTableFunction(loader);             // pin-resident cosine TF
   RegisterGpuCosineTopkTableFunction(loader);         // pin-resident cosine top-k TF
   RegisterGpuCosineTopkBatchTableFunction(loader);    // batched (table-of-queries) cosine top-k TF
+  RegisterGpuNativeSegInfoTableFunction(loader);      // Phase A: native-storage segment reachability
+  RegisterGpuNativeGroupDumpTableFunction(loader);    // debug: per-group mode/width dump
+  RegisterGpuNativeDecodeCheckTableFunction(loader);  // Phase C: GPU-direct decode bit-exact check
 }
 
 }  // namespace

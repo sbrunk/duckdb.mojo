@@ -336,10 +336,25 @@ Linux build notes:
 
 ## Limitations / open frontier
 
-- **Cold path** dominates a first-touch query (CPU materialize + upload); removing
-  it needs a GPU-direct scan (no Mojo/Metal columnar decoder today) or persistent
-  load-time residency. Heavier on a discrete GPU (full PCIe upload) than on Apple's
-  unified memory; the warm win needs a repeated workload to amortize it.
+- **Cold path** dominates a first-touch query (CPU materialize + upload). Heavier on
+  a discrete GPU (full PCIe upload) than on Apple's unified memory; the warm win
+  needs a repeated workload to amortize it. **A GPU-direct decoder now exists**
+  ([src/native_decode.mojo](src/native_decode.mojo)): it reads DuckDB v1.5.3 native
+  column segments straight from the live buffer manager (in-process pin — no file
+  re-read) and decodes them **on the GPU in Mojo** (portable; the reference, Sirius,
+  is CUDA-only). Validated bit-exact end-to-end on both platforms: every one of the
+  6,001,215 `l_shipdate` values decoded GPU-direct from BitPacking/FOR storage is
+  identical to DuckDB's scan (`gpu_native_decode_check`; synthetic codec coverage in
+  `bench/native_decode_test.mojo`). **Covered:** fixed-width UNCOMPRESSED + BITPACKING
+  modes CONSTANT/FOR. **Not yet:** DELTA_FOR (needs per-group prefix-sum; note that
+  per-2048-row group modes vary *within* a segment even under a "FOR" segment label,
+  so e.g. `l_orderkey`/`l_linenumber` are DELTA_FOR — the decoder defers these and
+  reports `deferred_rows`, never silently mis-decodes), RLE, validity (TPC-H is all
+  all-valid), strings (Dictionary/FSST). The decode path is wired as a validated
+  parallel path (`mojo_gpu_decode_segment` + the `gpu_native_*` debug table functions);
+  **replacing the `Connection::Query` feed with it is the next step** and should be
+  flag-gated + A/B-measured (DuckDB's own scan is multithreaded, so the win is
+  clearest on Apple unified memory and for repeated cold-distinct-predicate work).
 - **High-cardinality group-by (Q3) is CPU-favorable** — light per-row work + large
   group output. A GPU hash-aggregate is implemented (NVIDIA, `STRAT_HASH_GROUP`)
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and

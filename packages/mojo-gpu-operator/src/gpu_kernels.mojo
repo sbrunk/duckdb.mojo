@@ -37,6 +37,12 @@ from std.time import perf_counter_ns
 from tc_knn import run_tc_knn_batch, tc_knn_supported
 from tc_knn_apple import run_tc_knn_apple_batch, tc_knn_apple_supported
 
+from native_decode import (
+    bitpacking_decode_kernel,
+    uncompressed_decode_kernel,
+    BP_META_GROUP_SIZE,
+)
+
 import descriptor
 from descriptor import (
     GpuPlanDescriptor,
@@ -4666,3 +4672,93 @@ def mojo_gpu_result_str(
         return nbytes
     except:
         return 0
+
+# ===-------------------------------------------------------------------===#
+# Phase C: GPU-direct native-storage segment decode (@export wrapper).
+#
+# Decodes ONE column segment (raw on-disk/pinned bytes) on the GPU into a host
+# out-buffer slice. The C++ side (gpu_native_decode_check) pins the segment via
+# BufferManager, hands us {raw bytes, seg_bytes, n_rows, codec, type} and a host
+# pointer to write the decoded values at `segment_start`. Bit-exact decode is
+# verified in C++ against Connection::Query.
+#
+#   codec: 0 = UNCOMPRESSED fixed-width, 1 = BITPACKING (CONSTANT/FOR groups)
+#   type_code: 0 = int32, 1 = int64
+#   out_ptr: HOST buffer; we write n_rows decoded values of the given type.
+#
+# rc: 0 ok; 1 bad args; 2 unsupported type/codec; 3 internal error.
+# ===-------------------------------------------------------------------===#
+def _decode_segment_typed[
+    T: DType
+](
+    seg_bytes: UnsafePointer[UInt8, ImmutAnyOrigin],
+    seg_nbytes: Int,
+    n_rows: Int,
+    codec: Int,
+    out_ptr: UnsafePointer[Scalar[T], MutAnyOrigin],
+) raises -> Int32:
+    var ctx = shared_device_context()
+    var seg_d = ctx.enqueue_create_buffer[DType.uint8](seg_nbytes)
+    var out_d = ctx.enqueue_create_buffer[T](n_rows)
+    ctx.synchronize()
+    ctx.enqueue_copy(seg_d, seg_bytes)
+    ctx.synchronize()
+
+    if codec == 0:
+        # UNCOMPRESSED fixed-width: data_off = 0, one grid-strided launch.
+        comptime ukernel = uncompressed_decode_kernel[T]
+        ctx.enqueue_function[ukernel](
+            seg_d, out_d, n_rows, 0, 0,
+            grid_dim=256, block_dim=256,
+        )
+    else:
+        # BITPACKING: one block per 2048-row metadata group.
+        comptime bkernel = bitpacking_decode_kernel[T]
+        var n_groups = (n_rows + BP_META_GROUP_SIZE - 1) // BP_META_GROUP_SIZE
+        for g in range(n_groups):
+            var g0 = g * BP_META_GROUP_SIZE
+            var rows = (
+                BP_META_GROUP_SIZE if g0 + BP_META_GROUP_SIZE <= n_rows
+                else n_rows - g0
+            )
+            ctx.enqueue_function[bkernel](
+                seg_d, seg_nbytes, out_d, g, rows, g0,
+                grid_dim=1, block_dim=256,
+            )
+    ctx.synchronize()
+
+    # Copy decoded values back into the caller's host out-buffer.
+    var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n_rows, owning=False)
+    ctx.enqueue_copy(out_ptr, out_sub)
+    ctx.synchronize()
+    return 0
+
+
+@export("mojo_gpu_decode_segment")
+def mojo_gpu_decode_segment(
+    seg_bytes: UnsafePointer[UInt8, ImmutAnyOrigin],
+    seg_nbytes: Int,
+    n_rows: Int,
+    codec: Int,
+    type_code: Int,
+    out_ptr: UnsafePointer[NoneType, MutAnyOrigin],
+) abi("C") -> Int32:
+    if seg_nbytes <= 0 or n_rows <= 0:
+        return 1
+    if codec != 0 and codec != 1:
+        return 2
+    try:
+        if type_code == 0:
+            return _decode_segment_typed[DType.int32](
+                seg_bytes, seg_nbytes, n_rows, codec,
+                out_ptr.bitcast[Scalar[DType.int32]](),
+            )
+        elif type_code == 1:
+            return _decode_segment_typed[DType.int64](
+                seg_bytes, seg_nbytes, n_rows, codec,
+                out_ptr.bitcast[Scalar[DType.int64]](),
+            )
+        else:
+            return 2
+    except:
+        return 3
