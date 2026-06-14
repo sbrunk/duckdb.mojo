@@ -25,10 +25,13 @@ from std.gpu.memory import AddressSpace
 from gpu_platform import WARP
 from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
-from std.os import abort
+from std.os import abort, getenv
+from std.sys.info import has_nvidia_gpu_accelerator
 from std.math import sqrt
 from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
+
+from tc_knn import run_tc_knn_batch, tc_knn_supported
 
 import descriptor
 from descriptor import (
@@ -1313,6 +1316,24 @@ def _run_topk_batch[
     out_ids: UnsafePointer[Int64, MutAnyOrigin],
     out_dists: UnsafePointer[Float32, MutAnyOrigin],
 ) raises:
+    # FUSED tensor-core path (NVIDIA-only, opt-in). Routed ONLY when (a) the
+    # resident matrix is fp16 (the fused MMA kernel is fp16), (b) the build
+    # targets an NVIDIA accelerator (`has_nvidia_gpu_accelerator()`, the
+    # HOST-side comptime query; the in-kernel `is_nvidia_gpu()` triple check is
+    # always False in host context, so it can't gate this host branch), (c) the
+    # env flag GPU_OP_TENSORCORE is set, and (d) (K, k) is a supported fused
+    # shape. On Apple `has_nvidia_gpu_accelerator()` is comptime-False, so this
+    # branch -- and the tensor-core kernel instantiation inside
+    # `run_tc_knn_batch` -- is never compiled. On any runtime miss we fall
+    # through to the existing scalar path below (zero behavior change with the
+    # flag unset). Default OFF.
+    comptime if is_f16 and has_nvidia_gpu_accelerator():
+        if getenv("GPU_OP_TENSORCORE", "") != "" and tc_knn_supported(K, k):
+            run_tc_knn_batch(
+                ctx, emb16, n_rows, K, qs, M, k, out_ids, out_dists
+            )
+            return
+
     # The fused kernel caches each lane's strided row slice (ceil(K/WARP) dims) in
     # a fixed BATCH_MAX_LANE_DIMS register array; reject K that would overflow it.
     if (K + WARP - 1) // WARP > BATCH_MAX_LANE_DIMS:

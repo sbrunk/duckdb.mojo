@@ -217,9 +217,17 @@ embedding matrix (pinned once, fp16 by default). Measured on the RTX 4090
   many-millions-of-rows / recall-tolerant, write-once-query-forever workloads
   (its query is sublinear; ours is an O(N) scan, and the resident pin is capped by
   VRAM — ~3 GB at 1M×768).
-- The GPU **single-query kNN is already bandwidth-optimal** (~912 GB/s, one matrix
-  read). A *batched* throughput blowout (read the matrix once, score all M
-  queries) is gated on a tensor-core GEMM — see Limitations.
+- Single-query kNN is **bandwidth-optimal** (~912 GB/s, one matrix read). For
+  *batched* queries an optional **fused tensor-core path** (`GPU_OP_TENSORCORE`,
+  NVIDIA-only, default off; [src/tc_knn.mojo](src/tc_knn.mojo)) replaces the scalar
+  per-(row, query) dot with a tiled MMA `queries·embᵀ` (fp16→fp32, `transpose_b`)
+  fused with a streaming per-query top-k — so the M×N similarity matrix is **never
+  materialized** (only the embeddings are read, only M×k results written). MMA
+  crushes the per-query compute, so the kernel becomes **HBM-read-bound** (~69% of
+  peak for a 128-query tile) and that one matrix read amortizes across the batch:
+  through the operator entry, per-query latency drops up to **~60×** at large batch
+  (M=1000 over 1M×768) at **recall@10 = 1.0** (exact ids). The scalar kernel stays
+  the default and the non-NVIDIA fallback.
 
 ### The cost heuristic (default-on engine, no cost model)
 The engine is default-on and otherwise cost-blind. To avoid making a query
@@ -234,8 +242,11 @@ The generic kernels are **atomics-free** (warp.sum + host int128 reduce), so the
 port to NVIDIA with no atomics branch; warp width comes from `WARP_SIZE`
 ([src/gpu_platform.mojo](src/gpu_platform.mojo)). 64-bit-atomics gating, if ever
 needed, must be evaluated *inside* kernel code via `is_nvidia_gpu()`/`is_amd_gpu()`
-(target checks), not host-side. `build.sh` emits `.so`+`$ORIGIN` on Linux and
-`.dylib`+`@loader_path` on macOS.
+(target checks), not host-side. The complementary case is the fused-kNN tensor-core
+path: its host-side routing and the `layout.tensor_core` instantiation are gated on
+`has_nvidia_gpu_accelerator()` (the **host** comptime query), so on Metal the
+TensorCore code is never compiled and the scalar path is used. `build.sh` emits
+`.so`+`$ORIGIN` on Linux and `.dylib`+`@loader_path` on macOS.
 
 **Validated on both Apple (M-series, Metal) and NVIDIA (RTX 4090, Linux).** On
 NVIDIA all five classes match stock exactly and the in-kernel `is_nvidia_gpu()`
@@ -266,12 +277,5 @@ Linux build notes:
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and
   sf10, so the cost heuristic keeps this shape on the CPU. Not an open task —
   measured and settled.
-- **Batched kNN throughput** is gated on a **tensor-core GEMM** (queries·embᵀ).
-  Single-query is bandwidth-optimal; the naive batch kernel and a hand-tiled
-  shared-memory GEMM only reach ~1.1–1.4× because the Mojo compiler doesn't emit
-  efficient vectorized-fp16 FMA from scalar tiling. `layout.tensor_core` is
-  importable but its MMA API is compiled-only/opaque — authoring a correct+fast MMA
-  + fused top-k is the substantial next step for the batched blowout (the bit-exact
-  gate tolerates fp32 reorder, so it can be pursued safely).
 - The accepted class is FK-join + filter + group-by/aggregate (+ the cosine kNN
   path); shapes outside it fall back to CPU by design.
