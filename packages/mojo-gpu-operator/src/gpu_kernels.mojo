@@ -47,6 +47,9 @@ from descriptor import (
 from raw_plan_tags import (
     KIND_UNKNOWN,
     KIND_Q6,
+    KIND_Q1,
+    KIND_Q14,
+    KIND_Q3,
     KIND_Q5,
     STRAT_UNGROUPED,
     STRAT_DENSE_GROUP,
@@ -2004,6 +2007,9 @@ struct GpuPinned(Movable):
     var hash_gk_slot: Int
     var hash_cap: Int
     var hash_gk_dim_arr: List[List[Int64]]  # per group key; carried dim array
+    # Query KIND (KIND_Q1/Q6/Q14/Q5/...), used to route segreduce_run to the
+    # comptime-specialized kernel for that shape (KIND_UNKNOWN -> generic VM).
+    var kind: Int64
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2033,6 +2039,7 @@ struct GpuPinned(Movable):
         self.hash_gk_slot = 0
         self.hash_cap = 0
         self.hash_gk_dim_arr = []
+        self.kind = KIND_UNKNOWN
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2063,6 +2070,7 @@ def _assemble(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         gp.M,
         gp.gid_slot,
         gp.G,
+        gp.kind,
     )
 
     var n_cols = gp.n_cols
@@ -3279,6 +3287,7 @@ def _pin_finalize_generic(
     gp.n_cand = n_groups
     gp.emit_agg = -1
     gp.emit_gt0 = False
+    gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     p2[sig] = gp^
 
     ref dst = m[key]
@@ -3802,6 +3811,7 @@ def _pin_finalize_q5(
     gp.n_cand = G
     gp.emit_agg = 0  # gate on revenue
     gp.emit_gt0 = False  # emit iff revenue != 0 (stock GROUP BY over passers)
+    gp.kind = d.kind  # routes Q5 to the comptime-specialized dense kernel
     p2[sig] = gp^
 
     ref dst = m[key]
@@ -4316,6 +4326,7 @@ def _pin_finalize_generic_dims(
         gp.hash_gk_slot = gk_slot
         gp.hash_cap = cap
         gp.hash_gk_dim_arr = hash_gk_dim_arr^
+        gp.kind = d.kind  # Q3 HASH_GROUP stays on the generic interpreter path
         p2[sig] = gp^
 
         ref dst = m[key]
@@ -4435,6 +4446,7 @@ def _pin_finalize_generic_dims(
         gp.n_cand = n_seg
         gp.emit_agg = rev_ai  # emit a row iff revenue > 0 (stock GROUP BY)
         gp.emit_gt0 = True
+        gp.kind = d.kind  # Q3 SORT_SEGREDUCE stays on the generic interpreter
         p2[sig] = gp^
 
         ref dst = m[key]
@@ -4488,6 +4500,7 @@ def _pin_finalize_generic_dims(
     gp.n_cand = 1
     gp.emit_agg = -1
     gp.emit_gt0 = False
+    gp.kind = d.kind  # routes Q14 (UNGROUPED) to the comptime-specialized kernel
     p2[sig] = gp^
 
     ref dst = m[key]

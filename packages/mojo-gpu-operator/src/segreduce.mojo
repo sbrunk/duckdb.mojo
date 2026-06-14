@@ -59,6 +59,20 @@ from raw_plan_tags import (
     STRAT_DENSE_GROUP,
     STRAT_SORT_SEGREDUCE,
     STRAT_HASH_GROUP,
+    KIND_UNKNOWN,
+    KIND_Q6,
+    KIND_Q1,
+    KIND_Q14,
+    KIND_Q3,
+    KIND_Q5,
+    OP_LOAD_COL,
+    OP_PUSH_CONST,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_SELECT,
+    OP_LOAD_DIM,
+    OP_EQ,
 )
 from expr_vm import eval_program
 
@@ -91,6 +105,310 @@ def _row_passes(
     return eval_program(
         pass_prog, pass_len, cols, n_rows, row, dims, dim_offsets
     ) != 0
+
+
+# ===========================================================================
+# COMPTIME-SPECIALIZED (kind-aware) path. Improvement #2: the per-row metric +
+# filter postfix programs that `seg_*_kernel` evaluate with the runtime stack
+# machine (`eval_program`) are, for a given query KIND, a FIXED-SHAPE expression.
+# `eval_program_fast` is a stackless, comptime-shape-dispatched evaluator that
+# computes the SAME int64 value as `eval_program` (bit-identical: same integer
+# ops, same order, same operand reads) without the 16-slot register stack, the
+# `sp` bookkeeping, or the long per-op op-tag elif chain. It stays data-driven
+# for OPERANDS (column slots / consts / dim-array indices are read from the
+# program tape), so it is correct for ANY dynamic slot assignment the host
+# builders emit -- which is what guarantees bit-exactness across query shapes.
+#
+# It recognizes exactly the program shapes the supported kinds (Q1/Q5/Q6/Q14/Q3)
+# emit; anything it does not recognize falls through to `eval_program` so the
+# result is never wrong. The per-kind specialized kernels below are byte-for-byte
+# copies of the matching generic grid kernel with the inner `eval_program` metric
+# calls (and the 1-op pass-column filter, where applicable) swapped for this fast
+# path: the lane striding, `warp.sum`, per-block partial layout, and host int128
+# reduction are UNCHANGED, so the GPU output is identical to the interpreter.
+# ===========================================================================
+@always_inline
+def eval_program_fast(
+    prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    prog_len: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    row: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+) -> Int64:
+    """Stackless evaluator for the fixed expression shapes the GPU kinds emit.
+
+    Returns the SAME int64 value as `eval_program` for the recognized shapes:
+      len 1: LOAD_COL a            -> cols[a][row]
+             PUSH_CONST v           -> v
+             LOAD_DIM a b           -> dims[dim_offsets[a] + cols[b][row]]
+      len 3: <x> <y> MUL            -> x * y      (operands LOAD_COL/LOAD_DIM)
+      len 5: LOAD_x e; PUSH k; LOAD_x d; SUB; MUL -> e * (k - d)
+      len 9: ... ; PUSH k2; LOAD_x t; ADD; MUL    -> e*(k-d) * (k2 + t)
+      len 8: LOAD_DIM p; LOAD e; PUSH k; LOAD d; SUB; MUL; PUSH z; SELECT
+                                    -> (p != 0) ? e*(k-d) : z   (Q14 promo)
+    Any other shape defers to `eval_program` (universal fallback).
+    """
+
+    # Read one LOAD_COL/LOAD_DIM/PUSH_CONST operand at op index `k` into a value.
+    @always_inline
+    def _operand(
+        prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        k: Int,
+        cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        n_rows: Int,
+        row: Int,
+        dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    ) -> Int64:
+        var op = prog[3 * k + 0]
+        var a = prog[3 * k + 1]
+        var b = prog[3 * k + 2]
+        if op == OP_LOAD_COL:
+            return cols[Int(a) * n_rows + row]
+        elif op == OP_PUSH_CONST:
+            return a
+        elif op == OP_LOAD_DIM:
+            var key = Int(cols[Int(b) * n_rows + row])
+            return dims[Int(dim_offsets[Int(a)]) + key]
+        # operand op should be a leaf; non-leaf here means an unrecognized shape.
+        return Int64(0)
+
+    if prog_len == 1:
+        return _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
+
+    if prog_len == 3 and prog[3 * 2 + 0] == OP_MUL:
+        var x = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
+        var y = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
+        return x * y
+
+    # len 5: e ; k ; d ; SUB ; MUL  ->  e * (k - d)
+    if (
+        prog_len == 5
+        and prog[3 * 3 + 0] == OP_SUB
+        and prog[3 * 4 + 0] == OP_MUL
+    ):
+        var e = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
+        var k = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
+        var d = _operand(prog, 2, cols, n_rows, row, dims, dim_offsets)
+        return e * (k - d)
+
+    # len 9: e ; k ; d ; SUB ; MUL ; k2 ; t ; ADD ; MUL -> e*(k-d) * (k2 + t)
+    if (
+        prog_len == 9
+        and prog[3 * 3 + 0] == OP_SUB
+        and prog[3 * 4 + 0] == OP_MUL
+        and prog[3 * 7 + 0] == OP_ADD
+        and prog[3 * 8 + 0] == OP_MUL
+    ):
+        var e = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
+        var k = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
+        var d = _operand(prog, 2, cols, n_rows, row, dims, dim_offsets)
+        var k2 = _operand(prog, 5, cols, n_rows, row, dims, dim_offsets)
+        var t = _operand(prog, 6, cols, n_rows, row, dims, dim_offsets)
+        return (e * (k - d)) * (k2 + t)
+
+    # len 8 (Q14 promo): p ; e ; k ; d ; SUB ; MUL ; z ; SELECT
+    #   stack at SELECT: [p, prod, z] -> pred=p, then=prod, else=z.
+    if (
+        prog_len == 8
+        and prog[3 * 4 + 0] == OP_SUB
+        and prog[3 * 5 + 0] == OP_MUL
+        and prog[3 * 7 + 0] == OP_SELECT
+    ):
+        var p = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
+        var e = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
+        var k = _operand(prog, 2, cols, n_rows, row, dims, dim_offsets)
+        var d = _operand(prog, 3, cols, n_rows, row, dims, dim_offsets)
+        var z = _operand(prog, 6, cols, n_rows, row, dims, dim_offsets)
+        var prod = e * (k - d)
+        return prod if p != 0 else z
+
+    # Unrecognized shape: universal fallback (bit-identical by definition).
+    return eval_program(prog, prog_len, cols, n_rows, row, dims, dim_offsets)
+
+
+@always_inline
+def _row_passes_fast(
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    row: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+) -> Bool:
+    if pass_len == 0:
+        return True
+    # Fast path covers the 1-op LOAD_COL(pass_slot) filter (Q1/Q6) and, when a
+    # shape is unrecognized (Q5/Q14 multi-op dim-gather pass programs), falls back
+    # to eval_program inside eval_program_fast -- still bit-identical.
+    return eval_program_fast(
+        pass_prog, pass_len, cols, n_rows, row, dims, dim_offsets
+    ) != 0
+
+
+# Q6 (UNGROUPED, M==1): specialized copy of seg_ungrouped_kernel. Filter is the
+# 1-op pass column; the single metric is the fast-path expression. Identical lane
+# striding / warp.sum / partial layout to seg_ungrouped_kernel.
+def seg_ungrouped_kernel_q6(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _row_passes_fast(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for m in range(M):
+        var s = warp.sum(acc[m])
+        if lane == 0:
+            partials[blk * M + m] = s
+
+
+# Q14 (UNGROUPED + 1 dim): same shape as Q6's ungrouped kernel, but the pass
+# program and metric programs use OP_LOAD_DIM gathers (handled by the fast path /
+# its fallback). Kept as a distinct symbol for clarity + per-kind dispatch.
+def seg_ungrouped_kernel_q14(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _row_passes_fast(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for m in range(M):
+        var s = warp.sum(acc[m])
+        if lane == 0:
+            partials[blk * M + m] = s
+
+
+# Q1 (DENSE_GROUP): specialized copy of seg_dense_kernel with the fast metric +
+# filter path. Per-lane [G*M] accumulators, partials[(block*G+g)*M+m] layout, and
+# warp.sum reduction are byte-identical to seg_dense_kernel.
+def seg_dense_kernel_q1(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _row_passes_fast(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            var g = Int(cols[gid_slot * n_rows + i])
+            var base = g * M
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[base + m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for g in range(G):
+        for m in range(M):
+            var s = warp.sum(acc[g * M + m])
+            if lane == 0:
+                partials[(blk * G + g) * M + m] = s
+
+
+# Q5 (DENSE_GROUP + 5 dims): same structure as seg_dense_kernel_q1; the pass
+# program uses OP_LOAD_DIM gathers + OP_EQ + OP_MUL (fast-path fallback handles
+# it) and the metric is the fact-only revenue expression.
+def seg_dense_kernel_q5(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _row_passes_fast(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            var g = Int(cols[gid_slot * n_rows + i])
+            var base = g * M
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[base + m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for g in range(G):
+        for m in range(M):
+            var s = warp.sum(acc[g * M + m])
+            if lane == 0:
+                partials[(blk * G + g) * M + m] = s
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +840,7 @@ def segreduce_run(
     M: Int,
     gid_slot: Int,
     G: Int,
+    kind: Int64 = KIND_UNKNOWN,
 ) raises -> List[Int128]:
     var ctx = res.ctx
     var cols_d = res.cols_d
@@ -584,6 +903,8 @@ def segreduce_run(
         var npart = SEG_NBLOCKS * G * M
         var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
         if use_mw:
+            # Multi-warp occupancy variant is unchanged (generic interpreter):
+            # the comptime-specialized kernels mirror the 1-warp-block layout.
             ctx.enqueue_function[seg_dense_kernel_mw](
                 cols_d, n_rows, gid_slot,
                 pass_d, pass_len,
@@ -591,6 +912,24 @@ def segreduce_run(
                 dims_d, doff_d,
                 part_d,
                 grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+            )
+        elif kind == KIND_Q1:
+            ctx.enqueue_function[seg_dense_kernel_q1](
+                cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        elif kind == KIND_Q5:
+            ctx.enqueue_function[seg_dense_kernel_q5](
+                cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
             )
         else:
             ctx.enqueue_function[seg_dense_kernel](
@@ -618,6 +957,7 @@ def segreduce_run(
     var npart = SEG_NBLOCKS * M
     var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
     if use_mw:
+        # Multi-warp occupancy variant is unchanged (generic interpreter).
         ctx.enqueue_function[seg_ungrouped_kernel_mw](
             cols_d, n_rows,
             pass_d, pass_len,
@@ -625,6 +965,24 @@ def segreduce_run(
             dims_d, doff_d,
             part_d,
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+        )
+    elif kind == KIND_Q6:
+        ctx.enqueue_function[seg_ungrouped_kernel_q6](
+            cols_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            grid_dim=SEG_NBLOCKS, block_dim=WARP,
+        )
+    elif kind == KIND_Q14:
+        ctx.enqueue_function[seg_ungrouped_kernel_q14](
+            cols_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            grid_dim=SEG_NBLOCKS, block_dim=WARP,
         )
     else:
         ctx.enqueue_function[seg_ungrouped_kernel](
