@@ -259,7 +259,48 @@ The engine is default-on and otherwise cost-blind. To avoid making a query
 *slower* by offloading it, `build_descriptor` **declines high-cardinality
 group-by** (`SORT_SEGREDUCE`/`HASH_GROUP`, i.e. the Q3 shape) → it falls back to
 stock CPU. UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14) are unaffected.
-`GPU_OP_FORCE_HIGHCARD=1` overrides for A/B measurement.
+`GPU_OP_FORCE_HIGHCARD=1` overrides for A/B measurement. The decision lives in
+`_should_decline(desc, force_highcard)` ([src/descriptor.mojo](src/descriptor.mojo)) —
+declining is always correct (it just routes to stock CPU), so this gate can only
+affect performance, never correctness.
+
+### The cost model (investigated — current heuristic near-optimal)
+A natural next step (Mordred's "holistic model", lite) is a transfer-vs-compute
+gate: use the cardinality DuckDB already estimated to decline offloads whose
+fixed overhead won't be repaid. We investigated it and **did not ship an active
+threshold** — only a default-off hook — for a concrete, structural reason.
+
+- **The signal.** Each GET's `est_cardinality` is DuckDB's *post-filter* row
+  estimate, not the base-table size: the join-order optimizer sets
+  `get.estimated_cardinality = cardinality_after_filters`
+  (`relation_statistics_helper.cpp`), which the C++ glue reads straight off the
+  plan (`gpu_operator.cpp` `ge.est_cardinality = g->estimated_cardinality`). So
+  the fact GET's value is exactly the estimated GPU *input* size after pushdown —
+  the right transfer-vs-compute driver. (Selectivity as a *ratio* is not
+  separately recoverable — base cardinality isn't carried over the wire — but the
+  post-filter row count is the number that actually matters.)
+- **The tension that defeats it.** The operator's win is the **warm / repeated**
+  path; the **cold** path "does not beat stock" by design and is amortized by the
+  resident pin (see "Execution & the pin"). A *small* `est_cardinality` is
+  precisely the case that (1) loses **cold** because the fixed overhead isn't
+  amortized (cf. "Q1 sf1 cold can lose to stock's ~12 ms"), *and* (2) is cheap to
+  keep resident and **wins warm** if it repeats. The plan carries **no
+  repeat-count / query-history signal**, so cardinality alone cannot separate
+  "tiny, loses even warm" from "tiny now, repeats and wins warm". Any threshold
+  tuned to kill cold losses would also decline warm-winning queries — the one
+  regression we must not cause (Q1/Q5/Q6/Q14 are accepted-and-winning). And a
+  threshold set low enough to spare them never fires. There is no cardinality
+  cutoff that is a clear win.
+- **What's decidable.** Only "input too small to ever amortize even one warm
+  reuse" — and at TPC-H sf1+ the accepted classes are already well above any such
+  floor, so an active threshold would be either dead or harmful.
+- **The hook.** `_should_decline` therefore carries a **default-off**
+  `est_cardinality` gate: `GPU_OP_COSTMODEL=1` enables it,
+  `GPU_OP_COSTMODEL_MINROWS=<n>` sets the fact-input floor (default 4096, an
+  unvalidated placeholder). With the model off (the default) behavior is
+  identical to before. The hook is here for future on-hardware measurement, not
+  as a shipped policy — same status as the "measured and declined" semi-join
+  pushdown below.
 
 ## Hardware portability
 
@@ -304,6 +345,14 @@ Linux build notes:
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and
   sf10, so the cost heuristic keeps this shape on the CPU. Not an open task —
   measured and settled.
+- **A cardinality-driven transfer-vs-compute cost model — investigated, not
+  shipped as policy.** `est_cardinality` is the right (post-filter) signal, but it
+  can't separate "tiny input that loses even warm" from "tiny input that repeats
+  and wins warm" (no repeat-count signal on the plan), and the warm win is the
+  whole point — so any active threshold would either be dead or regress the
+  accepted-and-winning classes. A default-off hook (`GPU_OP_COSTMODEL`) is in
+  `_should_decline` for future on-hardware tuning. See "The cost model
+  (investigated)" above.
 - **Dynamic-filter / semi-join pushdown into the fact materialize is CPU-favorable
   — measured and declined.** The idea (Sirius dynamic filters / Mordred semi-join
   transfer): derive surviving join keys from the filtered dimensions and push a

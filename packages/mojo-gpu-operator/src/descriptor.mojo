@@ -373,6 +373,81 @@ def _cond_touches(
 
 
 # ---------------------------------------------------------------------------
+# Offload-vs-CPU-fallback policy (the only "cost"-ish decision the engine makes).
+#
+# CORRECTNESS NOTE: declining is ALWAYS correct — it just routes the query to
+# stock DuckDB CPU. So this helper can never produce a wrong answer; the only
+# thing at stake is performance. That means the bar is: never decline a shape we
+# know wins (Q1/Q5/Q6/Q14), and only decline shapes measured to lose.
+#
+# `desc` is the fully classified descriptor (fact_table / strategy / kind set).
+# Returns True => return None from build_descriptor_impl => stock CPU fallback.
+# ---------------------------------------------------------------------------
+def _should_decline(desc: GpuPlanDescriptor, force_highcard: Bool) -> Bool:
+    # (a) HIGH-CARDINALITY GROUP-BY (the Q3 shape) — measured & settled.
+    # Light per-row work over a large fact table producing many groups (e.g.
+    # TPC-H Q3, ~1.5M order groups) is CPU-favorable: DuckDB's multithreaded
+    # join+hash-aggregate beats the single-threaded GPU source op at every
+    # measured scale (Q3 RTX 4090: 0.87x vs 16-thread stock at sf1, 0.54x at
+    # sf10 — the gap widens with scale). The engine is otherwise cost-blind and
+    # would offload Q3 and make it slower; declining keeps it on the CPU.
+    # UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14 — few groups or join-heavy, which
+    # the GPU wins) are unaffected. GPU_OP_FORCE_HIGHCARD=1 (or the test-only
+    # `force_highcard=True`) force-offloads anyway, for A/B measurement of the
+    # GPU path / classification validation without the policy.
+    if (
+        desc.strategy == STRAT_SORT_SEGREDUCE
+        or desc.strategy == STRAT_HASH_GROUP
+    ):
+        if not force_highcard and getenv("GPU_OP_FORCE_HIGHCARD", "") == "":
+            return True
+
+    # (b) COST-MODEL HOOK (Mordred-style transfer-vs-compute), DEFAULT OFF.
+    #
+    # Available signal: `est_cardinality` per GET is DuckDB's *post-filter* row
+    # estimate (relation_statistics_helper.cpp: `get.estimated_cardinality =
+    # cardinality_after_filters`), so the fact GET's value is the estimated GPU
+    # *input* size after pushdown — exactly the transfer-vs-compute driver.
+    #
+    # WHY THIS IS A HOOK AND NOT AN ACTIVE THRESHOLD (the honest finding):
+    # the operator's win is the WARM / repeated path; the cold (first-touch)
+    # path "does not beat stock" by design and is amortized by the resident pin.
+    # A small `est_cardinality` is precisely the case that (1) loses COLD because
+    # the fixed offload overhead isn't amortized, AND (2) is cheap to keep
+    # resident and WINS WARM if it repeats. The plan carries no repeat-count /
+    # query-history signal, so `est_cardinality` alone CANNOT separate "tiny,
+    # loses even warm" from "tiny now, repeats and wins warm". Any threshold
+    # tuned to kill cold losses would wrongly decline warm-winning queries — the
+    # one regression we must not cause. So the model stays OFF by default and
+    # current behavior is unchanged. The hook exists for future measurement on
+    # real hardware: set GPU_OP_COSTMODEL=1 to enable, GPU_OP_COSTMODEL_MINROWS
+    # to override the (unvalidated, conservative) threshold below which the fact
+    # input is deemed too small to amortize an offload. See DESIGN.md "The cost
+    # model (investigated)".
+    if getenv("GPU_OP_COSTMODEL", "") != "":
+        # Default threshold is deliberately tiny: with the model OFF this branch
+        # never runs, and when a user opts in it should only catch trivially
+        # small inputs unless they raise it via GPU_OP_COSTMODEL_MINROWS.
+        var min_rows: Int64 = 4096
+        var override = getenv("GPU_OP_COSTMODEL_MINROWS", "")
+        if override != "":
+            try:
+                min_rows = Int64(atol(override))
+            except:
+                pass  # keep the default on an unparseable value
+        # Fact = the GET with the largest est_cardinality (matches the fact-table
+        # selection in build_descriptor_impl). est_cardinality is post-filter.
+        var fact_est: Int64 = 0
+        for gi in range(len(desc.gets)):
+            if desc.gets[gi].est_cardinality > fact_est:
+                fact_est = desc.gets[gi].est_cardinality
+        if fact_est < min_rows:
+            return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # The matcher brain. Fail-closed: returns None on anything unsupported.
 # ---------------------------------------------------------------------------
 def build_descriptor_impl(
@@ -533,20 +608,11 @@ def build_descriptor_impl(
     desc.strategy = strategy
     desc.kind = kind
 
-    # Cost heuristic: DECLINE high-cardinality group-by (SORT_SEGREDUCE / HASH_GROUP)
-    # so it falls back to stock DuckDB CPU. This shape — light per-row work over a
-    # large fact table producing many groups (e.g. TPC-H Q3, ~1.5M order groups) —
-    # is CPU-favorable: DuckDB's multithreaded join+hash-aggregate beats the
-    # single-threaded GPU source op at every measured scale (Q3 RTX 4090: 0.87x vs
-    # 16-thread stock at sf1, 0.54x at sf10 — the gap widens with scale). The engine
-    # is otherwise cost-blind and would offload Q3 and make it slower; returning None
-    # keeps it on the CPU. UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14 — few groups or
-    # join-heavy, which the GPU wins) are unaffected. Set GPU_OP_FORCE_HIGHCARD=1 to
-    # force-offload anyway (for A/B measurement of the GPU path), and tests pass
-    # force_highcard=True to validate classification without the policy.
-    if strategy == STRAT_SORT_SEGREDUCE or strategy == STRAT_HASH_GROUP:
-        if not force_highcard and getenv("GPU_OP_FORCE_HIGHCARD", "") == "":
-            return None
+    # Offload-vs-CPU-fallback policy (see `_should_decline`): keeps the
+    # high-cardinality-group-by decline (Q3 shape) and carries a default-off
+    # est_cardinality cost-model hook. Declining is always correct (stock CPU).
+    if _should_decline(desc, force_highcard):
+        return None
 
     return desc^
 
