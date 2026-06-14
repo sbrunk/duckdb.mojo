@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026060206"
+mojo-compiler = "=1.0.0b2.dev2026061203"
 
 [package.build-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026060206"
+mojo-compiler = "=1.0.0b2.dev2026061203"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -106,27 +106,34 @@ compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
 [dependencies]
 libduckdb-devel = "=1.5.3"
 duckdb-cli = "=1.5.3"
-mojo = "=1.0.0b2.dev2026060206"
+mojo = "=1.0.0b2.dev2026061203"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
 # The source directory is named `duckdb/` so mojo resolves `from duckdb import ...` directly.
 # MODULAR_MOJO_MAX_IMPORT_PATH overrides the default, so we include the stdlib path too.
+# The stdlib path is listed first: mojo takes the first import-path entry that yields
+# `std`, so leading with $CONDA_PREFIX/lib/mojo guarantees this env's own stdlib wins.
+# (Listing the project root first lets mojo's recursive scan pick up a foreign
+# std.mojoc from another env under .pixi/, e.g. the `full` env's older compiler,
+# which then fails to load. See the operator-replacement block below.)
 [activation.env]
-MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
+MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
-mojo = "=1.0.0b2.dev2026060206"
+mojo = "=1.0.0b2.dev2026061203"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
 # `mojo` finds both the `duckdb` package (project root) and the installed
 # packages — stdlib + operator_replacement — under $CONDA_PREFIX/lib/mojo.
+# Stdlib path first (see note above): keeps each env's own std.mojoc from being
+# shadowed by the other env's copy when both are materialized under .pixi/.
 [feature.operator-replacement.activation.env]
-MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
+MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Environments
 # 

@@ -553,7 +553,7 @@ struct StatementType(
 struct Column(Movable & Copyable & Writable):
     var index: Int
     var name: String
-    var type: LogicalType[is_owned=True, origin=MutExternalOrigin]
+    var type: LogicalType[is_owned=True, origin=MutUntrackedOrigin]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -596,7 +596,7 @@ struct Result(Writable, Iterable, Movable):
         for i in range(self.column_count()):
             var borrowed_type = self.column_type(i)
             var col = Column(
-                index=i, name=self.column_name(i), type=LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id())
+                index=i, name=self.column_name(i), type=LogicalType[is_owned=True, origin=MutUntrackedOrigin](borrowed_type.get_type_id())
             )
             self._columns.append(col^)
 
@@ -613,12 +613,12 @@ struct Result(Writable, Iterable, Movable):
         )
         return String(unsafe_from_utf8_ptr=c_str)
 
-    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
-        var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]:
+        var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
         for i in range(self.column_count()):
             # Copy the borrowed type to create an owned version
             var borrowed_type = self.column_type(i)
-            types.append(LogicalType[is_owned=True, origin=MutExternalOrigin](borrowed_type.get_type_id()))
+            types.append(LogicalType[is_owned=True, origin=MutUntrackedOrigin](borrowed_type.get_type_id()))
         return types^
 
     def column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self)]:
@@ -664,7 +664,7 @@ struct Result(Writable, Iterable, Movable):
             names.append(col.name.copy())
         return names^
 
-    def types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+    def types(self) -> List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]:
         """Column logical types, in order (Python ``rel.dtypes``).
 
         Alias for `column_types`.
@@ -976,7 +976,7 @@ struct MaterializedResult(Sized, Movable):
     def column_name(self, col: Int) -> String:
         return self.result.column_name(col)
 
-    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+    def column_types(self) -> List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]:
         return self.result.column_types()
 
     def column_type(ref [_]self: Self, col: Int) -> LogicalType[is_owned=False, origin=origin_of(self.result)]:
@@ -986,7 +986,7 @@ struct MaterializedResult(Sized, Movable):
         """Column names, in order (Python ``rel.columns``)."""
         return self.result.columns()
 
-    def types(self) -> List[LogicalType[is_owned=True, origin=MutExternalOrigin]]:
+    def types(self) -> List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]:
         """Column logical types, in order (Python ``rel.dtypes``)."""
         return self.result.column_types()
 
@@ -998,7 +998,7 @@ struct MaterializedResult(Sized, Movable):
         return self.size
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & ImplicitlyDestructible
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -1099,7 +1099,7 @@ struct MaterializedResult(Sized, Movable):
         return self.chunks[loc[0]][].get[T](row=loc[1])
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & ImplicitlyDestructible
     ](self) raises -> List[T]:
         """Deserialize all rows into a list of Mojo structs.
 

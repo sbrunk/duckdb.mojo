@@ -289,7 +289,7 @@ struct MojoType(Copyable, Movable, Writable):
 
     # -- Conversions ----------------------------------------------------
 
-    def to_logical_type(self) -> LogicalType[True, MutExternalOrigin]:
+    def to_logical_type(self) -> LogicalType[True, MutUntrackedOrigin]:
         """Convert this MojoType to a DuckDB runtime LogicalType.
 
         Returns a new *owned* LogicalType that the caller must manage.
@@ -305,7 +305,7 @@ struct MojoType(Copyable, Movable, Writable):
                 size = atol(self.field_names[0])
             except:
                 size = 0
-            return LogicalType[True, MutExternalOrigin](
+            return LogicalType[True, MutUntrackedOrigin](
                 libduckdb.duckdb_create_array_type(
                     child_lt.internal_ptr(), idx_t(size)
                 )
@@ -314,13 +314,13 @@ struct MojoType(Copyable, Movable, Writable):
             var key_lt = self.children[0].to_logical_type()
             var val_lt = self.children[1].to_logical_type()
             ref libduckdb = DuckDB().libduckdb()
-            return LogicalType[True, MutExternalOrigin](
+            return LogicalType[True, MutUntrackedOrigin](
                 libduckdb.duckdb_create_map_type(
                     key_lt.internal_ptr(), val_lt.internal_ptr()
                 )
             )
         elif self.type_id == DuckDBType.struct_t:
-            var child_types = List[LogicalType[True, MutExternalOrigin]]()
+            var child_types = List[LogicalType[True, MutUntrackedOrigin]]()
             for i in range(len(self.children)):
                 child_types.append(self.children[i].to_logical_type())
             var names = List[String]()
@@ -328,7 +328,7 @@ struct MojoType(Copyable, Movable, Writable):
                 names.append(self.field_names[i])
             return struct_type(names, child_types)
         else:
-            return LogicalType[True, MutExternalOrigin](self.type_id)
+            return LogicalType[True, MutUntrackedOrigin](self.type_id)
 
     # -- Display --------------------------------------------------------
 
@@ -1153,7 +1153,7 @@ __extension Variant(_VariantUnionDeserializable):
 # scalar and _deserialize_list handles it directly.
 # ──────────────────────────────────────────────────────────────────
 
-comptime _DBase = Copyable & Movable
+comptime _DBase = Copyable & Movable & ImplicitlyDestructible
 
 
 trait _InnerListDeserializer(_DBase):
@@ -1218,17 +1218,21 @@ __extension List(_VectorListConstructible):
             var deserialized = _deserialize_list[downcast[Self.T, _DBase]](
                 child_vector, length, offset
             )
-            var result = Self(capacity=length)
+            # Validate before building `result`: a non-Optional element type
+            # cannot represent NULL. Raising here (while only `deserialized`
+            # is live) avoids abandoning a partially built `result`, which the
+            # compiler now rejects for non-implicitly-destructible elements.
             for i in range(len(deserialized)):
-                if deserialized[i]:
-                    result.append(
-                        rebind_var[Self.T](deserialized[i].value().copy())
-                    )
-                else:
+                if not deserialized[i]:
                     raise Error(
                         "NULL in DuckDB list but target element type is not"
                         " Optional. Use List[Optional[...]] to handle NULLs."
                     )
+            var result = Self(capacity=length)
+            for i in range(len(deserialized)):
+                result.append(
+                    rebind_var[Self.T](deserialized[i].value().copy())
+                )
             return result^
 
 

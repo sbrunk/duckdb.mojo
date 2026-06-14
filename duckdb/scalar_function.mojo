@@ -276,7 +276,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             var info = FunctionInfo(raw_info)
             var input_chunk = Chunk[is_owned=False](raw_input)
             # Output vector doesn't need chunk reference - DuckDB manages its lifetime
-            var output_vec = Vector[False, MutExternalOrigin](raw_output)
+            var output_vec = Vector[False, MutUntrackedOrigin](raw_output)
             
             # Call the user's high-level function
             func(info, input_chunk, output_vec)

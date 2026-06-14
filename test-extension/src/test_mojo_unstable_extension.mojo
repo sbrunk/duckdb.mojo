@@ -33,7 +33,7 @@ def init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
 @export("mojo_unstable_init_c_api")
 def mojo_unstable_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     """Entry point called by DuckDB when loading this extension.
 

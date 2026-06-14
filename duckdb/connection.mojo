@@ -55,7 +55,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         self._db = Database(path)
         # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
-            duckdb_connection.type, MutExternalOrigin
+            duckdb_connection.type, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
@@ -73,7 +73,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         self._db = Database(path, config)
         # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
-            duckdb_connection.type, MutExternalOrigin
+            duckdb_connection.type, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
@@ -104,7 +104,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         self._db = Database(_handle=db._db)
         # Placeholder handle — duckdb_connect populates it via out-param.
         self._conn = UnsafePointer[
-            duckdb_connection.type, MutExternalOrigin
+            duckdb_connection.type, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (

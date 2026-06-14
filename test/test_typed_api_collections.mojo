@@ -3,7 +3,6 @@
 from duckdb import *
 from std.utils import Variant
 from std.collections import Dict, Optional
-from std.reflection import struct_field_count
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from std.testing.suite import TestSuite
 

@@ -2,7 +2,6 @@
 
 from duckdb import *
 from std.collections import Optional
-from std.reflection import struct_field_count
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from std.testing.suite import TestSuite
 
@@ -189,9 +188,9 @@ def test_logical_type_struct_creation() raises:
     var names = List[String]()
     names.append("a")
     names.append("b")
-    var types = List[LogicalType[True, MutExternalOrigin]]()
-    types.append(LogicalType[True, MutExternalOrigin](DuckDBType.integer))
-    types.append(LogicalType[True, MutExternalOrigin](DuckDBType.double))
+    var types = List[LogicalType[True, MutUntrackedOrigin]]()
+    types.append(LogicalType[True, MutUntrackedOrigin](DuckDBType.integer))
+    types.append(LogicalType[True, MutUntrackedOrigin](DuckDBType.double))
     var lt = struct_type(names, types)
     assert_equal(lt.get_type_id(), DuckDBType.struct_t)
     assert_equal(Int(lt.struct_type_child_count()), 2)

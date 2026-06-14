@@ -5,7 +5,7 @@ from std.testing.suite import TestSuite
 
 def test_chunk_create() raises:
     """Test creating a data chunk with specific types."""
-    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.varchar))
     types.append(LogicalType(DuckDBType.double))
@@ -18,7 +18,7 @@ def test_chunk_create() raises:
 
 def test_chunk_set_size() raises:
     """Test setting the size of a data chunk."""
-    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.double))
     
@@ -33,7 +33,7 @@ def test_chunk_set_size() raises:
 
 def test_chunk_reset() raises:
     """Test resetting a data chunk."""
-    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     
     var chunk = Chunk[True](types)
@@ -47,7 +47,7 @@ def test_chunk_reset() raises:
 
 def test_chunk_get_vector() raises:
     """Test getting a vector from a data chunk."""
-    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
     types.append(LogicalType(DuckDBType.integer))
     types.append(LogicalType(DuckDBType.varchar))
     
@@ -60,7 +60,7 @@ def test_chunk_get_vector() raises:
 
 def test_chunk_type() raises:
     """Test getting column types from a data chunk."""
-    var types = List[LogicalType[is_owned=True, origin=MutExternalOrigin]]()
+    var types = List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]()
     types.append(LogicalType(DuckDBType.bigint))
     types.append(LogicalType(DuckDBType.boolean))
     types.append(LogicalType(DuckDBType.double))

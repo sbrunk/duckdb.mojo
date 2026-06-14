@@ -16,7 +16,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
     - `Vector[True, ...]`: Owned standalone vector, will be destroyed when it goes out of scope
     
     The origin parameter tracks the lifetime dependency:
-    - For standalone vectors: ImmutExternalOrigin (no dependency)
+    - For standalone vectors: ImmutUntrackedOrigin (no dependency)
     - For vectors from chunks: origin_of(chunk) (extends chunk's lifetime)
     
     The ``api_level`` parameter gates access to unstable C API functions at
@@ -40,7 +40,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         """
         self._vector = vector
 
-    def __init__(out self: Vector[is_owned=True, origin=MutExternalOrigin], type: LogicalType, capacity: idx_t):
+    def __init__(out self: Vector[is_owned=True, origin=MutUntrackedOrigin], type: LogicalType, capacity: idx_t):
         """Creates a standalone owned vector.
         
         This creates a `Vector` that owns the underlying duckdb_vector

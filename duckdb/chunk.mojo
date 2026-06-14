@@ -63,7 +63,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         """
         self._chunk = chunk
 
-    def __init__(out self: Chunk[is_owned=True], types: List[LogicalType[is_owned=True, origin=MutExternalOrigin]]):
+    def __init__(out self: Chunk[is_owned=True], types: List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]):
         """Creates an empty data chunk with the specified column types.
         
         This creates an owned `Chunk[True]` that will be destroyed when it goes out of scope.
@@ -327,7 +327,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return _deserialize_table_field[T](self.get_vector(col), row)
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & ImplicitlyDestructible
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -631,7 +631,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return result^
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & ImplicitlyDestructible
     ](self) raises -> List[T]:
         """Deserialize all table rows into Mojo structs.
 

@@ -14,14 +14,14 @@ def _kgen_insert_global(name: StringSlice, ptr: UnsafePointer):
     )
 
 
-def _kgen_get_global(name: StringSlice) -> UnsafePointer[NoneType, MutExternalOrigin]:
+def _kgen_get_global(name: StringSlice) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
     return external_call[
         "KGEN_CompilerRT_GetGlobalOrNull",
-        UnsafePointer[NoneType, MutExternalOrigin],
+        UnsafePointer[NoneType, MutUntrackedOrigin],
     ](name.unsafe_ptr(), name.byte_length())
 
 
-def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]):
+def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]):
     """Store the stable extension API pointer for later use by
     _init_duckdb_global.
 
@@ -32,20 +32,20 @@ def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin])
 
 
 def _get_ext_api_ptr() -> Optional[
-    UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]
+    UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]
 ]:
     """Retrieve the previously stored stable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiPtr")
     var addr = Int(raw)
     if addr == 0:
         return None
-    return UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin](
+    return UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin](
         unsafe_from_address=addr
     )
 
 
 def _set_ext_api_unstable_ptr(
-    ptr: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin],
+    ptr: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin],
 ):
     """Store the unstable extension API pointer for later use by
     _init_duckdb_global.
@@ -57,14 +57,14 @@ def _set_ext_api_unstable_ptr(
 
 
 def _get_ext_api_unstable_ptr() -> Optional[
-    UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]
+    UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin]
 ]:
     """Retrieve the previously stored unstable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiUnstablePtr")
     var addr = Int(raw)
     if addr == 0:
         return None
-    return UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin](
+    return UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin](
         unsafe_from_address=addr
     )
 
@@ -92,14 +92,14 @@ struct _DuckDBGlobal(Defaultable, Movable):
         self.libduckdb = LibDuckDB()
 
     def __init__(
-        out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]
+        out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]
     ):
         """Extension mode (stable): construct LibDuckDB from the stable API struct."""
         self.libduckdb = LibDuckDB(api)
 
     def __init__(
         out self,
-        api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin],
+        api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin],
     ):
         """Extension mode (unstable): construct LibDuckDB from the unstable API struct."""
         self.libduckdb = LibDuckDB(api)

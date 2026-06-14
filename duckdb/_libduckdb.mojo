@@ -354,7 +354,7 @@ struct duckdb_query_progress_type(TrivialRegisterPassable, ImplicitlyCopyable, M
 struct duckdb_string_t_pointer(Copyable, Movable):
     var length: UInt32
     var prefix: InlineArray[c_char, 4]
-    var ptr: UnsafePointer[c_char, MutExternalOrigin]
+    var ptr: UnsafePointer[c_char, MutUntrackedOrigin]
 
 @fieldwise_init
 struct duckdb_string_t_inlined(Copyable, Movable):
@@ -372,48 +372,48 @@ struct duckdb_list_entry(ImplicitlyCopyable, Movable):
 #! A column consists of a pointer to its internal data. Don't operate on this type directly.
 @fieldwise_init
 struct duckdb_column(Copyable, Movable):
-    var __deprecated_data: UnsafePointer[NoneType, MutExternalOrigin]
-    var __deprecated_nullmask: UnsafePointer[Bool, MutExternalOrigin]
+    var __deprecated_data: UnsafePointer[NoneType, MutUntrackedOrigin]
+    var __deprecated_nullmask: UnsafePointer[Bool, MutUntrackedOrigin]
     var __deprecated_type: Int32  # actually a duckdb_type enum
-    var __deprecated_name: UnsafePointer[c_char, ImmutExternalOrigin]
-    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]
+    var __deprecated_name: UnsafePointer[c_char, ImmutUntrackedOrigin]
+    var internal_data: UnsafePointer[NoneType, MutUntrackedOrigin]
 
     def __init__(out self):
         # All pointer fields are populated by DuckDB when fetched.
-        self.__deprecated_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()
-        self.__deprecated_nullmask = UnsafePointer[Bool, MutExternalOrigin].unsafe_dangling()
+        self.__deprecated_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()
+        self.__deprecated_nullmask = UnsafePointer[Bool, MutUntrackedOrigin].unsafe_dangling()
         self.__deprecated_type = 0
-        self.__deprecated_name = UnsafePointer[c_char, ImmutExternalOrigin].unsafe_dangling()
-        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()
+        self.__deprecated_name = UnsafePointer[c_char, ImmutUntrackedOrigin].unsafe_dangling()
+        self.internal_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()
 
 struct _duckdb_vector:
-    var __vctr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutExternalOrigin]
+    var __vctr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_vector = UnsafePointer[_duckdb_vector, MutUntrackedOrigin]
 
 struct _duckdb_selection_vector:
-    var __sel: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_selection_vector = UnsafePointer[_duckdb_selection_vector, MutExternalOrigin]
+    var __sel: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_selection_vector = UnsafePointer[_duckdb_selection_vector, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Types (explicit freeing/destroying)
 # ===--------------------------------------------------------------------===#
 
 struct duckdb_string:
-    var data: UnsafePointer[c_char, MutExternalOrigin]
+    var data: UnsafePointer[c_char, MutUntrackedOrigin]
     var size: idx_t
 
 struct duckdb_blob:
-    var data: UnsafePointer[NoneType, MutExternalOrigin]
+    var data: UnsafePointer[NoneType, MutUntrackedOrigin]
     var size: idx_t
 
 @fieldwise_init
 struct duckdb_bit(TrivialRegisterPassable, ImplicitlyCopyable, Movable):
-    var data: UnsafePointer[UInt8, MutExternalOrigin]
+    var data: UnsafePointer[UInt8, MutUntrackedOrigin]
     var size: idx_t
 
 @fieldwise_init
 struct duckdb_bignum(ImplicitlyCopyable, Movable):
-    var data: UnsafePointer[UInt8, MutExternalOrigin]
+    var data: UnsafePointer[UInt8, MutUntrackedOrigin]
     var size: idx_t
     var is_negative: Bool
 
@@ -422,110 +422,110 @@ struct duckdb_result(RegisterPassable, ImplicitlyCopyable & Movable):
     var __deprecated_column_count: idx_t
     var __deprecated_row_count: idx_t
     var __deprecated_rows_changed: idx_t
-    var __deprecated_columns: UnsafePointer[duckdb_column, MutExternalOrigin]
-    var __deprecated_error_message: UnsafePointer[c_char, ImmutExternalOrigin]
-    var internal_data: UnsafePointer[NoneType, MutExternalOrigin]
+    var __deprecated_columns: UnsafePointer[duckdb_column, MutUntrackedOrigin]
+    var __deprecated_error_message: UnsafePointer[c_char, ImmutUntrackedOrigin]
+    var internal_data: UnsafePointer[NoneType, MutUntrackedOrigin]
 
     def __init__(out self):
         # Pointer fields are populated by DuckDB when the result is filled.
         self.__deprecated_column_count = 0
         self.__deprecated_row_count = 0
         self.__deprecated_rows_changed = 0
-        self.__deprecated_columns = UnsafePointer[duckdb_column, MutExternalOrigin].unsafe_dangling()
-        self.__deprecated_error_message = UnsafePointer[c_char, ImmutExternalOrigin].unsafe_dangling()
-        self.internal_data = UnsafePointer[NoneType, MutExternalOrigin].unsafe_dangling()
+        self.__deprecated_columns = UnsafePointer[duckdb_column, MutUntrackedOrigin].unsafe_dangling()
+        self.__deprecated_error_message = UnsafePointer[c_char, ImmutUntrackedOrigin].unsafe_dangling()
+        self.internal_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()
 
 struct _duckdb_instance_cache:
-    var __ic: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_instance_cache = UnsafePointer[_duckdb_instance_cache, MutExternalOrigin]
+    var __ic: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_instance_cache = UnsafePointer[_duckdb_instance_cache, MutUntrackedOrigin]
 
 struct _duckdb_database:
-    var __db: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_database = UnsafePointer[_duckdb_database, MutExternalOrigin]
+    var __db: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_database = UnsafePointer[_duckdb_database, MutUntrackedOrigin]
 
 struct _duckdb_connection:
-    var __conn: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_connection = UnsafePointer[_duckdb_connection, MutExternalOrigin]
+    var __conn: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_connection = UnsafePointer[_duckdb_connection, MutUntrackedOrigin]
 
 struct _duckdb_client_context:
-    var __ctx: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_client_context = UnsafePointer[_duckdb_client_context, MutExternalOrigin]
+    var __ctx: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_client_context = UnsafePointer[_duckdb_client_context, MutUntrackedOrigin]
 
 struct _duckdb_prepared_statement:
-    var __prep: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_prepared_statement = UnsafePointer[_duckdb_prepared_statement, MutExternalOrigin]
+    var __prep: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_prepared_statement = UnsafePointer[_duckdb_prepared_statement, MutUntrackedOrigin]
 
 struct _duckdb_extracted_statements:
-    var __extrac: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_extracted_statements = UnsafePointer[_duckdb_extracted_statements, MutExternalOrigin]
+    var __extrac: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_extracted_statements = UnsafePointer[_duckdb_extracted_statements, MutUntrackedOrigin]
 
 struct _duckdb_pending_result:
-    var __pend: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_pending_result = UnsafePointer[_duckdb_pending_result, MutExternalOrigin]
+    var __pend: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_pending_result = UnsafePointer[_duckdb_pending_result, MutUntrackedOrigin]
 
 struct _duckdb_appender:
-    var __appn: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_appender = UnsafePointer[_duckdb_appender, MutExternalOrigin]
+    var __appn: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_appender = UnsafePointer[_duckdb_appender, MutUntrackedOrigin]
 
 struct _duckdb_table_description:
-    var __td: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_table_description = UnsafePointer[_duckdb_table_description, MutExternalOrigin]
+    var __td: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_table_description = UnsafePointer[_duckdb_table_description, MutUntrackedOrigin]
 
 struct _duckdb_config:
-    var __cnfg: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_config = UnsafePointer[_duckdb_config, MutExternalOrigin]
+    var __cnfg: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_config = UnsafePointer[_duckdb_config, MutUntrackedOrigin]
 
 struct _duckdb_config_option:
-    var __copt: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_config_option = UnsafePointer[_duckdb_config_option, MutExternalOrigin]
+    var __copt: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_config_option = UnsafePointer[_duckdb_config_option, MutUntrackedOrigin]
 
 struct _duckdb_logical_type:
-    var __lglt: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_logical_type = UnsafePointer[_duckdb_logical_type, MutExternalOrigin]
+    var __lglt: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_logical_type = UnsafePointer[_duckdb_logical_type, MutUntrackedOrigin]
 
 struct _duckdb_create_type_info:
-    var __cti: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_create_type_info = UnsafePointer[_duckdb_create_type_info, MutExternalOrigin]
+    var __cti: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_create_type_info = UnsafePointer[_duckdb_create_type_info, MutUntrackedOrigin]
 
 struct _duckdb_data_chunk:
-    var __dtck: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_data_chunk = UnsafePointer[_duckdb_data_chunk, MutExternalOrigin]
+    var __dtck: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_data_chunk = UnsafePointer[_duckdb_data_chunk, MutUntrackedOrigin]
 
 struct _duckdb_value:
-    var __val: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_value = UnsafePointer[_duckdb_value, MutExternalOrigin]
+    var __val: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_value = UnsafePointer[_duckdb_value, MutUntrackedOrigin]
 
 struct _duckdb_profiling_info:
-    var __prof: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_profiling_info = UnsafePointer[_duckdb_profiling_info, MutExternalOrigin]
+    var __prof: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_profiling_info = UnsafePointer[_duckdb_profiling_info, MutUntrackedOrigin]
 
 struct _duckdb_error_data:
-    var __err: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_error_data = UnsafePointer[_duckdb_error_data, MutExternalOrigin]
+    var __err: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_error_data = UnsafePointer[_duckdb_error_data, MutUntrackedOrigin]
 
 struct _duckdb_expression:
-    var __expr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_expression = UnsafePointer[_duckdb_expression, MutExternalOrigin]
+    var __expr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_expression = UnsafePointer[_duckdb_expression, MutUntrackedOrigin]
 
 struct _duckdb_extension_info:
-    var __ext: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_extension_info = UnsafePointer[_duckdb_extension_info, MutExternalOrigin]
+    var __ext: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_extension_info = UnsafePointer[_duckdb_extension_info, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Function types
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_function_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_function_info = UnsafePointer[_duckdb_function_info, MutUntrackedOrigin]
 
 struct _duckdb_bind_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_bind_info = UnsafePointer[_duckdb_bind_info, MutUntrackedOrigin]
 
 struct _duckdb_init_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_init_info = UnsafePointer[_duckdb_init_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_init_info = UnsafePointer[_duckdb_init_info, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Scalar function types
@@ -533,13 +533,13 @@ comptime duckdb_init_info = UnsafePointer[_duckdb_init_info, MutExternalOrigin]
 
 #! A scalar function. Must be destroyed with `duckdb_destroy_scalar_function`.
 struct _duckdb_scalar_function:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_scalar_function = UnsafePointer[_duckdb_scalar_function, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_scalar_function = UnsafePointer[_duckdb_scalar_function, MutUntrackedOrigin]
 
 #! A scalar function set. Must be destroyed with `duckdb_destroy_scalar_function_set`.
 struct _duckdb_scalar_function_set:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_scalar_function_set = UnsafePointer[_duckdb_scalar_function_set, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_scalar_function_set = UnsafePointer[_duckdb_scalar_function_set, MutUntrackedOrigin]
 
 #! The bind function of the scalar function.
 comptime duckdb_scalar_function_bind_t = def(duckdb_bind_info) thin abi("C") -> NoneType
@@ -553,8 +553,8 @@ comptime duckdb_scalar_function_t = def(duckdb_function_info, duckdb_data_chunk,
 
 #! A table function. Must be destroyed with `duckdb_destroy_table_function`.
 struct _duckdb_table_function:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_table_function = UnsafePointer[_duckdb_table_function, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_table_function = UnsafePointer[_duckdb_table_function, MutUntrackedOrigin]
 
 #! The bind function of the table function.
 comptime duckdb_table_function_bind_t = def(duckdb_bind_info) thin abi("C") -> NoneType
@@ -571,18 +571,18 @@ comptime duckdb_table_function_t = def(duckdb_function_info, duckdb_data_chunk) 
 
 #! An aggregate function.
 struct _duckdb_aggregate_function:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_aggregate_function = UnsafePointer[_duckdb_aggregate_function, MutUntrackedOrigin]
 
 #! A aggregate function set.
 struct _duckdb_aggregate_function_set:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_aggregate_function_set = UnsafePointer[_duckdb_aggregate_function_set, MutUntrackedOrigin]
 
 #! The state of an aggregate function.
 struct _duckdb_aggregate_state:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_aggregate_state = UnsafePointer[_duckdb_aggregate_state, MutUntrackedOrigin]
 
 #! A function to return the aggregate state's size.
 comptime duckdb_aggregate_state_size = def(duckdb_function_info) thin abi("C") -> idx_t
@@ -591,24 +591,24 @@ comptime duckdb_aggregate_state_size = def(duckdb_function_info) thin abi("C") -
 comptime duckdb_aggregate_init_t = def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType
 
 #! An optional function to destroy an aggregate state.
-comptime duckdb_aggregate_destroy_t = def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+comptime duckdb_aggregate_destroy_t = def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
 
 #! A function to update a set of aggregate states with new values.
-comptime duckdb_aggregate_update_t = def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType
+comptime duckdb_aggregate_update_t = def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 #! A function to combine aggregate states.
-comptime duckdb_aggregate_combine_t = def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+comptime duckdb_aggregate_combine_t = def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
 
 #! A function to finalize aggregate states into a result vector.
-comptime duckdb_aggregate_finalize_t = def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType
+comptime duckdb_aggregate_finalize_t = def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType
 
 # ===--------------------------------------------------------------------===#
 # Replacement scan types
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_replacement_scan_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_replacement_scan_info = UnsafePointer[_duckdb_replacement_scan_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_replacement_scan_info = UnsafePointer[_duckdb_replacement_scan_info, MutUntrackedOrigin]
 
 comptime duckdb_replacement_callback_t = def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType
 
@@ -617,8 +617,8 @@ comptime duckdb_replacement_callback_t = def(duckdb_replacement_scan_info, Unsaf
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_cast_function:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_cast_function = UnsafePointer[_duckdb_cast_function, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_cast_function = UnsafePointer[_duckdb_cast_function, MutUntrackedOrigin]
 
 comptime duckdb_cast_function_t = def(duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) thin abi("C") -> Bool
 
@@ -627,24 +627,24 @@ comptime duckdb_cast_function_t = def(duckdb_function_info, idx_t, duckdb_vector
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_copy_function:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_copy_function = UnsafePointer[_duckdb_copy_function, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_copy_function = UnsafePointer[_duckdb_copy_function, MutUntrackedOrigin]
 
 struct _duckdb_copy_function_bind_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_copy_function_bind_info = UnsafePointer[_duckdb_copy_function_bind_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_copy_function_bind_info = UnsafePointer[_duckdb_copy_function_bind_info, MutUntrackedOrigin]
 
 struct _duckdb_copy_function_global_init_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_copy_function_global_init_info = UnsafePointer[_duckdb_copy_function_global_init_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_copy_function_global_init_info = UnsafePointer[_duckdb_copy_function_global_init_info, MutUntrackedOrigin]
 
 struct _duckdb_copy_function_sink_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_copy_function_sink_info = UnsafePointer[_duckdb_copy_function_sink_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_copy_function_sink_info = UnsafePointer[_duckdb_copy_function_sink_info, MutUntrackedOrigin]
 
 struct _duckdb_copy_function_finalize_info:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_copy_function_finalize_info = UnsafePointer[_duckdb_copy_function_finalize_info, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_copy_function_finalize_info = UnsafePointer[_duckdb_copy_function_finalize_info, MutUntrackedOrigin]
 
 comptime duckdb_copy_function_bind_t = def(duckdb_copy_function_bind_info) thin abi("C") -> NoneType
 comptime duckdb_copy_function_global_init_t = def(duckdb_copy_function_global_init_info) thin abi("C") -> NoneType
@@ -656,68 +656,68 @@ comptime duckdb_copy_function_finalize_t = def(duckdb_copy_function_finalize_inf
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_arrow:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow = UnsafePointer[_duckdb_arrow, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow = UnsafePointer[_duckdb_arrow, MutUntrackedOrigin]
 
 struct _duckdb_arrow_stream:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow_stream = UnsafePointer[_duckdb_arrow_stream, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow_stream = UnsafePointer[_duckdb_arrow_stream, MutUntrackedOrigin]
 
 struct _duckdb_arrow_schema:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow_schema = UnsafePointer[_duckdb_arrow_schema, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow_schema = UnsafePointer[_duckdb_arrow_schema, MutUntrackedOrigin]
 
 struct _duckdb_arrow_array:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow_array = UnsafePointer[_duckdb_arrow_array, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow_array = UnsafePointer[_duckdb_arrow_array, MutUntrackedOrigin]
 
 struct _duckdb_arrow_converted_schema:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow_converted_schema = UnsafePointer[_duckdb_arrow_converted_schema, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow_converted_schema = UnsafePointer[_duckdb_arrow_converted_schema, MutUntrackedOrigin]
 
 struct _duckdb_arrow_options:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_arrow_options = UnsafePointer[_duckdb_arrow_options, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_arrow_options = UnsafePointer[_duckdb_arrow_options, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Virtual File System types
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_file_open_options:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_file_open_options = UnsafePointer[_duckdb_file_open_options, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_file_open_options = UnsafePointer[_duckdb_file_open_options, MutUntrackedOrigin]
 
 struct _duckdb_file_system:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_file_system = UnsafePointer[_duckdb_file_system, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_file_system = UnsafePointer[_duckdb_file_system, MutUntrackedOrigin]
 
 struct _duckdb_file_handle:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_file_handle = UnsafePointer[_duckdb_file_handle, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_file_handle = UnsafePointer[_duckdb_file_handle, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Catalog Interface types
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_catalog:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_catalog = UnsafePointer[_duckdb_catalog, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_catalog = UnsafePointer[_duckdb_catalog, MutUntrackedOrigin]
 
 struct _duckdb_catalog_entry:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_catalog_entry = UnsafePointer[_duckdb_catalog_entry, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_catalog_entry = UnsafePointer[_duckdb_catalog_entry, MutUntrackedOrigin]
 
 # ===--------------------------------------------------------------------===#
 # Logging types
 # ===--------------------------------------------------------------------===#
 
 struct _duckdb_log_storage:
-    var internal_ptr: UnsafePointer[NoneType, MutExternalOrigin]
-comptime duckdb_log_storage = UnsafePointer[_duckdb_log_storage, MutExternalOrigin]
+    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_log_storage = UnsafePointer[_duckdb_log_storage, MutUntrackedOrigin]
 
 comptime duckdb_logger_write_log_entry_t = def(UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
 
-comptime duckdb_task_state = UnsafePointer[NoneType, MutExternalOrigin]
+comptime duckdb_task_state = UnsafePointer[NoneType, MutUntrackedOrigin]
 
 
 
@@ -759,7 +759,7 @@ struct duckdb_ext_api_v1:
     var duckdb_result_error: def(UnsafePointer[duckdb_result, ImmutAnyOrigin]) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
     var duckdb_result_error_type: def(UnsafePointer[duckdb_result, ImmutAnyOrigin]) thin abi("C") -> duckdb_error_type
     var duckdb_result_return_type: def(duckdb_result) thin abi("C") -> duckdb_result_type
-    var duckdb_malloc: def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_malloc: def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_free: def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_vector_size: def() thin abi("C") -> idx_t
     var duckdb_string_is_inlined: def(duckdb_string_t) thin abi("C") -> Bool
@@ -877,7 +877,7 @@ struct duckdb_ext_api_v1:
     var duckdb_get_decimal: def(duckdb_value) thin abi("C") -> duckdb_decimal
     var duckdb_get_bit: def(duckdb_value) thin abi("C") -> duckdb_bit
     var duckdb_get_uuid: def(duckdb_value) thin abi("C") -> duckdb_uhugeint
-    var duckdb_get_varchar: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_get_varchar: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_create_struct_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin]) thin abi("C") -> duckdb_value
     var duckdb_create_list_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin], idx_t) thin abi("C") -> duckdb_value
     var duckdb_create_array_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin], idx_t) thin abi("C") -> duckdb_value
@@ -892,7 +892,7 @@ struct duckdb_ext_api_v1:
     var duckdb_get_enum_value: def(duckdb_value) thin abi("C") -> UInt64
     var duckdb_get_struct_child: def(duckdb_value, idx_t) thin abi("C") -> duckdb_value
     var duckdb_create_logical_type: def(duckdb_type) thin abi("C") -> duckdb_logical_type
-    var duckdb_logical_type_get_alias: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_logical_type_get_alias: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_logical_type_set_alias: def(duckdb_logical_type, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_list_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_create_array_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
@@ -907,17 +907,17 @@ struct duckdb_ext_api_v1:
     var duckdb_decimal_internal_type: def(duckdb_logical_type) thin abi("C") -> duckdb_type
     var duckdb_enum_internal_type: def(duckdb_logical_type) thin abi("C") -> duckdb_type
     var duckdb_enum_dictionary_size: def(duckdb_logical_type) thin abi("C") -> UInt32
-    var duckdb_enum_dictionary_value: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_enum_dictionary_value: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_list_type_child_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_array_type_child_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_array_type_array_size: def(duckdb_logical_type) thin abi("C") -> idx_t
     var duckdb_map_type_key_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_map_type_value_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_struct_type_child_count: def(duckdb_logical_type) thin abi("C") -> idx_t
-    var duckdb_struct_type_child_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_struct_type_child_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_struct_type_child_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
     var duckdb_union_type_member_count: def(duckdb_logical_type) thin abi("C") -> idx_t
-    var duckdb_union_type_member_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_union_type_member_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_union_type_member_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
     var duckdb_destroy_logical_type: def(UnsafePointer[duckdb_logical_type, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_register_logical_type: def(duckdb_connection, duckdb_logical_type, duckdb_create_type_info) thin abi("C") -> duckdb_state
@@ -929,8 +929,8 @@ struct duckdb_ext_api_v1:
     var duckdb_data_chunk_get_size: def(duckdb_data_chunk) thin abi("C") -> idx_t
     var duckdb_data_chunk_set_size: def(duckdb_data_chunk, idx_t) thin abi("C") -> NoneType
     var duckdb_vector_get_column_type: def(duckdb_vector) thin abi("C") -> duckdb_logical_type
-    var duckdb_vector_get_data: def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_vector_get_validity: def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutExternalOrigin]
+    var duckdb_vector_get_data: def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_vector_get_validity: def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutUntrackedOrigin]
     var duckdb_vector_ensure_validity_writable: def(duckdb_vector) thin abi("C") -> NoneType
     var duckdb_vector_assign_string_element: def(duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_vector_assign_string_element_len: def(duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) thin abi("C") -> NoneType
@@ -940,10 +940,10 @@ struct duckdb_ext_api_v1:
     var duckdb_list_vector_reserve: def(duckdb_vector, idx_t) thin abi("C") -> duckdb_state
     var duckdb_struct_vector_get_child: def(duckdb_vector, idx_t) thin abi("C") -> duckdb_vector
     var duckdb_array_vector_get_child: def(duckdb_vector) thin abi("C") -> duckdb_vector
-    var duckdb_validity_row_is_valid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> Bool
-    var duckdb_validity_set_row_validity: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t, Bool) thin abi("C") -> NoneType
-    var duckdb_validity_set_row_invalid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
-    var duckdb_validity_set_row_valid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+    var duckdb_validity_row_is_valid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> Bool
+    var duckdb_validity_set_row_validity: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t, Bool) thin abi("C") -> NoneType
+    var duckdb_validity_set_row_invalid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
+    var duckdb_validity_set_row_valid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
     var duckdb_create_scalar_function: def() thin abi("C") -> duckdb_scalar_function
     var duckdb_destroy_scalar_function: def(UnsafePointer[duckdb_scalar_function, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_scalar_function_set_name: def(duckdb_scalar_function, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -955,7 +955,7 @@ struct duckdb_ext_api_v1:
     var duckdb_scalar_function_set_extra_info: def(duckdb_scalar_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_scalar_function_set_function: def(duckdb_scalar_function, def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_register_scalar_function: def(duckdb_connection, duckdb_scalar_function) thin abi("C") -> duckdb_state
-    var duckdb_scalar_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_scalar_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_scalar_function_set: def(UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> duckdb_scalar_function_set
     var duckdb_destroy_scalar_function_set: def(UnsafePointer[duckdb_scalar_function_set, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -966,12 +966,12 @@ struct duckdb_ext_api_v1:
     var duckdb_aggregate_function_set_name: def(duckdb_aggregate_function, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_aggregate_function_add_parameter: def(duckdb_aggregate_function, duckdb_logical_type) thin abi("C") -> NoneType
     var duckdb_aggregate_function_set_return_type: def(duckdb_aggregate_function, duckdb_logical_type) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_set_functions: def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_set_destructor: def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    var duckdb_aggregate_function_set_functions: def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    var duckdb_aggregate_function_set_destructor: def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_register_aggregate_function: def(duckdb_connection, duckdb_aggregate_function) thin abi("C") -> duckdb_state
     var duckdb_aggregate_function_set_special_handling: def(duckdb_aggregate_function) thin abi("C") -> NoneType
     var duckdb_aggregate_function_set_extra_info: def(duckdb_aggregate_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_aggregate_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_aggregate_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_aggregate_function_set: def(UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> duckdb_aggregate_function_set
     var duckdb_destroy_aggregate_function_set: def(UnsafePointer[duckdb_aggregate_function_set, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -989,7 +989,7 @@ struct duckdb_ext_api_v1:
     var duckdb_table_function_set_function: def(duckdb_table_function, def(duckdb_function_info, duckdb_data_chunk) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_table_function_supports_projection_pushdown: def(duckdb_table_function, Bool) thin abi("C") -> NoneType
     var duckdb_register_table_function: def(duckdb_connection, duckdb_table_function) thin abi("C") -> duckdb_state
-    var duckdb_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_bind_add_result_column: def(duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_logical_type) thin abi("C") -> NoneType
     var duckdb_bind_get_parameter_count: def(duckdb_bind_info) thin abi("C") -> idx_t
     var duckdb_bind_get_parameter: def(duckdb_bind_info, idx_t) thin abi("C") -> duckdb_value
@@ -997,17 +997,17 @@ struct duckdb_ext_api_v1:
     var duckdb_bind_set_bind_data: def(duckdb_bind_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_bind_set_cardinality: def(duckdb_bind_info, idx_t, Bool) thin abi("C") -> NoneType
     var duckdb_bind_set_error: def(duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_init_set_init_data: def(duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_init_get_column_count: def(duckdb_init_info) thin abi("C") -> idx_t
     var duckdb_init_get_column_index: def(duckdb_init_info, idx_t) thin abi("C") -> idx_t
     var duckdb_init_set_max_threads: def(duckdb_init_info, idx_t) thin abi("C") -> NoneType
     var duckdb_init_set_error: def(duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_local_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_local_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_add_replacement_scan: def(duckdb_database, def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_replacement_scan_set_function_name: def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -1031,8 +1031,8 @@ struct duckdb_ext_api_v1:
     var duckdb_table_description_create_ext: def(duckdb_connection, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_table_description, ImmutAnyOrigin]) thin abi("C") -> duckdb_state
     var duckdb_table_description_destroy: def(UnsafePointer[duckdb_table_description, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_table_description_error: def(duckdb_table_description) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
-    var duckdb_column_has_default: def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutExternalOrigin]) thin abi("C") -> duckdb_state
-    var duckdb_table_description_get_column_name: def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_column_has_default: def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutUntrackedOrigin]) thin abi("C") -> duckdb_state
+    var duckdb_table_description_get_column_name: def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_execute_tasks: def(duckdb_database, idx_t) thin abi("C") -> NoneType
     var duckdb_create_task_state: def(duckdb_database) thin abi("C") -> duckdb_task_state
     var duckdb_execute_tasks_state: def(duckdb_task_state) thin abi("C") -> NoneType
@@ -1048,7 +1048,7 @@ struct duckdb_ext_api_v1:
     var duckdb_cast_function_set_implicit_cast_cost: def(duckdb_cast_function, Int64) thin abi("C") -> NoneType
     var duckdb_cast_function_set_function: def(duckdb_cast_function, def(duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) thin abi("C") -> Bool) thin abi("C") -> NoneType
     var duckdb_cast_function_set_extra_info: def(duckdb_cast_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_cast_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_cast_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_cast_function_get_cast_mode: def(duckdb_function_info) thin abi("C") -> duckdb_cast_mode
     var duckdb_cast_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_cast_function_set_row_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin], idx_t, duckdb_vector) thin abi("C") -> NoneType
@@ -1127,7 +1127,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_result_error: def(UnsafePointer[duckdb_result, ImmutAnyOrigin]) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
     var duckdb_result_error_type: def(UnsafePointer[duckdb_result, ImmutAnyOrigin]) thin abi("C") -> duckdb_error_type
     var duckdb_result_return_type: def(duckdb_result) thin abi("C") -> duckdb_result_type
-    var duckdb_malloc: def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_malloc: def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_free: def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_vector_size: def() thin abi("C") -> idx_t
     var duckdb_string_is_inlined: def(duckdb_string_t) thin abi("C") -> Bool
@@ -1245,7 +1245,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_get_decimal: def(duckdb_value) thin abi("C") -> duckdb_decimal
     var duckdb_get_bit: def(duckdb_value) thin abi("C") -> duckdb_bit
     var duckdb_get_uuid: def(duckdb_value) thin abi("C") -> duckdb_uhugeint
-    var duckdb_get_varchar: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_get_varchar: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_create_struct_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin]) thin abi("C") -> duckdb_value
     var duckdb_create_list_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin], idx_t) thin abi("C") -> duckdb_value
     var duckdb_create_array_value: def(duckdb_logical_type, UnsafePointer[duckdb_value, ImmutAnyOrigin], idx_t) thin abi("C") -> duckdb_value
@@ -1260,7 +1260,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_get_enum_value: def(duckdb_value) thin abi("C") -> UInt64
     var duckdb_get_struct_child: def(duckdb_value, idx_t) thin abi("C") -> duckdb_value
     var duckdb_create_logical_type: def(duckdb_type) thin abi("C") -> duckdb_logical_type
-    var duckdb_logical_type_get_alias: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_logical_type_get_alias: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_logical_type_set_alias: def(duckdb_logical_type, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_list_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_create_array_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
@@ -1275,17 +1275,17 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_decimal_internal_type: def(duckdb_logical_type) thin abi("C") -> duckdb_type
     var duckdb_enum_internal_type: def(duckdb_logical_type) thin abi("C") -> duckdb_type
     var duckdb_enum_dictionary_size: def(duckdb_logical_type) thin abi("C") -> UInt32
-    var duckdb_enum_dictionary_value: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_enum_dictionary_value: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_list_type_child_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_array_type_child_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_array_type_array_size: def(duckdb_logical_type) thin abi("C") -> idx_t
     var duckdb_map_type_key_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_map_type_value_type: def(duckdb_logical_type) thin abi("C") -> duckdb_logical_type
     var duckdb_struct_type_child_count: def(duckdb_logical_type) thin abi("C") -> idx_t
-    var duckdb_struct_type_child_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_struct_type_child_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_struct_type_child_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
     var duckdb_union_type_member_count: def(duckdb_logical_type) thin abi("C") -> idx_t
-    var duckdb_union_type_member_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_union_type_member_name: def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_union_type_member_type: def(duckdb_logical_type, idx_t) thin abi("C") -> duckdb_logical_type
     var duckdb_destroy_logical_type: def(UnsafePointer[duckdb_logical_type, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_register_logical_type: def(duckdb_connection, duckdb_logical_type, duckdb_create_type_info) thin abi("C") -> duckdb_state
@@ -1297,8 +1297,8 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_data_chunk_get_size: def(duckdb_data_chunk) thin abi("C") -> idx_t
     var duckdb_data_chunk_set_size: def(duckdb_data_chunk, idx_t) thin abi("C") -> NoneType
     var duckdb_vector_get_column_type: def(duckdb_vector) thin abi("C") -> duckdb_logical_type
-    var duckdb_vector_get_data: def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_vector_get_validity: def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutExternalOrigin]
+    var duckdb_vector_get_data: def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_vector_get_validity: def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutUntrackedOrigin]
     var duckdb_vector_ensure_validity_writable: def(duckdb_vector) thin abi("C") -> NoneType
     var duckdb_vector_assign_string_element: def(duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_vector_assign_string_element_len: def(duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) thin abi("C") -> NoneType
@@ -1308,10 +1308,10 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_list_vector_reserve: def(duckdb_vector, idx_t) thin abi("C") -> duckdb_state
     var duckdb_struct_vector_get_child: def(duckdb_vector, idx_t) thin abi("C") -> duckdb_vector
     var duckdb_array_vector_get_child: def(duckdb_vector) thin abi("C") -> duckdb_vector
-    var duckdb_validity_row_is_valid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> Bool
-    var duckdb_validity_set_row_validity: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t, Bool) thin abi("C") -> NoneType
-    var duckdb_validity_set_row_invalid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
-    var duckdb_validity_set_row_valid: def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+    var duckdb_validity_row_is_valid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> Bool
+    var duckdb_validity_set_row_validity: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t, Bool) thin abi("C") -> NoneType
+    var duckdb_validity_set_row_invalid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
+    var duckdb_validity_set_row_valid: def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
     var duckdb_create_scalar_function: def() thin abi("C") -> duckdb_scalar_function
     var duckdb_destroy_scalar_function: def(UnsafePointer[duckdb_scalar_function, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_scalar_function_set_name: def(duckdb_scalar_function, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -1323,7 +1323,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_scalar_function_set_extra_info: def(duckdb_scalar_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_scalar_function_set_function: def(duckdb_scalar_function, def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_register_scalar_function: def(duckdb_connection, duckdb_scalar_function) thin abi("C") -> duckdb_state
-    var duckdb_scalar_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_scalar_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_scalar_function_set: def(UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> duckdb_scalar_function_set
     var duckdb_destroy_scalar_function_set: def(UnsafePointer[duckdb_scalar_function_set, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -1334,12 +1334,12 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_aggregate_function_set_name: def(duckdb_aggregate_function, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_aggregate_function_add_parameter: def(duckdb_aggregate_function, duckdb_logical_type) thin abi("C") -> NoneType
     var duckdb_aggregate_function_set_return_type: def(duckdb_aggregate_function, duckdb_logical_type) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_set_functions: def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_set_destructor: def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    var duckdb_aggregate_function_set_functions: def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    var duckdb_aggregate_function_set_destructor: def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_register_aggregate_function: def(duckdb_connection, duckdb_aggregate_function) thin abi("C") -> duckdb_state
     var duckdb_aggregate_function_set_special_handling: def(duckdb_aggregate_function) thin abi("C") -> NoneType
     var duckdb_aggregate_function_set_extra_info: def(duckdb_aggregate_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_aggregate_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_aggregate_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_aggregate_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_create_aggregate_function_set: def(UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> duckdb_aggregate_function_set
     var duckdb_destroy_aggregate_function_set: def(UnsafePointer[duckdb_aggregate_function_set, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -1357,7 +1357,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_table_function_set_function: def(duckdb_table_function, def(duckdb_function_info, duckdb_data_chunk) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_table_function_supports_projection_pushdown: def(duckdb_table_function, Bool) thin abi("C") -> NoneType
     var duckdb_register_table_function: def(duckdb_connection, duckdb_table_function) thin abi("C") -> duckdb_state
-    var duckdb_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_bind_add_result_column: def(duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin], duckdb_logical_type) thin abi("C") -> NoneType
     var duckdb_bind_get_parameter_count: def(duckdb_bind_info) thin abi("C") -> idx_t
     var duckdb_bind_get_parameter: def(duckdb_bind_info, idx_t) thin abi("C") -> duckdb_value
@@ -1365,17 +1365,17 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_bind_set_bind_data: def(duckdb_bind_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_bind_set_cardinality: def(duckdb_bind_info, idx_t, Bool) thin abi("C") -> NoneType
     var duckdb_bind_set_error: def(duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_init_set_init_data: def(duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_init_get_column_count: def(duckdb_init_info) thin abi("C") -> idx_t
     var duckdb_init_get_column_index: def(duckdb_init_info, idx_t) thin abi("C") -> idx_t
     var duckdb_init_set_max_threads: def(duckdb_init_info, idx_t) thin abi("C") -> NoneType
     var duckdb_init_set_error: def(duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_function_get_local_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_function_get_local_init_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_add_replacement_scan: def(duckdb_database, def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_replacement_scan_set_function_name: def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
@@ -1399,8 +1399,8 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_table_description_create_ext: def(duckdb_connection, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[duckdb_table_description, ImmutAnyOrigin]) thin abi("C") -> duckdb_state
     var duckdb_table_description_destroy: def(UnsafePointer[duckdb_table_description, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_table_description_error: def(duckdb_table_description) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
-    var duckdb_column_has_default: def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutExternalOrigin]) thin abi("C") -> duckdb_state
-    var duckdb_table_description_get_column_name: def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_column_has_default: def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutUntrackedOrigin]) thin abi("C") -> duckdb_state
+    var duckdb_table_description_get_column_name: def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_execute_tasks: def(duckdb_database, idx_t) thin abi("C") -> NoneType
     var duckdb_create_task_state: def(duckdb_database) thin abi("C") -> duckdb_task_state
     var duckdb_execute_tasks_state: def(duckdb_task_state) thin abi("C") -> NoneType
@@ -1416,7 +1416,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_cast_function_set_implicit_cast_cost: def(duckdb_cast_function, Int64) thin abi("C") -> NoneType
     var duckdb_cast_function_set_function: def(duckdb_cast_function, def(duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) thin abi("C") -> Bool) thin abi("C") -> NoneType
     var duckdb_cast_function_set_extra_info: def(duckdb_cast_function, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_cast_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_cast_function_get_extra_info: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_cast_function_get_cast_mode: def(duckdb_function_info) thin abi("C") -> duckdb_cast_mode
     var duckdb_cast_function_set_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_cast_function_set_row_error: def(duckdb_function_info, UnsafePointer[c_char, ImmutAnyOrigin], idx_t, duckdb_vector) thin abi("C") -> NoneType
@@ -1463,8 +1463,8 @@ struct duckdb_ext_api_v1_unstable:
 
     # --- unstable_deprecated ---
     var duckdb_row_count: def(UnsafePointer[duckdb_result, ImmutAnyOrigin]) thin abi("C") -> idx_t
-    var duckdb_column_data: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_nullmask_data: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[Bool, MutExternalOrigin]
+    var duckdb_column_data: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_nullmask_data: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[Bool, MutUntrackedOrigin]
     var duckdb_result_get_chunk: def(duckdb_result, idx_t) thin abi("C") -> duckdb_data_chunk
     var duckdb_result_is_streaming: def(duckdb_result) thin abi("C") -> Bool
     var duckdb_result_chunk_count: def(duckdb_result) thin abi("C") -> idx_t
@@ -1486,9 +1486,9 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_value_time: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_time
     var duckdb_value_timestamp: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_timestamp
     var duckdb_value_interval: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_interval
-    var duckdb_value_varchar: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_value_varchar: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_value_string: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_string
-    var duckdb_value_varchar_internal: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_value_varchar_internal: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_value_string_internal: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_string
     var duckdb_value_blob: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> duckdb_blob
     var duckdb_value_is_null: def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t, idx_t) thin abi("C") -> Bool
@@ -1556,7 +1556,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_destroy_copy_function: def(UnsafePointer[duckdb_copy_function, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_copy_function_set_bind: def(duckdb_copy_function, def(duckdb_copy_function_bind_info) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_bind_set_error: def(duckdb_copy_function_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_copy_function_bind_get_extra_info: def(duckdb_copy_function_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_bind_get_extra_info: def(duckdb_copy_function_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_bind_get_client_context: def(duckdb_copy_function_bind_info) thin abi("C") -> duckdb_client_context
     var duckdb_copy_function_bind_get_column_count: def(duckdb_copy_function_bind_info) thin abi("C") -> idx_t
     var duckdb_copy_function_bind_get_column_type: def(duckdb_copy_function_bind_info, idx_t) thin abi("C") -> duckdb_logical_type
@@ -1564,23 +1564,23 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_copy_function_bind_set_bind_data: def(duckdb_copy_function_bind_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_set_global_init: def(duckdb_copy_function, def(duckdb_copy_function_global_init_info) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_global_init_set_error: def(duckdb_copy_function_global_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_copy_function_global_init_get_extra_info: def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_global_init_get_extra_info: def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_global_init_get_client_context: def(duckdb_copy_function_global_init_info) thin abi("C") -> duckdb_client_context
-    var duckdb_copy_function_global_init_get_bind_data: def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_global_init_get_bind_data: def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_global_init_set_global_state: def(duckdb_copy_function_global_init_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_global_init_get_file_path: def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
     var duckdb_copy_function_set_sink: def(duckdb_copy_function, def(duckdb_copy_function_sink_info, duckdb_data_chunk) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_sink_set_error: def(duckdb_copy_function_sink_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_copy_function_sink_get_extra_info: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_sink_get_extra_info: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_sink_get_client_context: def(duckdb_copy_function_sink_info) thin abi("C") -> duckdb_client_context
-    var duckdb_copy_function_sink_get_bind_data: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_copy_function_sink_get_global_state: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_sink_get_bind_data: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_copy_function_sink_get_global_state: def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_set_finalize: def(duckdb_copy_function, def(duckdb_copy_function_finalize_info) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_copy_function_finalize_set_error: def(duckdb_copy_function_finalize_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_copy_function_finalize_get_extra_info: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_finalize_get_extra_info: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_finalize_get_client_context: def(duckdb_copy_function_finalize_info) thin abi("C") -> duckdb_client_context
-    var duckdb_copy_function_finalize_get_bind_data: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_copy_function_finalize_get_global_state: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_copy_function_finalize_get_bind_data: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_copy_function_finalize_get_global_state: def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_copy_function_set_copy_from_function: def(duckdb_copy_function, duckdb_table_function) thin abi("C") -> NoneType
     var duckdb_table_function_bind_get_result_column_count: def(duckdb_bind_info) thin abi("C") -> idx_t
     var duckdb_table_function_bind_get_result_column_name: def(duckdb_bind_info, idx_t) thin abi("C") -> UnsafePointer[c_char, ImmutAnyOrigin]
@@ -1618,7 +1618,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_file_handle_size: def(duckdb_file_handle) thin abi("C") -> Int64
 
     # --- unstable_new_geo_functions ---
-    var duckdb_geometry_type_get_crs: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_geometry_type_get_crs: def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 
     # --- unstable_new_logger_functions ---
     var duckdb_create_log_storage: def() thin abi("C") -> duckdb_log_storage
@@ -1650,23 +1650,23 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_scalar_function_bind_set_error: def(duckdb_bind_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_scalar_function_get_client_context: def(duckdb_bind_info, UnsafePointer[duckdb_client_context, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_scalar_function_set_bind_data: def(duckdb_bind_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
-    var duckdb_scalar_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_scalar_function_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_get_bind_data: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_scalar_function_bind_get_extra_info: def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_scalar_function_bind_get_argument_count: def(duckdb_bind_info) thin abi("C") -> idx_t
     var duckdb_scalar_function_bind_get_argument: def(duckdb_bind_info, idx_t) thin abi("C") -> duckdb_expression
     var duckdb_scalar_function_set_bind_data_copy: def(duckdb_bind_info, def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType
 
     # --- unstable_new_scalar_function_state_functions ---
-    var duckdb_scalar_function_get_state: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_get_state: def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
     var duckdb_scalar_function_set_init: def(duckdb_scalar_function, def(duckdb_init_info) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_scalar_function_init_set_error: def(duckdb_init_info, UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType
     var duckdb_scalar_function_init_set_state: def(duckdb_init_info, UnsafePointer[NoneType, MutAnyOrigin], def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType) thin abi("C") -> NoneType
     var duckdb_scalar_function_init_get_client_context: def(duckdb_init_info, UnsafePointer[duckdb_client_context, ImmutAnyOrigin]) thin abi("C") -> NoneType
-    var duckdb_scalar_function_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
-    var duckdb_scalar_function_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    var duckdb_scalar_function_init_get_bind_data: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
+    var duckdb_scalar_function_init_get_extra_info: def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 
     # --- unstable_new_string_functions ---
-    var duckdb_value_to_string: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    var duckdb_value_to_string: def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
     var duckdb_valid_utf8_check: def(UnsafePointer[c_char, ImmutAnyOrigin], idx_t) thin abi("C") -> duckdb_error_data
 
     # --- unstable_new_table_description_functions ---
@@ -1690,7 +1690,7 @@ struct duckdb_ext_api_v1_unstable:
     var duckdb_vector_reference_vector: def(duckdb_vector, duckdb_vector) thin abi("C") -> NoneType
     var duckdb_create_selection_vector: def(idx_t) thin abi("C") -> duckdb_selection_vector
     var duckdb_destroy_selection_vector: def(duckdb_selection_vector) thin abi("C") -> NoneType
-    var duckdb_selection_vector_get_data_ptr: def(duckdb_selection_vector) thin abi("C") -> UnsafePointer[UInt32, MutExternalOrigin]
+    var duckdb_selection_vector_get_data_ptr: def(duckdb_selection_vector) thin abi("C") -> UnsafePointer[UInt32, MutUntrackedOrigin]
     var duckdb_vector_copy_sel: def(duckdb_vector, duckdb_vector, duckdb_selection_vector, idx_t, idx_t, idx_t) thin abi("C") -> NoneType
     var duckdb_unsafe_vector_assign_string_element_len: def(duckdb_vector, idx_t, UnsafePointer[c_char, ImmutAnyOrigin], idx_t) thin abi("C") -> NoneType
 
@@ -2729,7 +2729,7 @@ struct LibDuckDB(Movable):
         except e:
             abort(String(e))
 
-    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutExternalOrigin]):
+    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]):
         """Initialize LibDuckDB from a stable DuckDB extension API struct pointer.
 
         This constructor is used when loaded as a DuckDB extension
@@ -3240,7 +3240,7 @@ struct LibDuckDB(Movable):
         except e:
             abort(String(e))
 
-    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutExternalOrigin]):
+    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin]):
         """Initialize LibDuckDB from an unstable DuckDB extension API struct pointer.
 
         This constructor is used when loaded as a DuckDB extension
@@ -4665,7 +4665,7 @@ struct LibDuckDB(Movable):
         self,
         result: UnsafePointer[duckdb_result, ImmutAnyOrigin],
         col: idx_t,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         **DEPRECATED**: Prefer using `duckdb_result_get_chunk` instead.
 
@@ -4687,7 +4687,7 @@ struct LibDuckDB(Movable):
         self,
         result: UnsafePointer[duckdb_result, ImmutAnyOrigin],
         col: idx_t,
-    ) -> UnsafePointer[Bool, MutExternalOrigin]:
+    ) -> UnsafePointer[Bool, MutUntrackedOrigin]:
         """
         **DEPRECATED**: Prefer using `duckdb_result_get_chunk` instead.
 
@@ -4745,7 +4745,7 @@ struct LibDuckDB(Movable):
     def duckdb_malloc(
         self,
         size: UInt,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Allocate `size` bytes of memory using the duckdb internal malloc function. Any memory allocated in this manner
         should be freed using `duckdb_free`.
@@ -6174,7 +6174,7 @@ struct LibDuckDB(Movable):
     def duckdb_get_varchar(
         self,
         value: duckdb_value,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Obtains a string representation of the given value.
         The result must be destroyed with `duckdb_free`.
@@ -6337,7 +6337,7 @@ struct LibDuckDB(Movable):
     def duckdb_value_to_string(
         self,
         value: duckdb_value,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Returns the SQL string representation of the given value.
         """
@@ -6364,7 +6364,7 @@ struct LibDuckDB(Movable):
     def duckdb_logical_type_get_alias(
         self,
         type_: duckdb_logical_type,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Returns the alias of a duckdb_logical_type, if set, else `nullptr`.
         The result must be destroyed with `duckdb_free`.
@@ -6517,7 +6517,7 @@ struct LibDuckDB(Movable):
         self,
         type_: duckdb_logical_type,
         index: idx_t,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Retrieves the dictionary value at the specified position from the enum.
 
@@ -6590,7 +6590,7 @@ struct LibDuckDB(Movable):
         self,
         type_: duckdb_logical_type,
         index: idx_t,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Retrieves the name of the struct child.
 
@@ -6623,7 +6623,7 @@ struct LibDuckDB(Movable):
         self,
         type_: duckdb_logical_type,
         index: idx_t,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Retrieves the name of the union member.
 
@@ -6779,7 +6779,7 @@ struct LibDuckDB(Movable):
     def duckdb_vector_get_data(
         self,
         vector: duckdb_vector,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the data pointer of the vector.
 
@@ -6791,7 +6791,7 @@ struct LibDuckDB(Movable):
     def duckdb_vector_get_validity(
         self,
         vector: duckdb_vector,
-    ) -> UnsafePointer[UInt64, MutExternalOrigin]:
+    ) -> UnsafePointer[UInt64, MutUntrackedOrigin]:
         """
         Retrieves the validity mask pointer of the specified vector.
 
@@ -6984,7 +6984,7 @@ struct LibDuckDB(Movable):
 
     def duckdb_validity_row_is_valid(
         self,
-        validity: UnsafePointer[UInt64, MutExternalOrigin],
+        validity: UnsafePointer[UInt64, MutUntrackedOrigin],
         row: idx_t,
     ) -> Bool:
         """
@@ -6994,7 +6994,7 @@ struct LibDuckDB(Movable):
 
     def duckdb_validity_set_row_validity(
         self,
-        validity: UnsafePointer[UInt64, MutExternalOrigin],
+        validity: UnsafePointer[UInt64, MutUntrackedOrigin],
         row: idx_t,
         valid: Bool,
     ) -> NoneType:
@@ -7008,7 +7008,7 @@ struct LibDuckDB(Movable):
 
     def duckdb_validity_set_row_invalid(
         self,
-        validity: UnsafePointer[UInt64, MutExternalOrigin],
+        validity: UnsafePointer[UInt64, MutUntrackedOrigin],
         row: idx_t,
     ) -> NoneType:
         """
@@ -7020,7 +7020,7 @@ struct LibDuckDB(Movable):
 
     def duckdb_validity_set_row_valid(
         self,
-        validity: UnsafePointer[UInt64, MutExternalOrigin],
+        validity: UnsafePointer[UInt64, MutUntrackedOrigin],
         row: idx_t,
     ) -> NoneType:
         """
@@ -7195,7 +7195,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_get_extra_info(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_scalar_function_set_extra_info`.
         """
@@ -7204,7 +7204,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_bind_get_extra_info(
         self,
         info: duckdb_bind_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in the bind info.
         """
@@ -7213,7 +7213,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_get_bind_data(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the scalar function's bind data set by `duckdb_scalar_function_set_bind_data`.
         Note that the bind data is read-only.
@@ -7308,7 +7308,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_get_state(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the state pointer of the function info.
         """
@@ -7359,7 +7359,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_init_get_bind_data(
         self,
         info: duckdb_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the scalar function's bind data set by `duckdb_scalar_function_set_bind_data`.
         Note that the bind data is read-only.
@@ -7369,7 +7369,7 @@ struct LibDuckDB(Movable):
     def duckdb_scalar_function_init_get_extra_info(
         self,
         info: duckdb_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in the init info.
         """
@@ -7402,7 +7402,7 @@ struct LibDuckDB(Movable):
     def duckdb_selection_vector_get_data_ptr(
         self,
         sel: duckdb_selection_vector,
-    ) -> UnsafePointer[UInt32, MutExternalOrigin]:
+    ) -> UnsafePointer[UInt32, MutUntrackedOrigin]:
         """
         Access the data pointer of a selection vector.
         """
@@ -7467,9 +7467,9 @@ struct LibDuckDB(Movable):
         aggregate_function: duckdb_aggregate_function,
         state_size: def(duckdb_function_info) thin abi("C") -> idx_t,
         state_init: def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType,
-        update: def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType,
-        combine: def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType,
-        finalize: def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType,
+        update: def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType,
+        combine: def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType,
+        finalize: def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType,
     ) -> NoneType:
         """
         Sets the main functions of the aggregate function.
@@ -7479,7 +7479,7 @@ struct LibDuckDB(Movable):
     def duckdb_aggregate_function_set_destructor(
         self,
         aggregate_function: duckdb_aggregate_function,
-        destroy: def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType,
+        destroy: def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType,
     ) -> NoneType:
         """
         Sets the state destructor callback of the aggregate function (optional).
@@ -7523,7 +7523,7 @@ struct LibDuckDB(Movable):
     def duckdb_aggregate_function_get_extra_info(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_aggregate_function_set_extra_info`.
         """
@@ -7727,7 +7727,7 @@ struct LibDuckDB(Movable):
     def duckdb_bind_get_extra_info(
         self,
         info: duckdb_bind_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_table_function_set_extra_info`.
         """
@@ -7828,7 +7828,7 @@ struct LibDuckDB(Movable):
     def duckdb_init_get_extra_info(
         self,
         info: duckdb_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_table_function_set_extra_info`.
         """
@@ -7837,7 +7837,7 @@ struct LibDuckDB(Movable):
     def duckdb_init_get_bind_data(
         self,
         info: duckdb_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the bind data set by `duckdb_bind_set_bind_data` during the bind.
 
@@ -7908,7 +7908,7 @@ struct LibDuckDB(Movable):
     def duckdb_function_get_extra_info(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_table_function_set_extra_info`.
         """
@@ -7917,7 +7917,7 @@ struct LibDuckDB(Movable):
     def duckdb_function_get_bind_data(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the table function's bind data set by `duckdb_bind_set_bind_data`.
 
@@ -7929,7 +7929,7 @@ struct LibDuckDB(Movable):
     def duckdb_function_get_init_data(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the init data set by `duckdb_init_set_init_data` during the init.
         """
@@ -7938,7 +7938,7 @@ struct LibDuckDB(Movable):
     def duckdb_function_get_local_init_data(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Gets the thread-local init data set by `duckdb_init_set_init_data` during the local_init.
         """
@@ -8533,7 +8533,7 @@ struct LibDuckDB(Movable):
         self,
         table_description: duckdb_table_description,
         index: idx_t,
-        out_: UnsafePointer[Bool, MutExternalOrigin],
+        out_: UnsafePointer[Bool, MutUntrackedOrigin],
     ) -> duckdb_state:
         """
         Check if the column at 'index' index of the table has a DEFAULT expression.
@@ -8553,7 +8553,7 @@ struct LibDuckDB(Movable):
         self,
         table_description: duckdb_table_description,
         index: idx_t,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Obtain the column name at 'index'.
         The out result must be destroyed with `duckdb_free`.
@@ -8812,7 +8812,7 @@ struct LibDuckDB(Movable):
     def duckdb_cast_function_get_extra_info(
         self,
         info: duckdb_function_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info of the function as set in `duckdb_cast_function_set_extra_info`.
         """
@@ -9244,7 +9244,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_bind_get_extra_info(
         self,
         info: duckdb_copy_function_bind_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info pointer of the copy function.
         """
@@ -9323,7 +9323,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_global_init_get_extra_info(
         self,
         info: duckdb_copy_function_global_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info pointer of the copy function.
         """
@@ -9343,7 +9343,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_global_init_get_bind_data(
         self,
         info: duckdb_copy_function_global_init_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
         """
@@ -9394,7 +9394,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_sink_get_extra_info(
         self,
         info: duckdb_copy_function_sink_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info pointer of the copy function.
         """
@@ -9414,7 +9414,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_sink_get_bind_data(
         self,
         info: duckdb_copy_function_sink_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
         """
@@ -9423,7 +9423,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_sink_get_global_state(
         self,
         info: duckdb_copy_function_sink_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the global state provided during the init-phase of a `COPY ... TO` function.
         """
@@ -9452,7 +9452,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_finalize_get_extra_info(
         self,
         info: duckdb_copy_function_finalize_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the extra info pointer of the copy function.
         """
@@ -9472,7 +9472,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_finalize_get_bind_data(
         self,
         info: duckdb_copy_function_finalize_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the bind data provided during the binding-phase of a `COPY ... TO` function.
         """
@@ -9481,7 +9481,7 @@ struct LibDuckDB(Movable):
     def duckdb_copy_function_finalize_get_global_state(
         self,
         info: duckdb_copy_function_finalize_info,
-    ) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    ) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """
         Retrieves the global state provided during the init-phase of a `COPY ... TO` function.
         """
@@ -9697,7 +9697,7 @@ struct LibDuckDB(Movable):
     def duckdb_geometry_type_get_crs(
         self,
         type_: duckdb_logical_type,
-    ) -> UnsafePointer[c_char, MutExternalOrigin]:
+    ) -> UnsafePointer[c_char, MutUntrackedOrigin]:
         """
         Gets the CRS (Coordinate Reference System) of a GEOMETRY type.
         Result must be freed with `duckdb_free`.
@@ -9907,12 +9907,12 @@ comptime _duckdb_rows_changed = _dylib_function["duckdb_rows_changed",
 
 # [ext_api: unstable_deprecated]
 comptime _duckdb_column_data = _dylib_function["duckdb_column_data",
-    def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_deprecated]
 comptime _duckdb_nullmask_data = _dylib_function["duckdb_nullmask_data",
-    def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[Bool, MutExternalOrigin]
+    def(UnsafePointer[duckdb_result, ImmutAnyOrigin], idx_t) thin abi("C") -> UnsafePointer[Bool, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -9937,7 +9937,7 @@ comptime _duckdb_result_return_type = _dylib_function["duckdb_result_return_type
 
 # [ext_api: v1.2.0]
 comptime _duckdb_malloc = _dylib_function["duckdb_malloc",
-    def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(UInt) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10662,7 +10662,7 @@ comptime _duckdb_get_uuid = _dylib_function["duckdb_get_uuid",
 
 # [ext_api: v1.2.0]
 comptime _duckdb_get_varchar = _dylib_function["duckdb_get_varchar",
-    def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10742,7 +10742,7 @@ comptime _duckdb_get_struct_child = _dylib_function["duckdb_get_struct_child",
 
 # [ext_api: unstable_new_string_functions]
 comptime _duckdb_value_to_string = _dylib_function["duckdb_value_to_string",
-    def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_value) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 
@@ -10757,7 +10757,7 @@ comptime _duckdb_create_logical_type = _dylib_function["duckdb_create_logical_ty
 
 # [ext_api: v1.2.0]
 comptime _duckdb_logical_type_get_alias = _dylib_function["duckdb_logical_type_get_alias",
-    def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10832,7 +10832,7 @@ comptime _duckdb_enum_dictionary_size = _dylib_function["duckdb_enum_dictionary_
 
 # [ext_api: v1.2.0]
 comptime _duckdb_enum_dictionary_value = _dylib_function["duckdb_enum_dictionary_value",
-    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10867,7 +10867,7 @@ comptime _duckdb_struct_type_child_count = _dylib_function["duckdb_struct_type_c
 
 # [ext_api: v1.2.0]
 comptime _duckdb_struct_type_child_name = _dylib_function["duckdb_struct_type_child_name",
-    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10882,7 +10882,7 @@ comptime _duckdb_union_type_member_count = _dylib_function["duckdb_union_type_me
 
 # [ext_api: v1.2.0]
 comptime _duckdb_union_type_member_name = _dylib_function["duckdb_union_type_member_name",
-    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_logical_type, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -10962,12 +10962,12 @@ comptime _duckdb_vector_get_column_type = _dylib_function["duckdb_vector_get_col
 
 # [ext_api: v1.2.0]
 comptime _duckdb_vector_get_data = _dylib_function["duckdb_vector_get_data",
-    def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_vector) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_vector_get_validity = _dylib_function["duckdb_vector_get_validity",
-    def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutExternalOrigin]
+    def(duckdb_vector) thin abi("C") -> UnsafePointer[UInt64, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -11047,22 +11047,22 @@ comptime _duckdb_vector_reference_vector = _dylib_function["duckdb_vector_refere
 
 # [ext_api: v1.2.0]
 comptime _duckdb_validity_row_is_valid = _dylib_function["duckdb_validity_row_is_valid",
-    def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> Bool
+    def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> Bool
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_validity_set_row_validity = _dylib_function["duckdb_validity_set_row_validity",
-    def(UnsafePointer[UInt64, MutExternalOrigin], idx_t, Bool) thin abi("C") -> NoneType
+    def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t, Bool) thin abi("C") -> NoneType
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_validity_set_row_invalid = _dylib_function["duckdb_validity_set_row_invalid",
-    def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+    def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_validity_set_row_valid = _dylib_function["duckdb_validity_set_row_valid",
-    def(UnsafePointer[UInt64, MutExternalOrigin], idx_t) thin abi("C") -> NoneType
+    def(UnsafePointer[UInt64, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType
 ]
 
 
@@ -11147,17 +11147,17 @@ comptime _duckdb_register_scalar_function = _dylib_function["duckdb_register_sca
 
 # [ext_api: v1.2.0]
 comptime _duckdb_scalar_function_get_extra_info = _dylib_function["duckdb_scalar_function_get_extra_info",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_scalar_function_functions]
 comptime _duckdb_scalar_function_bind_get_extra_info = _dylib_function["duckdb_scalar_function_bind_get_extra_info",
-    def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_scalar_function_functions]
 comptime _duckdb_scalar_function_get_bind_data = _dylib_function["duckdb_scalar_function_get_bind_data",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_scalar_function_functions]
@@ -11202,7 +11202,7 @@ comptime _duckdb_scalar_function_bind_get_argument = _dylib_function["duckdb_sca
 
 # [ext_api: unstable_new_scalar_function_state_functions]
 comptime _duckdb_scalar_function_get_state = _dylib_function["duckdb_scalar_function_get_state",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_scalar_function_state_functions]
@@ -11227,12 +11227,12 @@ comptime _duckdb_scalar_function_init_get_client_context = _dylib_function["duck
 
 # [ext_api: unstable_new_scalar_function_state_functions]
 comptime _duckdb_scalar_function_init_get_bind_data = _dylib_function["duckdb_scalar_function_init_get_bind_data",
-    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_scalar_function_state_functions]
 comptime _duckdb_scalar_function_init_get_extra_info = _dylib_function["duckdb_scalar_function_init_get_extra_info",
-    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 
@@ -11252,7 +11252,7 @@ comptime _duckdb_destroy_selection_vector = _dylib_function["duckdb_destroy_sele
 
 # [ext_api: unstable_new_vector_functions]
 comptime _duckdb_selection_vector_get_data_ptr = _dylib_function["duckdb_selection_vector_get_data_ptr",
-    def(duckdb_selection_vector) thin abi("C") -> UnsafePointer[UInt32, MutExternalOrigin]
+    def(duckdb_selection_vector) thin abi("C") -> UnsafePointer[UInt32, MutUntrackedOrigin]
 ]
 
 
@@ -11287,12 +11287,12 @@ comptime _duckdb_aggregate_function_set_return_type = _dylib_function["duckdb_ag
 
 # [ext_api: v1.2.0]
 comptime _duckdb_aggregate_function_set_functions = _dylib_function["duckdb_aggregate_function_set_functions",
-    def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    def(duckdb_aggregate_function, def(duckdb_function_info) thin abi("C") -> idx_t, def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType, def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType, def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_aggregate_function_set_destructor = _dylib_function["duckdb_aggregate_function_set_destructor",
-    def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
+    def(duckdb_aggregate_function, def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType) thin abi("C") -> NoneType
 ]
 
 # [ext_api: v1.2.0]
@@ -11312,7 +11312,7 @@ comptime _duckdb_aggregate_function_set_extra_info = _dylib_function["duckdb_agg
 
 # [ext_api: v1.2.0]
 comptime _duckdb_aggregate_function_get_extra_info = _dylib_function["duckdb_aggregate_function_get_extra_info",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -11412,7 +11412,7 @@ comptime _duckdb_register_table_function = _dylib_function["duckdb_register_tabl
 
 # [ext_api: v1.2.0]
 comptime _duckdb_bind_get_extra_info = _dylib_function["duckdb_bind_get_extra_info",
-    def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_table_function_functions]
@@ -11462,12 +11462,12 @@ comptime _duckdb_bind_set_error = _dylib_function["duckdb_bind_set_error",
 
 # [ext_api: v1.2.0]
 comptime _duckdb_init_get_extra_info = _dylib_function["duckdb_init_get_extra_info",
-    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_init_get_bind_data = _dylib_function["duckdb_init_get_bind_data",
-    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -11502,22 +11502,22 @@ comptime _duckdb_init_set_error = _dylib_function["duckdb_init_set_error",
 
 # [ext_api: v1.2.0]
 comptime _duckdb_function_get_extra_info = _dylib_function["duckdb_function_get_extra_info",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_function_get_bind_data = _dylib_function["duckdb_function_get_bind_data",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_function_get_init_data = _dylib_function["duckdb_function_get_init_data",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
 comptime _duckdb_function_get_local_init_data = _dylib_function["duckdb_function_get_local_init_data",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -11807,7 +11807,7 @@ comptime _duckdb_table_description_error = _dylib_function["duckdb_table_descrip
 
 # [ext_api: v1.2.0]
 comptime _duckdb_column_has_default = _dylib_function["duckdb_column_has_default",
-    def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutExternalOrigin]) thin abi("C") -> duckdb_state
+    def(duckdb_table_description, idx_t, UnsafePointer[Bool, MutUntrackedOrigin]) thin abi("C") -> duckdb_state
 ]
 
 # [ext_api: unstable_new_table_description_functions]
@@ -11817,7 +11817,7 @@ comptime _duckdb_table_description_get_column_count = _dylib_function["duckdb_ta
 
 # [ext_api: v1.2.0]
 comptime _duckdb_table_description_get_column_name = _dylib_function["duckdb_table_description_get_column_name",
-    def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_table_description, idx_t) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_table_description_functions]
@@ -11947,7 +11947,7 @@ comptime _duckdb_cast_function_set_extra_info = _dylib_function["duckdb_cast_fun
 
 # [ext_api: v1.2.0]
 comptime _duckdb_cast_function_get_extra_info = _dylib_function["duckdb_cast_function_get_extra_info",
-    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_function_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: v1.2.0]
@@ -12177,7 +12177,7 @@ comptime _duckdb_copy_function_bind_set_error = _dylib_function["duckdb_copy_fun
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_bind_get_extra_info = _dylib_function["duckdb_copy_function_bind_get_extra_info",
-    def(duckdb_copy_function_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_bind_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12217,7 +12217,7 @@ comptime _duckdb_copy_function_global_init_set_error = _dylib_function["duckdb_c
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_global_init_get_extra_info = _dylib_function["duckdb_copy_function_global_init_get_extra_info",
-    def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12227,7 +12227,7 @@ comptime _duckdb_copy_function_global_init_get_client_context = _dylib_function[
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_global_init_get_bind_data = _dylib_function["duckdb_copy_function_global_init_get_bind_data",
-    def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_global_init_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12252,7 +12252,7 @@ comptime _duckdb_copy_function_sink_set_error = _dylib_function["duckdb_copy_fun
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_sink_get_extra_info = _dylib_function["duckdb_copy_function_sink_get_extra_info",
-    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12262,12 +12262,12 @@ comptime _duckdb_copy_function_sink_get_client_context = _dylib_function["duckdb
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_sink_get_bind_data = _dylib_function["duckdb_copy_function_sink_get_bind_data",
-    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_sink_get_global_state = _dylib_function["duckdb_copy_function_sink_get_global_state",
-    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_sink_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12282,7 +12282,7 @@ comptime _duckdb_copy_function_finalize_set_error = _dylib_function["duckdb_copy
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_finalize_get_extra_info = _dylib_function["duckdb_copy_function_finalize_get_extra_info",
-    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12292,12 +12292,12 @@ comptime _duckdb_copy_function_finalize_get_client_context = _dylib_function["du
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_finalize_get_bind_data = _dylib_function["duckdb_copy_function_finalize_get_bind_data",
-    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
 comptime _duckdb_copy_function_finalize_get_global_state = _dylib_function["duckdb_copy_function_finalize_get_global_state",
-    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutExternalOrigin]
+    def(duckdb_copy_function_finalize_info) thin abi("C") -> UnsafePointer[NoneType, MutUntrackedOrigin]
 ]
 
 # [ext_api: unstable_new_copy_functions_api]
@@ -12402,6 +12402,6 @@ comptime _duckdb_register_log_storage = _dylib_function["duckdb_register_log_sto
 
 # [ext_api: unstable_new_geo_functions]
 comptime _duckdb_geometry_type_get_crs = _dylib_function["duckdb_geometry_type_get_crs",
-    def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutExternalOrigin]
+    def(duckdb_logical_type) thin abi("C") -> UnsafePointer[c_char, MutUntrackedOrigin]
 ]
 

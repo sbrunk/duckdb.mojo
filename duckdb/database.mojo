@@ -23,7 +23,7 @@ struct Database(Movable):
         # NULL handle — duckdb_open_ext populates it via out-param. If
         # construction raises after this, __del__'s duckdb_close becomes a
         # safe no-op on NULL.
-        self._db = _null_ptr[duckdb_database.type, MutExternalOrigin]()
+        self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
         self._is_owned = True
         var db_addr = UnsafePointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
@@ -31,7 +31,7 @@ struct Database(Movable):
         var out_error = alloc[UnsafePointer[c_char, MutAnyOrigin]](1)
         # config=NULL signals "use default config" to DuckDB.
         if (
-            libduckdb.duckdb_open_ext(path_ptr, db_addr, config=_null_ptr[duckdb_config.type, MutExternalOrigin](), out_error=out_error)
+            libduckdb.duckdb_open_ext(path_ptr, db_addr, config=_null_ptr[duckdb_config.type, MutUntrackedOrigin](), out_error=out_error)
         ) == DuckDBError:
             var error_ptr = out_error[]
             var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
@@ -48,7 +48,7 @@ struct Database(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         # NULL handle — duckdb_open_ext populates it via out-param.
-        self._db = _null_ptr[duckdb_database.type, MutExternalOrigin]()
+        self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
         self._is_owned = True
         var db_addr = UnsafePointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"

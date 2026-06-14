@@ -383,7 +383,7 @@ __extension List(Appendable):
                 libduckdb.duckdb_destroy_logical_type(UnsafePointer(to=child_type))
             else:
                 # LIST (default)
-                var elem_type = LogicalType[True, MutExternalOrigin](
+                var elem_type = LogicalType[True, MutUntrackedOrigin](
                     mojo_type_to_duckdb_type[CT]()
                 )
                 val = libduckdb.duckdb_create_list_value(
