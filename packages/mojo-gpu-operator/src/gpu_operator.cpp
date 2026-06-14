@@ -438,14 +438,48 @@ void OptimizeNode(unique_ptr<LogicalOperator> &node) {
   }
 }
 
-// Pre/optimize hook coordination: the pre-optimizer hook disables DuckDB's
-// string-dictionary compression pass (COMPRESSED_MATERIALIZATION) so grouped
-// GROUP BY keys stay raw VARCHAR (no __internal_compress/decompress projections,
-// which a source operator can't reproduce). The paired optimize hook restores
-// the original disabled-optimizer set so the change never leaks into later CPU
-// queries. We remember the original set per-thread (the binder runs both hooks
-// on the same thread for one plan), keyed by context pointer for re-entrancy
-// safety (the generic operator's pin self-query runs nested on the same thread).
+// Pre/optimize hook coordination: the pre-optimizer hook disables a small set of
+// DuckDB optimizers whose output the transparent matcher cannot serialize, then
+// the paired optimize hook restores the original disabled-optimizer set so the
+// change never leaks into later CPU queries. Each disable below is justified by a
+// concrete plan shape the matcher would otherwise miss or mis-handle:
+//
+//   COMPRESSED_MATERIALIZATION - string-dictionary compression rewrites grouped
+//     GROUP BY keys into __internal_compress/decompress projections that a source
+//     operator can't reproduce; disabling it keeps Q1's keys raw VARCHAR so the
+//     matcher sees LogicalAggregate(2 varchar group refs, 8 aggregates) over a
+//     filtered GET.
+//
+//   STATISTICS_PROPAGATION - on a multi-table FK-join (our Q3/Q5 class) it derives
+//     a redundant range filter from the join-key statistics (e.g. `c_custkey<=N`
+//     when customer is joined to orders) and leaves it as a residual LOGICAL_FILTER
+//     operator INSIDE the join tree, above the dimension scan. CollectJoinTree
+//     descends the join tree but only serializes GET.table_filters, never a
+//     standalone LogicalFilter's predicate -- so (post the CollectJoinTree guard
+//     that now bails on any non-empty residual filter rather than silently drop it)
+//     such a tree is rejected and the offload is lost, even though the filter is a
+//     tautology implied by the join. Disabling the pass removes the redundant
+//     filter, restoring a clean Aggregate-over-INNER-join-tree the matcher can
+//     serialize. Verified: a Q3-shaped GROUP BY o_shippriority (DENSE_GROUP, NOT
+//     cost-declined) serializes only with this pass disabled. NOTE: this pass also
+//     folds an *ungrouped* MIN/MAX over an unfiltered column into a constant
+//     (EXPRESSION_GET + DUMMY_SCAN, no Aggregate node) -- but that fold is a free
+//     zone-map read that beats any GPU scan, so we deliberately do NOT fight it;
+//     the SUM-based scalar aggregates we offload (Q6/Q14) never fold.
+//
+// IN_CLAUSE and LATE_MATERIALIZATION are deliberately left ENABLED: an `x IN (...)`
+// filter rewrites to either a residual OR-filter or a MARK-join + CHUNK_GET, both of
+// which CollectJoinTree already rejects (non-INNER join / non-GET leaf / residual
+// filter) -> safe CPU fallback, identical with or without the pass; and
+// LATE_MATERIALIZATION only fires on LIMIT/TOP_N/SAMPLE roots over PROJECTION/FILTER/
+// GET chains (an Aggregate breaks the chain), so it can never rewrite inside our
+// matched aggregate subtree -- the ORDER BY/LIMIT always sits ABOVE the aggregate and
+// stays with DuckDB. (Sirius disables all four because its rebind path executes the
+// ENTIRE plan on GPU; we only replace the aggregate subtree and leave the rest to CPU.)
+//
+// We remember the original set per-thread (the binder runs both hooks on the same
+// thread for one plan), keyed by context pointer for re-entrancy safety (the generic
+// operator's pin self-query runs nested on the same thread).
 struct SavedDisabled {
   bool valid = false;
   std::set<OptimizerType> original;
@@ -463,6 +497,11 @@ void GpuPreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> 
     // Keep Q1 group keys as raw VARCHAR so the transparent matcher sees a plain
     // LogicalAggregate(2 varchar group refs, 8 aggregates) over a filtered GET.
     opts.disabled_optimizers.insert(OptimizerType::COMPRESSED_MATERIALIZATION);
+    // Stop the FK-join statistics pass from injecting redundant range filters
+    // (e.g. `c_custkey<=N`) as residual LogicalFilter operators inside the join
+    // tree, which CollectJoinTree must reject (it can't serialize them) -- see the
+    // block comment above. Keeps the Q3/Q5 join trees clean and serializable.
+    opts.disabled_optimizers.insert(OptimizerType::STATISTICS_PROPAGATION);
   } catch (...) {
     // If anything goes wrong, leave the optimizer config untouched.
   }
@@ -1005,6 +1044,17 @@ bool CollectJoinTree(LogicalOperator *op, JoinTree &out) {
     return true;
   case LogicalOperatorType::LOGICAL_FILTER:
     if (op->children.size() != 1) { return false; }
+    // A LOGICAL_FILTER operator inside the join tree carries residual predicates
+    // that are NOT pushed into any GET's table_filters (e.g. a cross-column
+    // disjunction `p_size>40 OR p_retailprice<10`, or the OR-conjunction the
+    // IN_CLAUSE rewrite leaves above a scan). SerializeMatchedPlan only reads
+    // GET.table_filters and never serializes a LogicalFilter's expressions, so
+    // descending past a non-empty filter would SILENTLY DROP its predicate and
+    // produce a wrong aggregate. Bail to stock DuckDB CPU unless the filter is a
+    // pure pass-through (no expressions). Verified: a Q14-shape join with a
+    // residual `(l_quantity>30 OR l_extendedprice<1000)` builds a routable
+    // descriptor with the filter dropped before this guard.
+    if (!op->Cast<LogicalFilter>().expressions.empty()) { return false; }
     return CollectJoinTree(op->children[0].get(), out);
   case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
     auto &join = op->Cast<LogicalComparisonJoin>();
