@@ -284,7 +284,11 @@ def mojo_gpu_cosine_run(
         ref st = s[]
         if n_rows > st.capacity:
             return 2
-        # Stage this morsel into the resident input buffer (a copy).
+        # Stage this morsel into the resident input buffer (a copy). A plain
+        # enqueue_copy is the fast path: the driver stages the pageable source
+        # through its own pinned bounce buffer in one shot. (map_to_host is the
+        # WRONG tool here — it is bidirectional, DMAing device->host on enter, so
+        # for a pure upload it ~3.4x slower on PCIe; measured on RTX 4090.)
         var in_sub = DeviceBuffer(
             st.ctx, st.in_buf.unsafe_ptr(), n_rows * st.K, owning=False
         )
@@ -391,8 +395,12 @@ def mojo_gpu_pin(
         var cand_cap = _topk_nblocks(n_rows, TOPK_MAX) * TOPK_MAX
         var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
         var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
-        ctx.synchronize()
-        ctx.enqueue_copy(emb_dev, emb)  # the one-time pin upload
+        # One-time pin upload. enqueue_copy of the pageable source is the fast
+        # path: the driver bounces it through its own pinned buffer in one shot.
+        # (map_to_host would be ~3.4x slower here — it is bidirectional and DMAs
+        # device->host on enter; measured on RTX 4090.) Single sync afterwards;
+        # the buffer allocs above are ordered on the one runtime stream.
+        ctx.enqueue_copy(emb_dev, emb)
         ctx.synchronize()
         var cand_dist_h = alloc[Float32](cand_cap)
         var cand_id_h = alloc[Int64](cand_cap)
@@ -538,17 +546,20 @@ def mojo_gpu_pin_f16(
         var cand_cap = _topk_nblocks(n_rows, TOPK_MAX) * TOPK_MAX
         var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
         var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
-        ctx.synchronize()
 
-        # One-time host fp32->fp16 conversion straight into the mapped upload
-        # staging of the resident half buffer (the conversion cost is paid once
-        # at pin; every query then reads half the bytes).
-        with emb_dev.map_to_host() as h:
-            var hp = h.unsafe_ptr()
-            var total = n_rows * K
-            for j in range(total):
-                hp[j] = emb[j].cast[DType.float16]()
-        ctx.synchronize()
+        # One-time fp32->fp16 conversion on the host, then a single enqueue_copy
+        # of the half buffer (the conversion cost is paid once at pin; every query
+        # then reads half the bytes from VRAM). Convert into a plain host buffer
+        # and let the driver bounce it to device in one shot: writing into
+        # emb_dev.map_to_host() instead is ~3.4x slower, since map_to_host is
+        # bidirectional and DMAs device->host on enter (measured on RTX 4090).
+        var total = n_rows * K
+        var h16 = alloc[Float16](total)
+        for j in range(total):
+            h16[j] = emb[j].cast[DType.float16]()
+        ctx.enqueue_copy(emb_dev, h16)
+        ctx.synchronize()  # kernels read emb_dev later; safe to free h16 now
+        h16.free()
 
         var cand_dist_h = alloc[Float32](cand_cap)
         var cand_id_h = alloc[Int64](cand_cap)

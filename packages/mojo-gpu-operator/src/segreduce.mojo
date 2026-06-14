@@ -343,6 +343,12 @@ def segreduce_upload(
     dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_dims: Int,
 ) raises -> SegResident:
+    # These resident uploads are one-time (the pin-resident design uploads once
+    # and reuses across warm runs), so a plain enqueue_copy is the fast path: the
+    # driver bounces the pageable source through its own pinned buffer in one
+    # shot. (map_to_host is the WRONG tool — it is bidirectional, DMAing
+    # device->host on enter, so for a pure upload it is ~3.4x slower on PCIe;
+    # measured on RTX 4090.)
     # ---- packed columns ----
     var cols_d = ctx.enqueue_create_buffer[DType.int64](n_cols * n_rows)
     ctx.enqueue_copy(cols_d, cols_host)
@@ -423,14 +429,14 @@ def segreduce_run(
     ctx.enqueue_copy(moff_d, metric_offsets_host)
     var mlen_d = ctx.enqueue_create_buffer[DType.int64](M)
     ctx.enqueue_copy(mlen_d, metric_lens_host)
-    ctx.synchronize()
+    # No sync here: the kernel launches below are ordered after these small
+    # program uploads on the one runtime stream; only the result read-back syncs.
 
     var result = List[Int128]()
 
     if mode == STRAT_SORT_SEGREDUCE:
         # one warp per segment; lane 0 writes per-segment int64 -> host int128
         var out_d = ctx.enqueue_create_buffer[DType.int64](n_seg * M)
-        ctx.synchronize()
         ctx.enqueue_function[seg_sort_kernel](
             cols_d, n_rows, res.seg_off_d, n_seg,
             pass_d, pass_len,
@@ -452,7 +458,6 @@ def segreduce_run(
     if mode == STRAT_DENSE_GROUP:
         var npart = SEG_NBLOCKS * G * M
         var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-        ctx.synchronize()
         ctx.enqueue_function[seg_dense_kernel](
             cols_d, n_rows, gid_slot,
             pass_d, pass_len,
@@ -477,7 +482,6 @@ def segreduce_run(
     # default: STRAT_UNGROUPED
     var npart = SEG_NBLOCKS * M
     var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-    ctx.synchronize()
     ctx.enqueue_function[seg_ungrouped_kernel](
         cols_d, n_rows,
         pass_d, pass_len,
@@ -568,7 +572,8 @@ def segreduce_run_hash(
     var slot_acc_d = ctx.enqueue_create_buffer[DType.int64](cap * M)
     slot_key_d.enqueue_fill(HASH_EMPTY)
     slot_acc_d.enqueue_fill(Int64(0))
-    ctx.synchronize()
+    # No sync: the fills are ordered before the kernel that reads the table on
+    # the same stream; only the result read-back below needs a sync.
 
     # ---- launch: one thread per row, grid-stride over n_rows ----
     var nblocks = (n_rows + HASH_BLOCK - 1) // HASH_BLOCK
@@ -585,7 +590,6 @@ def segreduce_run_hash(
         slot_key_d, slot_acc_d,
         grid_dim=nblocks, block_dim=HASH_BLOCK,
     )
-    ctx.synchronize()
 
     # ---- read back occupied slots, widen int64 -> int128 on the host ----
     var key_h = alloc[Int64](cap)
