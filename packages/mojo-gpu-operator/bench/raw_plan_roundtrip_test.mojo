@@ -41,9 +41,11 @@ from raw_plan_tags import (
     STRAT_UNGROUPED,
     STRAT_DENSE_GROUP,
     STRAT_SORT_SEGREDUCE,
+    STRAT_HASH_GROUP,
     IDX_NONE,
 )
 from std.memory import alloc
+from std.sys.info import has_nvidia_gpu_accelerator, has_amd_gpu_accelerator
 from std.testing import assert_equal, assert_true
 
 
@@ -471,7 +473,13 @@ def main() raises:
     check("Q14", q14, KIND_Q14, STRAT_UNGROUPED, 1, 2)
 
     var q3 = build_q3()
-    check("Q3", q3, KIND_Q3, STRAT_SORT_SEGREDUCE, 2, 1)
+    # Q3's high-card integer fact key maps to a platform-dependent strategy
+    # (mirrors descriptor.mojo): HASH_GROUP where 64-bit atomics exist
+    # (NVIDIA/AMD), SORT_SEGREDUCE on Apple (no 64-bit atomics).
+    comptime if has_nvidia_gpu_accelerator() or has_amd_gpu_accelerator():
+        check("Q3", q3, KIND_Q3, STRAT_HASH_GROUP, 2, 1)
+    else:
+        check("Q3", q3, KIND_Q3, STRAT_SORT_SEGREDUCE, 2, 1)
 
     var q5 = build_q5()
     check("Q5", q5, KIND_Q5, STRAT_DENSE_GROUP, 5, 1)
