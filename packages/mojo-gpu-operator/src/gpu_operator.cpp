@@ -577,8 +577,134 @@ struct PinEntry {
   idx_t K;
 };
 
+// ===-------------------------------------------------------------------===//
+// Bounded, LRU-evicting resident pin registry (feature #4).
+//
+// The kNN embedding pins are the biggest GPU residents in the extension (~3 GB
+// at 1M x 768 fp32). Previously they were a process-lifetime, never-evicted
+// `unordered_map`, so pinning many embedding matrices (or many tables/columns)
+// leaked VRAM until the GPU OOM'd. This registry caps total resident bytes at a
+// configurable budget and evicts the least-recently-used *evictable* entry to
+// make room, freeing its DeviceBuffers via the Mojo free entry points.
+//
+// Correctness: eviction is always safe. A pin is pure cache — a query that finds
+// its key missing simply rebuilds it (materialize + upload = the COLD path,
+// slower but identical results). The ONE thing eviction must never do is free a
+// buffer a query is actively reading: a `Bind` fetches the handle under the lock,
+// then runs the GPU query OUTSIDE the lock, so a concurrent evict could otherwise
+// free the buffer mid-query (use-after-free). We guard that with a per-entry
+// in-use refcount (`PinLease`, RAII): an in-use entry (refcount > 0) is never
+// evicted; it stays resident until its query finishes, then becomes evictable.
+// ===-------------------------------------------------------------------===//
+enum class PinKind { FP32, FP16 };
+
+struct ResidentPin {
+  void *handle = nullptr;
+  idx_t n_rows = 0;
+  idx_t K = 0;
+  PinKind kind = PinKind::FP32;
+  size_t bytes = 0;          // approximate resident VRAM footprint
+  uint64_t last_use = 0;     // monotonic tick of last access (LRU ordering)
+  int refcount = 0;          // > 0 => a query is in flight; do not evict
+};
+
 std::mutex g_pin_mu;
-std::unordered_map<std::string, PinEntry> g_pins;  // process-lifetime cache
+std::unordered_map<std::string, ResidentPin> g_pins;  // keyed "table.column[#f16]"
+size_t g_pin_bytes_resident = 0;                      // sum of g_pins[*].bytes
+uint64_t g_pin_tick = 0;                              // monotonic LRU clock
+
+// Free an entry's GPU buffers via the right Mojo entry point. Caller holds the
+// lock and has already removed it from the map + decremented g_pin_bytes_resident.
+void FreeResidentPin(const ResidentPin &e) {
+  if (!e.handle) { return; }
+  if (e.kind == PinKind::FP16) {
+    mojo_gpu_pin_free_f16(e.handle);
+  } else {
+    mojo_gpu_pin_free(e.handle);
+  }
+}
+
+// Resident-byte budget. 0 == unbounded (legacy never-evict behavior). Default is
+// a fixed conservative cap; GPU_OP_PIN_BUDGET_MB overrides (in MB). Read once and
+// cached (the budget is a process-wide policy, not a per-query knob).
+size_t PinBudgetBytes() {
+  static const size_t budget = [] {
+    const char *env = std::getenv("GPU_OP_PIN_BUDGET_MB");
+    if (env && *env) {
+      char *end = nullptr;
+      long long mb = std::strtoll(env, &end, 10);
+      if (end != env && mb >= 0) { return static_cast<size_t>(mb) * 1024ull * 1024ull; }
+    }
+    return static_cast<size_t>(4096) * 1024ull * 1024ull;  // 4 GiB default cap
+  }();
+  return budget;
+}
+
+// Approximate resident footprint of a pinned column: the embedding matrix
+// dominates (n*K * 4 fp32 / 2 fp16); add the per-pin scratch (q=K, dist=n_rows,
+// plus the top-k candidate buffers). The candidate scratch sizing mirrors the
+// Mojo `cand_cap = _topk_nblocks(n_rows, TOPK_MAX) * TOPK_MAX`; we approximate it
+// conservatively so the budget never under-counts what is actually resident.
+size_t PinFootprintBytes(idx_t n_rows, idx_t K, PinKind kind) {
+  size_t elem = (kind == PinKind::FP16) ? 2 : 4;
+  size_t emb = static_cast<size_t>(n_rows) * static_cast<size_t>(K) * elem;
+  size_t scratch = static_cast<size_t>(K) * 4               // q_dev (fp32)
+                 + static_cast<size_t>(n_rows) * 4;          // out_dev (fp32)
+  // Top-k candidate scratch: nblocks (<= ceil(n_rows / something) but capped) at
+  // TOPK_MAX=1024; cand_dist (4B) + cand_id (8B). Bound nblocks by ceil(n/256)+1
+  // and TOPK_MAX so the estimate is an upper bound across kernels.
+  static const size_t TOPK_MAX = 1024;
+  size_t nblocks = static_cast<size_t>(n_rows) / 256 + 1;
+  size_t cand = nblocks * TOPK_MAX * (4 + 8);
+  return emb + scratch + cand;
+}
+
+// Evict the least-recently-used EVICTABLE (refcount == 0) entry. Returns true if
+// one was freed, false if no evictable entry remains. Caller holds g_pin_mu.
+bool EvictOneLRU() {
+  auto victim = g_pins.end();
+  uint64_t best = UINT64_MAX;
+  for (auto it = g_pins.begin(); it != g_pins.end(); ++it) {
+    if (it->second.refcount > 0) { continue; }  // in flight; never evict
+    if (it->second.last_use < best) { best = it->second.last_use; victim = it; }
+  }
+  if (victim == g_pins.end()) { return false; }
+  ResidentPin e = victim->second;
+  g_pin_bytes_resident -= e.bytes;
+  g_pins.erase(victim);
+  FreeResidentPin(e);
+  return true;
+}
+
+// RAII lease: marks a resident pin in-use for the lifetime of a query so a
+// concurrent evict can't free its buffers. Constructed by EnsurePinned* (which
+// increments refcount under the lock); the destructor decrements it under the
+// lock and refreshes the LRU tick (the pin was just used). Move-only.
+struct PinLease {
+  std::string key;
+  PinEntry entry{nullptr, 0, 0};
+  PinLease() = default;
+  PinLease(std::string k, PinEntry e) : key(std::move(k)), entry(e) {}
+  PinLease(const PinLease &) = delete;
+  PinLease &operator=(const PinLease &) = delete;
+  PinLease(PinLease &&o) noexcept : key(std::move(o.key)), entry(o.entry) { o.entry.handle = nullptr; o.key.clear(); }
+  PinLease &operator=(PinLease &&o) noexcept {
+    if (this != &o) { release(); key = std::move(o.key); entry = o.entry; o.entry.handle = nullptr; o.key.clear(); }
+    return *this;
+  }
+  ~PinLease() { release(); }
+  void release() {
+    if (key.empty()) { return; }
+    std::lock_guard<std::mutex> g(g_pin_mu);
+    auto it = g_pins.find(key);
+    if (it != g_pins.end() && it->second.refcount > 0) {
+      it->second.refcount--;
+      it->second.last_use = ++g_pin_tick;  // refresh LRU: just used
+    }
+    key.clear();
+    entry.handle = nullptr;
+  }
+};
 
 // Materialize <column> from <table> into a contiguous n*K float host buffer.
 // Validates the column is FLOAT[K] (ARRAY) and reports K + n_rows. Shared by the
@@ -608,51 +734,98 @@ void MaterializeFloatColumn(ClientContext &context, const std::string &table,
   }
 }
 
-// Materialize + pin a column as fp32 if not already cached. Returns the cache
-// entry. Keyed by "table.column"; shared with gpu_cosine. fp32 handles are freed
-// with mojo_gpu_pin_free (pins are process-lifetime here, so no teardown).
-PinEntry EnsurePinned(ClientContext &context, const std::string &table, const std::string &column) {
-  std::string key = table + "." + column;
-  std::lock_guard<std::mutex> g(g_pin_mu);
-  auto it = g_pins.find(key);
-  if (it != g_pins.end()) { return it->second; }
-
-  vector<float> host;
-  idx_t K = 0, n_rows = 0;
-  MaterializeFloatColumn(context, table, column, "gpu_cosine", host, K, n_rows);
-
-  void *handle = reinterpret_cast<void *>(
-      mojo_gpu_pin(host.data(), NumericCast<int64_t>(n_rows), NumericCast<int64_t>(K)));
-  PinEntry e{handle, n_rows, K};
-  g_pins[key] = e;
-  return e;
+// Pin a freshly-materialized host buffer, evicting LRU entries to stay within
+// budget and retrying the device allocation if it OOMs. Returns the new handle
+// (0 on failure even after evicting everything). Caller holds g_pin_mu.
+void *PinWithBudget(const std::string &who, PinKind kind, const float *host,
+                    idx_t n_rows, idx_t K, size_t &out_bytes) {
+  size_t need = PinFootprintBytes(n_rows, K, kind);
+  size_t budget = PinBudgetBytes();
+  // Make room up-front: evict LRU evictable entries until this pin fits under the
+  // budget (or nothing more is evictable — then we still try, OOM-retry catches
+  // the actual device limit). budget == 0 means unbounded: skip pre-eviction.
+  if (budget != 0) {
+    while (g_pin_bytes_resident + need > budget) {
+      if (!EvictOneLRU()) { break; }  // only in-use entries left; proceed and rely on OOM-retry
+    }
+  }
+  auto do_pin = [&]() -> void * {
+    if (kind == PinKind::FP16) {
+      return reinterpret_cast<void *>(
+          mojo_gpu_pin_f16(host, NumericCast<int64_t>(n_rows), NumericCast<int64_t>(K)));
+    }
+    return reinterpret_cast<void *>(
+        mojo_gpu_pin(host, NumericCast<int64_t>(n_rows), NumericCast<int64_t>(K)));
+  };
+  void *handle = do_pin();
+  // OOM-retry: a null handle means the device allocation failed. Evict the LRU
+  // evictable entry and retry until it succeeds or nothing more can be evicted.
+  while (!handle && EvictOneLRU()) { handle = do_pin(); }
+  out_bytes = need;
+  (void)who;
+  return handle;
 }
 
-// fp16 resident pins live in a SEPARATE cache keyed "table.column#f16" so they
-// never collide with the fp32 entries in g_pins; the handle is created by
-// mojo_gpu_pin_f16 and MUST be freed with mojo_gpu_pin_free_f16 (also
-// process-lifetime here, so there is no teardown path). A column queried at both
-// precisions ends up with two resident GPU copies (one fp32 in g_pins, one fp16
-// here) — accepted, it is the cost of supporting both without a re-upload.
-std::unordered_map<std::string, PinEntry> g_pins_f16;
-
-// Materialize + pin a column as fp16 if not already cached. Returns the entry.
-PinEntry EnsurePinnedF16(ClientContext &context, const std::string &table,
-                         const std::string &column) {
-  std::string key = table + "." + column + "#f16";
-  std::lock_guard<std::mutex> g(g_pin_mu);
-  auto it = g_pins_f16.find(key);
-  if (it != g_pins_f16.end()) { return it->second; }
-
+// Materialize + pin a column (fp32 or fp16) if not already resident, returning a
+// PinLease that keeps it in-use (uneviGCtable) for the query's lifetime. Keyed by
+// "table.column" (fp32) / "table.column#f16" (fp16) in the single LRU registry —
+// the suffix keeps the two precisions from colliding. A column queried at both
+// precisions ends up with two resident copies (accepted: the cost of supporting
+// both without a re-upload). fp32 handles free with mojo_gpu_pin_free, fp16 with
+// mojo_gpu_pin_free_f16 (FreeResidentPin dispatches by kind on eviction/unpin).
+PinLease EnsurePinnedLeased(ClientContext &context, const std::string &table,
+                            const std::string &column, PinKind kind, const char *who) {
+  std::string key = (kind == PinKind::FP16) ? (table + "." + column + "#f16")
+                                            : (table + "." + column);
+  {
+    std::lock_guard<std::mutex> g(g_pin_mu);
+    auto it = g_pins.find(key);
+    if (it != g_pins.end()) {
+      it->second.refcount++;                  // in-use guard for this query
+      it->second.last_use = ++g_pin_tick;     // LRU refresh
+      return PinLease(key, PinEntry{it->second.handle, it->second.n_rows, it->second.K});
+    }
+  }
+  // COLD: materialize OUTSIDE the lock (it issues a nested Connection::Query),
+  // then re-lock to install. A concurrent pin of the same key may have raced us;
+  // if so, drop our buffer and use theirs.
   vector<float> host;
   idx_t K = 0, n_rows = 0;
-  MaterializeFloatColumn(context, table, column, "gpu_cosine_topk", host, K, n_rows);
+  MaterializeFloatColumn(context, table, column, who, host, K, n_rows);
 
-  void *handle = reinterpret_cast<void *>(
-      mojo_gpu_pin_f16(host.data(), NumericCast<int64_t>(n_rows), NumericCast<int64_t>(K)));
-  PinEntry e{handle, n_rows, K};
-  g_pins_f16[key] = e;
-  return e;
+  std::lock_guard<std::mutex> g(g_pin_mu);
+  auto it = g_pins.find(key);
+  if (it != g_pins.end()) {  // lost the race; reuse the winner
+    it->second.refcount++;
+    it->second.last_use = ++g_pin_tick;
+    return PinLease(key, PinEntry{it->second.handle, it->second.n_rows, it->second.K});
+  }
+  size_t bytes = 0;
+  void *handle = PinWithBudget(who, kind, host.data(), n_rows, K, bytes);
+  if (!handle) { return PinLease(); }  // null lease -> caller throws
+  ResidentPin e;
+  e.handle = handle;
+  e.n_rows = n_rows;
+  e.K = K;
+  e.kind = kind;
+  e.bytes = bytes;
+  e.last_use = ++g_pin_tick;
+  e.refcount = 1;  // leased to the caller's query
+  g_pin_bytes_resident += bytes;
+  g_pins[key] = e;
+  return PinLease(key, PinEntry{handle, n_rows, K});
+}
+
+// Backwards-compatible thin wrappers used by the cosine table functions. Each
+// returns a PinLease; the caller MUST keep it alive until the GPU query finishes
+// (the lease is the in-use guard against concurrent eviction).
+PinLease EnsurePinned(ClientContext &context, const std::string &table, const std::string &column) {
+  return EnsurePinnedLeased(context, table, column, PinKind::FP32, "gpu_cosine");
+}
+
+PinLease EnsurePinnedF16(ClientContext &context, const std::string &table,
+                         const std::string &column) {
+  return EnsurePinnedLeased(context, table, column, PinKind::FP16, "gpu_cosine_topk");
 }
 
 struct GpuCosineBindData : public TableFunctionData {
@@ -671,7 +844,10 @@ unique_ptr<FunctionData> GpuCosineBind(ClientContext &context, TableFunctionBind
   auto column = input.inputs[1].GetValue<string>();
   auto &qkids = ListValue::GetChildren(input.inputs[2]);
 
-  auto pe = EnsurePinned(context, table, column);
+  // The lease keeps the resident pin in-use (un-evictable) until it goes out of
+  // scope at the end of Bind — i.e. for the whole GPU query below.
+  auto lease = EnsurePinned(context, table, column);
+  auto &pe = lease.entry;
   if (!pe.handle) { throw InvalidInputException("gpu_cosine: GPU pin failed"); }
   if (qkids.size() != pe.K) {
     throw InvalidInputException("gpu_cosine: query length " + std::to_string(qkids.size()) +
@@ -766,8 +942,9 @@ unique_ptr<FunctionData> GpuCosineTopkBind(ClientContext &context, TableFunction
     }
   }
 
-  PinEntry pe = use_fp16 ? EnsurePinnedF16(context, table, column)
-                         : EnsurePinned(context, table, column);
+  PinLease lease = use_fp16 ? EnsurePinnedF16(context, table, column)
+                            : EnsurePinned(context, table, column);
+  auto &pe = lease.entry;
   if (!pe.handle) { throw InvalidInputException("gpu_cosine_topk: GPU pin failed"); }
   if (qkids.size() != pe.K) {
     throw InvalidInputException("gpu_cosine_topk: query length " + std::to_string(qkids.size()) +
@@ -902,9 +1079,11 @@ unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFun
         "(the fused tensor-core path); fp32 is cosine-only");
   }
 
-  // Pin (or reuse the cached) resident emb matrix, same as gpu_cosine_topk.
-  PinEntry pe = use_fp16 ? EnsurePinnedF16(context, emb_table, emb_col)
-                         : EnsurePinned(context, emb_table, emb_col);
+  // Pin (or reuse the cached) resident emb matrix, same as gpu_cosine_topk. The
+  // lease keeps it un-evictable for the whole batched query below.
+  PinLease lease = use_fp16 ? EnsurePinnedF16(context, emb_table, emb_col)
+                            : EnsurePinned(context, emb_table, emb_col);
+  auto &pe = lease.entry;
   if (!pe.handle) { throw InvalidInputException("gpu_cosine_topk_batch: GPU pin failed"); }
 
   // Materialize the M query vectors from the query table column (FLOAT[K] ARRAY).
@@ -2588,6 +2767,223 @@ void RegisterGpuNativeDecodeCheckTableFunction(ExtensionLoader &loader) {
   loader.RegisterFunction(tf);
 }
 
+// ===-------------------------------------------------------------------===//
+// Explicit pin control + observability table functions (feature #4).
+//
+//   gpu_pin_status()                      -> resident pins, for observability
+//   gpu_unpin(key)                        -> free one resident pin by key
+//   gpu_unpin_all()                       -> free all (evictable) resident pins
+//   gpu_pin_table(table, column [, prec])  -> pre-pin a kNN embedding column warm
+//
+// Names mirror the existing gpu_cosine* / gpu_native_* table functions. unpin is
+// always correctness-safe (a later query simply rebuilds COLD); in-use pins
+// (refcount > 0, a query in flight) are skipped and reported, never force-freed.
+// ===-------------------------------------------------------------------===//
+struct GpuPinStatusBindData : public TableFunctionData {
+  struct Row { string key; string kind; int64_t bytes; int64_t n_rows; int64_t K;
+               int64_t last_use_age; int64_t in_use; };
+  vector<Row> rows;
+  int64_t budget_mb = 0;
+  int64_t resident_mb = 0;
+};
+
+unique_ptr<FunctionData> GpuPinStatusBind(ClientContext &, TableFunctionBindInput &,
+                                          vector<LogicalType> &return_types, vector<string> &names) {
+  auto bd = make_uniq<GpuPinStatusBindData>();
+  {
+    std::lock_guard<std::mutex> g(g_pin_mu);
+    for (auto &kv : g_pins) {
+      GpuPinStatusBindData::Row r;
+      r.key = kv.first;
+      r.kind = (kv.second.kind == PinKind::FP16) ? "fp16" : "fp32";
+      r.bytes = NumericCast<int64_t>(kv.second.bytes);
+      r.n_rows = NumericCast<int64_t>(kv.second.n_rows);
+      r.K = NumericCast<int64_t>(kv.second.K);
+      // last_use_age: ticks since this entry was last touched (0 = most recent).
+      r.last_use_age = NumericCast<int64_t>(g_pin_tick - kv.second.last_use);
+      r.in_use = kv.second.refcount;
+      bd->rows.push_back(std::move(r));
+    }
+    bd->resident_mb = NumericCast<int64_t>(g_pin_bytes_resident / (1024ull * 1024ull));
+  }
+  bd->budget_mb = NumericCast<int64_t>(PinBudgetBytes() / (1024ull * 1024ull));
+  return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT};
+  names = {"key", "kind", "bytes", "rows", "K", "last_use_age", "in_use",
+           "resident_mb", "budget_mb"};
+  return std::move(bd);
+}
+
+void GpuPinStatusFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuPinStatusBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  idx_t n = MinValue<idx_t>(bd.rows.size() - gs.offset, STANDARD_VECTOR_SIZE);
+  if (n == 0) { output.SetCardinality(0); return; }
+  for (idx_t i = 0; i < n; i++) {
+    auto &r = bd.rows[gs.offset + i];
+    output.data[0].SetValue(i, Value(r.key));
+    output.data[1].SetValue(i, Value(r.kind));
+    FlatVector::GetData<int64_t>(output.data[2])[i] = r.bytes;
+    FlatVector::GetData<int64_t>(output.data[3])[i] = r.n_rows;
+    FlatVector::GetData<int64_t>(output.data[4])[i] = r.K;
+    FlatVector::GetData<int64_t>(output.data[5])[i] = r.last_use_age;
+    FlatVector::GetData<int64_t>(output.data[6])[i] = r.in_use;
+    FlatVector::GetData<int64_t>(output.data[7])[i] = bd.resident_mb;
+    FlatVector::GetData<int64_t>(output.data[8])[i] = bd.budget_mb;
+  }
+  output.SetCardinality(n);
+  gs.offset += n;
+}
+
+void RegisterGpuPinStatusTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_pin_status", {}, GpuPinStatusFunc, GpuPinStatusBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+}
+
+// gpu_unpin(key) / gpu_unpin_all(): free resident pins. Returns one row
+// (freed BIGINT, skipped_in_use BIGINT). Skips in-use entries (a query holds a
+// lease) — they are reported in skipped_in_use, never force-freed.
+struct GpuUnpinBindData : public TableFunctionData {
+  int64_t freed = 0;
+  int64_t skipped_in_use = 0;
+};
+
+unique_ptr<FunctionData> GpuUnpinBindImpl(ClientContext &, TableFunctionBindInput &input,
+                                          vector<LogicalType> &return_types, vector<string> &names,
+                                          bool all) {
+  auto bd = make_uniq<GpuUnpinBindData>();
+  std::lock_guard<std::mutex> g(g_pin_mu);
+  if (all) {
+    for (auto it = g_pins.begin(); it != g_pins.end();) {
+      if (it->second.refcount > 0) { bd->skipped_in_use++; ++it; continue; }
+      ResidentPin e = it->second;
+      g_pin_bytes_resident -= e.bytes;
+      it = g_pins.erase(it);
+      FreeResidentPin(e);
+      bd->freed++;
+    }
+  } else {
+    auto key = input.inputs[0].GetValue<string>();
+    auto it = g_pins.find(key);
+    if (it != g_pins.end()) {
+      if (it->second.refcount > 0) {
+        bd->skipped_in_use++;
+      } else {
+        ResidentPin e = it->second;
+        g_pin_bytes_resident -= e.bytes;
+        g_pins.erase(it);
+        FreeResidentPin(e);
+        bd->freed++;
+      }
+    }
+  }
+  return_types = {LogicalType::BIGINT, LogicalType::BIGINT};
+  names = {"freed", "skipped_in_use"};
+  return std::move(bd);
+}
+
+unique_ptr<FunctionData> GpuUnpinBind(ClientContext &context, TableFunctionBindInput &input,
+                                      vector<LogicalType> &return_types, vector<string> &names) {
+  return GpuUnpinBindImpl(context, input, return_types, names, /*all=*/false);
+}
+unique_ptr<FunctionData> GpuUnpinAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                         vector<LogicalType> &return_types, vector<string> &names) {
+  return GpuUnpinBindImpl(context, input, return_types, names, /*all=*/true);
+}
+
+void GpuUnpinFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuUnpinBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  if (gs.offset > 0) { output.SetCardinality(0); return; }
+  FlatVector::GetData<int64_t>(output.data[0])[0] = bd.freed;
+  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.skipped_in_use;
+  output.SetCardinality(1);
+  gs.offset = 1;
+}
+
+void RegisterGpuUnpinTableFunctions(ExtensionLoader &loader) {
+  TableFunction tf("gpu_unpin", {LogicalType::VARCHAR}, GpuUnpinFunc, GpuUnpinBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+  TableFunction tfa("gpu_unpin_all", {}, GpuUnpinFunc, GpuUnpinAllBind, GpuNativeTFInit);
+  loader.RegisterFunction(tfa);
+}
+
+// gpu_pin_table(table, column [, precision]): pre-pin a kNN embedding column so
+// the first gpu_cosine* query against it is warm. Materializes + uploads under
+// the same budget/LRU path; the lease is dropped immediately after binding (no
+// query runs here) so the entry stays resident and evictable. Returns one row
+// (key VARCHAR, kind VARCHAR, rows BIGINT, K BIGINT, bytes BIGINT).
+struct GpuPinTableBindData : public TableFunctionData {
+  string key, kind;
+  int64_t n_rows = 0, K = 0, bytes = 0;
+};
+
+unique_ptr<FunctionData> GpuPinTableBind(ClientContext &context, TableFunctionBindInput &input,
+                                         vector<LogicalType> &return_types, vector<string> &names) {
+  auto table = input.inputs[0].GetValue<string>();
+  auto column = input.inputs[1].GetValue<string>();
+  bool use_fp16 = true;  // default fp16, matching gpu_cosine_topk*
+  if (input.inputs.size() >= 3 && !input.inputs[2].IsNull()) {
+    std::string prec = StringUtil::Lower(input.inputs[2].GetValue<string>());
+    if (prec == "fp16" || prec == "half") {
+      use_fp16 = true;
+    } else if (prec == "fp32" || prec == "exact" || prec == "f32") {
+      use_fp16 = false;
+    } else {
+      throw InvalidInputException("gpu_pin_table: unknown precision '" + prec +
+                                  "' (expected 'fp16' or 'fp32')");
+    }
+  }
+  PinKind kind = use_fp16 ? PinKind::FP16 : PinKind::FP32;
+  // EnsurePinnedLeased materializes + pins (or reuses); the lease drops at the
+  // end of this scope, leaving the entry resident + evictable.
+  {
+    PinLease lease = EnsurePinnedLeased(context, table, column, kind, "gpu_pin_table");
+    if (!lease.entry.handle) { throw InvalidInputException("gpu_pin_table: GPU pin failed"); }
+  }
+  auto bd = make_uniq<GpuPinTableBindData>();
+  bd->key = use_fp16 ? (table + "." + column + "#f16") : (table + "." + column);
+  {
+    std::lock_guard<std::mutex> g(g_pin_mu);
+    auto it = g_pins.find(bd->key);
+    if (it != g_pins.end()) {
+      bd->kind = (it->second.kind == PinKind::FP16) ? "fp16" : "fp32";
+      bd->n_rows = NumericCast<int64_t>(it->second.n_rows);
+      bd->K = NumericCast<int64_t>(it->second.K);
+      bd->bytes = NumericCast<int64_t>(it->second.bytes);
+    }
+  }
+  return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT};
+  names = {"key", "kind", "rows", "K", "bytes"};
+  return std::move(bd);
+}
+
+void GpuPinTableFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuPinTableBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  if (gs.offset > 0) { output.SetCardinality(0); return; }
+  output.data[0].SetValue(0, Value(bd.key));
+  output.data[1].SetValue(0, Value(bd.kind));
+  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.n_rows;
+  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.K;
+  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.bytes;
+  output.SetCardinality(1);
+  gs.offset = 1;
+}
+
+void RegisterGpuPinTableTableFunction(ExtensionLoader &loader) {
+  // 2-arg (default fp16) and 3-arg (explicit precision) overloads.
+  TableFunction tf2("gpu_pin_table", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                    GpuPinTableFunc, GpuPinTableBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf2);
+  TableFunction tf3("gpu_pin_table",
+                    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                    GpuPinTableFunc, GpuPinTableBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf3);
+}
+
 void LoadInternal(ExtensionLoader &loader) {
   mojo_gpu_ctx_init();                                 // pay the ~32 ms DeviceContext init once, at LOAD
   RegisterGpuOperator(loader.GetDatabaseInstance());  // transparent cosine operator
@@ -2597,6 +2993,9 @@ void LoadInternal(ExtensionLoader &loader) {
   RegisterGpuNativeSegInfoTableFunction(loader);      // Phase A: native-storage segment reachability
   RegisterGpuNativeGroupDumpTableFunction(loader);    // debug: per-group mode/width dump
   RegisterGpuNativeDecodeCheckTableFunction(loader);  // Phase C: GPU-direct decode bit-exact check
+  RegisterGpuPinStatusTableFunction(loader);          // pin cache observability (resident pins)
+  RegisterGpuUnpinTableFunctions(loader);             // explicit unpin (key / all)
+  RegisterGpuPinTableTableFunction(loader);           // pre-pin a kNN embedding column warm
 }
 
 }  // namespace

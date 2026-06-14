@@ -197,6 +197,54 @@ correct only on the cold (single-shot) path and returned wrong results on warm
 runs; the fix is the resident `_pin2` cache + a shared cold/warm `assemble` so the
 two paths cannot diverge.
 
+### Bounded, LRU-evicting resident pin cache (tiered-memory bound)
+
+Pins are pure cache, so the resident caches can be **bounded and LRU-evicted**
+without ever affecting results — eviction just forces the next touch back onto the
+**cold** rebuild path (materialize + upload again, slower, identical answer). This
+is the gap Sirius's cuCascade tiered memory + downgrade executor closes; we close
+it for the **kNN embedding pins** — the biggest GPU residents (~3 GB at 1M×768) and
+the ones that previously leaked VRAM until OOM when many matrices/columns were
+pinned.
+
+The kNN pin registry ([src/gpu_operator.cpp](src/gpu_operator.cpp), `ResidentPin`)
+caps total resident bytes at `GPU_OP_PIN_BUDGET_MB` (default **4096 MB**; `0` =
+unbounded/legacy). Each entry tracks its approximate VRAM footprint, a monotonic
+last-use tick (LRU), and an **in-use refcount**. On a new pin it evicts the
+least-recently-used *evictable* entry until the new one fits, freeing its
+`DeviceBuffer`s via the Mojo `mojo_gpu_pin_free`/`_f16` entry points; if the device
+allocation still OOMs, it **evicts-and-retries** (mirrors Sirius's OOM-retry) and
+only fails — gracefully, as a SQL error, never a crash — once nothing more is
+evictable.
+
+The one eviction hazard is freeing a buffer a query is actively reading: a
+`gpu_cosine*` `Bind` fetches the handle under the registry lock but runs the GPU
+query *outside* it, so a concurrent evict could otherwise use-after-free. An RAII
+**`PinLease`** (returned by `EnsurePinned*`, increments the refcount under the lock)
+keeps the entry un-evictable for the query's lifetime; LRU/`gpu_unpin` skip
+refcount > 0 entries and report them as `skipped_in_use`. Explicit control is
+exposed as table functions consistent with the `gpu_cosine*` family:
+`gpu_pin_status()` (resident pins + bytes + last-use age + in-use + budget),
+`gpu_unpin(key)` / `gpu_unpin_all()` (free now), and
+`gpu_pin_table(table, column [, precision])` (pre-pin a column so the first query
+is warm). Covered by `bench/pin_evict_test.sql` (`pixi run gpu-op-pin-evict-test`):
+pins past a small budget, asserts eviction via `gpu_pin_status`, then re-runs an
+evicted kNN query and asserts the cold rebuild's distance distribution is identical
+to stock `array_cosine_distance`.
+
+The aggregate `_pin2` cache (TPC-H column buffers) is **not yet bounded**: its
+residents are far smaller (KB–MB, not GB), it lives Mojo-side (`GpuPinned` +
+`SegResident`), and bounding it requires Mojo-side byte tracking + a teardown path
+for `SegResident`/`GpuPinned`. It is the natural next increment; the eviction-is-
+safe argument is identical (a missing signature returns COLD from `pin_begin` and
+`_pin_finalize_*` rebuilds). **Host-tier spill** (keep an evicted pin's host copy
+and re-promote without re-materializing from DuckDB) is deferred: it is cleanest on
+Apple unified memory (the host copy is nearly free), but the current kNN pin frees
+the host buffer right after upload (`mojo_gpu_pin*` `h16.free()` / the pageable
+`enqueue_copy`), so a host tier would need new retained-host storage + a promote
+path — out of scope for this increment. The shipped bound (budget + LRU + OOM-retry)
+already removes the unbounded-VRAM failure mode.
+
 ### Why no unified-memory allocator
 
 A tempting idea on Apple Silicon (shared CPU/GPU DRAM) is a custom

@@ -93,6 +93,9 @@ gpu-op-q5test = "mojo run packages/mojo-gpu-operator/bench/q5_kernel_test.mojo"
 # GPU-direct native-storage decode (Phase B): bit-exact synthetic test of the portable
 # Mojo BITPACKING (CONSTANT/FOR) + UNCOMPRESSED decoders vs the original host arrays.
 gpu-op-native-decode-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/native_decode_test.mojo"
+# Bounded-LRU pin-cache eviction test (feature #4): pin > budget, assert eviction
+# via gpu_pin_status, then assert an evicted kNN query cold-rebuilds correctly.
+gpu-op-pin-evict-test = "bash packages/mojo-gpu-operator/bench/pin_evict_test.sh"
 # Stage-2 shuttle tests: drive the FULL descriptor C-ABI (build->materialize->feed
 # ->finalize) bit-exact vs a CPU int128 reference. Q14 adds the FK-join dim path.
 gpu-op-q6shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo"
