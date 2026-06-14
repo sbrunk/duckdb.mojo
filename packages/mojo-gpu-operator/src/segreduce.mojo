@@ -45,12 +45,13 @@ row-major as result[g * M + m]. For UNGROUPED n_out_groups == 1; for DENSE_GROUP
 n_out_groups == G; for SORT_SEGREDUCE n_out_groups == n_seg.
 """
 
-from std.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim
+from std.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim, barrier
 from std.gpu.primitives import warp
+from std.gpu.memory import AddressSpace
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import alloc
+from std.memory import alloc, stack_allocation
 from std.atomic import Atomic
-from std.os import abort
+from std.os import abort, getenv
 from std.sys.info import is_nvidia_gpu, is_amd_gpu
 from gpu_platform import WARP
 from raw_plan_tags import (
@@ -62,6 +63,12 @@ from raw_plan_tags import (
 from expr_vm import eval_program
 
 comptime SEG_NBLOCKS = 4096  # one warp per block (matches the existing kernels)
+# Multi-warp block variant (GPU_OP_BLOCK128): on sm_89 a 1-warp block caps
+# occupancy at 50% (24-block/SM limit); a 4-warp block lifts the ceiling to ~100%
+# (regs/smem leave headroom). NWARPS warps reduce per-warp via warp.sum, then
+# combine across warps through shared memory + one barrier.
+comptime SEG_NWARPS = 4
+comptime SEG_BLK = SEG_NWARPS * WARP
 comptime HASH_BLOCK = 256  # threads/block for the one-thread-per-row hash kernel
 # Sentinel marking an empty hash slot. l_orderkey (and every TPC-H group key the
 # host routes here) is >= 1, so INT64_MIN can never be a real key.
@@ -170,6 +177,121 @@ def seg_dense_kernel(
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
                 partials[(blk * G + g) * M + m] = s
+
+
+# ---------------------------------------------------------------------------
+# Multi-warp variants of the two grid kernels (GPU_OP_BLOCK128). Identical math
+# to seg_ungrouped_kernel / seg_dense_kernel, but each block is SEG_NWARPS warps
+# (SEG_BLK threads): every warp reduces its lanes with warp.sum, lane 0 of each
+# warp publishes its partial to shared memory, a single barrier, then the first
+# threads sum across the warps and write ONE per-block partial. The partials
+# layout and host int128 reduction are unchanged (one partial per block over
+# SEG_NBLOCKS blocks), so only the in-block reduction differs.
+# ---------------------------------------------------------------------------
+def seg_ungrouped_kernel_mw(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x) % WARP
+    var wid = Int(thread_idx.x) // WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
+    var stride = SEG_NBLOCKS * SEG_BLK
+    var i = Int(block_idx.x) * SEG_BLK + Int(thread_idx.x)
+    while i < n_rows:
+        if _row_passes(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[m] += eval_program(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    # per-warp reduce into shared (lane 0 of each warp writes), then combine.
+    var sh = stack_allocation[
+        SEG_NWARPS * SEG_MAX_METRICS,
+        Scalar[DType.int64],
+        address_space = AddressSpace.SHARED,
+    ]()
+    for m in range(M):
+        var s = warp.sum(acc[m])
+        if lane == 0:
+            sh[wid * SEG_MAX_METRICS + m] = s
+    barrier()
+    # threads [0, M) each sum one metric across the SEG_NWARPS warps.
+    if Int(thread_idx.x) < M:
+        var tot = Int64(0)
+        for w in range(SEG_NWARPS):
+            tot += sh[w * SEG_MAX_METRICS + Int(thread_idx.x)]
+        partials[Int(block_idx.x) * M + Int(thread_idx.x)] = tot
+
+
+def seg_dense_kernel_mw(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+):
+    var lane = Int(thread_idx.x) % WARP
+    var wid = Int(thread_idx.x) // WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
+    var stride = SEG_NBLOCKS * SEG_BLK
+    var i = Int(block_idx.x) * SEG_BLK + Int(thread_idx.x)
+    while i < n_rows:
+        if _row_passes(
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            var g = Int(cols[gid_slot * n_rows + i])
+            var base = g * M
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[base + m] += eval_program(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    # per-warp reduce each (g, m) into shared, combine across warps. Shared is
+    # sized to the comptime max [SEG_NWARPS][G*M <= SEG_MAX_METRICS^2].
+    var sh = stack_allocation[
+        SEG_NWARPS * SEG_MAX_METRICS * SEG_MAX_METRICS,
+        Scalar[DType.int64],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var gm = G * M
+    for x in range(gm):
+        var s = warp.sum(acc[x])
+        if lane == 0:
+            sh[wid * (SEG_MAX_METRICS * SEG_MAX_METRICS) + x] = s
+    barrier()
+    # threads stride over the gm partials, summing each across the warps.
+    var xi = Int(thread_idx.x)
+    while xi < gm:
+        var tot = Int64(0)
+        for w in range(SEG_NWARPS):
+            tot += sh[w * (SEG_MAX_METRICS * SEG_MAX_METRICS) + xi]
+        var g = xi // M
+        var m = xi % M
+        partials[(Int(block_idx.x) * G + g) * M + m] = tot
+        xi += SEG_BLK
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +528,9 @@ def segreduce_run(
     var n_rows = res.n_rows
     var dims_d = res.dims_d
     var n_seg = res.n_seg
+    # GPU_OP_BLOCK128: route the two grid kernels to their multi-warp variants
+    # (SEG_BLK threads/block) to lift occupancy past the 1-warp-block 50% ceiling.
+    var use_mw = getenv("GPU_OP_BLOCK128", "") != ""
 
     # ---- rebuild the small host dim-offsets pointer for the kernels ----
     # doff buffer always valid (at least 1 element; n_dims==0 path).
@@ -458,14 +583,24 @@ def segreduce_run(
     if mode == STRAT_DENSE_GROUP:
         var npart = SEG_NBLOCKS * G * M
         var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-        ctx.enqueue_function[seg_dense_kernel](
-            cols_d, n_rows, gid_slot,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M, G,
-            dims_d, doff_d,
-            part_d,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+        if use_mw:
+            ctx.enqueue_function[seg_dense_kernel_mw](
+                cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+            )
+        else:
+            ctx.enqueue_function[seg_dense_kernel](
+                cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
         var part_h = alloc[Int64](npart)
         var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
         ctx.enqueue_copy(part_h, part_sub)
@@ -482,14 +617,24 @@ def segreduce_run(
     # default: STRAT_UNGROUPED
     var npart = SEG_NBLOCKS * M
     var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-    ctx.enqueue_function[seg_ungrouped_kernel](
-        cols_d, n_rows,
-        pass_d, pass_len,
-        mp_d, moff_d, mlen_d, M,
-        dims_d, doff_d,
-        part_d,
-        grid_dim=SEG_NBLOCKS, block_dim=WARP,
-    )
+    if use_mw:
+        ctx.enqueue_function[seg_ungrouped_kernel_mw](
+            cols_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+        )
+    else:
+        ctx.enqueue_function[seg_ungrouped_kernel](
+            cols_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            grid_dim=SEG_NBLOCKS, block_dim=WARP,
+        )
     var part_h = alloc[Int64](npart)
     var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
     ctx.enqueue_copy(part_h, part_sub)
