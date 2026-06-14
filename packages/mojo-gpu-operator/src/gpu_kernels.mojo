@@ -26,12 +26,16 @@ from gpu_platform import WARP
 from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
 from std.os import abort, getenv
-from std.sys.info import has_nvidia_gpu_accelerator
+from std.sys.info import (
+    has_nvidia_gpu_accelerator,
+    has_apple_gpu_accelerator,
+)
 from std.math import sqrt
 from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
 
 from tc_knn import run_tc_knn_batch, tc_knn_supported
+from tc_knn_apple import run_tc_knn_apple_batch, tc_knn_apple_supported
 
 import descriptor
 from descriptor import (
@@ -1313,9 +1317,14 @@ def _run_topk_batch[
     qs: UnsafePointer[Float32, ImmutAnyOrigin],
     M: Int,
     k: Int,
+    metric: Int,
     out_ids: UnsafePointer[Int64, MutAnyOrigin],
     out_dists: UnsafePointer[Float32, MutAnyOrigin],
 ) raises:
+    # `metric` (0=cosine, 1=L2, 2=inner-product; see tc_knn.TC_METRIC_*). Only
+    # the FUSED tensor-core path below honors non-cosine metrics; the scalar
+    # fallback is cosine-only, so a non-cosine request that cannot take the
+    # fused path is rejected (the C++ caller then falls back to stock DuckDB).
     # FUSED tensor-core path (NVIDIA-only, opt-in). Routed ONLY when (a) the
     # resident matrix is fp16 (the fused MMA kernel is fp16), (b) the build
     # targets an NVIDIA accelerator (`has_nvidia_gpu_accelerator()`, the
@@ -1330,9 +1339,40 @@ def _run_topk_batch[
     comptime if is_f16 and has_nvidia_gpu_accelerator():
         if getenv("GPU_OP_TENSORCORE", "") != "" and tc_knn_supported(K, k):
             run_tc_knn_batch(
+                ctx, emb16, n_rows, K, qs, M, k, metric, out_ids, out_dists
+            )
+            return
+
+    # FUSED Apple-Silicon (M1-M4) path: the 8x8 `simdgroup_matrix` MMA analogue
+    # of the NVIDIA tensor-core path above. Routed ONLY when (a) the resident
+    # matrix is fp16 (the fused MMA is fp16), (b) the build targets an Apple GPU
+    # (`has_apple_gpu_accelerator()`, the HOST comptime query; on NVIDIA this is
+    # comptime-False so the Apple kernel instantiation never compiles -- and the
+    # NVIDIA branch above is correspondingly never compiled on Apple), (c) the
+    # env flag GPU_OP_TENSORCORE is set, (d) the metric is COSINE (the only
+    # metric the Apple fused path implements -- normalized inputs), and (e)
+    # (K, k) is a supported fused shape. Any runtime miss falls through to the
+    # scalar path below (zero behavior change with the flag unset). Default OFF.
+    comptime if is_f16 and has_apple_gpu_accelerator():
+        if (
+            getenv("GPU_OP_TENSORCORE", "") != ""
+            and metric == 0
+            and tc_knn_apple_supported(K, k)
+        ):
+            run_tc_knn_apple_batch(
                 ctx, emb16, n_rows, K, qs, M, k, out_ids, out_dists
             )
             return
+
+    # Non-cosine metrics are ONLY implemented on the fused path above. If we did
+    # not route there (flag unset / non-NVIDIA / unsupported shape / fp32),
+    # there is no correct scalar implementation -- error out so the caller falls
+    # back to stock DuckDB rather than silently returning cosine results.
+    if metric != 0:
+        raise Error(
+            "topk batch: non-cosine metric requires the fused tensor-core path"
+            " (GPU_OP_TENSORCORE on an NVIDIA build, fp16, supported K/k)"
+        )
 
     # The fused kernel caches each lane's strided row slice (ceil(K/WARP) dims) in
     # a fixed BATCH_MAX_LANE_DIMS register array; reject K that would overflow it.
@@ -1485,6 +1525,7 @@ def mojo_gpu_pin_query_topk_batch(
             qs,
             M,
             k,
+            0,  # metric = cosine
             out_ids,
             out_dists,
         )
@@ -1496,18 +1537,25 @@ def mojo_gpu_pin_query_topk_batch(
 # Batched exact top-k (fp16-resident). Same contract + exact results as
 # mojo_gpu_pin_query_topk_batch, but reads the resident matrix as halves (fp32
 # accumulate). Free the handle with mojo_gpu_pin_free_f16.
-@export("mojo_gpu_pin_query_topk_batch_f16")
-def mojo_gpu_pin_query_topk_batch_f16(
+# Shared implementation for the fp16 batched entries (cosine + metric). `metric`
+# is 0=cosine, 1=L2 (squared euclidean / array_distance), 2=inner-product
+# (-dot / array_negative_inner_product). Non-cosine is only honored by the fused
+# tensor-core path (see _run_topk_batch); otherwise it returns a nonzero rc so
+# the C++ caller falls back to stock DuckDB.
+def _pin_query_topk_batch_f16_impl(
     handle: UnsafePointer[NoneType, MutAnyOrigin],
     qs: UnsafePointer[Float32, ImmutAnyOrigin],
     M: Int,
     k: Int,
+    metric: Int,
     out_ids: UnsafePointer[Int64, MutAnyOrigin],
     out_dists: UnsafePointer[Float32, MutAnyOrigin],
-) abi("C") -> Int32:
+) -> Int32:
     if Int(handle) == 0:
         return 1
     if k <= 0 or k > TOPK_MAX or M <= 0:
+        return 2
+    if metric < 0 or metric > 2:
         return 2
     try:
         var s = handle.bitcast[PinStateF16]()
@@ -1523,12 +1571,48 @@ def mojo_gpu_pin_query_topk_batch_f16(
             qs,
             M,
             k,
+            metric,
             out_ids,
             out_dists,
         )
         return 0
     except:
         return 3
+
+
+@export("mojo_gpu_pin_query_topk_batch_f16")
+def mojo_gpu_pin_query_topk_batch_f16(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    M: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    # Unchanged signature/behavior: cosine (metric 0).
+    return _pin_query_topk_batch_f16_impl(
+        handle, qs, M, k, 0, out_ids, out_dists
+    )
+
+
+# Batched fp16 top-k with an explicit metric (NEW symbol; the existing cosine
+# entry above is untouched). metric: 0=cosine, 1=L2 (array_distance, squared
+# euclidean), 2=inner-product (array_negative_inner_product / -dot). Non-cosine
+# only works on the fused tensor-core path (GPU_OP_TENSORCORE on an NVIDIA build,
+# supported K/k); a nonzero rc signals the C++ caller to fall back to DuckDB.
+@export("mojo_gpu_pin_query_topk_batch_f16_metric")
+def mojo_gpu_pin_query_topk_batch_f16_metric(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    M: Int,
+    k: Int,
+    metric: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C") -> Int32:
+    return _pin_query_topk_batch_f16_impl(
+        handle, qs, M, k, metric, out_ids, out_dists
+    )
 
 
 # Host final merge: stable-select the k smallest (dist asc, rowid asc) from the

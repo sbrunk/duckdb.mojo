@@ -217,17 +217,27 @@ embedding matrix (pinned once, fp16 by default). Measured on the RTX 4090
   many-millions-of-rows / recall-tolerant, write-once-query-forever workloads
   (its query is sublinear; ours is an O(N) scan, and the resident pin is capped by
   VRAM — ~3 GB at 1M×768).
-- Single-query kNN is **bandwidth-optimal** (~912 GB/s, one matrix read). For
-  *batched* queries an optional **fused tensor-core path** (`GPU_OP_TENSORCORE`,
-  NVIDIA-only, default off; [src/tc_knn.mojo](src/tc_knn.mojo)) replaces the scalar
-  per-(row, query) dot with a tiled MMA `queries·embᵀ` (fp16→fp32, `transpose_b`)
-  fused with a streaming per-query top-k — so the M×N similarity matrix is **never
-  materialized** (only the embeddings are read, only M×k results written). MMA
-  crushes the per-query compute, so the kernel becomes **HBM-read-bound** (~69% of
-  peak for a 128-query tile) and that one matrix read amortizes across the batch:
-  through the operator entry, per-query latency drops up to **~60×** at large batch
-  (M=1000 over 1M×768) at **recall@10 = 1.0** (exact ids). The scalar kernel stays
-  the default and the non-NVIDIA fallback.
+- Single-query kNN is **bandwidth-optimal** (~912 GB/s, one matrix read; it's the
+  *batched* path that needed work). For batched queries an optional **fused
+  matmul path** (`GPU_OP_TENSORCORE`, default off) replaces the scalar
+  per-(row, query) dot with a tiled MMA `queries·embᵀ` fused with a streaming
+  per-query top-k — so the M×N similarity matrix is **never materialized** (only
+  the embeddings are read, only M×k written). MMA crushes the per-query compute, so
+  the kernel becomes **matrix-read-bound** and that one read amortizes across the
+  batch. Two backends, same fused structure:
+  - **NVIDIA tensor cores** ([src/tc_knn.mojo](src/tc_knn.mojo), m16n8k8 fp16→fp32,
+    `transpose_b`): up to **~60×** per-query at large batch (M=1000 over 1M×768),
+    HBM-read-bound at ~69% of peak, **recall@10 = 1.0** (exact ids).
+  - **Apple-Silicon 8×8 `simdgroup_matrix`** ([src/tc_knn_apple.mojo](src/tc_knn_apple.mojo),
+    M1–M4): **~3–7×** per-query on an M3 Max, unified-memory-bandwidth-bound,
+    recall@10 = 1.0. (Apple's 16×16 MMA is M5-only; `layout.tensor_core` has no
+    Apple path, so this backend uses the 8×8 intrinsic directly.)
+  Cosine on both backends; NVIDIA also does **L2** (`array_distance`) and
+  **inner-product** (`array_inner_product`) by switching only the distance epilogue
+  — exposed as `gpu_cosine_topk_batch(..., metric := 'l2'|'ip')`. (Non-normalized
+  L2 has an fp16 squared-norm cancellation caveat — documented; normalized is
+  exact.) The scalar kernel stays the default and the flag-off / unsupported-shape
+  fallback on every platform.
 
 ### The cost heuristic (default-on engine, no cost model)
 The engine is default-on and otherwise cost-blind. To avoid making a query
@@ -242,10 +252,12 @@ The generic kernels are **atomics-free** (warp.sum + host int128 reduce), so the
 port to NVIDIA with no atomics branch; warp width comes from `WARP_SIZE`
 ([src/gpu_platform.mojo](src/gpu_platform.mojo)). 64-bit-atomics gating, if ever
 needed, must be evaluated *inside* kernel code via `is_nvidia_gpu()`/`is_amd_gpu()`
-(target checks), not host-side. The complementary case is the fused-kNN tensor-core
-path: its host-side routing and the `layout.tensor_core` instantiation are gated on
-`has_nvidia_gpu_accelerator()` (the **host** comptime query), so on Metal the
-TensorCore code is never compiled and the scalar path is used. `build.sh` emits
+(target checks), not host-side. The complementary case is the fused-kNN matmul
+path: the NVIDIA backend's routing + `layout.tensor_core` instantiation are gated on
+`has_nvidia_gpu_accelerator()`, and the Apple backend's routing + `simdgroup_matrix`
+instantiation on `has_apple_gpu_accelerator()` (both **host** comptime queries) — so
+each backend's MMA code is compiled only for its own target and elided on the other,
+with the scalar path as the universal fallback. `build.sh` emits
 `.so`+`$ORIGIN` on Linux and `.dylib`+`@loader_path` on macOS.
 
 **Validated on both Apple (M-series, Metal) and NVIDIA (RTX 4090, Linux).** On

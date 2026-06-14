@@ -77,6 +77,22 @@ comptime TC_NBLOCKS = 256
 # caller falls back to the scalar path for k beyond this.
 comptime TC_K_CAP = 64
 
+# ===-------------------------------------------------------------------===#
+# Metric selector. The MMA core (Q.Emb^T dot) is IDENTICAL for all three; only
+# the per-candidate distance EPILOGUE and the norm-buffer semantics change:
+#   COSINE (0): cd = 1 - dot/(|q|*|e|)         norms = L2 norm (sqrt of sum sq)
+#   L2     (1): cd = |q|^2 + |e|^2 - 2*dot     norms = SQUARED L2 norm (no sqrt)
+#   IP     (2): cd = -dot                       norms = unused
+# In every case top-k is by SMALLEST cd with the SAME (cd, rowid) tie-break, so
+# only the ~3-line `cd` computation differs. The metric is a COMPTIME parameter
+# of the kernel/driver so the switch is resolved at compile time (no runtime
+# branch in the streaming top-k inner loop); the host entry maps a runtime enum
+# to the comptime instantiation.
+# ===-------------------------------------------------------------------===#
+comptime TC_METRIC_COSINE = 0
+comptime TC_METRIC_L2 = 1
+comptime TC_METRIC_IP = 2
+
 
 # Whether the fused tensor-core path supports this (K, k). K must be one of the
 # comptime-specialized embedding dims (a multiple of TC_BK that we instantiate),
@@ -97,7 +113,7 @@ def tc_knn_supported(K: Int, k: Int) -> Bool:
 # resident matrix. Everything here is inside `comptime if is_nvidia_gpu()`.
 # ===-------------------------------------------------------------------===#
 def tc_fused_knn_kernel[
-    KD: Int, q_layout: Layout, e_layout: Layout,
+    KD: Int, metric: Int, q_layout: Layout, e_layout: Layout,
 ](
     q: LayoutTensor[DType.float16, q_layout, MutAnyOrigin],
     e: LayoutTensor[DType.float16, e_layout, MutAnyOrigin],
@@ -209,10 +225,28 @@ def tc_fused_knn_kernel[
                     if row >= n_rows:
                         break
                     var dotv = rebind[Scalar[DType.float32]](s_smem[m, nn])
-                    var denom = enorm[row] * qn  # enorm pre-sqrt'd on host
-                    var cd = (
-                        Float32(1) - dotv / denom if denom != 0 else Float32(0)
-                    )
+                    # Distance epilogue: only this varies by metric (comptime
+                    # switch -> no runtime branch). The MMA `dotv` above is
+                    # shared by all three; top-k is by smallest `cd` for each.
+                    var cd: Float32
+                    comptime if metric == TC_METRIC_L2:
+                        # Squared euclidean: |q|^2 + |e|^2 - 2*dot. qn / enorm
+                        # carry SQUARED norms here (host/enorm-kernel skip sqrt
+                        # for L2). NB: catastrophic cancellation for
+                        # non-normalized data + fp16 dot -- see run_tc_knn_batch.
+                        cd = qn + enorm[row] - Float32(2) * dotv
+                    elif metric == TC_METRIC_IP:
+                        # Negative inner product (top-k by largest dot = smallest
+                        # -dot). Norms unused.
+                        cd = -dotv
+                    else:
+                        # Cosine (default): 1 - dot/(|q|*|e|). enorm pre-sqrt'd
+                        # on host; byte-for-byte the original epilogue.
+                        var denom = enorm[row] * qn
+                        cd = (
+                            Float32(1) - dotv / denom if denom
+                            != 0 else Float32(0)
+                        )
                     var ci = Int64(row)
                     var accept = True
                     if cnt >= k:
@@ -353,7 +387,7 @@ def tc_merge_kernel(
 # forms). cand_* / merged_* are reused per tile.
 # ===-------------------------------------------------------------------===#
 def _run_tc_knn_for_kd[
-    KD: Int
+    KD: Int, metric: Int
 ](
     ctx: DeviceContext,
     emb16: DeviceBuffer[DType.float16],
@@ -391,7 +425,7 @@ def _run_tc_knn_for_kd[
         var merged_id_h = alloc[Int64](TC_BM * k)
         ctx.synchronize()
 
-        comptime fk = tc_fused_knn_kernel[KD, q_layout, e_layout]
+        comptime fk = tc_fused_knn_kernel[KD, metric, q_layout, e_layout]
 
         var q0 = 0
         while q0 < M:
@@ -457,9 +491,30 @@ def _run_tc_knn_for_kd[
 # ===-------------------------------------------------------------------===#
 # Top-level fused batched fp16 driver. Builds the fp16 query tile + the fp32
 # query/embedding norms on the host, uploads them once, then dispatches to the
-# comptime-specialized per-KD driver. Returns the SAME exact (ids, dists) as the
-# scalar batched path for the supported (K, k). NVIDIA-only via the gate; the
-# caller guards with `tc_knn_supported(K, k)` + the env flag.
+# comptime-specialized per-(KD, metric) driver. For cosine it returns the SAME
+# exact (ids, dists) as the scalar batched path for the supported (K, k).
+# NVIDIA-only via the gate; the caller guards with `tc_knn_supported(K, k)` +
+# the env flag.
+#
+# `metric` (TC_METRIC_*): 0 cosine, 1 L2/squared-euclidean (array_distance),
+# 2 inner-product (array_negative_inner_product, score = -dot). The MMA core is
+# byte-for-byte identical across metrics; only the per-candidate distance
+# epilogue (in tc_fused_knn_kernel) and the norm-buffer contents differ.
+#
+# NUMERICAL NOTE for L2 (validated): the kernel forms squared euclidean as
+# |q|^2 + |e|^2 - 2*dot, where `dot` comes from the fp16-INPUT MMA. For
+# UNIT-NORMALIZED data this is exact (|q|^2 = |e|^2 = 1, the subtraction is
+# well-conditioned and the top-k matches a scalar reference exactly). For
+# NON-NORMALIZED data with large/similar |q|^2, |e|^2 the subtraction suffers
+# CATASTROPHIC CANCELLATION against the lower-precision fp16-product dot -> the
+# ranking degrades (genuine misses). DECISION: ship L2 for normalized inputs
+# (the dominant real-embedding case -- array_distance over normalized vectors is
+# equivalent to a monotonic transform of cosine) and DOCUMENT the non-normalized
+# limitation here + in the metric bench. A numerically robust non-normalized L2
+# would need fp32/tf32 MMA inputs (≈2x the Emb-read bandwidth, the kernel's
+# bound) or a fused stable form; not implemented (cost noted). Cosine and IP are
+# unaffected (IP is a pure dot; cosine divides by the norm rather than
+# subtracting it).
 # ===-------------------------------------------------------------------===#
 def run_tc_knn_batch(
     ctx: DeviceContext,
@@ -469,11 +524,20 @@ def run_tc_knn_batch(
     qs: UnsafePointer[Float32, ImmutAnyOrigin],
     M: Int,
     k: Int,
+    metric: Int,
     out_ids: UnsafePointer[Int64, MutAnyOrigin],
     out_dists: UnsafePointer[Float32, MutAnyOrigin],
 ) raises:
     # HOST gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
     # host-side comptime query; Apple never compiles this body.
+    #
+    # `metric` is a RUNTIME enum here (TC_METRIC_*) dispatched to the comptime
+    # instantiation below. Norm-buffer semantics depend on it:
+    #   COSINE: qnorm/enorm = L2 norm  (sqrt of sum of squares)
+    #   L2    : qnorm/enorm = SQUARED L2 norm (skip the sqrt) -- the epilogue
+    #           forms |q|^2 + |e|^2 - 2*dot.
+    #   IP    : norms unused (epilogue is just -dot); we still fill them with a
+    #           harmless value so the kernel's reads are defined.
     comptime if has_nvidia_gpu_accelerator():
         # Host: fp16 query tile (padded to a multiple of BM rows so the kernel's
         # full-BM q tile is always in bounds), fp32 query norms, fp32 emb norms.
@@ -487,9 +551,14 @@ def run_tc_knn_batch(
                 var v = qs[qoff + i]
                 qh16[qoff + i] = v.cast[DType.float16]()
                 s += v * v
-            qnorm_h[m] = sqrt(s)
-        # Pad rows [M, ntile) with zeros (qnorm 1 so denom != 0; padded queries'
-        # results are discarded by the qcount guard in the per-KD driver).
+            # COSINE wants the L2 norm; L2/IP want the squared norm (L2) or do
+            # not read it (IP). For L2 we keep s (= |q|^2); for cosine sqrt(s).
+            if metric == TC_METRIC_COSINE:
+                qnorm_h[m] = sqrt(s)
+            else:
+                qnorm_h[m] = s
+        # Pad rows [M, ntile) with zeros (qnorm 1 so the cosine denom != 0;
+        # padded queries' results are discarded by the qcount guard).
         for m in range(M, ntile):
             var qoff = m * K
             for i in range(K):
@@ -506,54 +575,110 @@ def run_tc_knn_batch(
         )
         ctx.enqueue_copy(qnorm_dev, qnorm_imm)
 
-        # Emb norms: sqrt(sum of squares of the fp16-stored values), cast back to
-        # fp32 -- bit-identical to the scalar f16 path's denom (na += av*av, av =
-        # emb_half.cast[fp32]()). Compute on the GPU from the resident emb16.
+        # Emb norms: for COSINE, sqrt(sum of squares of the fp16-stored values)
+        # -- bit-identical to the scalar f16 path's denom (na += av*av, av =
+        # emb_half.cast[fp32]()). For L2 we want the SQUARED norm (skip the
+        # sqrt). IP does not read enorm. The kernel takes a `squared` flag.
+        var enorm_squared = Int(1) if metric != TC_METRIC_COSINE else Int(0)
         ctx.enqueue_function[_tc_enorm_kernel](
             emb16.unsafe_ptr(),
             enorm_dev.unsafe_ptr(),
             n_rows,
             K,
+            enorm_squared,
             grid_dim=n_rows,
             block_dim=WARP_SIZE,
         )
         ctx.synchronize()
 
-        if K == 768:
-            _run_tc_knn_for_kd[768](
-                ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
-                n_rows, M, k, out_ids, out_dists,
-            )
-        elif K == 384:
-            _run_tc_knn_for_kd[384](
-                ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
-                n_rows, M, k, out_ids, out_dists,
-            )
-        elif K == 1024:
-            _run_tc_knn_for_kd[1024](
-                ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
-                n_rows, M, k, out_ids, out_dists,
-            )
-        elif K == 1536:
-            _run_tc_knn_for_kd[1536](
-                ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
-                n_rows, M, k, out_ids, out_dists,
-            )
+        # Dispatch the runtime metric to the comptime kernel instantiation. Each
+        # (K, metric) pair is a separate specialization; only the listed K are
+        # supported (guard with tc_knn_supported in the caller).
+        if metric == TC_METRIC_L2:
+            if K == 768:
+                _run_tc_knn_for_kd[768, TC_METRIC_L2](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 384:
+                _run_tc_knn_for_kd[384, TC_METRIC_L2](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1024:
+                _run_tc_knn_for_kd[1024, TC_METRIC_L2](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1536:
+                _run_tc_knn_for_kd[1536, TC_METRIC_L2](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            else:
+                raise Error("tc_knn: unsupported K (guard tc_knn_supported)")
+        elif metric == TC_METRIC_IP:
+            if K == 768:
+                _run_tc_knn_for_kd[768, TC_METRIC_IP](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 384:
+                _run_tc_knn_for_kd[384, TC_METRIC_IP](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1024:
+                _run_tc_knn_for_kd[1024, TC_METRIC_IP](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1536:
+                _run_tc_knn_for_kd[1536, TC_METRIC_IP](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            else:
+                raise Error("tc_knn: unsupported K (guard tc_knn_supported)")
         else:
-            raise Error("tc_knn: unsupported K (guard with tc_knn_supported)")
+            if K == 768:
+                _run_tc_knn_for_kd[768, TC_METRIC_COSINE](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 384:
+                _run_tc_knn_for_kd[384, TC_METRIC_COSINE](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1024:
+                _run_tc_knn_for_kd[1024, TC_METRIC_COSINE](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            elif K == 1536:
+                _run_tc_knn_for_kd[1536, TC_METRIC_COSINE](
+                    ctx, emb16, qs_dev, qnorm_dev, enorm_dev,
+                    n_rows, M, k, out_ids, out_dists,
+                )
+            else:
+                raise Error("tc_knn: unsupported K (guard tc_knn_supported)")
 
         qh16.free()
         qnorm_h.free()
 
 
-# Per-row L2 norm of the fp16-resident matrix (one warp per row, warp-strided),
-# matching the scalar f16 denom exactly: sum of (fp16-cast-to-fp32)^2 then sqrt.
-# NVIDIA-only via the comptime gate.
+# Per-row norm of the fp16-resident matrix (one warp per row, warp-strided).
+# `squared == 0` returns the L2 norm (sqrt of sum of (fp16-cast-to-fp32)^2) --
+# matching the scalar f16 cosine denom exactly. `squared != 0` returns the
+# SQUARED norm (sum of squares, no sqrt) for the L2-distance epilogue. NVIDIA
+# -only via the comptime gate.
 def _tc_enorm_kernel(
     emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
     enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
     n_rows: Int,
     K: Int,
+    squared: Int,
 ):
     comptime if is_nvidia_gpu():
         from std.gpu.primitives import warp
@@ -571,4 +696,4 @@ def _tc_enorm_kernel(
             i += WARP_SIZE
         na = warp.sum(na)
         if lane == 0:
-            enorm[row] = sqrt(na)
+            enorm[row] = na if squared != 0 else sqrt(na)

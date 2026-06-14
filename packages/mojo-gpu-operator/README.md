@@ -70,7 +70,7 @@ on the GPU once (cached process-wide, fp16 by default) and reused across queries
 
 - `gpu_cosine_topk('emb','v', <FLOAT[K]>, k [, precision])` → `(rowid, dist)` —
   exact top-k cosine for a **single** query; only k rows cross PCIe.
-- `gpu_cosine_topk_batch('emb','v','queries','qv', k [, precision])` →
+- `gpu_cosine_topk_batch('emb','v','queries','qv', k [, precision] [, metric])` →
   `(query_rowid, rowid, dist)` — **true batched** kNN: the query set is a column
   of another table (also `FLOAT[K]`). All M queries are scored in one batched
   kernel that reads the resident N×K matrix **once per query-tile** (not once per
@@ -80,6 +80,20 @@ on the GPU once (cached process-wide, fp16 by default) and reused across queries
   query index (HNSW cannot use its index for batched queries at all). `precision`
   is `'fp16'` (default) or `'fp32'`/`'exact'`; results are bit-for-bit identical
   to M single-query `gpu_cosine_topk` calls.
+  - `metric` is `'cosine'` (default), `'l2'`/`'euclidean'` (= `array_distance`,
+    squared euclidean), or `'ip'` (= `array_negative_inner_product`, score
+    `-dot`). **Non-cosine metrics run only on the fused tensor-core path**:
+    they require `precision='fp16'`, an NVIDIA build, `GPU_OP_TENSORCORE=1`, and
+    a supported `K ∈ {384,768,1024,1536}` with `k ≤ 64` — otherwise the call
+    errors (the cosine scalar path has no non-cosine implementation; fall back to
+    stock DuckDB `array_distance`/`array_negative_inner_product`). The fused MMA
+    core is identical for all three metrics; only the per-candidate distance
+    epilogue + norm-buffer semantics change. Validated against a scalar CPU
+    reference: cosine, IP, and **normalized** L2 match exactly (recall@10 ≥ 0.99,
+    0 genuine misses). ⚠️ **Non-normalized L2** is formed as `|q|²+|e|²−2·dot`
+    with the fp16-product dot, which suffers catastrophic cancellation and can
+    drop genuine neighbors — use normalized embeddings for L2 (the standard
+    real-embedding case), or stock DuckDB for non-normalized L2.
 
 | Workload | Operator |
 |---|---|

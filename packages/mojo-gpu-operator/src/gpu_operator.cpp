@@ -89,6 +89,14 @@ int32_t mojo_gpu_pin_query_topk_batch(void *handle, const float *qs, int64_t M,
                                       int64_t k, int64_t *out_ids, float *out_dists);
 int32_t mojo_gpu_pin_query_topk_batch_f16(void *handle, const float *qs, int64_t M,
                                           int64_t k, int64_t *out_ids, float *out_dists);
+// Batched fp16 top-k with an explicit metric: 0 = cosine (array_cosine_distance),
+// 1 = L2 / squared-euclidean (array_distance), 2 = inner-product
+// (array_negative_inner_product / -dot). metric != 0 is ONLY implemented on the
+// fused tensor-core path (GPU_OP_TENSORCORE on an NVIDIA build, supported K/k);
+// otherwise it returns rc != 0 so the caller can fall back to stock DuckDB.
+int32_t mojo_gpu_pin_query_topk_batch_f16_metric(void *handle, const float *qs, int64_t M,
+                                                 int64_t k, int64_t metric,
+                                                 int64_t *out_ids, float *out_dists);
 // TPC-H Q6 engine: pin the 4 lineitem columns, run filter+exact-decimal-sum.
 int64_t mojo_q6_pin(const int32_t *ship, const int64_t *disc, const int64_t *ext,
                     const int64_t *qty, int64_t n_rows, int32_t timing);
@@ -803,6 +811,33 @@ unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFun
     }
   }
 
+  // Optional metric named param. Default cosine (0). L2 (1) = array_distance /
+  // squared euclidean; ip (2) = inner-product (array_negative_inner_product /
+  // -dot). Non-cosine is ONLY implemented on the FUSED tensor-core path
+  // (fp16 + GPU_OP_TENSORCORE on an NVIDIA build + supported K/k); requesting it
+  // with fp32 precision is a usage error (there is no scalar non-cosine path).
+  int64_t metric = 0;
+  auto mp = input.named_parameters.find("metric");
+  if (mp != input.named_parameters.end() && !mp->second.IsNull()) {
+    std::string m = StringUtil::Lower(mp->second.GetValue<string>());
+    if (m == "cosine" || m == "array_cosine_distance") {
+      metric = 0;
+    } else if (m == "l2" || m == "euclidean" || m == "array_distance") {
+      metric = 1;
+    } else if (m == "ip" || m == "inner_product" || m == "dot" ||
+               m == "array_negative_inner_product") {
+      metric = 2;
+    } else {
+      throw InvalidInputException("gpu_cosine_topk_batch: unknown metric '" + m +
+                                  "' (expected 'cosine', 'l2', or 'ip')");
+    }
+  }
+  if (metric != 0 && !use_fp16) {
+    throw InvalidInputException(
+        "gpu_cosine_topk_batch: non-cosine metric requires precision 'fp16' "
+        "(the fused tensor-core path); fp32 is cosine-only");
+  }
+
   // Pin (or reuse the cached) resident emb matrix, same as gpu_cosine_topk.
   PinEntry pe = use_fp16 ? EnsurePinnedF16(context, emb_table, emb_col)
                          : EnsurePinned(context, emb_table, emb_col);
@@ -826,14 +861,29 @@ unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFun
   // ONE batched kernel call: M*k results row-major [query*k + slot].
   vector<int64_t> out_ids(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
   vector<float> out_dists(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
-  int32_t rc = use_fp16
-                   ? mojo_gpu_pin_query_topk_batch_f16(pe.handle, qs.data(),
-                                                       NumericCast<int64_t>(M), k,
-                                                       out_ids.data(), out_dists.data())
-                   : mojo_gpu_pin_query_topk_batch(pe.handle, qs.data(),
-                                                   NumericCast<int64_t>(M), k,
-                                                   out_ids.data(), out_dists.data());
+  int32_t rc;
+  if (metric != 0) {
+    // Non-cosine: fused tensor-core path only (fp16, enforced above).
+    rc = mojo_gpu_pin_query_topk_batch_f16_metric(
+        pe.handle, qs.data(), NumericCast<int64_t>(M), k, metric,
+        out_ids.data(), out_dists.data());
+  } else {
+    rc = use_fp16
+             ? mojo_gpu_pin_query_topk_batch_f16(pe.handle, qs.data(),
+                                                 NumericCast<int64_t>(M), k,
+                                                 out_ids.data(), out_dists.data())
+             : mojo_gpu_pin_query_topk_batch(pe.handle, qs.data(),
+                                             NumericCast<int64_t>(M), k,
+                                             out_ids.data(), out_dists.data());
+  }
   if (rc != 0) {
+    if (metric != 0) {
+      throw InvalidInputException(
+          "gpu_cosine_topk_batch: non-cosine metric requires the fused "
+          "tensor-core path (set GPU_OP_TENSORCORE=1 on an NVIDIA build with a "
+          "supported K in {384,768,1024,1536} and k<=64); rc " +
+          std::to_string(rc));
+    }
     throw InvalidInputException("gpu_cosine_topk_batch: GPU batched top-k failed (rc " +
                                 std::to_string(rc) + ")");
   }
@@ -878,6 +928,10 @@ void RegisterGpuCosineTopkBatchTableFunction(ExtensionLoader &loader) {
                     LogicalType::VARCHAR, LogicalType::BIGINT},
                    GpuCosineTopkBatchFunc, GpuCosineTopkBatchBind, GpuCosineInit);
   tf.named_parameters["precision"] = LogicalType::VARCHAR;
+  // metric: 'cosine' (default), 'l2'/'euclidean' (array_distance), or 'ip'
+  // (array_negative_inner_product). Non-cosine routes to the fused tensor-core
+  // path (NVIDIA + GPU_OP_TENSORCORE + supported K/k); see GpuCosineTopkBatchBind.
+  tf.named_parameters["metric"] = LogicalType::VARCHAR;
   loader.RegisterFunction(tf);
 }
 
