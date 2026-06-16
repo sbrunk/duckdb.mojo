@@ -256,10 +256,33 @@ kernel argument. Hence the pin-resident route — the same choice Sirius makes.
 
 ## Performance characteristics
 
-**TPC-H sf1, warm, validated vs stock answers** (RTX 4090 benchmark_runner medians):
-**Q14 ~11×, Q5 ~7×, Q6 ~3.8×, Q1 ~2×** over 16-thread stock. (Apple is smaller:
-~1.6–2.0× on Q1/Q5/Q14, ~parity Q6.) The GPU wins where there's real per-row /
-join work and a small output. **Q3 is the exception and is now kept on the CPU**
+**TPC-H sf1, warm, result-verified vs stock answers** (benchmark_runner medians,
+1 cold + 5 hot runs, `Verify()` on every hot run):
+
+| query | RTX 4090 GPU vs stock | Apple M3 Max GPU vs stock |
+|---|---|---|
+| Q14 (FK join + promo CASE) | 0.64 ms vs 10.9 ms — **16.9×** | 2.23 ms vs 6.92 ms — **3.1×** |
+| Q6  (filter + scalar sum)  | 0.37 ms vs 2.9 ms — **7.9×**  | 2.02 ms vs 2.45 ms — **1.2×** |
+| Q5  (6-way join, grouped)  | 1.59 ms vs 11.4 ms — **7.2×** | 5.23 ms vs 9.74 ms — **1.9×** |
+| Q1  (grouped, 8 aggregates)| 2.04 ms vs 12.6 ms — **6.2×** | 5.49 ms vs 14.5 ms — **2.6×** |
+
+The GPU wins where there's real per-row / join work and a small output; the
+discrete GPU's warm/cold split is sharp (NVIDIA first-touch incl. GPU init/JIT:
+Q1 ~1.6 s, others ~0.3–0.5 s → fully amortized to the warm numbers above).
+
+> **Measure warm with the benchmark_runner, not the interactive CLI.** The DuckDB
+> CLI cannot measure this warm regime: re-running an identical query hits DuckDB's
+> result handling (returns instantly without re-executing), and varying a filter
+> constant to defeat that forces a *cold* signature (the pin key includes filter
+> constants) — so both look like the GPU "losing" by 50–170×, when they are really
+> measuring cold first-touch + init. The benchmark_runner does proper cold+hot runs
+> and verifies results, and is the source of the numbers above. (A related red
+> herring: an interactive-CLI session can *appear* to return empty rows for a
+> repeated grouped query — confirmed an artifact of CLI result rendering, **not** the
+> operator: the source op allocates fresh per-execution state and the warm finalize
+> re-runs the kernel and rebuilds the full result set every call; benchmark_runner
+> `Verify()` passed on all 10 hot grouped-Q1 executions per platform, and piped-stdin
+> CLI returns byte-identical full rows on every repeat.) **Q3 is the exception and is now kept on the CPU**
 (see the cost heuristic below): it's a light-per-row, high-cardinality-output
 (~1.5M groups) shape that DuckDB's multithreaded join+hash-aggregate does better —
 measured GPU 0.87× at sf1 and **0.54× at sf10** (the gap *widens* with scale: the
