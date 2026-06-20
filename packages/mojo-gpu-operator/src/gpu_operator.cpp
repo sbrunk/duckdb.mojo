@@ -2667,17 +2667,18 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
       return;  // not a pinnable/handled segment (e.g. top-level CONSTANT)
     }
     // For BITPACKING segments, classify each 2048-group's mode so we can
-    // attribute the (expected) zero-filled DELTA_FOR / CONSTANT_DELTA / unknown
-    // groups to `deferred_rows` rather than counting them as decode failures.
-    // A `deferred` row is one whose group mode is NOT yet implemented (the
-    // kernel deterministically zero-fills it). FOR/CONSTANT groups must match
-    // bit-exact -- a mismatch there is a real bug.
+    // attribute any (still-unimplemented) zero-filled groups to `deferred_rows`
+    // rather than counting them as decode failures. A `deferred` row is one
+    // whose group mode is NOT implemented in the kernel (deterministic
+    // zero-fill). The four fixed-width modes -- FOR, CONSTANT, CONSTANT_DELTA,
+    // and DELTA_FOR -- are all implemented now, so a mismatch in any of them is
+    // a real bug. Only INVALID / AUTO / unknown modes remain deferred.
     auto group_deferred = [&](idx_t row_in_seg) -> bool {
       if (codec != 1) return false;  // UNCOMPRESSED is always implemented
       idx_t g = row_in_seg / 2048;
       string m; int64_t f, w, doff;
       ParseBitpackingGroup(ps.base, ps.seg_bytes, ref.physical_type_size, g, m, f, w, doff);
-      return !(m == "FOR" || m == "CONSTANT");
+      return !(m == "FOR" || m == "CONSTANT" || m == "CONSTANT_DELTA" || m == "DELTA_FOR");
     };
 
     int32_t rc;
@@ -2728,13 +2729,14 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
   if (bd->checked_rows == 0) {
     bd->status = "NO_SEGMENTS_DECODED";
   } else if (bd->mismatches != 0) {
-    bd->status = "FAIL: " + std::to_string(bd->mismatches) + " mismatches in implemented (FOR/CONSTANT) groups";
+    bd->status = "FAIL: " + std::to_string(bd->mismatches) +
+                 " mismatches in implemented (CONSTANT/CONSTANT_DELTA/FOR/DELTA_FOR) groups";
   } else if (bd->deferred_rows == 0) {
     bd->status = "PASS: " + std::to_string(bd->checked_rows) + " values bit-identical";
   } else {
     bd->status = "PASS (partial): " + std::to_string(implemented) +
-                 " FOR/CONSTANT values bit-identical; " + std::to_string(bd->deferred_rows) +
-                 " rows in deferred DELTA_FOR/CONSTANT_DELTA groups (zero-filled, not yet implemented)";
+                 " values bit-identical; " + std::to_string(bd->deferred_rows) +
+                 " rows in deferred (INVALID/AUTO/unknown) groups (zero-filled, not yet implemented)";
   }
 
   return_types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT,

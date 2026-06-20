@@ -37,6 +37,8 @@ from native_decode import (
     uncompressed_decode_kernel,
     BP_META_GROUP_SIZE,
     BPMODE_CONSTANT,
+    BPMODE_CONSTANT_DELTA,
+    BPMODE_DELTA_FOR,
     BPMODE_FOR,
 )
 
@@ -100,15 +102,11 @@ def pack_lsb_first(
 # are equal, in which case CONSTANT is emitted (exercising both modes from one
 # builder, exactly as DuckDB chooses per group).
 # ---------------------------------------------------------------------------
-struct BuiltSegment:
+@fieldwise_init
+struct BuiltSegment(Copyable, Movable):
     var data: UnsafePointer[UInt8, MutAnyOrigin]
     var nbytes: Int
     var n_groups: Int
-
-    def __init__(out self, data: UnsafePointer[UInt8, MutAnyOrigin], nbytes: Int, n_groups: Int):
-        self.data = data
-        self.nbytes = nbytes
-        self.n_groups = n_groups
 
 
 def build_bitpacking_segment[
@@ -216,20 +214,170 @@ def put_u64_t[T: DType](buf: UnsafePointer[UInt8, MutAnyOrigin], off: Int, v: UI
         buf[off + b] = UInt8((v >> UInt64(8 * b)) & 0xFF)
 
 
+# Two's-complement bit-pattern (as UInt64) of a signed value of type T.
+def _bits_t[T: DType](v: Scalar[T]) -> UInt64:
+    comptime if T == DType.int32:
+        return UInt64(UInt32(Int32(v)))
+    else:
+        return UInt64(Int64(v))
+
+
+# ---------------------------------------------------------------------------
+# Build a single CONSTANT_DELTA BITPACKING segment in DuckDB byte layout.
+# Every metadata group is CONSTANT_DELTA: [T frame][T delta], decoded as
+# out[i] = frame + i*delta (group_offset resets to 0 per metadata group).
+# `vals` MUST already be the arithmetic series the caller chose so the decode
+# round-trips: vals[g0 + i] == frame_g + i*delta_g.  `frames`/`deltas` give the
+# per-group (frame, delta) used to generate them.
+# ---------------------------------------------------------------------------
+def build_constant_delta_segment[
+    T: DType
+](
+    frames: UnsafePointer[Scalar[T], MutAnyOrigin],
+    deltas: UnsafePointer[Scalar[T], MutAnyOrigin],
+    n: Int,
+) -> BuiltSegment:
+    comptime TBYTES = 4 if T == DType.int32 else 8
+    var n_groups = ceildiv(n, BP_META_GROUP_SIZE)
+
+    var cap = 8 + 2 * TBYTES * n_groups + 4 * n_groups + 64
+    var buf = alloc[UInt8](cap)
+    for j in range(cap):
+        buf[j] = 0
+
+    var data_offs = alloc[Int](n_groups)
+    var cursor = 8
+    for g in range(n_groups):
+        data_offs[g] = cursor
+        # [T frame][T delta]
+        put_u64_t[T](buf, cursor, _bits_t[T](frames[g]))
+        put_u64_t[T](buf, cursor + TBYTES, _bits_t[T](deltas[g]))
+        cursor += 2 * TBYTES
+
+    var trailer_start = cursor
+    var metadata_end = trailer_start + n_groups * 4
+    for g in range(n_groups):
+        var encoded = (UInt32(BPMODE_CONSTANT_DELTA) << 24) | (
+            UInt32(data_offs[g]) & 0x00FFFFFF
+        )
+        var entry_off = metadata_end - (g + 1) * 4
+        put_u32(buf, entry_off, encoded)
+    put_u64(buf, 0, UInt64(metadata_end))
+
+    data_offs.free()
+    return BuiltSegment(buf, metadata_end, n_groups)
+
+
+# ---------------------------------------------------------------------------
+# Build a single DELTA_FOR BITPACKING segment in DuckDB byte layout from target
+# output values `vals`. Each metadata group is DELTA_FOR:
+#   [T frame][T width][T delta_offset][packed deltas LSB-first]
+# This is the EXACT inverse of DuckDB's encoder (storage/compression/bitpacking.cpp
+# BitpackingState::Flush + WriteDeltaFor) so the GPU decode round-trips:
+#   frame        = minimum_delta = min_{i in [1,rows)}(vals[g0+i] - vals[g0+i-1])
+#   delta_offset = vals[g0] - frame
+#   packed[0]    = 0
+#   packed[i]    = (vals[g0+i] - vals[g0+i-1]) - frame      (>= 0 by construction)
+#   width        = min_width(max packed)
+# Decode: out[i] = delta_offset + inclusive_prefix_sum_{j<=i}(frame + packed[j]).
+# ---------------------------------------------------------------------------
+def build_delta_for_segment[
+    T: DType
+](vals: UnsafePointer[Scalar[T], MutAnyOrigin], n: Int) -> BuiltSegment:
+    comptime TBYTES = 4 if T == DType.int32 else 8
+    var n_groups = ceildiv(n, BP_META_GROUP_SIZE)
+
+    # header + per group (3*T header + worst-case packed TBYTES/row) + trailer.
+    var cap = 8 + n * (TBYTES + 1) + 3 * TBYTES * n_groups + 4 * n_groups + 64
+    var buf = alloc[UInt8](cap)
+    for j in range(cap):
+        buf[j] = 0
+
+    var data_offs = alloc[Int](n_groups)
+    var cursor = 8
+    for g in range(n_groups):
+        var g0 = g * BP_META_GROUP_SIZE
+        var rows = BP_META_GROUP_SIZE if g0 + BP_META_GROUP_SIZE <= n else n - g0
+        data_offs[g] = cursor
+
+        # Signed deltas d[i] = vals[g0+i] - vals[g0+i-1] for i>=1.
+        # minimum_delta = min over i in [1, rows); for a 1-row group DuckDB would
+        # not pick DELTA_FOR, but keep it well-defined (frame=0).
+        var min_delta = Int64(0)
+        var have_delta = False
+        for i in range(1, rows):
+            var d = Int64(vals[g0 + i]) - Int64(vals[g0 + i - 1])
+            if (not have_delta) or d < min_delta:
+                min_delta = d
+                have_delta = True
+        var frame = min_delta  # frame_of_reference = minimum_delta (signed)
+
+        # delta_offset = vals[g0] - frame   (seed for the inclusive scan)
+        var delta_offset = Int64(vals[g0]) - frame
+
+        # packed[i] = (signed delta - frame); packed[0] := 0 (DuckDB sets
+        # delta_buffer[0] = minimum_delta, so packed[0] = min - min = 0).
+        var offs = alloc[UInt64](rows)
+        offs[0] = UInt64(0)
+        var max_off = UInt64(0)
+        for i in range(1, rows):
+            var d = Int64(vals[g0 + i]) - Int64(vals[g0 + i - 1])
+            var off_u = UInt64(d - frame)  # >= 0 since frame is the min delta
+            offs[i] = off_u
+            if off_u > max_off:
+                max_off = off_u
+        var width = min_width(max_off)
+
+        # [T frame][T width][T delta_offset]
+        var frame_bits: UInt64
+        comptime if T == DType.int32:
+            frame_bits = UInt64(UInt32(Int32(frame)))
+        else:
+            frame_bits = UInt64(Int64(frame))
+        var doff_bits: UInt64
+        comptime if T == DType.int32:
+            doff_bits = UInt64(UInt32(Int32(delta_offset)))
+        else:
+            doff_bits = UInt64(Int64(delta_offset))
+        put_u64_t[T](buf, cursor, frame_bits)
+        put_u64_t[T](buf, cursor + TBYTES, UInt64(width))
+        put_u64_t[T](buf, cursor + 2 * TBYTES, doff_bits)
+
+        var packed_off = cursor + 3 * TBYTES
+        var packed_words = ceildiv(rows * width, 32)
+        var packed_ptr = (buf + packed_off).bitcast[UInt32]()
+        pack_lsb_first(packed_ptr, offs, rows, width)
+        offs.free()
+        cursor += 3 * TBYTES + packed_words * 4
+
+    var trailer_start = cursor
+    var metadata_end = trailer_start + n_groups * 4
+    for g in range(n_groups):
+        var encoded = (UInt32(BPMODE_DELTA_FOR) << 24) | (
+            UInt32(data_offs[g]) & 0x00FFFFFF
+        )
+        var entry_off = metadata_end - (g + 1) * 4
+        put_u32(buf, entry_off, encoded)
+    put_u64(buf, 0, UInt64(metadata_end))
+
+    data_offs.free()
+    return BuiltSegment(buf, metadata_end, n_groups)
+
+
 # ---------------------------------------------------------------------------
 # Decode a built segment on the GPU and assert bit-exact equality with `vals`.
 # ---------------------------------------------------------------------------
-def run_bitpacking_case[
+# Decode an already-built segment on the GPU (one block per metadata group) and
+# assert bit-exact equality with `vals`. Frees seg.data.
+def run_built_segment[
     T: DType
 ](
     ctx: DeviceContext,
     name: String,
+    var seg: BuiltSegment,
     vals: UnsafePointer[Scalar[T], MutAnyOrigin],
     n: Int,
-    force_constant: Bool,
 ) raises -> Bool:
-    var seg = build_bitpacking_segment[T](vals, n, force_constant)
-
     # Upload raw segment bytes as uint8.
     var seg_d = ctx.enqueue_create_buffer[DType.uint8](seg.nbytes)
     var out_d = ctx.enqueue_create_buffer[T](n)
@@ -275,6 +423,45 @@ def run_bitpacking_case[
     out_h.free()
     seg.data.free()
     return ok
+
+
+def run_bitpacking_case[
+    T: DType
+](
+    ctx: DeviceContext,
+    name: String,
+    vals: UnsafePointer[Scalar[T], MutAnyOrigin],
+    n: Int,
+    force_constant: Bool,
+) raises -> Bool:
+    var seg = build_bitpacking_segment[T](vals, n, force_constant)
+    return run_built_segment[T](ctx, name, seg^, vals, n)
+
+
+def run_constant_delta_case[
+    T: DType
+](
+    ctx: DeviceContext,
+    name: String,
+    frames: UnsafePointer[Scalar[T], MutAnyOrigin],
+    deltas: UnsafePointer[Scalar[T], MutAnyOrigin],
+    vals: UnsafePointer[Scalar[T], MutAnyOrigin],
+    n: Int,
+) raises -> Bool:
+    var seg = build_constant_delta_segment[T](frames, deltas, n)
+    return run_built_segment[T](ctx, name, seg^, vals, n)
+
+
+def run_delta_for_case[
+    T: DType
+](
+    ctx: DeviceContext,
+    name: String,
+    vals: UnsafePointer[Scalar[T], MutAnyOrigin],
+    n: Int,
+) raises -> Bool:
+    var seg = build_delta_for_segment[T](vals, n)
+    return run_built_segment[T](ctx, name, seg^, vals, n)
 
 
 def run_uncompressed_case[
@@ -419,6 +606,99 @@ def main() raises:
     all_ok = run_uncompressed_case[DType.int64](
         ctx, "UNCOMPRESSED int64", v8, n8
     ) and all_ok
+
+    print("--- Phase D: CONSTANT_DELTA + DELTA_FOR ---")
+
+    # ---- CONSTANT_DELTA int32 (2 groups + short tail) ----
+    # Per-group arithmetic series: out[i] = frame_g + i*delta_g (group_offset
+    # resets to 0 at the start of each metadata group).
+    var nd1 = 2048 + 513
+    var ngd1 = ceildiv(nd1, BP_META_GROUP_SIZE)
+    var cd_frames32 = alloc[Int32](ngd1)
+    var cd_deltas32 = alloc[Int32](ngd1)
+    cd_frames32[0] = Int32(100000); cd_deltas32[0] = Int32(7)
+    cd_frames32[1] = Int32(-2500);  cd_deltas32[1] = Int32(-3)  # negative frame + delta
+    var vd1 = alloc[Int32](nd1)
+    for g in range(ngd1):
+        var g0 = g * BP_META_GROUP_SIZE
+        var rows = BP_META_GROUP_SIZE if g0 + BP_META_GROUP_SIZE <= nd1 else nd1 - g0
+        for i in range(rows):
+            vd1[g0 + i] = cd_frames32[g] + Int32(i) * cd_deltas32[g]
+    all_ok = run_constant_delta_case[DType.int32](
+        ctx, "CONSTANT_DELTA int32 (2 groups, short tail, neg delta)",
+        cd_frames32, cd_deltas32, vd1, nd1
+    ) and all_ok
+
+    # ---- CONSTANT_DELTA int64 (1 full group + 1-row tail) ----
+    var nd2 = 2048 + 1
+    var ngd2 = ceildiv(nd2, BP_META_GROUP_SIZE)
+    var cd_frames64 = alloc[Int64](ngd2)
+    var cd_deltas64 = alloc[Int64](ngd2)
+    cd_frames64[0] = Int64(5_000_000_000); cd_deltas64[0] = Int64(86400)
+    cd_frames64[1] = Int64(-9_000_000_000); cd_deltas64[1] = Int64(13)
+    var vd2 = alloc[Int64](nd2)
+    for g in range(ngd2):
+        var g0 = g * BP_META_GROUP_SIZE
+        var rows = BP_META_GROUP_SIZE if g0 + BP_META_GROUP_SIZE <= nd2 else nd2 - g0
+        for i in range(rows):
+            vd2[g0 + i] = cd_frames64[g] + Int64(i) * cd_deltas64[g]
+    all_ok = run_constant_delta_case[DType.int64](
+        ctx, "CONSTANT_DELTA int64 (2 groups, 1-row tail)",
+        cd_frames64, cd_deltas64, vd2, nd2
+    ) and all_ok
+
+    # ---- DELTA_FOR int32: near-monotonic series (l_orderkey-like) ----
+    # Mixed positive deltas with occasional jumps + a short final group.
+    var nf1 = 2048 + 777
+    var vf1 = alloc[Int32](nf1)
+    var stf = UInt64(0x2468)
+    var acc32 = Int32(50000)
+    for i in range(nf1):
+        acc32 = acc32 + Int32(1) + Int32(lcg(stf) % 40)  # strictly increasing, varied step
+        vf1[i] = acc32
+    all_ok = run_delta_for_case[DType.int32](
+        ctx, "DELTA_FOR int32 (2 groups, short tail, increasing)", vf1, nf1
+    ) and all_ok
+
+    # ---- DELTA_FOR int32: NON-monotonic (negative deltas mixed in) ----
+    var nf2 = 3000
+    var vf2 = alloc[Int32](nf2)
+    var stf2 = UInt64(0x13579)
+    var acc2 = Int32(0)
+    for i in range(nf2):
+        acc2 = acc2 + Int32(lcg(stf2) % 200) - Int32(100)  # delta in [-100, +99]
+        vf2[i] = acc2
+    all_ok = run_delta_for_case[DType.int32](
+        ctx, "DELTA_FOR int32 (non-monotonic, +/- deltas)", vf2, nf2
+    ) and all_ok
+
+    # ---- DELTA_FOR int64: large-magnitude near-monotonic (l_orderkey 8B-like) ----
+    var nf3 = 2048 + 100
+    var vf3 = alloc[Int64](nf3)
+    var stf3 = UInt64(0xCAFE)
+    var acc3 = Int64(1_000_000_000_000)
+    for i in range(nf3):
+        acc3 = acc3 + Int64(1) + Int64(lcg(stf3) % 1000)
+        vf3[i] = acc3
+    all_ok = run_delta_for_case[DType.int64](
+        ctx, "DELTA_FOR int64 (2 groups, short tail, increasing)", vf3, nf3
+    ) and all_ok
+
+    # ---- DELTA_FOR int64: decreasing series (all-negative deltas) ----
+    var nf4 = 2048
+    var vf4 = alloc[Int64](nf4)
+    var stf4 = UInt64(0xF00D)
+    var acc4 = Int64(9_000_000_000)
+    for i in range(nf4):
+        acc4 = acc4 - Int64(1) - Int64(lcg(stf4) % 500)
+        vf4[i] = acc4
+    all_ok = run_delta_for_case[DType.int64](
+        ctx, "DELTA_FOR int64 (decreasing, negative deltas)", vf4, nf4
+    ) and all_ok
+
+    cd_frames32.free(); cd_deltas32.free(); vd1.free()
+    cd_frames64.free(); cd_deltas64.free(); vd2.free()
+    vf1.free(); vf2.free(); vf3.free(); vf4.free()
 
     v32.free(); v64.free(); v3.free(); v4.free(); v5.free()
     v6.free(); v7.free(); v8.free()

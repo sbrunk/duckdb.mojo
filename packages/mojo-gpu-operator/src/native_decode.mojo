@@ -10,10 +10,10 @@ Two codecs are implemented here, comptime-specialized per element type T
 
   * UNCOMPRESSED fixed-width -- a straight device-to-device typed copy.
   * BITPACKING -- one CTA (block) per 2048-row metadata group. The block reads
-    the segment trailer for its group, recovers the per-group mode + (for FOR)
-    frame/width/data_off, then unpacks each row with `unpack_value` and adds the
-    frame. Modes CONSTANT and FOR are implemented; DELTA_FOR is deliberately
-    deferred (needs a prefix-sum) and routes to a deterministic zero-fill.
+    the segment trailer for its group, recovers the per-group mode + header,
+    then decodes each row. All four fixed-width modes are implemented:
+    CONSTANT, FOR, CONSTANT_DELTA, and DELTA_FOR (the last needs an in-group
+    prefix-sum). INVALID / unknown modes route to a deterministic zero-fill.
 
 BITPACKING byte layout per segment (matches DuckDB v1.5.3
 common/bitpacking.hpp + storage/compression/bitpacking.hpp and Sirius's
@@ -25,9 +25,20 @@ gpu_decode_bitpacking.cu):
                                                   low 24 bits = data_off,
                                                   high 8 bits = BitpackingMode
 
-  Group data (FOR):       [T frame][T width][packed...]   packed @ data_off+2*sizeof(T)
-                          out[i] = frame + unpack_value(width, i)
-  Group data (CONSTANT):  [T value]   broadcast to every row
+  Group data (FOR):            [T frame][T width][packed...]  packed @ data_off+2*sizeof(T)
+                               out[i] = frame + unpack_value(width, i)
+  Group data (CONSTANT):       [T value]   broadcast to every row
+  Group data (CONSTANT_DELTA): [T frame][T delta]   (no packed stream)
+                               out[i] = frame + i*delta
+  Group data (DELTA_FOR):      [T frame][T width][T delta_offset][packed...]
+                               packed @ data_off+3*sizeof(T). Decode = unpack
+                               each width-bit value, add frame to EACH, take the
+                               inclusive prefix-sum over the group, then add the
+                               delta_offset bias:
+                                 out[i] = delta_offset + sum_{j=0..i}(frame+unpack(j))
+                               (matches DuckDB ApplyFrameOfReference + DeltaDecode
+                               in storage/compression/bitpacking.cpp; the bias is
+                               folded into data[0] before the inclusive scan.)
 
 `unpack_value` is the single load-bearing bit-twiddle (LSB-first width-bit field
 extraction from a uint32 stream), ported exactly from Sirius
@@ -206,7 +217,15 @@ def bitpacking_decode_kernel[
     var sm_packed_off = stack_allocation[
         1, Scalar[DType.int32], address_space = AddressSpace.SHARED
     ]()
-    # Frame / constant value, carried as the unsigned bit-pattern of T.
+    # Frame (FOR / CONSTANT_DELTA / DELTA_FOR), carried as the unsigned bit-pattern of T.
+    var sm_frame = stack_allocation[
+        1, Scalar[UT], address_space = AddressSpace.SHARED
+    ]()
+    # Mode-overloaded aux value (unsigned bit-pattern of T):
+    #   CONSTANT       -> the constant value (broadcast to every output row)
+    #   CONSTANT_DELTA -> the per-row delta  (out[i] = frame + i*delta)
+    #   FOR            -> unused
+    #   DELTA_FOR      -> the initial prefix-sum bias (delta_offset)
     var sm_aux = stack_allocation[
         1, Scalar[UT], address_space = AddressSpace.SHARED
     ]()
@@ -218,6 +237,7 @@ def bitpacking_decode_kernel[
         sm_mode[0] = Int32(BPMODE_INVALID)
         sm_width[0] = 0
         sm_packed_off[0] = 0
+        sm_frame[0] = 0
         sm_aux[0] = 0
 
         var metadata_end = Int(_load_u64(seg, 0))
@@ -235,18 +255,27 @@ def bitpacking_decode_kernel[
 
             # Bound the unconditional 2*sizeof(T) header read.
             if data_off + 2 * TBYTES <= metadata_end:
+                # v0 / v1 are read unconditionally for every header below; v2
+                # (DELTA_FOR's delta_offset) is read with an extra bound check.
+                var v0 = UInt64(0)
+                for b in range(TBYTES):
+                    v0 |= UInt64(seg[data_off + b]) << UInt64(8 * b)
+                var v1 = UInt64(0)
+                for b in range(TBYTES):
+                    v1 |= UInt64(seg[data_off + TBYTES + b]) << UInt64(8 * b)
+
                 if parsed_mode == BPMODE_CONSTANT:
                     # [T value]
-                    var v = UInt64(0)
-                    for b in range(TBYTES):
-                        v |= UInt64(seg[data_off + b]) << UInt64(8 * b)
                     sm_mode[0] = Int32(BPMODE_CONSTANT)
-                    sm_aux[0] = v.cast[UT]()
+                    sm_aux[0] = v0.cast[UT]()
+                elif parsed_mode == BPMODE_CONSTANT_DELTA:
+                    # [T frame][T delta]   (no packed stream)
+                    #   out[i] = frame + i*delta
+                    sm_mode[0] = Int32(BPMODE_CONSTANT_DELTA)
+                    sm_frame[0] = v0.cast[UT]()
+                    sm_aux[0] = v1.cast[UT]()
                 elif parsed_mode == BPMODE_FOR:
                     # [T frame][T width][packed...]
-                    var frame = UInt64(0)
-                    for b in range(TBYTES):
-                        frame |= UInt64(seg[data_off + b]) << UInt64(8 * b)
                     var width = Int(seg[data_off + TBYTES])  # width fits in 1 byte
                     var packed_off = data_off + 2 * TBYTES
                     var valid = width <= TBYTES * 8
@@ -258,8 +287,32 @@ def bitpacking_decode_kernel[
                             sm_mode[0] = Int32(BPMODE_FOR)
                             sm_width[0] = Int32(width)
                             sm_packed_off[0] = Int32(packed_off)
-                            sm_aux[0] = frame.cast[UT]()
-                # CONSTANT_DELTA / DELTA_FOR / INVALID / unknown: leave INVALID.
+                            sm_frame[0] = v0.cast[UT]()
+                elif parsed_mode == BPMODE_DELTA_FOR:
+                    # [T frame][T width][T delta_offset][packed...]
+                    # DELTA_FOR adds a third T (delta_offset) before the packed
+                    # stream -- re-bound to catch tight segments where the third
+                    # read would alias the metadata trailer.
+                    if data_off + 3 * TBYTES <= metadata_end:
+                        var width = Int(seg[data_off + TBYTES])  # width fits in 1 byte
+                        var delta_off_u = UInt64(0)
+                        for b in range(TBYTES):
+                            delta_off_u |= (
+                                UInt64(seg[data_off + 2 * TBYTES + b])
+                                << UInt64(8 * b)
+                            )
+                        var packed_off = data_off + 3 * TBYTES
+                        var valid = width <= TBYTES * 8
+                        if valid:
+                            var packed_words = ceildiv(group_rows * width, 32)
+                            var packed_end = packed_off + packed_words * 4
+                            if packed_end <= metadata_end:
+                                sm_mode[0] = Int32(BPMODE_DELTA_FOR)
+                                sm_width[0] = Int32(width)
+                                sm_packed_off[0] = Int32(packed_off)
+                                sm_frame[0] = v0.cast[UT]()
+                                sm_aux[0] = delta_off_u.cast[UT]()
+                # INVALID / AUTO / unknown: leave INVALID.
     barrier()
 
     var mode = Int(sm_mode[0])
@@ -273,23 +326,86 @@ def bitpacking_decode_kernel[
             i += nthreads
         return
 
-    if mode != BPMODE_FOR:
-        # DELTA_FOR / INVALID / unknown -> deterministic zero-fill.
+    if mode == BPMODE_CONSTANT_DELTA:
+        # out[i] = frame + i*delta, in the unsigned (two's-complement) domain to
+        # match DuckDB's CONSTANT_DELTA reconstruction:
+        #   target[i] = constant * (group_offset + i) + frame_of_reference
+        # group_offset is 0 at the start of each metadata group (one CTA = one
+        # group), so it reduces to frame + i*delta.
+        var frame_u = sm_frame[0]
+        var delta_u = sm_aux[0]
         var i = tid
         while i < group_rows:
-            dst[out_base + i] = Scalar[T](0)
+            var summed = frame_u + UInt64(i).cast[UT]() * delta_u
+            dst[out_base + i] = bitcast[T, 1](summed)
             i += nthreads
         return
 
-    # FOR: out[i] = frame + unpack_value(width, i).
-    # Do the add in the UNSIGNED domain (two's-complement wrap matches DuckDB's
-    # frame-of-reference decode) then reinterpret the bits to the signed T.
-    var width = Int(sm_width[0])
-    var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
-    var frame_u = sm_aux[0]  # frame as the unsigned bit-pattern of T
+    if mode == BPMODE_FOR:
+        # FOR: out[i] = frame + unpack_value(width, i).
+        # Do the add in the UNSIGNED domain (two's-complement wrap matches DuckDB's
+        # frame-of-reference decode) then reinterpret the bits to the signed T.
+        var width = Int(sm_width[0])
+        var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
+        var frame_u = sm_frame[0]  # frame as the unsigned bit-pattern of T
+        var i = tid
+        while i < group_rows:
+            var raw = unpack_value(packed, i, width)  # UInt64 offset
+            var summed = frame_u + raw.cast[UT]()
+            dst[out_base + i] = bitcast[T, 1](summed)
+            i += nthreads
+        return
+
+    if mode == BPMODE_DELTA_FOR:
+        # DELTA_FOR: out[i] = delta_offset + sum_{j=0..i}(frame + unpack(j)),
+        # i.e. an INCLUSIVE prefix-sum (within the 2048-row metadata group) of
+        # the frame-of-reference-decoded deltas, seeded with delta_offset.
+        #
+        # This matches DuckDB's per-algorithm-group decode (bitpacking.cpp):
+        #   ApplyFrameOfReference(buf, frame, n)  -> buf[k] += frame
+        #   DeltaDecode(buf, prev_delta, n)       -> buf[0] += prev_delta; inclusive scan
+        #   prev_delta = buf[n-1]  (carries across the 32-value algorithm groups)
+        # Carried across all algorithm groups in the metadata group, the running
+        # bias starts at the header's delta_offset, so it folds into a single
+        # group-wide inclusive scan seeded with delta_offset. All arithmetic is
+        # done in the unsigned (two's-complement) domain.
+        #
+        # Shared scratch holds frame-decoded deltas, then the prefix sums. A
+        # single-thread serial scan over <= BP_META_GROUP_SIZE elements keeps
+        # this bulletproof for arbitrary block_dim / short tails (correctness
+        # over cleverness; portable, no warp/scan intrinsics).
+        var sm_scan = stack_allocation[
+            BP_META_GROUP_SIZE, Scalar[UT], address_space = AddressSpace.SHARED
+        ]()
+        var width = Int(sm_width[0])
+        var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
+        var frame_u = sm_frame[0]
+
+        # Stage 1 (parallel): each thread frame-decodes its strided rows.
+        var i = tid
+        while i < group_rows:
+            var raw = unpack_value(packed, i, width)
+            sm_scan[i] = frame_u + raw.cast[UT]()
+            i += nthreads
+        barrier()
+
+        # Stage 2 (serial, thread 0): inclusive prefix-sum seeded with delta_offset.
+        if tid == 0:
+            var running = sm_aux[0]  # delta_offset bias
+            for k in range(group_rows):
+                running = running + sm_scan[k]
+                sm_scan[k] = running
+        barrier()
+
+        # Stage 3 (parallel): write the scanned values out.
+        var j = tid
+        while j < group_rows:
+            dst[out_base + j] = bitcast[T, 1](sm_scan[j])
+            j += nthreads
+        return
+
+    # INVALID / AUTO / unknown -> deterministic zero-fill.
     var i = tid
     while i < group_rows:
-        var raw = unpack_value(packed, i, width)  # UInt64 offset
-        var summed = frame_u + raw.cast[UT]()
-        dst[out_base + i] = bitcast[T, 1](summed)
+        dst[out_base + i] = Scalar[T](0)
         i += nthreads
