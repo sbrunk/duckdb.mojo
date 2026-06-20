@@ -96,6 +96,9 @@ gpu-op-native-decode-test = "mojo run -I packages/mojo-gpu-operator/src packages
 # Bounded-LRU pin-cache eviction test (feature #4): pin > budget, assert eviction
 # via gpu_pin_status, then assert an evicted kNN query cold-rebuilds correctly.
 gpu-op-pin-evict-test = "bash packages/mojo-gpu-operator/bench/pin_evict_test.sh"
+# Phase 2 cost-aware placement A/B: drives one pool state through both eviction
+# pickers (keep-benefit vs LRU pick opposite victims) + promotion. Needs a GPU.
+gpu-op-costaware-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/colpool_costaware_test.mojo"
 # Stage-2 shuttle tests: drive the FULL descriptor C-ABI (build->materialize->feed
 # ->finalize) bit-exact vs a CPU int128 reference. Q14 adds the FK-join dim path.
 gpu-op-q6shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo"

@@ -271,6 +271,13 @@ int64_t mojo_gpu_colpool_uploaded_bytes();
 // by the tracked aggregate residency (_pin2). For the VRAM-bound assertion.
 int64_t mojo_gpu_colpool_pool_bytes();
 int64_t mojo_gpu_colpool_pin2_bytes();
+// Phase 2 cost-aware placement observability (all diagnostic-only).
+int64_t mojo_gpu_colpool_hits();
+int64_t mojo_gpu_colpool_misses();
+int64_t mojo_gpu_colpool_evictions();
+int64_t mojo_gpu_colpool_resident_cols();
+int64_t mojo_gpu_colpool_promoted_cols();
+int64_t mojo_gpu_colpool_costaware();
 }
 
 namespace duckdb {
@@ -3103,6 +3110,14 @@ struct GpuColPoolStatusBindData : public TableFunctionData {
   int64_t pool_bytes = 0;
   int64_t pin2_bytes = 0;
   int64_t budget_mb = 0;
+  // Phase 2 cost-aware placement observability (appended after the Phase 1
+  // columns so existing positional selects keep working).
+  int64_t hits = 0;
+  int64_t misses = 0;
+  int64_t evictions = 0;
+  int64_t resident_cols = 0;
+  int64_t promoted_cols = 0;
+  int64_t costaware = 0;
 };
 
 unique_ptr<FunctionData> GpuColPoolStatusBind(ClientContext &, TableFunctionBindInput &,
@@ -3112,9 +3127,19 @@ unique_ptr<FunctionData> GpuColPoolStatusBind(ClientContext &, TableFunctionBind
   bd->pool_bytes = mojo_gpu_colpool_pool_bytes();
   bd->pin2_bytes = mojo_gpu_colpool_pin2_bytes();
   bd->budget_mb = NumericCast<int64_t>(PinBudgetBytes() / (1024ull * 1024ull));
+  bd->hits = mojo_gpu_colpool_hits();
+  bd->misses = mojo_gpu_colpool_misses();
+  bd->evictions = mojo_gpu_colpool_evictions();
+  bd->resident_cols = mojo_gpu_colpool_resident_cols();
+  bd->promoted_cols = mojo_gpu_colpool_promoted_cols();
+  bd->costaware = mojo_gpu_colpool_costaware();
   return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
                   LogicalType::BIGINT};
-  names = {"uploaded_bytes", "pool_bytes", "pin2_bytes", "budget_mb"};
+  names = {"uploaded_bytes", "pool_bytes", "pin2_bytes", "budget_mb",
+           "hits", "misses", "evictions", "resident_cols", "promoted_cols",
+           "costaware"};
   return std::move(bd);
 }
 
@@ -3126,6 +3151,12 @@ void GpuColPoolStatusFunc(ClientContext &, TableFunctionInput &data, DataChunk &
   FlatVector::GetData<int64_t>(output.data[1])[0] = bd.pool_bytes;
   FlatVector::GetData<int64_t>(output.data[2])[0] = bd.pin2_bytes;
   FlatVector::GetData<int64_t>(output.data[3])[0] = bd.budget_mb;
+  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.hits;
+  FlatVector::GetData<int64_t>(output.data[5])[0] = bd.misses;
+  FlatVector::GetData<int64_t>(output.data[6])[0] = bd.evictions;
+  FlatVector::GetData<int64_t>(output.data[7])[0] = bd.resident_cols;
+  FlatVector::GetData<int64_t>(output.data[8])[0] = bd.promoted_cols;
+  FlatVector::GetData<int64_t>(output.data[9])[0] = bd.costaware;
   output.SetCardinality(1);
   gs.offset += 1;
 }

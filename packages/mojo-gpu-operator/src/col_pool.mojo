@@ -32,6 +32,7 @@ consistently behind the single pool-state pointer.
 from std.ffi import _Global
 from std.collections import Dict
 from std.gpu.host import DeviceContext, DeviceBuffer
+from std.os import getenv
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,15 @@ struct ColPoolState(Movable):
     # gpu_kernels keeps these in lockstep with _pin2 (only when the flag is on).
     var pin2_keys: List[String]
     var pin2_bytes: Int
+    # Phase 2 (cost-aware placement) observability counters. Monotonic over the
+    # process lifetime; surfaced via gpu_colpool_status(). Diagnostic only -- they
+    # never feed back into a decision, so they cannot affect results. `hits` /
+    # `misses` count column-level resident reuse vs cold uploads (the hot-set
+    # hit-rate); `evictions` counts pooled columns dropped under budget pressure
+    # by EITHER policy (the LRU-vs-keep-benefit A/B reads this).
+    var hits: Int
+    var misses: Int
+    var evictions: Int
 
     def __init__(out self):
         self.cols = Dict[String, PooledColumn]()
@@ -141,6 +151,9 @@ struct ColPoolState(Movable):
         self.uploaded_bytes = Int64(0)
         self.pin2_keys = []
         self.pin2_bytes = 0
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
 
 
 def _make_col_pool() -> ColPoolState:
@@ -178,6 +191,47 @@ def pool_bytes() raises -> Int:
 # ---------------------------------------------------------------------------
 def uploaded_bytes() raises -> Int64:
     return col_pool_ptr()[].uploaded_bytes
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 observability accessors (surfaced via gpu_colpool_status). All are
+# diagnostic-only reads of the monotonic counters / live pool state.
+# ---------------------------------------------------------------------------
+def pool_hits() raises -> Int:
+    return col_pool_ptr()[].hits
+
+
+def pool_misses() raises -> Int:
+    return col_pool_ptr()[].misses
+
+
+def pool_evictions() raises -> Int:
+    return col_pool_ptr()[].evictions
+
+
+# Number of columns currently resident in the pool.
+def pool_resident_cols() raises -> Int:
+    ref st = col_pool_ptr()[]
+    var n = 0
+    for k in st.cols:  # key iteration (see pool_bytes note)
+        _ = k
+        n += 1
+    return n
+
+
+# Number of resident columns that are "promoted" (access_count >= the promotion
+# threshold). 0 when promotion is disabled (threshold 0). Lets the A/B confirm
+# the hot set the cost-aware policy is protecting.
+def pool_promoted_cols() raises -> Int:
+    var threshold = _promote_threshold()
+    if threshold <= 0:
+        return 0
+    ref st = col_pool_ptr()[]
+    var n = 0
+    for k in st.cols:  # key iteration (see pool_bytes note)
+        if st.cols[k].access_count >= threshold:
+            n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +274,7 @@ def col_pool_lease(key: String) raises -> Bool:
     st.cols[key].last_use = st.tick
     st.cols[key].access_count += 1
     st.cols[key].refcount += 1
+    st.hits += 1  # skip-materialize resident reuse (counts toward hit-rate)
     return True
 
 
@@ -289,6 +344,93 @@ def _has_prefix(s: String, prefix: String) -> Bool:
     return True
 
 
+# ===-------------------------------------------------------------------===#
+# Phase 2 -- cost-aware placement (RESIDENT_POOL_PLAN.md §C, the Mordred lever).
+#
+# Plain LRU evicts the oldest-touched column regardless of how often it is reused
+# or how expensive it is to reload. The cost-aware policy instead evicts the
+# column with the lowest KEEP-BENEFIT, a knapsack value-density:
+#
+#     keep_benefit(col) = access_count * reload_cost(col) / bytes(col)
+#         reload_cost(col) ~= FIXED_OVERHEAD_US + bytes / H2D_BANDWIDTH
+#
+# i.e. value (how often we avoid a reload * how costly that reload is) per unit
+# of VRAM. Hot, expensive-to-reload, not-too-large columns score high and stay;
+# cold/cheap/huge ones score low and evict first. The fixed per-upload overhead
+# makes small columns relatively MORE valuable per byte (the launch/latency floor
+# dominates a tiny transfer), matching the "keep hot small columns" intuition.
+#
+# CORRECTNESS: eviction only changes WHICH column is cold-rebuilt on its next
+# touch (invariant #2: evicted => COLD re-upload => slower, never wrong). So this
+# is free of result risk; it is a residency-management lever, not a math change.
+# Gated by GPU_OP_COLPOOL_COSTAWARE so plain LRU stays the default + the A/B is
+# clean. All model parameters are env-tunable (Apple unified-mem vs NVIDIA PCIe
+# have very different reload_cost -- calibrate per platform).
+# ===-------------------------------------------------------------------===#
+
+# Cost-aware policy gate. Composes with GPU_OP_COLPOOL=1|2 (it only swaps the
+# eviction victim selection). Off => evict_victim falls back to plain LRU.
+def costaware_on() -> Bool:
+    return getenv("GPU_OP_COLPOOL_COSTAWARE", "") != ""
+
+
+# Fixed per-upload overhead (microseconds): the H2D launch/latency floor a reload
+# pays regardless of size. Env GPU_OP_COLPOOL_RELOAD_FIXED_US (default 10.0).
+def _reload_fixed_us() -> Float64:
+    var env = getenv("GPU_OP_COLPOOL_RELOAD_FIXED_US", "")
+    if env != "":
+        try:
+            var v = atof(env)
+            if v >= 0.0:
+                return v
+        except:
+            pass
+    return 10.0
+
+
+# Effective H2D bandwidth in BYTES PER MICROSECOND. Env
+# GPU_OP_COLPOOL_RELOAD_BW_GBPS gives GB/s (1 GB/s == 1000 bytes/us); default
+# 12 GB/s (pageable PCIe gen3-ish; Apple unified is much higher -- recalibrate
+# there, e.g. 100+). Clamped > 0 so reload_cost is finite.
+def _reload_bw_bytes_per_us() -> Float64:
+    var gbps = 12.0
+    var env = getenv("GPU_OP_COLPOOL_RELOAD_BW_GBPS", "")
+    if env != "":
+        try:
+            var v = atof(env)
+            if v > 0.0:
+                gbps = v
+        except:
+            pass
+    return gbps * 1000.0
+
+
+# Promotion threshold: a resident column whose access_count reaches this is
+# "promoted" and survives budget pressure as long as ANY non-promoted column is
+# evictable (proactive data placement -- keep proven-hot columns pinned). Env
+# GPU_OP_COLPOOL_PROMOTE_HITS (default 4); 0 disables promotion (pure benefit
+# ranking). Promotion is a PREFERENCE, not a hard pin: if every evictable column
+# is promoted we still evict the lowest-benefit one (never OOM over a preference).
+def _promote_threshold() -> Int:
+    var env = getenv("GPU_OP_COLPOOL_PROMOTE_HITS", "")
+    if env != "":
+        try:
+            var v = Int(env)
+            if v >= 0:
+                return v
+        except:
+            pass
+    return 4
+
+
+# keep_benefit for one resident column. Higher = more worth keeping. Pure
+# function of the column's tracked stats + the env reload model; no mutation.
+def keep_benefit(access_count: Int, bytes: Int) -> Float64:
+    var b = Float64(bytes if bytes > 0 else 1)
+    var reload_cost = _reload_fixed_us() + b / _reload_bw_bytes_per_us()
+    return Float64(access_count) * reload_cost / b
+
+
 # ---------------------------------------------------------------------------
 # evict_lru: free the least-recently-used EVICTABLE (refcount == 0) pooled
 # column. Returns its freed byte count, or 0 if nothing is evictable (every
@@ -311,7 +453,83 @@ def evict_lru() raises -> Int:
         return 0
     var freed = st.cols[victim_key].bytes
     _ = st.cols.pop(victim_key)  # drops the DeviceBuffer -> frees VRAM
+    st.evictions += 1
     return freed
+
+
+# ---------------------------------------------------------------------------
+# evict_by_keep_benefit: cost-aware eviction. Free the EVICTABLE (refcount == 0)
+# pooled column with the LOWEST keep_benefit, preferring non-promoted columns.
+# Two-pass:
+#   1. among non-promoted evictable columns, pick min keep_benefit (tiebreak:
+#      older last_use) -- the usual case.
+#   2. only if every evictable column is promoted, pick min keep_benefit among
+#      those (promotion yields under genuine pressure -- never OOM over it).
+# Returns freed bytes, or 0 if nothing is evictable. Mirrors evict_lru's contract
+# (refcount>0 never evicted; counts the eviction) so it is a drop-in victim picker.
+# ---------------------------------------------------------------------------
+def evict_by_keep_benefit() raises -> Int:
+    ref st = col_pool_ptr()[]
+    var threshold = _promote_threshold()
+    var victim_key = String("")
+    var have = False
+    var best_score = Float64(0)
+    var best_tick = 0
+    # promoted_fallback_* tracks the lowest-benefit PROMOTED victim, used only if
+    # no non-promoted column is evictable.
+    var fb_key = String("")
+    var have_fb = False
+    var fb_score = Float64(0)
+    var fb_tick = 0
+    for k in st.cols:  # key iteration (see pool_bytes note)
+        if st.cols[k].refcount > 0:
+            continue  # in flight; never evict (correctness invariant)
+        var ac = st.cols[k].access_count
+        var by = st.cols[k].bytes
+        var score = keep_benefit(ac, by)
+        var lu = st.cols[k].last_use
+        var promoted = threshold > 0 and ac >= threshold
+        if promoted:
+            # candidate only for the fallback pass
+            if (not have_fb) or score < fb_score or (
+                score == fb_score and lu < fb_tick
+            ):
+                fb_score = score
+                fb_tick = lu
+                fb_key = k
+                have_fb = True
+            continue
+        # non-promoted: the preferred victim pool. Min score, older tick breaks ties.
+        if (not have) or score < best_score or (
+            score == best_score and lu < best_tick
+        ):
+            best_score = score
+            best_tick = lu
+            victim_key = k
+            have = True
+    if not have:
+        # No non-promoted evictable column: fall back to the lowest-benefit
+        # promoted one (promotion yields under real pressure).
+        if not have_fb:
+            return 0  # everything is leased / in flight
+        victim_key = fb_key
+    var freed = st.cols[victim_key].bytes
+    _ = st.cols.pop(victim_key)  # drops the DeviceBuffer -> frees VRAM
+    st.evictions += 1
+    return freed
+
+
+# ---------------------------------------------------------------------------
+# evict_victim: the policy dispatcher every budget-pressure call site uses. Picks
+# cost-aware keep-benefit eviction when GPU_OP_COLPOOL_COSTAWARE is set, else the
+# default plain LRU. Returns freed bytes (0 if nothing evictable). Both callers
+# (_colpool_make_room in gpu_kernels.mojo and ensure_column's OOM-retry) route
+# through here so the policy applies uniformly.
+# ---------------------------------------------------------------------------
+def evict_victim() raises -> Int:
+    if costaware_on():
+        return evict_by_keep_benefit()
+    return evict_lru()
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +659,7 @@ def ensure_column(
         st.cols[key].last_use = st.tick
         st.cols[key].access_count += 1
         st.cols[key].refcount += 1
+        st.hits += 1
         return EnsureResult(True, True, st.cols[key].buf)  # refcounted handle
 
     # ---- MISS: upload the one column once into its own int64 buffer. ----
@@ -454,7 +673,7 @@ def ensure_column(
             dev = ctx.enqueue_create_buffer[DType.int64](n)
             break
         except:
-            var freed = evict_lru()
+            var freed = evict_victim()
             if freed == 0:
                 # Nothing evictable and the alloc failed -> not poolable now.
                 return EnsureResult(
@@ -471,6 +690,7 @@ def ensure_column(
     pc.last_use = st.tick
     pc.access_count = 1
     pc.refcount = 1  # leased by the in-flight query that just inserted it
+    st.misses += 1
     st.uploaded_bytes += Int64(pc.bytes)
     var ret = pc.buf  # cheap refcounted handle copy before moving into the map
     st.cols[key] = pc^

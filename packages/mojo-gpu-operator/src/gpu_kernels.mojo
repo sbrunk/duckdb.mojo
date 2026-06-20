@@ -101,9 +101,15 @@ from col_pool import (
     col_key,
     ensure_column,
     release_lease,
-    evict_lru,
+    evict_victim,
     pool_bytes,
     uploaded_bytes as col_pool_uploaded_bytes,
+    pool_hits,
+    pool_misses,
+    pool_evictions,
+    pool_resident_cols,
+    pool_promoted_cols,
+    costaware_on as col_pool_costaware_on,
     pin2_register,
     pin2_unregister,
     pin2_resident_bytes,
@@ -539,6 +545,59 @@ def mojo_gpu_colpool_pin2_bytes() abi("C") -> Int64:
         return Int64(pin2_resident_bytes())
     except:
         return Int64(0)
+
+
+# Phase 2 (cost-aware placement) observability. All diagnostic-only counters /
+# live-state reads surfaced through gpu_colpool_status(); none feed back into a
+# decision, so they cannot affect results.
+# `hits`/`misses` are the column-level resident-reuse vs cold-upload counts (the
+# hot-set hit-rate); `evictions` is the pooled-column drop count under budget
+# pressure (the LRU-vs-keep-benefit A/B reads this); `resident_cols` /
+# `promoted_cols` describe the current pool population; `costaware` echoes whether
+# the cost-aware eviction policy is active.
+@export("mojo_gpu_colpool_hits")
+def mojo_gpu_colpool_hits() abi("C") -> Int64:
+    try:
+        return Int64(pool_hits())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_misses")
+def mojo_gpu_colpool_misses() abi("C") -> Int64:
+    try:
+        return Int64(pool_misses())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_evictions")
+def mojo_gpu_colpool_evictions() abi("C") -> Int64:
+    try:
+        return Int64(pool_evictions())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_resident_cols")
+def mojo_gpu_colpool_resident_cols() abi("C") -> Int64:
+    try:
+        return Int64(pool_resident_cols())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_promoted_cols")
+def mojo_gpu_colpool_promoted_cols() abi("C") -> Int64:
+    try:
+        return Int64(pool_promoted_cols())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_costaware")
+def mojo_gpu_colpool_costaware() abi("C") -> Int64:
+    return Int64(1) if col_pool_costaware_on() else Int64(0)
 
 
 # ===-------------------------------------------------------------------===#
@@ -2325,8 +2384,10 @@ def _colpool_make_room(need: Int) raises:
         if resident + need <= budget:
             return
         # Prefer evicting pooled columns (cheap to D2D-refill on a later cold
-        # miss) over the cached aggregate residency.
-        var freed = evict_lru()
+        # miss) over the cached aggregate residency. evict_victim() applies the
+        # cost-aware keep-benefit policy when GPU_OP_COLPOOL_COSTAWARE is set,
+        # else plain LRU (Phase 1 default).
+        var freed = evict_victim()
         if freed > 0:
             continue
         # No evictable pooled column left -> drop an aggregate residency.
