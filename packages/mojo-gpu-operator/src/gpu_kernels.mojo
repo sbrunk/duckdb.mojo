@@ -2026,6 +2026,16 @@ struct GpuPinned(Movable):
     # Slot order: [ship_slot, disc_slot, qty_slot].
     var q6_pred: Bool
     var q6_pred_slots: List[Int]
+    # --- Phase G Stage 2 (generalized): Q1/Q14 predicate-independent residency ---
+    # When `gen_pred` is True, the row filter is the general in-kernel fact-range
+    # predicate evaluated from the resident columns + the CURRENT query's bounds.
+    # The constant-INDEPENDENT part lives in the cache entry: `gen_pred_slots[p]`
+    # and `gen_pred_cmps[p]` for each fact filter `p` (in descriptor order). The
+    # constant-DEPENDENT bounds do NOT (they are threaded into _assemble fresh from
+    # the live descriptor each run, aligned to the same descriptor-filter order).
+    var gen_pred: Bool
+    var gen_pred_slots: List[Int]
+    var gen_pred_cmps: List[Int64]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2058,6 +2068,9 @@ struct GpuPinned(Movable):
         self.kind = KIND_UNKNOWN
         self.q6_pred = False
         self.q6_pred_slots = []
+        self.gen_pred = False
+        self.gen_pred_slots = []
+        self.gen_pred_cmps = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2082,15 +2095,37 @@ def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutAnyOrigin]:
 # descriptor. When `gp.q6_pred` is False the spec is ignored (stock pass-column
 # path). The slots come from the cache entry (constant-independent); the bounds
 # from `q6_bounds`.
+#
+# Phase G Stage 2 (generalized): `gen_bounds` carries the CURRENT query's Q1/Q14
+# fact-range filter bounds (one int64 per fact filter, in descriptor order) when
+# `gp.gen_pred` is set. Like `q6_bounds`, they are threaded fresh from the live
+# descriptor every run; the constant-INDEPENDENT slots + cmps come from the cache
+# entry. The (slot,cmp,bound) triples are assembled here into `fpred_list`.
 def _assemble(
     mut dst: GpuExecState,
     mut gp: GpuPinned,
     q6_bounds: Q6PredSpec = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0),
+    gen_bounds: List[Int64] = [],
 ) raises:
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
     var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
     var ds = gp.q6_pred_slots[1] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
     var qs = gp.q6_pred_slots[2] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
+    # Generalized Q1/Q14 in-kernel predicate. Assemble (slot,cmp,bound) triples
+    # from the cached slots+cmps + the live bounds (same descriptor-filter order).
+    var gen_active = (
+        gp.gen_pred
+        and (gp.kind == KIND_Q1 or gp.kind == KIND_Q14)
+        and len(gp.gen_pred_slots) == len(gen_bounds)
+        and len(gp.gen_pred_slots) == len(gp.gen_pred_cmps)
+        and len(gp.gen_pred_slots) > 0
+    )
+    var fpred_list: List[Int64] = []
+    if gen_active:
+        for p in range(len(gp.gen_pred_slots)):
+            fpred_list.append(Int64(gp.gen_pred_slots[p]))
+            fpred_list.append(gp.gen_pred_cmps[p])
+            fpred_list.append(gen_bounds[p])
     var sums = segreduce_run(
         gp.res,
         gp.mode,
@@ -2113,6 +2148,8 @@ def _assemble(
         q6_disc_lo=q6_bounds.disc_lo,
         q6_disc_hi=q6_bounds.disc_hi,
         q6_qty_hi=q6_bounds.qty_hi,
+        gen_pred_active=gen_active,
+        fpred_list=fpred_list^,
     )
 
     var n_cols = gp.n_cols
@@ -2591,6 +2628,29 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(p.cmp))
                 )
         sig += "|q6_pred=1"
+        return sig
+    # Phase G Stage 2 (generalized): the same const-decoupling for the canonical
+    # Q1/Q14 fact-range filter. The resident columns' CONTENT is filter-const-
+    # independent (materialize SQL has no WHERE) and the fact filter is evaluated
+    # in-kernel from per-run bounds; Q14's promo dim array is itself constant-
+    # independent (p_type LIKE 'PROMO%'). So EXCLUDE the fact filter constants
+    # (keep cmp+column structure) -> distinct-constant Q1/Q14 map to one signature.
+    # The dim edges (already folded above) + cmp/column shape still key a genuinely
+    # different predicate STRUCTURE distinctly. Distinct per-kind tag.
+    if _gen_pred_enabled(d):
+        for gi in range(len(d.gets)):
+            ref g = d.gets[gi]
+            for fi in range(len(g.filters)):
+                ref p = g.filters[fi]
+                sig += (
+                    "|gpf="
+                    + p.col.table
+                    + "."
+                    + p.col.column
+                    + ":"
+                    + String(Int(p.cmp))
+                )
+        sig += "|gen_pred=" + String(Int(d.kind))
         return sig
     # Filter CONSTANTS: every GET's predicates (fact AND dim) by table.column,
     # cmp, and the const lo/hi (+ str_val for VARCHAR consts). This is what makes
@@ -3208,6 +3268,107 @@ def _q6_pred_enabled(d: GpuPlanDescriptor) -> Bool:
     return _q6_pred_spec(d).eligible
 
 
+# ---------------------------------------------------------------------------
+# Phase G Stage 2 (generalized): Q1 / Q14 predicate-independent residency.
+#
+# Unlike Q6 (resolved to fixed named role slots), Q1 and Q14 have a SIMPLE fact
+# range filter that the generic finalize already collects as a list of fact
+# filters in descriptor order. The constant-INDEPENDENT part (which resident
+# column slot + which cmp) is cached; the constant-DEPENDENT bounds are threaded
+# fresh per run. So the "spec" splits into:
+#   * `_gen_pred_eligible(d)` -- a structural gate (kind/strategy + the exact
+#     canonical fact-filter shape) used by `_signature` and the finalize. ANY
+#     deviation -> False -> the caller stays on the per-constant pass-column path
+#     (still correct, just not warm-across-constants).
+#   * `_gen_pred_bounds(d)` -- the per-run bounds (one int64 per fact filter, in
+#     the SAME descriptor order the finalize collects f_slot/f_cmp), threaded into
+#     _assemble. The slots+cmps are cached on the COLD path (where col_slot is
+#     available) into gp.gen_pred_slots / gp.gen_pred_cmps.
+#
+# Canonical shapes (must match EXACTLY or eligible=False):
+#   Q1 (KIND_Q1, DENSE_GROUP): every fact filter is on `l_shipdate` (one column),
+#     all CMP_LE/CMP_LT/CMP_GE/CMP_GT (range, no EQ/NE). TPC-H Q1 is a single
+#     `l_shipdate <= cutoff`; we accept any all-range single-column shipdate filter
+#     set since the in-kernel eval is the exact host _pred_pass per filter.
+#   Q14 (KIND_Q14, UNGROUPED + dims): every fact filter is on `l_shipdate`, all
+#     range (Q14 is `l_shipdate >= lo AND l_shipdate < hi`). The promo dim gather
+#     stays in the metric programs (constant-independent), untouched.
+# Both require: >=1 fact filter, ALL fact filters range-only, all on ONE fact
+# column, and NO non-fact-table filters that are range predicates folded into the
+# fact pass (Q14's dim promo flag is a dim ARRAY, not a fact filter, so it does
+# not appear in the fact-filter list -- correctly excluded here).
+def _gen_pred_eligible(d: GpuPlanDescriptor) -> Bool:
+    if d.kind == KIND_Q1:
+        if d.strategy != STRAT_DENSE_GROUP:
+            return False
+    elif d.kind == KIND_Q14:
+        if d.strategy != STRAT_UNGROUPED:
+            return False
+    else:
+        return False
+    # Collect fact-table filters; require >=1, all range, all on one fact column.
+    # CORRECTNESS: any NON-fact-table filter carries a constant we would otherwise
+    # drop from the signature (a dim filter feeds a dim pass-flag ARRAY, which IS
+    # constant-dependent), so its presence makes the constant-decoupling unsound ->
+    # eligible=False (stay per-constant). Canonical Q1/Q14 have zero dim filters
+    # (Q14's promo is an aggregate CASE, not a filter), so this only excludes
+    # genuinely const-coupled shapes.
+    var n_fact = 0
+    var the_col = String("")
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if g.table != d.fact_table:
+            if len(g.filters) > 0:
+                return False  # a dim filter is constant-coupled -> not eligible
+            continue
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            if p.col.table != d.fact_table:
+                return False
+            # only true range comparisons (the in-kernel filter mirrors these).
+            if not (
+                p.cmp == CMP_LT
+                or p.cmp == CMP_LE
+                or p.cmp == CMP_GT
+                or p.cmp == CMP_GE
+            ):
+                return False
+            if the_col == "":
+                the_col = p.col.column
+            elif p.col.column != the_col:
+                return False
+            n_fact += 1
+    if n_fact < 1:
+        return False
+    return True
+
+
+# Master switch: the generalized Q1/Q14 predicate-independent path is only taken
+# when the native-decode flag is on AND the descriptor is a canonical Q1/Q14 shape.
+def _gen_pred_enabled(d: GpuPlanDescriptor) -> Bool:
+    if getenv("GPU_OP_NATIVE_DECODE", "") == "":
+        return False
+    return _gen_pred_eligible(d)
+
+
+# Per-run bounds: one int64 per fact filter, in the SAME order the finalize
+# collects them (descriptor order over fact-table filters). These are the exact
+# `d.consts[p.const_id].lo` ints the host pass-bake compares against (so the
+# in-kernel filter is bit-identical). Returns an empty list if not eligible.
+def _gen_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
+    var bounds: List[Int64] = []
+    if not _gen_pred_eligible(d):
+        return bounds^
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if g.table != d.fact_table:
+            continue
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            bounds.append(d.consts[p.const_id].lo)
+    return bounds^
+
+
 # The fully generic finalize for n_dims == 0 (UNGROUPED + DENSE_GROUP).
 def _pin_finalize_generic(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -3229,7 +3390,9 @@ def _pin_finalize_generic(
     if sig in p2:
         ref dst = m[key]
         var q6b = _q6_pred_spec(d)
-        _assemble(dst, p2[sig], q6b)
+        # Generalized Q1 (DENSE_GROUP): thread THIS query's fact-filter bounds.
+        var genb = _gen_pred_bounds(d)
+        _assemble(dst, p2[sig], q6b, genb^)
         return 0
 
     # COLD: build the host inputs + programs + assembly metadata, upload the
@@ -3350,6 +3513,12 @@ def _pin_finalize_generic(
     var q6_pred_on = (
         getenv("GPU_OP_NATIVE_DECODE", "") != "" and q6_spec.eligible
     )
+    # Generalized Q1 (DENSE_GROUP) predicate-independent path (flag on + canonical
+    # Q1 shape). Same idea as q6_pred_on: skip the host pass bake; the kernel
+    # evaluates the fact filter in-kernel from the resident column slots + per-run
+    # bounds. f_slot/f_cmp collected below (descriptor order) are the cached
+    # constant-independent slots+cmps; the bounds are threaded per run.
+    var gen_pred_on = _gen_pred_enabled(d) and d.kind == KIND_Q1
 
     # --- host pass column: AND of the fact range predicates (one int64/row) ---
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
@@ -3376,7 +3545,7 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    if q6_pred_on:
+    if q6_pred_on or gen_pred_on:
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         for i in range(n):
             pass_col[i] = Int64(0)
@@ -3487,7 +3656,7 @@ def _pin_finalize_generic(
     # in-kernel from per-run bounds, so there is NO pass program (pass_len 0).
     var pass_prog: List[Int64] = [OP_LOAD_COL, Int64(pass_slot), Int64(0)]
     var pass_len_eff = 1
-    if q6_pred_on:
+    if q6_pred_on or gen_pred_on:
         pass_prog = []
         pass_len_eff = 0
 
@@ -3562,12 +3731,24 @@ def _pin_finalize_generic(
         gp.q6_pred_slots = [
             q6_spec.ship_slot, q6_spec.disc_slot, q6_spec.qty_slot
         ]
+    # Generalized Q1: cache the constant-independent fact-filter slots + cmps (in
+    # descriptor order, == f_slot/f_cmp here). The bounds are threaded per run.
+    gp.gen_pred = gen_pred_on
+    if gen_pred_on:
+        var gslots: List[Int] = []
+        var gcmps: List[Int64] = []
+        for fi in range(n_filters):
+            gslots.append(f_slot[fi])
+            gcmps.append(f_cmp[fi])
+        gp.gen_pred_slots = gslots^
+        gp.gen_pred_cmps = gcmps^
     p2[sig] = gp^
 
     ref dst = m[key]
     # The COLD path assembles with THIS query's bounds too (the kernel is the same
-    # code as WARM; q6_spec carries the first constant set).
-    _assemble(dst, p2[sig], q6_spec)
+    # code as WARM; q6_spec / gen-bounds carry the first constant set).
+    var gen_b0 = _gen_pred_bounds(d)
+    _assemble(dst, p2[sig], q6_spec, gen_b0^)
     return 0
 
 
@@ -4104,7 +4285,10 @@ def _pin_finalize_generic_dims(
     if key not in m:
         return 2
 
-    # WARM: re-run on the resident buffers + assemble from cached metadata.
+    # WARM: re-run on the resident buffers + assemble from cached metadata. For the
+    # generalized Q14 predicate-independent path the CURRENT query's fact-filter
+    # bounds are threaded into the re-run (the resident columns + promo dim array
+    # are constant-independent; the kernel applies THIS query's shipdate range).
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
     if sig in p2:
@@ -4112,7 +4296,12 @@ def _pin_finalize_generic_dims(
         if p2[sig].mode == STRAT_HASH_GROUP:
             _assemble_hash(dst, p2[sig])
         else:
-            _assemble(dst, p2[sig])
+            var genb = _gen_pred_bounds(d)
+            _assemble(
+                dst, p2[sig],
+                Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0),
+                genb^,
+            )
         return 0
 
     # COLD: build dim arrays + packed columns from fed host columns, upload once.
@@ -4431,6 +4620,20 @@ def _pin_finalize_generic_dims(
     for ax in range(n_dim_arrays + 1):
         doff_host[ax] = dim_offsets[ax]
 
+    # Generalized Q14 (UNGROUPED) predicate-independent path: flag on + canonical
+    # Q14 shape (single fact column, all-range, no dim filters -> dim_pass_de is
+    # empty). When active, skip the host fact pass bake AND emit no pass program;
+    # the kernel evaluates the fact filter in-kernel from the resident column slot
+    # + per-run bounds. The promo dim array (constant-independent) is still gathered
+    # by the METRIC programs, untouched. Only safe when there are no dim pass-flag
+    # arrays to AND (guaranteed by _gen_pred_eligible's no-dim-filter rule).
+    var gen_pred_on = (
+        _gen_pred_enabled(d)
+        and d.kind == KIND_Q14
+        and d.strategy == STRAT_UNGROUPED
+        and len(dim_pass_de) == 0
+    )
+
     # --- host fact pass column (AND of fact range predicates), then AND in the
     # dim pass-flag arrays via OP_LOAD_DIM in the pass PROGRAM (not the host col).
     var pass_slot = n_numeric
@@ -4451,14 +4654,19 @@ def _pin_finalize_generic_dims(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    for i in range(n):
-        var ok = True
-        for fi in range(n_filters):
-            var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
-            if not _pred_pass(v, f_cmp[fi], f_k[fi]):
-                ok = False
-                break
-        pass_col[i] = Int64(1) if ok else Int64(0)
+    if gen_pred_on:
+        # No host pass bake: zero the slot (the in-kernel predicate gates rows).
+        for i in range(n):
+            pass_col[i] = Int64(0)
+    else:
+        for i in range(n):
+            var ok = True
+            for fi in range(n_filters):
+                var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
+                if not _pred_pass(v, f_cmp[fi], f_k[fi]):
+                    ok = False
+                    break
+            pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- pack the fact columns + pass column ---
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
@@ -4481,6 +4689,11 @@ def _pin_finalize_generic_dims(
         pass_prog.append(Int64(0))
         pass_prog.append(Int64(0))
     var pass_len = len(pass_prog) // 3
+    if gen_pred_on:
+        # Generalized Q14: the in-kernel fact filter replaces the pass program
+        # entirely (dim_pass_de is empty here, so nothing else was ANDed in).
+        pass_prog = []
+        pass_len = 0
 
     var ctx = shared_device_context()
     var n_cols = len(d.out_types)
@@ -4777,10 +4990,25 @@ def _pin_finalize_generic_dims(
     gp.emit_agg = -1
     gp.emit_gt0 = False
     gp.kind = d.kind  # routes Q14 (UNGROUPED) to the comptime-specialized kernel
+    # Generalized Q14: cache the constant-independent fact-filter slots + cmps (in
+    # descriptor order, == f_slot/f_cmp here). The bounds are threaded per run.
+    gp.gen_pred = gen_pred_on
+    if gen_pred_on:
+        var gslots: List[Int] = []
+        var gcmps: List[Int64] = []
+        for fi in range(n_filters):
+            gslots.append(f_slot[fi])
+            gcmps.append(f_cmp[fi])
+        gp.gen_pred_slots = gslots^
+        gp.gen_pred_cmps = gcmps^
     p2[sig] = gp^
 
     ref dst = m[key]
-    _assemble(dst, p2[sig])
+    # COLD assembles with THIS query's bounds too (same kernel code as WARM).
+    var gen_b0 = _gen_pred_bounds(d)
+    _assemble(
+        dst, p2[sig], Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0), gen_b0^
+    )
     return 0
 
 

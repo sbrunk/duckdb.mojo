@@ -73,6 +73,12 @@ from raw_plan_tags import (
     OP_SELECT,
     OP_LOAD_DIM,
     OP_EQ,
+    CMP_EQ,
+    CMP_NE,
+    CMP_LT,
+    CMP_LE,
+    CMP_GT,
+    CMP_GE,
 )
 from expr_vm import eval_program
 
@@ -338,6 +344,140 @@ def seg_ungrouped_kernel_q6_pred(
             and dc <= disc_hi
             and qt < qty_hi
         ):
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for m in range(M):
+        var s = warp.sum(acc[m])
+        if lane == 0:
+            partials[blk * M + m] = s
+
+
+# ===========================================================================
+# Phase G Stage 2 (generalized): predicate-independent residency for Q1 / Q14.
+#
+# A GENERAL in-kernel fact-range filter, evaluated per row from the resident
+# columns + a small device-side predicate tape `fpred` of `n_fpred` triples
+#   fpred[3*p + 0] = column SLOT  (cols[slot * n_rows + row])
+#   fpred[3*p + 1] = cmp tag      (CMP_LT/LE/GT/GE/EQ/NE -- raw_plan_tags ints)
+#   fpred[3*p + 2] = bound k      (the int64 the host pass-bake compared against)
+# A row PASSES iff every triple passes (the same AND-of-fact-range-predicates the
+# host pass column bakes). This is byte-for-byte the host `_pred_pass(v, cmp, k)`
+# semantics over the SAME int64 slot values, so the pass set is identical and the
+# resulting reduction is bit-exact -- but the bounds are LAUNCH-time inputs, so
+# the resident columns are decoupled from the filter constants (warm across
+# constants). The metric evaluation (incl. Q14's promo dim gather) is UNCHANGED:
+# it still uses eval_program_fast over the same metric programs.
+# ===========================================================================
+@always_inline
+def _fpred_pass_dev(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    row: Int,
+    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_fpred: Int,
+) -> Bool:
+    for p in range(n_fpred):
+        var slot = Int(fpred[3 * p + 0])
+        var cmp = fpred[3 * p + 1]
+        var k = fpred[3 * p + 2]
+        var v = cols[slot * n_rows + row]
+        # Mirror host _pred_pass exactly (same cmp tags / same int64 compares).
+        if cmp == CMP_EQ:
+            if not (v == k):
+                return False
+        elif cmp == CMP_NE:
+            if not (v != k):
+                return False
+        elif cmp == CMP_LT:
+            if not (v < k):
+                return False
+        elif cmp == CMP_LE:
+            if not (v <= k):
+                return False
+        elif cmp == CMP_GT:
+            if not (v > k):
+                return False
+        elif cmp == CMP_GE:
+            if not (v >= k):
+                return False
+        else:
+            return False
+    return True
+
+
+# Q1 PREDICATE-INDEPENDENT (DENSE_GROUP): identical to seg_dense_kernel_q1 except
+# the row filter is the general in-kernel fact-range predicate (Q1: the single
+# `l_shipdate <= cutoff`) evaluated from `fpred` launch params instead of a host
+# pass column. Group-id slot + metric programs are unchanged -> bit-identical.
+def seg_dense_kernel_q1_pred(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_fpred: Int,
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _fpred_pass_dev(cols, n_rows, i, fpred, n_fpred):
+            var g = Int(cols[gid_slot * n_rows + i])
+            var base = g * M
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[base + m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for g in range(G):
+        for m in range(M):
+            var s = warp.sum(acc[g * M + m])
+            if lane == 0:
+                partials[(blk * G + g) * M + m] = s
+
+
+# Q14 PREDICATE-INDEPENDENT (UNGROUPED + 1 dim): identical to
+# seg_ungrouped_kernel_q14 except the row filter is the general in-kernel fact-
+# range predicate (Q14: `l_shipdate >= lo AND l_shipdate < hi`) evaluated from
+# `fpred` launch params instead of a host pass column. The promo CASE stays in
+# the metric programs (eval_program_fast's len-8 promo shape over the resident
+# promo-flag dim gather) and is constant-INDEPENDENT, so it is untouched.
+def seg_ungrouped_kernel_q14_pred(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_fpred: Int,
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        if _fpred_pass_dev(cols, n_rows, i, fpred, n_fpred):
             for m in range(M):
                 var prog = metric_progs + 3 * Int(metric_offsets[m])
                 acc[m] += eval_program_fast(
@@ -919,6 +1059,14 @@ def segreduce_run(
     q6_disc_lo: Int64 = 0,
     q6_disc_hi: Int64 = 0,
     q6_qty_hi: Int64 = 0,
+    # Phase G Stage 2 (generalized): Q1/Q14 predicate-independent residency. When
+    # `gen_pred_active` is True (KIND_Q1 DENSE_GROUP / KIND_Q14 UNGROUPED+1dim),
+    # the row filter is the general in-kernel fact-range predicate built from
+    # `fpred_list` (flattened (slot,cmp,bound) triples; len == 3 * n_fpred)
+    # instead of a host-baked pass column (pass_len is then 0). Off by default ->
+    # stock path. Passed by value (a tiny list) so the bounds are fresh per run.
+    gen_pred_active: Bool = False,
+    fpred_list: List[Int64] = [],
 ) raises -> List[Int128]:
     var ctx = res.ctx
     var cols_d = res.cols_d
@@ -947,6 +1095,15 @@ def segreduce_run(
     var mp_d = ctx.enqueue_create_buffer[DType.int64](mp_n)
     if metric_progs_n_ops > 0:
         ctx.enqueue_copy(mp_d, metric_progs_host)
+
+    # ---- generalized predicate tape (Q1/Q14): (slot,cmp,bound) triples. The
+    # buffer is always valid (>=1 element); the kernels only read n_fpred triples.
+    var n_fpred = len(fpred_list) // 3
+    var fpred_n = len(fpred_list) if len(fpred_list) > 0 else 1
+    var fpred_d = ctx.enqueue_create_buffer[DType.int64](fpred_n)
+    if len(fpred_list) > 0:
+        ctx.enqueue_copy(fpred_d, fpred_list.unsafe_ptr())
+
     var moff_d = ctx.enqueue_create_buffer[DType.int64](M)
     ctx.enqueue_copy(moff_d, metric_offsets_host)
     var mlen_d = ctx.enqueue_create_buffer[DType.int64](M)
@@ -980,7 +1137,20 @@ def segreduce_run(
     if mode == STRAT_DENSE_GROUP:
         var npart = SEG_NBLOCKS * G * M
         var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-        if use_mw:
+        if gen_pred_active and kind == KIND_Q1:
+            # Phase G Stage 2 (generalized): Q1 in-kernel predicate over resident
+            # columns + per-run bounds (no host pass column). Takes priority over
+            # use_mw because the pass column is absent (pass_len==0) on this path.
+            # Lane striding / warp.sum / partial layout match seg_dense_kernel_q1.
+            ctx.enqueue_function[seg_dense_kernel_q1_pred](
+                cols_d, n_rows, gid_slot,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                fpred_d, n_fpred,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        elif use_mw:
             # Multi-warp occupancy variant is unchanged (generic interpreter):
             # the comptime-specialized kernels mirror the 1-warp-block layout.
             ctx.enqueue_function[seg_dense_kernel_mw](
@@ -1047,6 +1217,20 @@ def segreduce_run(
             part_d,
             q6_ship_slot, q6_disc_slot, q6_qty_slot,
             q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
+            grid_dim=SEG_NBLOCKS, block_dim=WARP,
+        )
+    elif gen_pred_active and kind == KIND_Q14:
+        # Phase G Stage 2 (generalized): Q14 in-kernel predicate over resident
+        # columns + per-run bounds (no host pass column). Takes priority over
+        # use_mw (pass column absent). The promo CASE stays in the metric programs
+        # (constant-independent). Lane / warp.sum / partial layout match
+        # seg_ungrouped_kernel_q14.
+        ctx.enqueue_function[seg_ungrouped_kernel_q14_pred](
+            cols_d, n_rows,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            fpred_d, n_fpred,
             grid_dim=SEG_NBLOCKS, block_dim=WARP,
         )
     elif use_mw:
