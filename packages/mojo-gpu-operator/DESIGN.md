@@ -416,16 +416,36 @@ Linux build notes:
   is CUDA-only). Validated bit-exact end-to-end on both platforms: every one of the
   6,001,215 `l_shipdate` values decoded GPU-direct from BitPacking/FOR storage is
   identical to DuckDB's scan (`gpu_native_decode_check`; synthetic codec coverage in
-  `bench/native_decode_test.mojo`). **Covered:** fixed-width UNCOMPRESSED + BITPACKING
-  modes CONSTANT/FOR. **Not yet:** DELTA_FOR (needs per-group prefix-sum; note that
-  per-2048-row group modes vary *within* a segment even under a "FOR" segment label,
-  so e.g. `l_orderkey`/`l_linenumber` are DELTA_FOR — the decoder defers these and
-  reports `deferred_rows`, never silently mis-decodes), RLE, validity (TPC-H is all
-  all-valid), strings (Dictionary/FSST). The decode path is wired as a validated
-  parallel path (`mojo_gpu_decode_segment` + the `gpu_native_*` debug table functions);
-  **replacing the `Connection::Query` feed with it is the next step** and should be
-  flag-gated + A/B-measured (DuckDB's own scan is multithreaded, so the win is
-  clearest on Apple unified memory and for repeated cold-distinct-predicate work).
+  `bench/native_decode_test.mojo`). **Covered (all fixed-width codecs):** UNCOMPRESSED
+  + BITPACKING modes CONSTANT / CONSTANT_DELTA / FOR / DELTA_FOR — note per-2048-row
+  group modes vary *within* a segment even under a "FOR" segment label, so
+  `l_orderkey`/`l_linenumber` are DELTA_FOR; all six lineitem fact columns now decode
+  bit-identically (6,001,215 values each, 0 mismatches, 0 deferred, both platforms).
+  **Deferred (measured, with rationale):** *validity* — DEFER indefinitely (no TPC-H
+  column is nullable; `Has Null:false` for all lineitem); *strings* (Dictionary/FSST)
+  — needed only for Q1's `l_returnflag`/`l_linestatus` group keys and Q14's `p_type`,
+  so deferred until the warm-model PoC below justifies extending coverage (Q6/Q5-fact
+  are fully fixed-width-decodable now); *RLE* — N/A (a segment-level CompressionType,
+  not a per-group BitpackingMode; no TPC-H fixed-width column uses it).
+
+  **The decode path is a validated parallel path, not yet in query execution.** A
+  measure-first design (empirically grounded) found that *replacing the cold feed to
+  speed up cold* is **marginal** — the cold path already materializes *all* ~6M rows
+  (the materialize SQL has no WHERE; filtering is in-kernel via a host-prebaked pass
+  column), so GPU-direct decode only trims transfer volume (compressed segments, ~3–8×
+  smaller) and skips DuckDB's multithreaded scan; warm is unchanged and cold is already
+  amortized. The genuinely valuable adjacent direction the decoder *enables* is
+  **predicate-independent residency**: the resident columns already hold every row
+  (content is predicate-independent), and only `_signature` (keyed on filter constants)
+  + the host-prebaked pass column couple residency to a specific predicate. Dropping
+  the constants from the signature and moving the filter **into** the kernel (constants
+  as launch params) would let the resident columns serve *any* filter on the same
+  table warm — turning "every distinct-constant query is cold" into "first cold, rest
+  warm" (e.g. a dashboard varying Q6's date range: 2nd+ query ~365 ms cold → ~0.37 ms
+  warm). This is being proven via a **flag-gated Q6 PoC** (`GPU_OP_NATIVE_DECODE`):
+  Stage 1 feeds Q6 from the GPU-direct decoder; Stage 2 makes Q6 residency
+  predicate-independent and measures warm-hit-rate across a stream of Q6 with *varying*
+  constants (the whole thesis). Correctness-first: flag-off is the untouched default.
 - **High-cardinality group-by (Q3) is CPU-favorable** — light per-row work + large
   group output. A GPU hash-aggregate is implemented (NVIDIA, `STRAT_HASH_GROUP`)
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and
