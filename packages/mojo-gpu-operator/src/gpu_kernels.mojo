@@ -92,6 +92,7 @@ from raw_plan_tags import (
 from segreduce import (
     segreduce_upload,
     segreduce_upload_from_packed,
+    segreduce_upload_from_colptr,
     segreduce_run,
     segreduce_run_hash,
     HashGroupResult,
@@ -2262,6 +2263,30 @@ def _colpool_on() -> Bool:
     return getenv("GPU_OP_COLPOOL", "") != ""
 
 
+# Phase 3 (Option B) column-pointer-table flag. When on, eligible queries read
+# pooled columns DIRECTLY via a per-column device-pointer table instead of a
+# packed D2D copy -- eliminating the Phase 1/2 cols_d duplicate (~44% resident
+# VRAM). Requires the pool (it references pooled buffers); implies _colpool_on.
+# Off by default => the packed path runs (byte-identical).
+def _colptr_on() -> Bool:
+    return _colpool_on() and getenv("GPU_OP_COLPTR", "") != ""
+
+
+# Phase 3 is active for THIS query iff: the colptr flag is on AND the query is the
+# in-scope all-pooled class. Initial scope: Q6 UNGROUPED with the in-kernel
+# predicate-independent filter (`_q6_pred_enabled`) -- its cols_d is entirely
+# pooled fact columns, so the pointer table captures the full win and the only
+# colptr-capable kernel wired is seg_ungrouped_kernel_q6_pred[True]. ANY other
+# kind/strategy returns False -> the packed pool path runs (correct). Composes
+# with skip-materialize (omitted slots are pool borrows -> pointers, not copies).
+def _colptr_eligible(d: GpuPlanDescriptor) -> Bool:
+    if not _colptr_on():
+        return False
+    if d.kind == KIND_Q6:
+        return d.strategy == STRAT_UNGROUPED and _q6_pred_enabled(d)
+    return False
+
+
 # SKIP-MATERIALIZE sub-flag (the cold WALL-TIME follow-up to Phase 1). When on,
 # the SQL-feed path emits a NARROWER fact SELECT that omits fact columns already
 # pool-resident: DuckDB's columnar scan reads only the non-resident fact columns,
@@ -2318,7 +2343,16 @@ def _pin_budget_bytes() -> Int:
 # (the SegResident). cols_d (n_cols*n_rows int64) dominates; add the dim arrays +
 # seg offsets. Conservative so the budget never under-counts what is resident.
 def _gp_footprint_bytes(gp: GpuPinned) -> Int:
-    var b = gp.res.n_cols * gp.res.n_rows * 8
+    var b: Int
+    if gp.res.use_colptr:
+        # Phase 3: no packed cols_d -- the pooled columns live ONLY in the pool
+        # (counted by pool_bytes, NOT here). This resident owns just the small
+        # pointer table (n_cols int64) + the per-query derived/fallback buffers
+        # (each n_rows int64). That delta IS the ~44% VRAM win.
+        b = gp.res.n_cols * 8
+        b += len(gp.res.derived_bufs) * gp.res.n_rows * 8
+    else:
+        b = gp.res.n_cols * gp.res.n_rows * 8
     # dim arrays: dim_offsets[n_dims] elements (int64); seg offsets: n_seg+1.
     if gp.res.n_dims > 0 and len(gp.res.dim_offsets) > gp.res.n_dims:
         b += Int(gp.res.dim_offsets[gp.res.n_dims]) * 8
@@ -2533,6 +2567,115 @@ def _colpool_assemble_cols_d(
             file=FileDescriptor(2),
         )
     return cols_d^
+
+
+# ===-------------------------------------------------------------------===#
+# Phase 3 (GPU_OP_COLPTR) -- column-POINTER-TABLE assembly. The Option B sibling
+# of _colpool_assemble_cols_d: instead of allocating a packed cols_d and D2D-
+# copying every pooled column into it (a full SECOND copy of the pooled data),
+# this builds a small device table of n_slots DEVICE ADDRESSES:
+#   - pooled slot (HIT / MISS / skip-mat borrow): the address is the resident POOL
+#     buffer's own device pointer -> read DIRECTLY, no copy (the VRAM win).
+#   - non-poolable fallback / derived (gid/pass) slot: a per-query buffer filled
+#     H2D from the packed host buffer's slot region, kept alive in `out_derived_bufs`
+#     for the resident's lifetime; its pointer goes in the table.
+# The kernels (launched USE_COLPTR=True) read column `slot` via table[slot] -> the
+# SAME int64 values the packed layout holds, so results are bit-exact. The pooled
+# addresses stay valid because the GpuPinned holds the pool leases (out_lease_keys
+# + the transferred omit leases) for its whole lifetime (invariant #3).
+#
+# Returns the device pointer-table buffer (ownership to caller). `fail` is set on a
+# skip-mat omit that is not a guaranteed HIT (same backstop as the packed path) ->
+# caller bails to CPU.
+# ===-------------------------------------------------------------------===#
+def _colpool_assemble_col_ptrs(
+    ctx: DeviceContext,
+    fact_table: String,
+    st: GpuExecState,
+    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_slots: Int,
+    n: Int,
+    numeric_matcols: List[Int],
+    omit_slot: List[Bool],
+    mut out_lease_keys: List[String],
+    mut out_derived_bufs: List[DeviceBuffer[DType.int64]],
+    mut fail: Bool,
+) raises -> DeviceBuffer[DType.int64]:
+    var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+    var n_numeric = len(numeric_matcols)
+    var skipped_cols = 0
+    fail = False
+    # Host array of the n_slots device addresses (uploaded to the table at the end).
+    var addr_h = alloc[Int64](n_slots if n_slots > 0 else 1)
+
+    # --- numeric fact slots: pooled -> pool pointer; fallback -> per-query buf. ---
+    for slot in range(n_numeric):
+        var mj = numeric_matcols[slot]
+        var col_name = st.mat_cols[mj]
+        var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
+        var slot_host = cols_host + slot * n
+        var omit = omit_slot[slot] if slot < len(omit_slot) else False
+
+        if omit:
+            # skip-materialize: GUARANTEED resident pool borrow (lease held at
+            # materialize). Point directly at the pooled buffer; no copy.
+            var er = col_pool_borrow(ctx, key)
+            if not (er.ok and er.was_hit):
+                fail = True
+                addr_h.free()
+                if pin_log:
+                    print(
+                        "[gpu-op colptr] OMIT-MISS (fallback) col=", col_name,
+                        file=FileDescriptor(2),
+                    )
+                return ctx.enqueue_create_buffer[DType.int64](1)
+            addr_h[slot] = Int64(Int(er.buf.unsafe_ptr()))
+            skipped_cols += 1
+            continue
+
+        _colpool_make_room(n * 8)
+        var er = ensure_column(
+            ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE, slot_host, n,
+            st.cols[mj].type_tag,
+        )
+        if er.ok:
+            out_lease_keys.append(key)
+            addr_h[slot] = Int64(Int(er.buf.unsafe_ptr()))  # pooled buffer ptr
+            if pin_log:
+                var tag = "HIT" if er.was_hit else "MISS"
+                print("[gpu-op colptr] ", tag, " col=", col_name, file=FileDescriptor(2))
+        else:
+            # Not poolable -> per-query buffer, H2D from host (kept alive).
+            var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
+            ctx.enqueue_copy(buf, slot_host)
+            addr_h[slot] = Int64(Int(buf.unsafe_ptr()))
+            out_derived_bufs.append(buf)
+            if pin_log:
+                print("[gpu-op colptr] FALLBACK col=", col_name, file=FileDescriptor(2))
+
+    # --- derived slots (gid/pass): per-query buffers, H2D from packed host. ---
+    for slot in range(n_numeric, n_slots):
+        var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
+        ctx.enqueue_copy(buf, cols_host + slot * n)
+        addr_h[slot] = Int64(Int(buf.unsafe_ptr()))
+        out_derived_bufs.append(buf)
+
+    # Upload the address table. Sync first so every pooled/derived buffer's address
+    # is final before the table (holding those addresses) is copied to device.
+    ctx.synchronize()
+    var col_ptrs_d = ctx.enqueue_create_buffer[DType.int64](
+        n_slots if n_slots > 0 else 1
+    )
+    ctx.enqueue_copy(col_ptrs_d, addr_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.synchronize()
+    addr_h.free()
+    if pin_log and skipped_cols > 0:
+        print(
+            "[gpu-op colptr] skipped_cols=", skipped_cols,
+            " (pooled fact cols read via pointer table, no copy)",
+            file=FileDescriptor(2),
+        )
+    return col_ptrs_d^
 
 
 # Re-run the resident kernel + assemble the result table into `dst` from the
@@ -4494,7 +4637,37 @@ def _pin_finalize_generic(
     doff_dummy[0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
-    if _colpool_on():
+    if _colptr_eligible(d):
+        # Phase 3: build a per-column POINTER TABLE; pooled slots read directly
+        # from the pool (no packed copy -> the VRAM win). Same lease/omit handling
+        # + skip-mat backstop as the packed pool path below.
+        var assemble_fail = False
+        var derived_bufs: List[DeviceBuffer[DType.int64]] = []
+        var col_ptrs_d = _colpool_assemble_col_ptrs(
+            ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+            omit_slot, pool_lease_keys, derived_bufs, assemble_fail,
+        )
+        if assemble_fail:
+            for li in range(len(pool_lease_keys)):
+                release_lease(pool_lease_keys[li])
+            for li in range(len(st.colpool_omit_leases)):
+                release_lease(st.colpool_omit_leases[li])
+            st.colpool_omit_leases = []
+            seg_off_dummy.free()
+            dims_dummy.free()
+            doff_dummy.free()
+            cols.free()
+            pass_col.free()
+            row_gid.free()
+            return 11
+        for li in range(len(st.colpool_omit_leases)):
+            pool_lease_keys.append(st.colpool_omit_leases[li])
+        st.colpool_omit_leases = []
+        resident = segreduce_upload_from_colptr(
+            ctx, col_ptrs_d^, derived_bufs^, n_slots, n,
+            seg_off_dummy, 0, dims_dummy, doff_dummy, 0,
+        )
+    elif _colpool_on():
         var assemble_fail = False
         var cols_d = _colpool_assemble_cols_d(
             ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,

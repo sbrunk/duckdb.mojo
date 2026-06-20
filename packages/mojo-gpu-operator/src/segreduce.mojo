@@ -80,7 +80,7 @@ from raw_plan_tags import (
     CMP_GT,
     CMP_GE,
 )
-from expr_vm import eval_program
+from expr_vm import eval_program, _col_at
 
 comptime SEG_NBLOCKS = 4096  # one warp per block (matches the existing kernels)
 # Multi-warp block variant (GPU_OP_BLOCK128): on sm_89 a 1-warp block caps
@@ -134,7 +134,9 @@ def _row_passes(
 # reduction are UNCHANGED, so the GPU output is identical to the interpreter.
 # ===========================================================================
 @always_inline
-def eval_program_fast(
+def eval_program_fast[
+    USE_COLPTR: Bool = False
+](
     prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     prog_len: Int,
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -155,9 +157,15 @@ def eval_program_fast(
       len 8: LOAD_DIM p; LOAD e; PUSH k; LOAD d; SUB; MUL; PUSH z; SELECT
                                     -> (p != 0) ? e*(k-d) : z   (Q14 promo)
     Any other shape defers to `eval_program` (universal fallback).
+
+    When `USE_COLPTR` is True, `cols` is the per-column POINTER TABLE (Phase 3)
+    rather than the packed buffer; `_col_at[USE_COLPTR]` reads the SAME value
+    through the table, so the result is bit-exact. `dims`/`dim_offsets` are
+    SEPARATE buffers (not pooled) and are read unchanged in both modes.
     """
 
     # Read one LOAD_COL/LOAD_DIM/PUSH_CONST operand at op index `k` into a value.
+    # Column reads route through `_col_at[USE_COLPTR]` (packed or pointer-table).
     @always_inline
     def _operand(
         prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -172,11 +180,11 @@ def eval_program_fast(
         var a = prog[3 * k + 1]
         var b = prog[3 * k + 2]
         if op == OP_LOAD_COL:
-            return cols[Int(a) * n_rows + row]
+            return _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
         elif op == OP_PUSH_CONST:
             return a
         elif op == OP_LOAD_DIM:
-            var key = Int(cols[Int(b) * n_rows + row])
+            var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
             return dims[Int(dim_offsets[Int(a)]) + key]
         # operand op should be a leaf; non-leaf here means an unrecognized shape.
         return Int64(0)
@@ -232,7 +240,9 @@ def eval_program_fast(
         return prod if p != 0 else z
 
     # Unrecognized shape: universal fallback (bit-identical by definition).
-    return eval_program(prog, prog_len, cols, n_rows, row, dims, dim_offsets)
+    return eval_program[USE_COLPTR](
+        prog, prog_len, cols, n_rows, row, dims, dim_offsets
+    )
 
 
 @always_inline
@@ -310,7 +320,9 @@ def seg_ungrouped_kernel_q6(
 # packed values _col_val widened into the buffer — so the pass set is identical.
 # The metric is evaluated with the SAME eval_program_fast as the stock Q6 kernel,
 # so passing rows contribute identical products and the int128 reduction matches.
-def seg_ungrouped_kernel_q6_pred(
+def seg_ungrouped_kernel_q6_pred[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -329,14 +341,17 @@ def seg_ungrouped_kernel_q6_pred(
     disc_hi: Int64,
     qty_hi: Int64,
 ):
+    # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
+    # _col_at[USE_COLPTR] / eval_program_fast[USE_COLPTR] read the SAME values
+    # through it. Packed (False) reads the packed buffer. Bit-exact either way.
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
     var i = Int(block_idx.x) * WARP + lane
     while i < n_rows:
-        var sd = cols[ship_slot * n_rows + i]
-        var dc = cols[disc_slot * n_rows + i]
-        var qt = cols[qty_slot * n_rows + i]
+        var sd = _col_at[USE_COLPTR](cols, n_rows, ship_slot, i)
+        var dc = _col_at[USE_COLPTR](cols, n_rows, disc_slot, i)
+        var qt = _col_at[USE_COLPTR](cols, n_rows, qty_slot, i)
         if (
             sd >= ship_lo
             and sd < ship_hi
@@ -346,7 +361,7 @@ def seg_ungrouped_kernel_q6_pred(
         ):
             for m in range(M):
                 var prog = metric_progs + 3 * Int(metric_offsets[m])
-                acc[m] += eval_program_fast(
+                acc[m] += eval_program_fast[USE_COLPTR](
                     prog, Int(metric_lens[m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
@@ -1046,6 +1061,18 @@ struct SegResident(Movable):
     var n_dims: Int
     var seg_off_d: DeviceBuffer[DType.int64]
     var n_seg: Int
+    # --- Phase 3 (GPU_OP_COLPTR) column-pointer-table fields ---
+    # When `use_colptr` is True the seg_* kernels read columns through `col_ptrs_d`
+    # (a device buffer of n_cols int64 DEVICE ADDRESSES, one per slot) instead of
+    # the packed `cols_d` (which is then a 1-elem dummy). Pooled slots point
+    # DIRECTLY into the resident per-column pool buffers (no packed copy -> the
+    # VRAM win); non-pooled slots (derived gid/pass, fallback) point into the
+    # per-query buffers held alive in `derived_bufs` for this resident's lifetime.
+    # The pool leases (GpuPinned.pool_lease_keys) keep the pooled buffers — and
+    # hence their addresses — valid while this SegResident lives.
+    var use_colptr: Bool
+    var col_ptrs_d: DeviceBuffer[DType.int64]
+    var derived_bufs: List[DeviceBuffer[DType.int64]]
 
 
 # ---------------------------------------------------------------------------
@@ -1098,9 +1125,10 @@ def segreduce_upload(
         ctx.enqueue_copy(seg_off_d, seg_off_host)
 
     ctx.synchronize()
+    var colptr_dummy = ctx.enqueue_create_buffer[DType.int64](1)
     return SegResident(
         ctx, cols_d, n_rows, n_cols, dims_d, dim_offsets^, n_dims,
-        seg_off_d, n_seg,
+        seg_off_d, n_seg, False, colptr_dummy^, List[DeviceBuffer[DType.int64]](),
     )
 
 
@@ -1154,9 +1182,59 @@ def segreduce_upload_from_packed(
         ctx.enqueue_copy(seg_off_d, seg_off_host)
 
     ctx.synchronize()
+    var colptr_dummy = ctx.enqueue_create_buffer[DType.int64](1)
     return SegResident(
         ctx, cols_d^, n_rows, n_cols, dims_d, dim_offsets^, n_dims,
-        seg_off_d, n_seg,
+        seg_off_d, n_seg, False, colptr_dummy^, List[DeviceBuffer[DType.int64]](),
+    )
+
+
+# ---------------------------------------------------------------------------
+# segreduce_upload_from_colptr: Phase 3 (GPU_OP_COLPTR) variant. Instead of a
+# packed `cols_d`, the caller hands over `col_ptrs_d` (a device buffer of n_cols
+# int64 DEVICE ADDRESSES — pooled slots point into the resident pool buffers,
+# non-pooled slots into the per-query `derived_bufs` it also hands over). The
+# packed buffer is NEVER allocated (only a 1-elem dummy), so the Phase 1/2
+# duplicate of the pooled columns disappears (~44% resident-VRAM cut). The dim /
+# seg uploads are byte-identical to segreduce_upload(_from_packed). The kernels,
+# launched with USE_COLPTR=True, read the SAME column values via the pointer
+# table, so results are bit-exact. `derived_bufs` lifetime == this SegResident's.
+# ---------------------------------------------------------------------------
+def segreduce_upload_from_colptr(
+    ctx: DeviceContext,
+    var col_ptrs_d: DeviceBuffer[DType.int64],
+    var derived_bufs: List[DeviceBuffer[DType.int64]],
+    n_cols: Int,
+    n_rows: Int,
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_seg: Int,
+    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_dims: Int,
+) raises -> SegResident:
+    # ---- FK-join dim arrays (concatenated). Identical to the other uploaders. ----
+    var dims_total = Int(dim_offsets_host[n_dims]) if n_dims > 0 else 0
+    var dims_n = dims_total if dims_total > 0 else 1
+    var dims_d = ctx.enqueue_create_buffer[DType.int64](dims_n)
+    if dims_total > 0:
+        ctx.enqueue_copy(dims_d, dims_host)
+
+    var dim_offsets = List[Int64]()
+    if n_dims > 0:
+        for i in range(n_dims + 1):
+            dim_offsets.append(dim_offsets_host[i])
+
+    var soff_n = n_seg + 1 if n_seg > 0 else 1
+    var seg_off_d = ctx.enqueue_create_buffer[DType.int64](soff_n)
+    if n_seg > 0:
+        ctx.enqueue_copy(seg_off_d, seg_off_host)
+
+    ctx.synchronize()
+    # Dummy packed buffer (never read when use_colptr is True).
+    var cols_dummy = ctx.enqueue_create_buffer[DType.int64](1)
+    return SegResident(
+        ctx, cols_dummy^, n_rows, n_cols, dims_d, dim_offsets^, n_dims,
+        seg_off_d, n_seg, True, col_ptrs_d^, derived_bufs^,
     )
 
 
@@ -1218,6 +1296,11 @@ def segreduce_run(
     var n_rows = res.n_rows
     var dims_d = res.dims_d
     var n_seg = res.n_seg
+    # Phase 3 (GPU_OP_COLPTR): when use_colptr, the kernels read columns through
+    # this per-column device-pointer table instead of the packed `cols_d` (a dummy
+    # here). `cols_d` is still passed to every launch (ignored by [True] kernels).
+    var use_colptr = res.use_colptr
+    var col_ptrs_d = res.col_ptrs_d
     # GPU_OP_BLOCK128: route the two grid kernels to their multi-warp variants
     # (SEG_BLK threads/block) to lift occupancy past the 1-warp-block 50% ceiling.
     var use_mw = getenv("GPU_OP_BLOCK128", "") != ""
@@ -1370,15 +1453,30 @@ def segreduce_run(
         # pass column is absent (pass_len==0) on this path; the predicate kernel
         # is the only one that evaluates the filter from the bounds. The lane
         # striding / warp.sum / partial layout match seg_ungrouped_kernel_q6.
-        ctx.enqueue_function[seg_ungrouped_kernel_q6_pred](
-            cols_d, n_rows,
-            mp_d, moff_d, mlen_d, M,
-            dims_d, doff_d,
-            part_d,
-            q6_ship_slot, q6_disc_slot, q6_qty_slot,
-            q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+        if use_colptr:
+            # Phase 3: pass the per-column POINTER TABLE as `cols`; the [True]
+            # kernel reads columns through it (no packed cols_d at all).
+            comptime kq6p = seg_ungrouped_kernel_q6_pred[True]
+            ctx.enqueue_function[kq6p](
+                col_ptrs_d, n_rows,
+                mp_d, moff_d, mlen_d, M,
+                dims_d, doff_d,
+                part_d,
+                q6_ship_slot, q6_disc_slot, q6_qty_slot,
+                q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        else:
+            comptime kq6p0 = seg_ungrouped_kernel_q6_pred[False]
+            ctx.enqueue_function[kq6p0](
+                cols_d, n_rows,
+                mp_d, moff_d, mlen_d, M,
+                dims_d, doff_d,
+                part_d,
+                q6_ship_slot, q6_disc_slot, q6_qty_slot,
+                q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
     elif gen_pred_active and kind == KIND_Q14:
         # Phase G Stage 2 (generalized): Q14 in-kernel predicate over resident
         # columns + per-run bounds (no host pass column). Takes priority over

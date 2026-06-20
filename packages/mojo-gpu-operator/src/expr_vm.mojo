@@ -87,6 +87,7 @@ A fixed-size int64 register stack (EXPR_STACK_MAX = 16 slots). Programs produced
 by the planner for the supported TPC-H shapes never exceed this depth.
 """
 
+from std.gpu.memory import AddressSpace
 from raw_plan_tags import (
     OP_LOAD_COL,
     OP_PUSH_CONST,
@@ -101,8 +102,52 @@ from raw_plan_tags import (
 comptime EXPR_STACK_MAX = 16
 
 
+# ---------------------------------------------------------------------------
+# _col_at: read column `slot` at `row`, from EITHER the packed buffer (Phase 1/2
+# default) or a per-column POINTER TABLE (Phase 3 / Option B, GPU_OP_COLPTR).
+#
+# The `cols` argument is REUSED to carry both representations (so no kernel/VM
+# gains an extra runtime argument -- only a comptime flag):
+#   USE_COLPTR == False: `cols` is the PACKED buffer -> cols[slot * n_rows + row]
+#                        (today's layout, byte-identical; the ptr branch elides).
+#   USE_COLPTR == True:  `cols` is the per-column POINTER TABLE -> cols[slot] holds
+#                        the DEVICE ADDRESS of slot's column buffer; reconstruct a
+#                        GLOBAL-address-space pointer from it and read [row]. This
+#                        lets kernels read POOLED per-column buffers DIRECTLY (no
+#                        packed copy) -> eliminates the Phase 1/2 cols_d duplicate
+#                        (~44% resident-VRAM cut).
+#
+# AddressSpace.GLOBAL is REQUIRED: a pointer reconstructed from a raw integer with
+# the default GENERIC address space reads 0 on Apple Metal (separate address
+# spaces). GLOBAL works on both Apple M3 + NVIDIA (verified by bench/colptr_probe).
+# The value read is identical to the packed layout, so results are bit-exact.
+# ---------------------------------------------------------------------------
 @always_inline
-def eval_program(
+def _col_at[
+    USE_COLPTR: Bool
+](
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    slot: Int,
+    row: Int,
+) -> Int64:
+    @parameter
+    if USE_COLPTR:
+        var addr = Int(cols[slot])
+        var p = UnsafePointer[
+            Scalar[DType.int64],
+            MutAnyOrigin,
+            address_space = AddressSpace.GLOBAL,
+        ](unsafe_from_address=addr)
+        return p[row]
+    else:
+        return cols[slot * n_rows + row]
+
+
+@always_inline
+def eval_program[
+    USE_COLPTR: Bool = False
+](
     prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     prog_len: Int,
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -136,11 +181,11 @@ def eval_program(
         var a = prog[3 * k + 1]
         var b = prog[3 * k + 2]
         if op == OP_LOAD_COL:
-            stack[sp] = cols[Int(a) * n_rows + row]
+            stack[sp] = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
             sp += 1
         elif op == OP_LOAD_DIM:
             # FK gather: key = cols[b][row]; push dims[dim_offsets[a] + key].
-            var key = Int(cols[Int(b) * n_rows + row])
+            var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
             stack[sp] = dims[Int(dim_offsets[Int(a)]) + key]
             sp += 1
         elif op == OP_PUSH_CONST:
