@@ -390,18 +390,22 @@ def seg_ungrouped_kernel_q6_pred[
 # it still uses eval_program_fast over the same metric programs.
 # ===========================================================================
 @always_inline
-def _fpred_pass_dev(
+def _fpred_pass_dev[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     row: Int,
     fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_fpred: Int,
 ) -> Bool:
+    # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
+    # _col_at reads the SAME value through it. Default False = packed (unchanged).
     for p in range(n_fpred):
         var slot = Int(fpred[3 * p + 0])
         var cmp = fpred[3 * p + 1]
         var k = fpred[3 * p + 2]
-        var v = cols[slot * n_rows + row]
+        var v = _col_at[USE_COLPTR](cols, n_rows, slot, row)
         # Mirror host _pred_pass exactly (same cmp tags / same int64 compares).
         if cmp == CMP_EQ:
             if not (v == k):
@@ -474,7 +478,9 @@ def seg_dense_kernel_q1_pred(
 # `fpred` launch params instead of a host pass column. The promo CASE stays in
 # the metric programs (eval_program_fast's len-8 promo shape over the resident
 # promo-flag dim gather) and is constant-INDEPENDENT, so it is untouched.
-def seg_ungrouped_kernel_q14_pred(
+def seg_ungrouped_kernel_q14_pred[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -487,15 +493,18 @@ def seg_ungrouped_kernel_q14_pred(
     fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_fpred: Int,
 ):
+    # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
+    # the filter (_fpred_pass_dev) + metric (eval_program_fast) read columns
+    # through it. The FK-gather dim arrays (`dims`) stay a separate buffer.
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
     var i = Int(block_idx.x) * WARP + lane
     while i < n_rows:
-        if _fpred_pass_dev(cols, n_rows, i, fpred, n_fpred):
+        if _fpred_pass_dev[USE_COLPTR](cols, n_rows, i, fpred, n_fpred):
             for m in range(M):
                 var prog = metric_progs + 3 * Int(metric_offsets[m])
-                acc[m] += eval_program_fast(
+                acc[m] += eval_program_fast[USE_COLPTR](
                     prog, Int(metric_lens[m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
@@ -1483,14 +1492,27 @@ def segreduce_run(
         # use_mw (pass column absent). The promo CASE stays in the metric programs
         # (constant-independent). Lane / warp.sum / partial layout match
         # seg_ungrouped_kernel_q14.
-        ctx.enqueue_function[seg_ungrouped_kernel_q14_pred](
-            cols_d, n_rows,
-            mp_d, moff_d, mlen_d, M,
-            dims_d, doff_d,
-            part_d,
-            fpred_d, n_fpred,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+        if use_colptr:
+            # Phase 3: pass the per-column POINTER TABLE as `cols`; dims stay separate.
+            comptime kq14p = seg_ungrouped_kernel_q14_pred[True]
+            ctx.enqueue_function[kq14p](
+                col_ptrs_d, n_rows,
+                mp_d, moff_d, mlen_d, M,
+                dims_d, doff_d,
+                part_d,
+                fpred_d, n_fpred,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        else:
+            comptime kq14p0 = seg_ungrouped_kernel_q14_pred[False]
+            ctx.enqueue_function[kq14p0](
+                cols_d, n_rows,
+                mp_d, moff_d, mlen_d, M,
+                dims_d, doff_d,
+                part_d,
+                fpred_d, n_fpred,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
     elif use_mw:
         # Multi-warp occupancy variant is unchanged (generic interpreter).
         ctx.enqueue_function[seg_ungrouped_kernel_mw](

@@ -2284,6 +2284,10 @@ def _colptr_eligible(d: GpuPlanDescriptor) -> Bool:
         return False
     if d.kind == KIND_Q6:
         return d.strategy == STRAT_UNGROUPED and _q6_pred_enabled(d)
+    if d.kind == KIND_Q14:
+        # Q14 UNGROUPED FK-join, predicate-independent: fact cols are all pooled;
+        # the dim arrays stay a separate buffer (read unchanged by the kernel).
+        return d.strategy == STRAT_UNGROUPED and _gen_pred_enabled(d)
     return False
 
 
@@ -6322,7 +6326,33 @@ def _pin_finalize_generic_dims(
     seg_off_dummy[0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
-    if _colpool_on():
+    if _colptr_eligible(d):
+        # Phase 3 (Q14): pooled fact columns read directly via a pointer table
+        # (no packed cols_d). The dim arrays stay a separate buffer, uploaded as
+        # usual. Same skip-mat omit/lease handling + backstop as the packed path.
+        var assemble_fail = False
+        var derived_bufs: List[DeviceBuffer[DType.int64]] = []
+        var col_ptrs_d = _colpool_assemble_col_ptrs(
+            ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+            omit_slot, pool_lease_keys, derived_bufs, assemble_fail,
+        )
+        if assemble_fail:
+            for li in range(len(pool_lease_keys)):
+                release_lease(pool_lease_keys[li])
+            for li in range(len(st.colpool_omit_leases)):
+                release_lease(st.colpool_omit_leases[li])
+            st.colpool_omit_leases = []
+            seg_off_dummy.free()
+            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            return 11
+        for li in range(len(st.colpool_omit_leases)):
+            pool_lease_keys.append(st.colpool_omit_leases[li])
+        st.colpool_omit_leases = []
+        resident = segreduce_upload_from_colptr(
+            ctx, col_ptrs_d^, derived_bufs^, n_slots, n, seg_off_dummy, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
+    elif _colpool_on():
         # SKIP-MATERIALIZE (Q14 in scope): omit_slot carries the pool-resident
         # fact columns omitted from the narrowed SELECT. On a non-HIT for an
         # omitted slot the helper sets `assemble_fail` -> bail to CPU (the column
