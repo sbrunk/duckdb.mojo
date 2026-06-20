@@ -97,7 +97,9 @@ comptime SEG_MAX_METRICS = 8  # per-lane accumulator cap for the grid kernels
 
 
 @always_inline
-def _row_passes(
+def _row_passes[
+    USE_COLPTR: Bool = False
+](
     pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     pass_len: Int,
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -106,9 +108,12 @@ def _row_passes(
     dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
 ) -> Bool:
+    # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
+    # eval_program[USE_COLPTR] reads the SAME values through it. Default False =
+    # packed (byte-identical). Only the column reads change; the pass logic does not.
     if pass_len == 0:
         return True
-    return eval_program(
+    return eval_program[USE_COLPTR](
         pass_prog, pass_len, cols, n_rows, row, dims, dim_offsets
     ) != 0
 
@@ -434,7 +439,14 @@ def _fpred_pass_dev[
 # the row filter is the general in-kernel fact-range predicate (Q1: the single
 # `l_shipdate <= cutoff`) evaluated from `fpred` launch params instead of a host
 # pass column. Group-id slot + metric programs are unchanged -> bit-identical.
-def seg_dense_kernel_q1_pred(
+#
+# Phase 3 (GPU_OP_COLPTR): when USE_COLPTR is True, `cols` is the per-column
+# POINTER TABLE (not the packed buffer); the filter (_fpred_pass_dev), the gid
+# read (_col_at), and the metric (eval_program_fast) all read columns through it,
+# reading the SAME int64 values -> bit-exact. Default False = packed (unchanged).
+def seg_dense_kernel_q1_pred[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     gid_slot: Int,
@@ -454,12 +466,12 @@ def seg_dense_kernel_q1_pred(
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
     var i = Int(block_idx.x) * WARP + lane
     while i < n_rows:
-        if _fpred_pass_dev(cols, n_rows, i, fpred, n_fpred):
-            var g = Int(cols[gid_slot * n_rows + i])
+        if _fpred_pass_dev[USE_COLPTR](cols, n_rows, i, fpred, n_fpred):
+            var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
             var base = g * M
             for m in range(M):
                 var prog = metric_progs + 3 * Int(metric_offsets[m])
-                acc[base + m] += eval_program_fast(
+                acc[base + m] += eval_program_fast[USE_COLPTR](
                     prog, Int(metric_lens[m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
@@ -659,7 +671,14 @@ def seg_dense_kernel_q5(
 # host emit-rule (revenue != 0) drops the rest -- exactly stock's row set. Lane
 # striding / warp.sum / partials[(blk*G+g)*M+m] layout are IDENTICAL to
 # seg_dense_kernel_q5.
-def seg_dense_kernel_q5_pred(
+# Phase 3 (GPU_OP_COLPTR): when USE_COLPTR is True, `cols` is the per-column
+# POINTER TABLE (not the packed buffer); the lok/lsk fact reads, the gid read, and
+# the metric (eval_program_fast) all route through _col_at, reading the SAME int64
+# values -> bit-exact. The dim arrays (`dims`) are a SEPARATE buffer (NOT pooled)
+# read unchanged in both modes. Default False = packed (byte-identical).
+def seg_dense_kernel_q5_pred[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     gid_slot: Int,
@@ -686,8 +705,8 @@ def seg_dense_kernel_q5_pred(
     var doff2 = Int(dim_offsets[2])
     var doff3 = Int(dim_offsets[3])
     while i < n_rows:
-        var ok = Int(cols[lok_slot * n_rows + i])
-        var sk = Int(cols[lsk_slot * n_rows + i])
+        var ok = Int(_col_at[USE_COLPTR](cols, n_rows, lok_slot, i))
+        var sk = Int(_col_at[USE_COLPTR](cols, n_rows, lsk_slot, i))
         var od = dims[doff0 + ok]
         var cust_n = dims[doff1 + ok]
         var supp_n = dims[doff2 + sk]
@@ -699,12 +718,12 @@ def seg_dense_kernel_q5_pred(
             and supp_r == asia_region
         )
         if passes:
-            var g = Int(cols[gid_slot * n_rows + i])
+            var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
             if g >= 0 and g < G:
                 var base = g * M
                 for m in range(M):
                     var prog = metric_progs + 3 * Int(metric_offsets[m])
-                    acc[base + m] += eval_program_fast(
+                    acc[base + m] += eval_program_fast[USE_COLPTR](
                         prog, Int(metric_lens[m]), cols, n_rows, i,
                         dims, dim_offsets,
                     )
@@ -985,7 +1004,9 @@ def seg_sort_kernel(
 # the body compiles to an empty/abort kernel and the host never launches it (it
 # keeps SORT_SEGREDUCE), so the comptime-false branch is never reached.
 # ---------------------------------------------------------------------------
-def seg_hash_kernel(
+def seg_hash_kernel[
+    USE_COLPTR: Bool = False
+](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     gk_slot: Int,
@@ -1001,6 +1022,11 @@ def seg_hash_kernel(
     slot_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     slot_acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
 ):
+    # When USE_COLPTR is True, `cols` is the per-column POINTER TABLE (Phase 3);
+    # the filter (_row_passes), the fact group-key read (_col_at), and the metric
+    # (eval_program) read columns through it -> the SAME int64 values, so the per-
+    # group atomic accumulation is bit-exact. The FK-gather dim arrays (`dims`)
+    # stay a separate buffer, read unchanged. Default False = packed (unchanged).
     comptime if is_nvidia_gpu() or is_amd_gpu():
         # grid-stride: global_idx folds block_idx*block_dim + thread_idx; stride
         # by the full launched thread count each step.
@@ -1008,10 +1034,10 @@ def seg_hash_kernel(
         var grid = Int(block_dim.x) * Int(grid_dim.x)
         var mask = cap - 1  # cap is pow2 => key & mask == key % cap
         while i < n_rows:
-            if _row_passes(
+            if _row_passes[USE_COLPTR](
                 pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
             ):
-                var key = cols[gk_slot * n_rows + i]
+                var key = _col_at[USE_COLPTR](cols, n_rows, gk_slot, i)
                 # mix the key (Knuth multiplicative) then mask to [0, cap).
                 var h = Int((UInt64(key) * 0x9E3779B97F4A7C15) >> 33) & mask
                 # linear probe to claim or find the slot for `key`.
@@ -1031,7 +1057,7 @@ def seg_hash_kernel(
                         var base = slot * M
                         for m in range(M):
                             var prog = metric_progs + 3 * Int(metric_offsets[m])
-                            var v = eval_program(
+                            var v = eval_program[USE_COLPTR](
                                 prog, Int(metric_lens[m]), cols, n_rows, i,
                                 dims, dim_offsets,
                             )
@@ -1380,28 +1406,57 @@ def segreduce_run(
             # supplier nationkey). Takes priority over use_mw because the pass
             # column is absent (pass_len==0) on this path. Lane striding / warp.sum
             # / partial layout match seg_dense_kernel_q5.
-            ctx.enqueue_function[seg_dense_kernel_q5_pred](
-                cols_d, n_rows, gid_slot,
-                mp_d, moff_d, mlen_d, M, G,
-                dims_d, doff_d,
-                part_d,
-                q5_lok_slot, q5_lsk_slot,
-                q5_o_lo, q5_o_hi, q5_asia_region,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+            if use_colptr:
+                # Phase 3: pass the per-column POINTER TABLE as `cols`; the [True]
+                # kernel reads fact cols through it (dims stay a separate buffer).
+                comptime kq5p = seg_dense_kernel_q5_pred[True]
+                ctx.enqueue_function[kq5p](
+                    col_ptrs_d, n_rows, gid_slot,
+                    mp_d, moff_d, mlen_d, M, G,
+                    dims_d, doff_d,
+                    part_d,
+                    q5_lok_slot, q5_lsk_slot,
+                    q5_o_lo, q5_o_hi, q5_asia_region,
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
+                )
+            else:
+                comptime kq5p0 = seg_dense_kernel_q5_pred[False]
+                ctx.enqueue_function[kq5p0](
+                    cols_d, n_rows, gid_slot,
+                    mp_d, moff_d, mlen_d, M, G,
+                    dims_d, doff_d,
+                    part_d,
+                    q5_lok_slot, q5_lsk_slot,
+                    q5_o_lo, q5_o_hi, q5_asia_region,
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
+                )
         elif gen_pred_active and kind == KIND_Q1:
             # Phase G Stage 2 (generalized): Q1 in-kernel predicate over resident
             # columns + per-run bounds (no host pass column). Takes priority over
             # use_mw because the pass column is absent (pass_len==0) on this path.
             # Lane striding / warp.sum / partial layout match seg_dense_kernel_q1.
-            ctx.enqueue_function[seg_dense_kernel_q1_pred](
-                cols_d, n_rows, gid_slot,
-                mp_d, moff_d, mlen_d, M, G,
-                dims_d, doff_d,
-                part_d,
-                fpred_d, n_fpred,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+            if use_colptr:
+                # Phase 3: pass the per-column POINTER TABLE as `cols`; the [True]
+                # kernel reads columns (incl. the gid slot) through it.
+                comptime kq1p = seg_dense_kernel_q1_pred[True]
+                ctx.enqueue_function[kq1p](
+                    col_ptrs_d, n_rows, gid_slot,
+                    mp_d, moff_d, mlen_d, M, G,
+                    dims_d, doff_d,
+                    part_d,
+                    fpred_d, n_fpred,
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
+                )
+            else:
+                comptime kq1p0 = seg_dense_kernel_q1_pred[False]
+                ctx.enqueue_function[kq1p0](
+                    cols_d, n_rows, gid_slot,
+                    mp_d, moff_d, mlen_d, M, G,
+                    dims_d, doff_d,
+                    part_d,
+                    fpred_d, n_fpred,
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
+                )
         elif use_mw:
             # Multi-warp occupancy variant is unchanged (generic interpreter):
             # the comptime-specialized kernels mirror the 1-warp-block layout.
@@ -1606,6 +1661,11 @@ def segreduce_run_hash(
     var cols_d = res.cols_d
     var n_rows = res.n_rows
     var dims_d = res.dims_d
+    # Phase 3 (GPU_OP_COLPTR): when use_colptr, seg_hash_kernel[True] reads columns
+    # through this per-column device-pointer table instead of the packed `cols_d`
+    # (a dummy here). Mirrors segreduce_run; `dims_d` stays a separate buffer.
+    var use_colptr = res.use_colptr
+    var col_ptrs_d = res.col_ptrs_d
 
     # ---- small per-run program buffers (mirrors segreduce_run) ----
     var doff_n = res.n_dims + 1 if res.n_dims > 0 else 1
@@ -1642,14 +1702,28 @@ def segreduce_run_hash(
     # Cap the grid so the stride loop stays efficient (still covers all rows).
     if nblocks > SEG_NBLOCKS:
         nblocks = SEG_NBLOCKS
-    ctx.enqueue_function[seg_hash_kernel](
-        cols_d, n_rows, gk_slot, cap,
-        pass_d, pass_len,
-        mp_d, moff_d, mlen_d, M,
-        dims_d, doff_d,
-        slot_key_d, slot_acc_d,
-        grid_dim=nblocks, block_dim=HASH_BLOCK,
-    )
+    if use_colptr:
+        # Phase 3: pass the per-column POINTER TABLE as `cols`; the [True] kernel
+        # reads columns (incl. the fact group key) through it. dims stay separate.
+        comptime khash = seg_hash_kernel[True]
+        ctx.enqueue_function[khash](
+            col_ptrs_d, n_rows, gk_slot, cap,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            slot_key_d, slot_acc_d,
+            grid_dim=nblocks, block_dim=HASH_BLOCK,
+        )
+    else:
+        comptime khash0 = seg_hash_kernel[False]
+        ctx.enqueue_function[khash0](
+            cols_d, n_rows, gk_slot, cap,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            slot_key_d, slot_acc_d,
+            grid_dim=nblocks, block_dim=HASH_BLOCK,
+        )
 
     # ---- read back occupied slots, widen int64 -> int128 on the host ----
     var key_h = alloc[Int64](cap)

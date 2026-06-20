@@ -2288,6 +2288,27 @@ def _colptr_eligible(d: GpuPlanDescriptor) -> Bool:
         # Q14 UNGROUPED FK-join, predicate-independent: fact cols are all pooled;
         # the dim arrays stay a separate buffer (read unchanged by the kernel).
         return d.strategy == STRAT_UNGROUPED and _gen_pred_enabled(d)
+    if d.kind == KIND_Q1:
+        # Q1 DENSE_GROUP, predicate-independent (generalized fact filter): fact
+        # cols are all pooled (STORAGE order); the gid slot is a per-query derived
+        # buffer handled by the assembly. Mirrors the Q1 finalize pred gate exactly
+        # (`gen_pred_on = _gen_pred_enabled(d) and d.kind == KIND_Q1`).
+        return d.strategy == STRAT_DENSE_GROUP and _gen_pred_enabled(d)
+    if d.kind == KIND_Q5:
+        # Q5 DENSE_GROUP, predicate-independent (Path B): fact cols (incl. the
+        # l_orderkey/l_suppkey gather slots) are pooled; the raw dim arrays + the
+        # per-query derived gid stay separate (read unchanged / via derived bufs).
+        # Mirrors the Q5 finalize pred gate (`q5_pred_on = _q5_pred_enabled(d)`).
+        return d.strategy == STRAT_DENSE_GROUP and _q5_pred_enabled(d)
+    if d.kind == KIND_Q3:
+        # Q3 HASH_GROUP ONLY (NVIDIA/AMD; needs 64-bit atomics). HASH_GROUP appends
+        # NO ORDER BY => STORAGE row order, so the fact cols (incl. the integer fact
+        # group key l_orderkey) ARE pooled. The host-baked pass column + the FK dim
+        # arrays are per-query derived/separate buffers (handled by the assembly).
+        # SORT_SEGREDUCE is EXCLUDED: it appends ORDER BY (a different row order),
+        # so its fact columns are NOT poolable -> no pooled slots to point at; it
+        # must stay on the packed path (this gate returns False for it -> correct).
+        return d.strategy == STRAT_HASH_GROUP
     return False
 
 
@@ -5220,7 +5241,41 @@ def _pin_finalize_q5(
             seg_off_dummy[0] = 0
             var pool_lease_keys: List[String] = []
             var resident: SegResident
-            if _colpool_on():
+            if _colptr_eligible(d):
+                # Phase 3 (Q5): pooled fact columns (incl. the l_orderkey/l_suppkey
+                # gather slots) read directly via a per-column POINTER TABLE -- no
+                # packed cols_d. The raw dim arrays stay a separate buffer, uploaded
+                # as usual; the per-query derived gid slot (>= n_numeric) is handled
+                # by the assembly's derived-buf loop. Q5 is NOT skip-mat-eligible, so
+                # the omit mask is all-False -> `assemble_fail` never trips here, but
+                # we keep the same lease/omit handling + backstop as the packed path.
+                var omit_slot_q5 = _omit_slot_mask(st, numeric_matcols)
+                var assemble_fail = False
+                var derived_bufs: List[DeviceBuffer[DType.int64]] = []
+                var col_ptrs_d = _colpool_assemble_col_ptrs(
+                    ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+                    omit_slot_q5, pool_lease_keys, derived_bufs, assemble_fail,
+                )
+                if assemble_fail:
+                    for li in range(len(pool_lease_keys)):
+                        release_lease(pool_lease_keys[li])
+                    for li in range(len(st.colpool_omit_leases)):
+                        release_lease(st.colpool_omit_leases[li])
+                    st.colpool_omit_leases = []
+                    seg_off_dummy.free()
+                    nation_region.free(); cust_nation.free()
+                    supp_nation.free(); supp_region.free()
+                    order_date.free(); order_cust_nation.free()
+                    dims_host.free(); doff_host.free(); cols.free()
+                    return 11
+                for li in range(len(st.colpool_omit_leases)):
+                    pool_lease_keys.append(st.colpool_omit_leases[li])
+                st.colpool_omit_leases = []
+                resident = segreduce_upload_from_colptr(
+                    ctx, col_ptrs_d^, derived_bufs^, n_slots, n, seg_off_dummy, 0,
+                    dims_host, doff_host, n_dim_arrays,
+                )
+            elif _colpool_on():
                 # Q5 is NOT skip-materialize-eligible (deferred): the omit mask is
                 # all-False, so no column is ever pool-sourced and `_assemble_fail`
                 # stays False. We still pass them for the unified signature.
@@ -6127,7 +6182,37 @@ def _pin_finalize_generic_dims(
         seg_off_dummy_h[0] = 0
         var pool_lease_keys_h: List[String] = []
         var resident: SegResident
-        if _colpool_on():
+        if _colptr_eligible(d):
+            # Phase 3 (Q3 HASH_GROUP): pooled fact columns (incl. the integer fact
+            # group key l_orderkey) read directly via a per-column POINTER TABLE --
+            # no packed cols_d. The host-baked pass column (per-query derived slot)
+            # + the FK dim arrays stay separate buffers (handled by the assembly's
+            # derived-buf loop / uploaded as usual). Q3 is NOT skip-mat-eligible, so
+            # the omit mask is all-False -> `assemble_fail` never trips here, but we
+            # keep the same lease/omit handling + backstop as the packed path.
+            var assemble_fail = False
+            var derived_bufs: List[DeviceBuffer[DType.int64]] = []
+            var col_ptrs_d = _colpool_assemble_col_ptrs(
+                ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+                omit_slot, pool_lease_keys_h, derived_bufs, assemble_fail,
+            )
+            if assemble_fail:
+                for li in range(len(pool_lease_keys_h)):
+                    release_lease(pool_lease_keys_h[li])
+                for li in range(len(st.colpool_omit_leases)):
+                    release_lease(st.colpool_omit_leases[li])
+                st.colpool_omit_leases = []
+                seg_off_dummy_h.free()
+                cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+                return 11
+            for li in range(len(st.colpool_omit_leases)):
+                pool_lease_keys_h.append(st.colpool_omit_leases[li])
+            st.colpool_omit_leases = []
+            resident = segreduce_upload_from_colptr(
+                ctx, col_ptrs_d^, derived_bufs^, n_slots, n, seg_off_dummy_h, 0,
+                dims_host, doff_host, n_dim_arrays,
+            )
+        elif _colpool_on():
             # HASH_GROUP (Q3) is NOT skip-materialize-eligible (excluded): omit_slot
             # is all-False here, so nothing is pool-sourced and `_assemble_fail`
             # stays False. Passed for the unified signature.
