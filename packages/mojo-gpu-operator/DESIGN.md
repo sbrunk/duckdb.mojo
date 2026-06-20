@@ -442,10 +442,33 @@ Linux build notes:
   as launch params) would let the resident columns serve *any* filter on the same
   table warm — turning "every distinct-constant query is cold" into "first cold, rest
   warm" (e.g. a dashboard varying Q6's date range: 2nd+ query ~365 ms cold → ~0.37 ms
-  warm). This is being proven via a **flag-gated Q6 PoC** (`GPU_OP_NATIVE_DECODE`):
-  Stage 1 feeds Q6 from the GPU-direct decoder; Stage 2 makes Q6 residency
-  predicate-independent and measures warm-hit-rate across a stream of Q6 with *varying*
-  constants (the whole thesis). Correctness-first: flag-off is the untouched default.
+  warm).
+
+  **This is implemented and proven, flag-gated on `GPU_OP_NATIVE_DECODE` (default
+  off), for all four GPU-accepted queries — Q6, Q1, Q5, Q14** (Q3 is CPU-favorable,
+  below). The filter is dropped from `_signature` and evaluated **in-kernel** from
+  per-run launch params over the constant-independent resident columns, so the same
+  resident buffers serve *any* filter constant warm. Per kind: Q6/Q1/Q14 have
+  fixed-width fact filters (`l_shipdate` etc.) handled directly; **Q5** (filter on
+  *dimensions* — `r_name`, `o_orderdate`) uses "Path B" — all resident buffers made
+  constant-independent (group id = raw supplier nationkey; raw dim arrays;
+  `n_name` labels for every nationkey) with region/date gated in-kernel from
+  per-run scalars (the naive "re-feed dims on warm" is impossible — the cold/warm
+  contract feeds nothing on warm). Eligibility is a strict canonical-shape gate;
+  any deviation (extra filter, non-canonical cmp, group cardinality > 64) falls back
+  to the per-constant signature — correct, just not warm; **never a wrong number**.
+  - Q6 substrate (Stage 1): the fact columns are also fed GPU-direct from the decoder
+    (~2.6× less host→device traffic); Q1/Q5/Q14 use the existing feed for residency
+    (their VARCHAR group keys / promo flag are constant-independent, so no string
+    decode is needed — see Deferred above).
+  - **Verified bit-exact on Apple M3 Max + RTX 4090**: each query run with several
+    *different* constant sets in one session → first COLD, rest WARM under a single
+    constant-free signature, every result identical to stock (`GPU_OP_GENERIC=off`)
+    with the same constants. Decisive Q5 probe: a region (MIDDLE EAST) *never*
+    materialized on the cold run is served WARM and exact, proving residency is truly
+    constant-independent. (Q1's `avg_*` columns differ only in the last double ULP —
+    the pre-existing GPU-AVG-as-double rounding, present with the flag off too.)
+  Correctness-first: flag-off is the byte-identical, per-constant-keyed default.
 - **High-cardinality group-by (Q3) is CPU-favorable** — light per-row work + large
   group output. A GPU hash-aggregate is implemented (NVIDIA, `STRAT_HASH_GROUP`)
   and is the right algorithm, but it still loses to multithreaded stock at sf1 and
