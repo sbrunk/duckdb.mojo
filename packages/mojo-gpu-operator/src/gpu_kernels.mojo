@@ -2036,6 +2036,20 @@ struct GpuPinned(Movable):
     var gen_pred: Bool
     var gen_pred_slots: List[Int]
     var gen_pred_cmps: List[Int64]
+    # --- Phase G Stage 2 (Path B): Q5 predicate-independent residency ---
+    # When `q5_pred` is True the resident dim arrays + gid are the CONSTANT-
+    # INDEPENDENT raw forms (arr0=o_orderdate, arr1=order_cust_nation,
+    # arr2=supp_nation, arr3=supp_region; gid = raw supp_nation), and the Q5 filter
+    # (region + orderdate window + cust_nation==supp_nation) is evaluated IN-KERNEL
+    # from these + the CURRENT query's scalars (o_lo/o_hi/asia_region) threaded into
+    # _assemble every run. The constant-INDEPENDENT slots (l_orderkey / l_suppkey)
+    # live here; the bounds do NOT. The region_name->regionkey map (ALL 5 regions,
+    # itself region-independent) is cached so the WARM path can resolve THIS query's
+    # region const to its key with no region dim fed.
+    var q5_pred: Bool
+    var q5_pred_slots: List[Int]  # [l_orderkey_slot, l_suppkey_slot]
+    var q5_region_names: List[String]
+    var q5_region_keys: List[Int64]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2071,6 +2085,10 @@ struct GpuPinned(Movable):
         self.gen_pred = False
         self.gen_pred_slots = []
         self.gen_pred_cmps = []
+        self.q5_pred = False
+        self.q5_pred_slots = []
+        self.q5_region_names = []
+        self.q5_region_keys = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2106,6 +2124,7 @@ def _assemble(
     mut gp: GpuPinned,
     q6_bounds: Q6PredSpec = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0),
     gen_bounds: List[Int64] = [],
+    q5_bounds: List[Int64] = [],
 ) raises:
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
     var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
@@ -2126,6 +2145,22 @@ def _assemble(
             fpred_list.append(Int64(gp.gen_pred_slots[p]))
             fpred_list.append(gp.gen_pred_cmps[p])
             fpred_list.append(gen_bounds[p])
+    # Phase G Stage 2 (Path B): Q5 in-kernel predicate. The resident dim arrays +
+    # gid are constant-independent; THIS query's region/date scalars come fresh from
+    # `q5_bounds` ([o_lo, o_hi, asia_region], assembled by the caller from the live
+    # descriptor + the cached region map). Slots (l_orderkey / l_suppkey) are
+    # constant-independent and live in the cache entry.
+    var q5_active = (
+        gp.q5_pred
+        and gp.kind == KIND_Q5
+        and len(gp.q5_pred_slots) == 2
+        and len(q5_bounds) == 3
+    )
+    var q5_lok = gp.q5_pred_slots[0] if q5_active else 0
+    var q5_lsk = gp.q5_pred_slots[1] if q5_active else 0
+    var q5_o_lo = q5_bounds[0] if q5_active else Int64(0)
+    var q5_o_hi = q5_bounds[1] if q5_active else Int64(0)
+    var q5_asia = q5_bounds[2] if q5_active else Int64(0)
     var sums = segreduce_run(
         gp.res,
         gp.mode,
@@ -2150,6 +2185,12 @@ def _assemble(
         q6_qty_hi=q6_bounds.qty_hi,
         gen_pred_active=gen_active,
         fpred_list=fpred_list^,
+        q5_pred_active=q5_active,
+        q5_lok_slot=q5_lok,
+        q5_lsk_slot=q5_lsk,
+        q5_o_lo=q5_o_lo,
+        q5_o_hi=q5_o_hi,
+        q5_asia_region=q5_asia,
     )
 
     var n_cols = gp.n_cols
@@ -2651,6 +2692,33 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(p.cmp))
                 )
         sig += "|gen_pred=" + String(Int(d.kind))
+        return sig
+    # Phase G Stage 2 (Path B): Q5's predicate-independent residency decouples the
+    # resident dim arrays + gid from the region/date constants (raw o_orderdate /
+    # cust_nation / supp_nation / supp_region; gid = raw supp_nation), evaluating
+    # the region + orderdate window + cust_nation==supp_nation filter IN-KERNEL from
+    # per-run scalars. So EXCLUDE the region (r_name) + o_orderdate constants (keep
+    # the cmp/column shape) -> r_name in {ASIA,EUROPE,AMERICA,...} and ANY date
+    # window collapse to ONE signature, reusing the resident buffers warm. The dim
+    # edges (already folded above) + the dim-filter cmp/column shape still key a
+    # genuinely different predicate STRUCTURE distinctly.
+    if _q5_pred_enabled(d):
+        for gi in range(len(d.gets)):
+            ref g = d.gets[gi]
+            for fi in range(len(g.filters)):
+                ref p = g.filters[fi]
+                if (p.col.table == "region" and p.col.column == "r_name") or (
+                    p.col.table == "orders" and p.col.column == "o_orderdate"
+                ):
+                    sig += (
+                        "|q5f="
+                        + p.col.table
+                        + "."
+                        + p.col.column
+                        + ":"
+                        + String(Int(p.cmp))
+                    )
+        sig += "|q5_pred=1"
         return sig
     # Filter CONSTANTS: every GET's predicates (fact AND dim) by table.column,
     # cmp, and the const lo/hi (+ str_val for VARCHAR consts). This is what makes
@@ -3369,6 +3437,129 @@ def _gen_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
     return bounds^
 
 
+# ---------------------------------------------------------------------------
+# Phase G Stage 2 (Path B): Q5 predicate-independent residency.
+#
+# Mirrors the Q6/Q1/Q14 mechanism for the Q5 shape: the resident dim arrays + gid
+# are the CONSTANT-INDEPENDENT raw forms, and the region/date filter is evaluated
+# IN-KERNEL from per-run scalars, so DIFFERENT region/date constants reuse the same
+# residency (warm-across-constants).
+#
+#   * `_q5_pred_eligible(d)` -- a PURE structural gate: kind==Q5, DENSE_GROUP, the
+#     canonical 5 dims (orders/customer/supplier/nation/region), and the ONLY
+#     constant-bearing filters are region.r_name (CMP_EQ VARCHAR) + orders.
+#     o_orderdate (a GE/GT lo bound AND a LT/LE hi bound). No other dim/fact
+#     filters. ANY deviation -> False -> the caller stays on the per-constant
+#     |f= signature + the existing per-constant Q5 residency (still correct, just
+#     not warm-across-constants).
+#   * `_q5_pred_enabled(d)` -- the master switch: flag on AND _q5_pred_eligible.
+#   * `_q5_pred_params(d, names, keys)` -- the per-run scalars threaded into
+#     _assemble: (o_lo, o_hi, asia_region). o_lo/o_hi from the o_orderdate filters
+#     (GE->lo, GT->lo+1, LT->hi, LE->hi+1 -- exactly _pin_finalize_q5 today);
+#     asia_region from the region_name->regionkey map (ALL 5 regions, cached on
+#     cold; itself region-independent) so WARM is self-contained with no region dim.
+def _q5_pred_eligible(d: GpuPlanDescriptor) -> Bool:
+    if d.kind != KIND_Q5:
+        return False
+    if d.strategy != STRAT_DENSE_GROUP:
+        return False
+    # Exactly the canonical 5 dims (orders/customer/supplier/nation/region).
+    if len(d.dim_edges) != 5:
+        return False
+    if (
+        _de_of_table(d, "orders") < 0
+        or _de_of_table(d, "customer") < 0
+        or _de_of_table(d, "supplier") < 0
+        or _de_of_table(d, "nation") < 0
+        or _de_of_table(d, "region") < 0
+    ):
+        return False
+    # The ONLY constant-bearing filters allowed: region.r_name (CMP_EQ VARCHAR) and
+    # orders.o_orderdate (GE/GT lo + LT/LE hi). Anything else -> not eligible.
+    var have_region = False
+    var have_o_lo = False
+    var have_o_hi = False
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            if p.col.table == "region" and p.col.column == "r_name":
+                if p.cmp != CMP_EQ:
+                    return False
+                if d.consts[p.const_id].type_tag != TYPE_VARCHAR:
+                    return False
+                if have_region:
+                    return False  # duplicate region filter -> not canonical
+                have_region = True
+            elif p.col.table == "orders" and p.col.column == "o_orderdate":
+                if p.cmp == CMP_GE or p.cmp == CMP_GT:
+                    if have_o_lo:
+                        return False
+                    have_o_lo = True
+                elif p.cmp == CMP_LT or p.cmp == CMP_LE:
+                    if have_o_hi:
+                        return False
+                    have_o_hi = True
+                else:
+                    return False
+            else:
+                # Any other filter (fact or dim) carries a constant we would drop
+                # from the signature -> the decoupling would be unsound.
+                return False
+    if not have_region or not have_o_lo or not have_o_hi:
+        return False
+    return True
+
+
+def _q5_pred_enabled(d: GpuPlanDescriptor) -> Bool:
+    if getenv("GPU_OP_NATIVE_DECODE", "") == "":
+        return False
+    return _q5_pred_eligible(d)
+
+
+# Per-run scalars [o_lo, o_hi, asia_region] for the in-kernel Q5 predicate. The
+# region->regionkey map (ALL 5 regions) is passed in (cached on cold), so WARM has
+# no region dim fed yet resolves THIS query's region const to its key. o_lo/o_hi
+# match _pin_finalize_q5 exactly (GE->lo, GT->lo+1, LT->hi, LE->hi+1). Returns an
+# empty list if not eligible or the region const is unknown (the caller then must
+# fall back; but eligibility already guarantees the filter shape).
+def _q5_pred_params(
+    d: GpuPlanDescriptor,
+    region_names: List[String],
+    region_keys: List[Int64],
+) -> List[Int64]:
+    var out: List[Int64] = []
+    if not _q5_pred_eligible(d):
+        return out^
+    var o_lo = Int64(0)
+    var o_hi = Int64(0)
+    var region_name = String("")
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            if p.col.table == "orders" and p.col.column == "o_orderdate":
+                ref c = d.consts[p.const_id]
+                if p.cmp == CMP_GE:
+                    o_lo = c.lo
+                elif p.cmp == CMP_GT:
+                    o_lo = c.lo + 1
+                elif p.cmp == CMP_LT:
+                    o_hi = c.lo
+                elif p.cmp == CMP_LE:
+                    o_hi = c.lo + 1
+            elif p.col.table == "region" and p.col.column == "r_name":
+                region_name = d.consts[p.const_id].str_val
+    var asia_region = Int64(-1)
+    for i in range(len(region_names)):
+        if region_names[i] == region_name:
+            asia_region = region_keys[i]
+    out.append(o_lo)
+    out.append(o_hi)
+    out.append(asia_region)
+    return out^
+
+
 # The fully generic finalize for n_dims == 0 (UNGROUPED + DENSE_GROUP).
 def _pin_finalize_generic(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -3949,17 +4140,27 @@ def _pin_finalize_q5(
     if key not in m:
         return 2
 
-    # WARM: re-run on the resident buffers + assemble from cached metadata.
+    # WARM: re-run on the resident buffers + assemble from cached metadata. For
+    # the Path B predicate-independent residency the resident dim arrays + gid are
+    # constant-INDEPENDENT; THIS query's region/date scalars are extracted from the
+    # live descriptor `d` + the cached region map and threaded into the re-run.
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
     if sig in p2:
         ref dst = m[key]
-        _assemble(dst, p2[sig])
+        if p2[sig].q5_pred:
+            var q5b = _q5_pred_params(
+                d, p2[sig].q5_region_names, p2[sig].q5_region_keys
+            )
+            _assemble(dst, p2[sig], q5_bounds=q5b^)
+        else:
+            _assemble(dst, p2[sig])
         return 0
 
     # COLD: build dim arrays + packed columns from fed host columns, upload once.
     ref st = m[key]
     var n = st.n_rows
+    var q5_pred_on = _q5_pred_enabled(d)
 
     # --- locate the 5 dim edges by table name ---
     var de_orders = _de_of_table(d, "orders")
@@ -3986,6 +4187,259 @@ def _pin_finalize_q5(
         return 21
     var lok_slot = col_slot["l_orderkey"]
     var lsk_slot = col_slot["l_suppkey"]
+
+    # =======================================================================
+    # Phase G Stage 2 (Path B): predicate-INDEPENDENT residency for Q5. The
+    # resident dim arrays + gid are the RAW (region/date-independent) forms and the
+    # region + orderdate window + cust_nation==supp_nation filter is evaluated
+    # IN-KERNEL from per-run scalars (o_lo/o_hi/asia_region), so DIFFERENT region/
+    # date constants reuse the SAME residency (warm-across-constants). This mirrors
+    # the shipped Q6/Q1/Q14 mechanism. Built only when _q5_pred_enabled(d).
+    # =======================================================================
+    if q5_pred_on:
+        # --- nation: name[nk] + region[nk] for ALL nationkeys (region-independent).
+        var c_nk = _dim_src_col(st, de_nation, "n_nationkey")
+        var c_nn = _dim_src_col(st, de_nation, "n_name")
+        var c_nrk = _dim_src_col(st, de_nation, "n_regionkey")
+        var ndn = st.dim_n_rows[de_nation]
+        var max_nk = 0
+        for i in range(ndn):
+            var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
+            if nk > max_nk:
+                max_nk = nk
+        # G = max_nationkey + 1 (raw nationkey is the gid). The dense kernel's
+        # per-lane accumulator is sized SEG_MAX_METRICS*SEG_MAX_METRICS == 64 cells
+        # (M==1 for Q5), so G must be <= 64. sf1 max nationkey == 24; if a larger
+        # schema appears, fall back to the per-constant (ASIA-rank gid) path, which
+        # is still correct -- just not warm-across-constants.
+        var G = max_nk + 1
+        if G > 64:
+            q5_pred_on = False
+        else:
+            var nation_region = alloc[Int64](max_nk + 1)
+            var nation_name: List[String] = []
+            for _ in range(max_nk + 1):
+                nation_name.append(String(""))
+            for k in range(max_nk + 1):
+                nation_region[k] = -1
+            for i in range(ndn):
+                var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
+                nation_region[nk] = _dim_col_val(st, de_nation, c_nrk, i)
+                nation_name[nk] = _dim_col_str(st, de_nation, c_nn, i)
+
+            # --- region map: r_name -> r_regionkey for ALL regions (region-indep). ---
+            var c_rk_p = _dim_src_col(st, de_region, "r_regionkey")
+            var c_rn_p = _dim_src_col(st, de_region, "r_name")
+            var rdn_p = st.dim_n_rows[de_region]
+            var q5_region_names: List[String] = []
+            var q5_region_keys: List[Int64] = []
+            for i in range(rdn_p):
+                q5_region_names.append(_dim_col_str(st, de_region, c_rn_p, i))
+                q5_region_keys.append(_dim_col_val(st, de_region, c_rk_p, i))
+
+            # --- customer: cust_nation[c_custkey] (region/date-independent). ---
+            var c_cck = _dim_src_col(st, de_customer, "c_custkey")
+            var c_cnk = _dim_src_col(st, de_customer, "c_nationkey")
+            var cdn = st.dim_n_rows[de_customer]
+            var max_ck = 0
+            for i in range(cdn):
+                var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
+                if ck > max_ck:
+                    max_ck = ck
+            var cust_nation = alloc[Int64](max_ck + 1)
+            for k in range(max_ck + 1):
+                cust_nation[k] = -1
+            for i in range(cdn):
+                var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
+                cust_nation[ck] = _dim_col_val(st, de_customer, c_cnk, i)
+
+            # --- supplier: supp_nation[sk] + supp_region[sk] (region-independent). ---
+            var c_sk = _dim_src_col(st, de_supplier, "s_suppkey")
+            var c_snk = _dim_src_col(st, de_supplier, "s_nationkey")
+            var sdn = st.dim_n_rows[de_supplier]
+            var max_sk = 0
+            for i in range(sdn):
+                var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
+                if sk > max_sk:
+                    max_sk = sk
+            var supp_nation = alloc[Int64](max_sk + 1)
+            var supp_region = alloc[Int64](max_sk + 1)
+            for k in range(max_sk + 1):
+                supp_nation[k] = -1
+                supp_region[k] = -1
+            for i in range(sdn):
+                var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
+                var sn = Int(_dim_col_val(st, de_supplier, c_snk, i))
+                supp_nation[sk] = Int64(sn)
+                if sn >= 0 and sn <= max_nk:
+                    supp_region[sk] = nation_region[sn]
+
+            # --- orders: o_orderdate[ok] (RAW) + order_cust_nation[ok] (region/
+            #     date-independent; no host order_pass bake). ---
+            var c_ook = _dim_src_col(st, de_orders, "o_orderkey")
+            var c_ock = _dim_src_col(st, de_orders, "o_custkey")
+            var c_od = _dim_src_col(st, de_orders, "o_orderdate")
+            var odn = st.dim_n_rows[de_orders]
+            var max_ok = 0
+            for i in range(odn):
+                var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
+                if ok > max_ok:
+                    max_ok = ok
+            var order_date = alloc[Int64](max_ok + 1)
+            var order_cust_nation = alloc[Int64](max_ok + 1)
+            for k in range(max_ok + 1):
+                order_date[k] = 0
+                order_cust_nation[k] = -1
+            for i in range(odn):
+                var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
+                order_date[ok] = _dim_col_val(st, de_orders, c_od, i)
+                var ck = Int(_dim_col_val(st, de_orders, c_ock, i))
+                if ck >= 0 and ck <= max_ck:
+                    order_cust_nation[ok] = cust_nation[ck]
+
+            # --- pack the 4 dim arrays + offsets (FIXED indices 0..3):
+            #     arr0=o_orderdate[ok], arr1=order_cust_nation[ok],
+            #     arr2=supp_nation[sk], arr3=supp_region[sk]. ---
+            var len0 = max_ok + 1
+            var len1 = max_ok + 1
+            var len2 = max_sk + 1
+            var len3 = max_sk + 1
+            var total_dim = len0 + len1 + len2 + len3
+            var dims_host = alloc[Int64](total_dim)
+            var w = 0
+            for i in range(len0):
+                dims_host[w] = order_date[i]; w += 1
+            for i in range(len1):
+                dims_host[w] = order_cust_nation[i]; w += 1
+            for i in range(len2):
+                dims_host[w] = supp_nation[i]; w += 1
+            for i in range(len3):
+                dims_host[w] = supp_region[i]; w += 1
+            var n_dim_arrays = 4
+            var doff_host = alloc[Int64](n_dim_arrays + 1)
+            doff_host[0] = 0
+            doff_host[1] = Int64(len0)
+            doff_host[2] = Int64(len0 + len1)
+            doff_host[3] = Int64(len0 + len1 + len2)
+            doff_host[4] = Int64(total_dim)
+
+            # --- packed fact columns + the per-row gid column (RAW supp_nation
+            #     [l_suppkey]; the in-kernel region gate zeroes non-region nations). ---
+            var gid_slot = n_numeric
+            var n_slots = n_numeric + 1
+            var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+            for slot in range(n_numeric):
+                var mj = numeric_matcols[slot]
+                for i in range(n):
+                    cols[slot * n + i] = _col_val(st, mj, i)
+            for i in range(n):
+                var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
+                var gv = Int64(0)
+                if sk >= 0 and sk <= max_sk:
+                    var sn = supp_nation[sk]
+                    if sn >= 0:
+                        gv = sn
+                cols[gid_slot * n + i] = gv
+
+            # --- pass program: NONE (in-kernel predicate gates rows). ---
+            var pass_prog: List[Int64] = []
+            var pass_len = 0
+
+            # --- metric: the single SUM(revenue) program (scale 4), unchanged. ---
+            var rev_ai = -1
+            for ai in range(len(d.aggregates)):
+                if d.aggregates[ai].kind == AGG_SUM:
+                    rev_ai = ai
+                    break
+            if rev_ai < 0:
+                nation_region.free(); cust_nation.free()
+                supp_nation.free(); supp_region.free()
+                order_date.free(); order_cust_nation.free()
+                dims_host.free(); doff_host.free(); cols.free()
+                return 25
+            var plan = _resolve_program(d, d.aggregates[rev_ai], col_slot)
+            var metric_ops = plan.ops.copy()
+            var metric_offsets: List[Int64] = [Int64(0)]
+            var metric_lens: List[Int64] = [Int64(plan.n_ops)]
+            var M = 1
+            var n_ops_total = plan.n_ops
+
+            # --- per-candidate (gid == raw nationkey) labels: n_name[gid] for ALL
+            #     nationkeys; gid_to_nation is the identity. n_cand = G. ---
+            var n_cols = len(d.out_types)
+            var n_keys = len(d.group_keys)  # == 1 (n_name)
+            var gk_is_str: List[Bool] = []
+            for _ in range(n_keys):
+                gk_is_str.append(True)
+            var gk_str_vals: List[List[String]] = []
+            var gk_i64_vals: List[List[Int64]] = []
+            for g in range(G):
+                var sv: List[String] = []
+                var iv: List[Int64] = []
+                if n_keys > 0:
+                    sv.append(nation_name[g])
+                    iv.append(Int64(0))
+                gk_str_vals.append(sv^)
+                gk_i64_vals.append(iv^)
+
+            # --- upload the resident buffers once (DENSE_GROUP, 4 dim arrays). ---
+            var ctx = shared_device_context()
+            var seg_off_dummy = alloc[Int64](1)
+            seg_off_dummy[0] = 0
+            var resident = segreduce_upload(
+                ctx, cols, n_slots, n, seg_off_dummy, 0,
+                dims_host, doff_host, n_dim_arrays,
+            )
+            seg_off_dummy.free()
+
+            nation_region.free(); cust_nation.free()
+            supp_nation.free(); supp_region.free()
+            order_date.free(); order_cust_nation.free()
+            dims_host.free(); doff_host.free(); cols.free()
+
+            # --- construct + cache the GpuPinned, then assemble (emit revenue!=0). ---
+            var agg_kind: List[Int64] = [AGG_SUM]
+            var agg_scale: List[Int64] = [d.aggregates[rev_ai].ret_scale]
+            var agg_m0: List[Int] = [0]
+            var agg_m1: List[Int] = [-1]
+
+            var gp = GpuPinned(resident^)
+            gp.mode = STRAT_DENSE_GROUP
+            gp.G = G
+            gp.gid_slot = gid_slot
+            gp.M = M
+            gp.pass_prog = pass_prog^
+            gp.pass_len = pass_len
+            gp.metric_ops = metric_ops^
+            gp.n_ops_total = n_ops_total
+            gp.metric_offsets = metric_offsets^
+            gp.metric_lens = metric_lens^
+            gp.n_seg = 0
+            gp.n_cols = n_cols
+            gp.n_keys = n_keys
+            gp.agg_kind = agg_kind^
+            gp.agg_scale = agg_scale^
+            gp.agg_m0 = agg_m0^
+            gp.agg_m1 = agg_m1^
+            gp.gk_is_str = gk_is_str^
+            gp.gk_str_vals = gk_str_vals^
+            gp.gk_i64_vals = gk_i64_vals^
+            gp.n_cand = G
+            gp.emit_agg = 0  # gate on revenue
+            gp.emit_gt0 = False  # emit iff revenue != 0 (selected-region nations)
+            gp.kind = d.kind
+            gp.q5_pred = True
+            gp.q5_pred_slots = [lok_slot, lsk_slot]
+            gp.q5_region_names = q5_region_names.copy()
+            gp.q5_region_keys = q5_region_keys.copy()
+            p2[sig] = gp^
+
+            ref dst = m[key]
+            # COLD assembles with THIS query's scalars too (same kernel as WARM):
+            # resolve the region const against the just-built region map.
+            var q5b0 = _q5_pred_params(d, q5_region_names, q5_region_keys)
+            _assemble(dst, p2[sig], q5_bounds=q5b0^)
+            return 0
 
     # --- region: the regionkey whose r_name == the region filter const ---
     var region_name = String("")

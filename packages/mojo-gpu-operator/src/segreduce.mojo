@@ -616,6 +616,83 @@ def seg_dense_kernel_q5(
                 partials[(blk * G + g) * M + m] = s
 
 
+# Q5 PREDICATE-INDEPENDENT (DENSE_GROUP + 5 dims): identical to seg_dense_kernel_q5
+# except the row filter and the gid are evaluated IN-KERNEL from the resident
+# columns + dim arrays + per-run scalars (o_lo/o_hi/asia_region) instead of a
+# host-baked pass column + ASIA-rank gid. The resident buffers are therefore
+# constant-INDEPENDENT (raw o_orderdate / cust_nation / supp_nation / supp_region
+# dim arrays; gid = raw supp_nation), so DIFFERENT region/date constants reuse the
+# same residency (warm-across-constants). The dim-array LAYOUT is fixed:
+#   dims[doff[0] + orderkey] = o_orderdate (RAW int64 date)
+#   dims[doff[1] + orderkey] = order_cust_nation (customer's nationkey)
+#   dims[doff[2] + suppkey ] = supp_nation (supplier's nationkey)
+#   dims[doff[3] + suppkey ] = supp_region (supplier's regionkey)
+# A row PASSES iff (od in [o_lo, o_hi)) AND (cust_n == supp_n) AND
+# (supp_r == asia_region) -- byte-for-byte the host Q5 pass set for THIS region+
+# date, so the per-gid int128 SUM is bit-exact vs the per-constant Q5 path. The
+# gid is the supplier's RAW nationkey (G = max_nationkey+1); the in-kernel region
+# gate means only the selected region's nations get nonzero revenue, and the
+# host emit-rule (revenue != 0) drops the rest -- exactly stock's row set. Lane
+# striding / warp.sum / partials[(blk*G+g)*M+m] layout are IDENTICAL to
+# seg_dense_kernel_q5.
+def seg_dense_kernel_q5_pred(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    lok_slot: Int,
+    lsk_slot: Int,
+    o_lo: Int64,
+    o_hi: Int64,
+    asia_region: Int64,
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    var doff0 = Int(dim_offsets[0])
+    var doff1 = Int(dim_offsets[1])
+    var doff2 = Int(dim_offsets[2])
+    var doff3 = Int(dim_offsets[3])
+    while i < n_rows:
+        var ok = Int(cols[lok_slot * n_rows + i])
+        var sk = Int(cols[lsk_slot * n_rows + i])
+        var od = dims[doff0 + ok]
+        var cust_n = dims[doff1 + ok]
+        var supp_n = dims[doff2 + sk]
+        var supp_r = dims[doff3 + sk]
+        var passes = (
+            od >= o_lo
+            and od < o_hi
+            and cust_n == supp_n
+            and supp_r == asia_region
+        )
+        if passes:
+            var g = Int(cols[gid_slot * n_rows + i])
+            if g >= 0 and g < G:
+                var base = g * M
+                for m in range(M):
+                    var prog = metric_progs + 3 * Int(metric_offsets[m])
+                    acc[base + m] += eval_program_fast(
+                        prog, Int(metric_lens[m]), cols, n_rows, i,
+                        dims, dim_offsets,
+                    )
+        i += stride
+    var blk = Int(block_idx.x)
+    for g in range(G):
+        for m in range(M):
+            var s = warp.sum(acc[g * M + m])
+            if lane == 0:
+                partials[(blk * G + g) * M + m] = s
+
+
 # ---------------------------------------------------------------------------
 # UNGROUPED kernel: NBLOCKS blocks x WARP lanes, lane-strided over all rows.
 # Per-block int64 partials laid out partials[block * M + m].
@@ -1067,6 +1144,18 @@ def segreduce_run(
     # stock path. Passed by value (a tiny list) so the bounds are fresh per run.
     gen_pred_active: Bool = False,
     fpred_list: List[Int64] = [],
+    # Phase G Stage 2 (Path B): Q5 predicate-independent residency. When
+    # `q5_pred_active` is True (KIND_Q5 DENSE_GROUP only), the row filter (region +
+    # orderdate window + cust_nation==supp_nation) is evaluated IN-KERNEL from the
+    # resident raw dim arrays + per-run scalars (o_lo/o_hi/asia_region) instead of a
+    # host-baked pass column + ASIA-rank gid (pass_len is then 0, gid_slot holds the
+    # RAW supplier nationkey). Off by default -> stock per-constant Q5 path.
+    q5_pred_active: Bool = False,
+    q5_lok_slot: Int = 0,
+    q5_lsk_slot: Int = 0,
+    q5_o_lo: Int64 = 0,
+    q5_o_hi: Int64 = 0,
+    q5_asia_region: Int64 = 0,
 ) raises -> List[Int128]:
     var ctx = res.ctx
     var cols_d = res.cols_d
@@ -1137,7 +1226,22 @@ def segreduce_run(
     if mode == STRAT_DENSE_GROUP:
         var npart = SEG_NBLOCKS * G * M
         var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-        if gen_pred_active and kind == KIND_Q1:
+        if q5_pred_active and kind == KIND_Q5:
+            # Phase G Stage 2 (Path B): Q5 in-kernel predicate over the resident
+            # raw dim arrays + per-run scalars (no host pass column; gid is the raw
+            # supplier nationkey). Takes priority over use_mw because the pass
+            # column is absent (pass_len==0) on this path. Lane striding / warp.sum
+            # / partial layout match seg_dense_kernel_q5.
+            ctx.enqueue_function[seg_dense_kernel_q5_pred](
+                cols_d, n_rows, gid_slot,
+                mp_d, moff_d, mlen_d, M, G,
+                dims_d, doff_d,
+                part_d,
+                q5_lok_slot, q5_lsk_slot,
+                q5_o_lo, q5_o_hi, q5_asia_region,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        elif gen_pred_active and kind == KIND_Q1:
             # Phase G Stage 2 (generalized): Q1 in-kernel predicate over resident
             # columns + per-run bounds (no host pass column). Takes priority over
             # use_mw because the pass column is absent (pass_len==0) on this path.
