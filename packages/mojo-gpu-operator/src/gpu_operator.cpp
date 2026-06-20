@@ -247,6 +247,15 @@ int64_t mojo_gpu_desc_materialize_sql(void *handle, int64_t i, uint8_t *out, int
 int64_t mojo_gpu_pin_begin(void *handle);             // 0=WARM, 1=COLD
 int64_t mojo_gpu_feed_column(void *handle, int64_t req_i, int64_t col_j, void *ptr,
                              int64_t n_rows, int64_t type_tag);   // 0 ok
+// SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): set st.n_rows for the FACT request
+// unconditionally (called for request 0 before the feed loop with res->RowCount()).
+// When the narrowed SELECT omits ALL fact columns this is the only n_rows source.
+int64_t mojo_gpu_feed_rowcount(void *handle, int64_t n_rows);     // 0 ok
+// SKIP-MATERIALIZE active for THIS query (1) or not (0): pool on + sub-flag on +
+// in-scope ungrouped predicate-independent class (Q6/Q14). When 1 the C++ side
+// uses the narrowed SQL feed (NOT the GPU-direct fact feed) and calls
+// feed_rowcount before the feed loop. 0 => Phase 1 / verbatim behavior.
+int64_t mojo_gpu_skipmat_active(void *handle);
 int64_t mojo_gpu_pin_finalize(void *handle);          // 0 ok
 int64_t mojo_gpu_result_rows(void *handle);
 int64_t mojo_gpu_result_i128(void *handle, int64_t row, int64_t col, int64_t *lo, int64_t *hi);
@@ -1973,6 +1982,14 @@ public:
           mojo_gpu_desc_materialize_sql(h, i, reinterpret_cast<uint8_t *>(&sql[0]), len);
         }
 
+        // SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): when active for this query, the
+        // narrowed SELECT (emitted by materialize_sql) reads only the NON-resident
+        // fact columns and the finalize sources the resident ones from the pool.
+        // BYPASS the GPU-direct fact feed entirely (it would re-decode the full
+        // column set) and use the narrowed SQL feed below. (The decode-skip is
+        // deferred.) Recompute per request; only the fact request (i==0) matters.
+        bool skipmat = (mojo_gpu_skipmat_active(h) == 1);
+
         // Phase G Stage 1 (flag-gated): for the FACT request (i==0) ONLY, when
         // GPU_OP_NATIVE_DECODE is set and every projected fact column resolves to
         // a fully-decodable native column, feed the fact columns from the
@@ -1980,7 +1997,7 @@ public:
         // Eligibility / decode is all-or-nothing per request; on any unsupported
         // column/segment TryGpuDirectFactFeed feeds NOTHING and returns false, so
         // we fall through to the unchanged Connection::Query feed below.
-        if (i == 0 && std::getenv("GPU_OP_NATIVE_DECODE")) {
+        if (i == 0 && !skipmat && std::getenv("GPU_OP_NATIVE_DECODE")) {
           int64_t kind = mojo_gpu_desc_kind(h);
           // Allow Q6 (ungrouped, all-fixed-width fact request). Other kinds stay
           // on the SQL feed even with the flag on (tightly scoped first cut).
@@ -2026,6 +2043,30 @@ public:
           }
         }
 
+        // SKIP-MATERIALIZE landmine #1 (all-resident edge): when the narrowed
+        // request-0 SELECT has ZERO projected columns (every fact column is
+        // pool-resident), the SQL is "SELECT  FROM <table>" -- ILLEGAL to run.
+        // Detect the empty projection list and SKIP the fact Connection::Query
+        // entirely. materialize_sql already seeded st.n_rows from the resident row
+        // count for this case, so the finalize sources every column from the pool
+        // and knows the row count. (A genuine query whose projection is empty is
+        // impossible here -- materialize_sql only emits an empty list when it
+        // omitted every column after a guaranteed pool HIT.)
+        if (i == 0 && skipmat) {
+          const std::string kSel = "SELECT ";
+          const std::string kFrom = " FROM ";
+          auto p0 = sql.find(kSel);
+          auto p1 = sql.find(kFrom);
+          bool empty_projection = false;
+          if (p0 == 0 && p1 != std::string::npos && p1 >= kSel.size()) {
+            std::string mid = sql.substr(kSel.size(), p1 - kSel.size());
+            empty_projection = (mid.find_first_not_of(" \t") == std::string::npos);
+          }
+          if (empty_projection) {
+            continue;  // all fact columns resident -> nothing to scan/feed
+          }
+        }
+
         Connection con(*context.db);
         auto res = con.Query(sql);
         if (res->HasError()) {
@@ -2033,6 +2074,16 @@ public:
         }
         idx_t total_rows = res->RowCount();
         idx_t n_cols = res->types.size();
+
+        // SKIP-MATERIALIZE landmine #1: set st.n_rows for the FACT request from the
+        // observed row count BEFORE the feed loop. Required so the finalize knows
+        // n_rows even for an OMITTED column (whose feed_column never runs); for fed
+        // columns feed_column sets the same value, so this is idempotent. Gated by
+        // `skipmat` so the non-skip-materialize paths (flag off / =1 / Q1/Q3/Q5)
+        // are byte-IDENTICAL to before -- they never call this extra C-ABI entry.
+        if (i == 0 && skipmat) {
+          mojo_gpu_feed_rowcount(h, (int64_t)total_rows);
+        }
 
         // Gather every output column CONTIGUOUSLY across all chunks into one flat
         // buffer (feed_column overwrites per (req,col), so a single contiguous feed

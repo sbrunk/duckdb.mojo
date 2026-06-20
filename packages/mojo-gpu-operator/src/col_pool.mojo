@@ -98,14 +98,23 @@ struct PooledColumn(Copyable, Movable):
     var last_use: Int
     var access_count: Int
     var refcount: Int
+    # The contract TypeTag the column was fed as (TYPE_DATE / TYPE_DECIMAL /
+    # TYPE_BIGINT / ...). Set on MISS from the fed column's tag and carried so the
+    # SKIP-MATERIALIZE path can recover the decimal SCALE of an OMITTED column
+    # whose FedColumn (st.cols[mj]) is never filled (its type_tag would read 0 ->
+    # wrong DECIMAL scale -> wrong AVG). Phase 1 never read this; harmless then.
+    var type_tag: Int64
 
-    def __init__(out self, var buf: DeviceBuffer[DType.int64], n_rows: Int):
+    def __init__(
+        out self, var buf: DeviceBuffer[DType.int64], n_rows: Int, type_tag: Int64
+    ):
         self.buf = buf^
         self.n_rows = n_rows
         self.bytes = n_rows * 8
         self.last_use = 0
         self.access_count = 0
         self.refcount = 0
+        self.type_tag = type_tag
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +187,106 @@ def uploaded_bytes() raises -> Int64:
 # ---------------------------------------------------------------------------
 def is_poolable(representation: Int, ordering: String) -> Bool:
     return representation == REPR_INT64_PACKED and ordering == ORDERING_STORAGE
+
+
+# ---------------------------------------------------------------------------
+# col_pool_type_tag: the contract TypeTag a RESIDENT column was uploaded with
+# (TYPE_DATE / TYPE_DECIMAL / ...), or 0 if the key is not resident. The
+# SKIP-MATERIALIZE finalize seeds the decimal SCALE of an OMITTED slot from this
+# (its FedColumn is never filled). Reading an absent key returns 0 (the caller
+# only calls this for a key it proved resident at materialize time).
+# ---------------------------------------------------------------------------
+def col_pool_type_tag(key: String) raises -> Int64:
+    ref st = col_pool_ptr()[]
+    if key not in st.cols:
+        return Int64(0)
+    return st.cols[key].type_tag
+
+
+# ---------------------------------------------------------------------------
+# col_pool_lease: SKIP-MATERIALIZE probe-time lease. Take an in-use lease
+# (refcount++) on a RESIDENT column so it CANNOT be evicted between the omit
+# decision (materialize_sql) and the finalize that sources it from the pool.
+# Returns True on a HIT (lease taken), False if not resident (caller must NOT
+# omit -> feed the column). Also refreshes the LRU tick (it is about to be used).
+# Pairs with col_pool_borrow (finalize reads the buffer without a 2nd bump) +
+# release_lease (drop when the owning GpuPinned is evicted, or on a backstop).
+# ---------------------------------------------------------------------------
+def col_pool_lease(key: String) raises -> Bool:
+    ref st = col_pool_ptr()[]
+    if key not in st.cols:
+        return False
+    st.tick += 1
+    st.cols[key].last_use = st.tick
+    st.cols[key].access_count += 1
+    st.cols[key].refcount += 1
+    return True
+
+
+# col_pool_borrow: SKIP-MATERIALIZE finalize-time read of an already-LEASED
+# resident column. Returns ok=True + the buffer handle WITHOUT bumping refcount
+# (the materialize-time col_pool_lease already holds the +1, whose ownership the
+# caller transfers to the GpuPinned via pool_lease_keys). ok=False if the column
+# is somehow gone (should be impossible while leased -> the was-hit backstop). The
+# dummy buffer on the miss path is never read.
+def col_pool_borrow(
+    ctx: DeviceContext, key: String
+) raises -> EnsureResult:
+    ref st = col_pool_ptr()[]
+    if key not in st.cols:
+        return EnsureResult(False, False, ctx.enqueue_create_buffer[DType.int64](1))
+    return EnsureResult(True, True, st.cols[key].buf)  # refcounted handle
+
+
+# ---------------------------------------------------------------------------
+# col_pool_resident_nrows: SKIP-MATERIALIZE residency probe used at
+# materialize-SQL time (BEFORE the fact query runs, so the exact n_rows is not
+# yet known to the caller). Scans for a resident column matching
+# (table, column, representation, ordering) at ANY n_rows and returns its
+# n_rows, or -1 if none. For a predicate-independent (full-table) fact column the
+# pool holds at most one n_rows per (table,column), so the first match is THE
+# resident row count -- which the caller then folds into the exact ColKey used by
+# the finalize (a guaranteed HIT). Fail-closed: only STORAGE + int64-packed match
+# (mirrors is_poolable); anything else returns -1 (never omitted).
+# ---------------------------------------------------------------------------
+def col_pool_resident_nrows(
+    table: String, column: String, representation: Int, ordering: String
+) raises -> Int:
+    if not is_poolable(representation, ordering):
+        return -1
+    ref st = col_pool_ptr()[]
+    var prefix = (
+        table
+        + _KEY_SEP
+        + column
+        + _KEY_SEP
+        + String(representation)
+        + _KEY_SEP
+        + ordering
+        + _KEY_SEP
+    )
+    for k in st.cols:  # key iteration (see pool_bytes note)
+        # A ColKey is "<table>\x1f<col>\x1f<repr>\x1f<ordering>\x1f<n_rows>": the
+        # only field after the final separator is n_rows, so a prefix match
+        # uniquely identifies this (table,column,repr,ordering) and the suffix is
+        # the resident row count. _KEY_SEP cannot appear in any field, so the
+        # prefix can never match a different column whose name embeds the prefix.
+        if _has_prefix(k, prefix):
+            return st.cols[k].n_rows
+    return -1
+
+
+# Byte-level prefix test (no dependence on a possibly-renamed String.startswith).
+def _has_prefix(s: String, prefix: String) -> Bool:
+    var pn = prefix.byte_length()
+    if s.byte_length() < pn:
+        return False
+    var sb = s.as_bytes()
+    var pb = prefix.as_bytes()
+    for i in range(pn):
+        if sb[i] != pb[i]:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +413,10 @@ struct EnsureResult(Movable):
 # caller already materialized for packing -- the SAME bytes the packing loop
 # writes, so the pooled upload is bit-identical to a fresh pack.
 #
+# (SKIP-MATERIALIZE reads an already-leased resident column via col_pool_borrow,
+# NOT ensure_column, so this path never sees an OMITTED column's unfilled host
+# buffer -- ensure_column is only called for columns that ARE fed.)
+#
 # Returns the resident buffer inside EnsureResult for the caller to D2D-copy.
 # ---------------------------------------------------------------------------
 def ensure_column(
@@ -313,6 +426,7 @@ def ensure_column(
     ordering: String,
     host_col_ptr: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
+    type_tag: Int64,
 ) raises -> EnsureResult:
     # Phase 1 fail-closed: only STORAGE + int64-packed are poolable. The dummy
     # buffer is never read (ok=False).
@@ -352,7 +466,7 @@ def ensure_column(
     # once per physical column, not once per signature).
     ctx.enqueue_copy(dev, host_col_ptr)
 
-    var pc = PooledColumn(dev^, n_rows)
+    var pc = PooledColumn(dev^, n_rows, type_tag)
     st.tick += 1
     pc.last_use = st.tick
     pc.access_count = 1

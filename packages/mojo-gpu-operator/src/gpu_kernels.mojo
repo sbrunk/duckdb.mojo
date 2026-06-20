@@ -108,6 +108,10 @@ from col_pool import (
     pin2_unregister,
     pin2_resident_bytes,
     pin2_oldest_key,
+    col_pool_type_tag,
+    col_pool_resident_nrows,
+    col_pool_lease,
+    col_pool_borrow,
     REPR_INT64_PACKED,
     ORDERING_STORAGE,
 )
@@ -1920,6 +1924,24 @@ struct GpuExecState(Movable):
     var mat_cols: List[String]  # the fact-request (req 0) materialize/feed order
     var cols: List[FedColumn]  # fed fact columns, indexed by mat_cols order
     var n_rows: Int
+    # --- SKIP-MATERIALIZE (GPU_OP_COLPOOL=2) request-0 bookkeeping ---
+    # `colpool_omit[mj]` is True for a fact column (mat_cols index mj) the narrowed
+    # SELECT OMITTED because it is pool-resident: it is NOT scanned/fed; the
+    # finalize sources it from the pool (D2D) and never reads st.cols[mj].
+    # `fed_pos_to_matcol[p]` maps the p-th EMITTED (narrowed) result column back to
+    # its FULL mat_cols index, so feed_column keeps st.cols indexed by mat_cols
+    # order (the finalize slot map is unchanged). Both are recomputed every
+    # request-0 materialize_sql; empty when skip-materialize is inactive (then
+    # `colpool_omit` is all-False / fed_pos_to_matcol is the identity).
+    var colpool_omit: List[Bool]
+    var fed_pos_to_matcol: List[Int]
+    # The pool ColKeys this request leased AT OMIT-DECISION TIME (materialize_sql),
+    # one per omitted column. The lease (refcount++) is held from the probe so the
+    # column CANNOT be evicted before the finalize sources it (closing the
+    # probe->finalize race). The cold finalize TRANSFERS each lease to the cached
+    # GpuPinned (pool_lease_keys) and clears this; on a backstop bail it releases
+    # them. Empty when skip-materialize is inactive.
+    var colpool_omit_leases: List[String]
     # Dim requests (request index 1..n_dims for an n_dims>0 FK-join plan). Each
     # entry i corresponds to request index i+1; dim_mat_cols[i] is that dim's
     # SELECT column order and dim_cols[i] the fed columns. Empty for n_dims==0.
@@ -1943,6 +1965,9 @@ struct GpuExecState(Movable):
         for _ in range(n_cols):
             self.cols.append(FedColumn())
         self.n_rows = 0
+        self.colpool_omit = []
+        self.fed_pos_to_matcol = []
+        self.colpool_omit_leases = []
         self.dim_mat_cols = []
         self.dim_cols = []
         self.dim_n_rows = []
@@ -1991,6 +2016,13 @@ def _exec_drop(handle: Int):
     try:
         ref m = _exec_ptr()[]
         if handle in m:
+            # SKIP-MATERIALIZE: release any materialize-time omit leases that a cold
+            # finalize did not transfer to a GpuPinned (e.g. it bailed on an early
+            # error before the assemble) so a dropped handle never leaks a pin.
+            var leases = m[handle].colpool_omit_leases.copy()
+            for li in range(len(leases)):
+                release_lease(leases[li])
+            m[handle].colpool_omit_leases = []
             m[handle].free_cols()
             _ = m.pop(handle)
     except:
@@ -2171,6 +2203,43 @@ def _colpool_on() -> Bool:
     return getenv("GPU_OP_COLPOOL", "") != ""
 
 
+# SKIP-MATERIALIZE sub-flag (the cold WALL-TIME follow-up to Phase 1). When on,
+# the SQL-feed path emits a NARROWER fact SELECT that omits fact columns already
+# pool-resident: DuckDB's columnar scan reads only the non-resident fact columns,
+# and the finalize sources the resident ones from the pool (Phase 1 already
+# D2D's pool HITs). `GPU_OP_COLPOOL=2` (Phase 1 + narrow-SQL) or the explicit
+# GPU_OP_SKIP_MATERIALIZE toggle enables it. `_colpool_on()` (!= "") stays the
+# pool gate; off or =1 => narrowing never happens => byte-identical to Phase 1.
+def _skipmat_on() -> Bool:
+    return (
+        getenv("GPU_OP_COLPOOL", "") == "2"
+        or getenv("GPU_OP_SKIP_MATERIALIZE", "") != ""
+    )
+
+
+# SKIP-MATERIALIZE is active for THIS query iff: the pool is on, the sub-flag is
+# on, the descriptor is one of the in-scope ungrouped predicate-independent
+# classes (Q6 / Q14 -- Q1 is DENSE_GROUP and deferred, Q5 deferred, Q3 excluded),
+# the predicate-independent path is ACTIVE (so the host pass-bake reads NO fact
+# data -> omitted fact columns are never needed on the host), and the row order
+# is STORAGE (no ORDER BY; SORT_SEGREDUCE never eligible). ANY uncertainty here
+# returns False -> the full SELECT is emitted (feed everything) -> correct.
+def _skipmat_active(d: GpuPlanDescriptor) -> Bool:
+    if not _colpool_on() or not _skipmat_on():
+        return False
+    # STORAGE ordering only: SORT_SEGREDUCE appends ORDER BY (different row order)
+    # and is excluded; Q6/Q14 are UNGROUPED (no ORDER BY).
+    if d.strategy == STRAT_SORT_SEGREDUCE:
+        return False
+    if d.kind == KIND_Q6:
+        # Pure UNGROUPED Q6 with the in-kernel (predicate-independent) filter.
+        return d.strategy == STRAT_UNGROUPED and _q6_pred_enabled(d)
+    if d.kind == KIND_Q14:
+        # UNGROUPED FK-join Q14 with the generalized in-kernel fact filter.
+        return d.strategy == STRAT_UNGROUPED and _gen_pred_enabled(d)
+    return False
+
+
 # Resident-byte budget in bytes. Mirrors the C++ PinBudgetBytes: GPU_OP_PIN_BUDGET_MB
 # overrides (in MB); default 4 GiB. 0 => unbounded. Read every call (cheap; the
 # value is a process-wide policy but re-reading keeps it stateless on the Mojo side).
@@ -2280,6 +2349,21 @@ def _colpool_make_room(need: Int) raises:
 #
 # `mat_col_of_slot[slot]` is the mat_cols index of numeric slot `slot` (i.e.
 # numeric_matcols); slots >= n_numeric are derived (gid/pass) and copied whole.
+# Build the per-NUMERIC-SLOT omit mask from st.colpool_omit (indexed by mat_cols).
+# omit_slot[slot] == st.colpool_omit[numeric_matcols[slot]] (False when the omit
+# mask is absent/short -> nothing omitted -> Phase 1 behavior). Used by the three
+# cold finalize paths to gate the packing loop + drive _colpool_assemble_cols_d.
+def _omit_slot_mask(st: GpuExecState, numeric_matcols: List[Int]) -> List[Bool]:
+    var out: List[Bool] = []
+    for slot in range(len(numeric_matcols)):
+        var mj = numeric_matcols[slot]
+        if mj >= 0 and mj < len(st.colpool_omit):
+            out.append(st.colpool_omit[mj])
+        else:
+            out.append(False)
+    return out^
+
+
 def _colpool_assemble_cols_d(
     ctx: DeviceContext,
     fact_table: String,
@@ -2288,10 +2372,14 @@ def _colpool_assemble_cols_d(
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
+    omit_slot: List[Bool],
     mut out_lease_keys: List[String],
+    mut fail: Bool,
 ) raises -> DeviceBuffer[DType.int64]:
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var n_numeric = len(numeric_matcols)
+    var skipped_cols = 0  # SKIP-MATERIALIZE diagnostic: omitted (pool-sourced) cols
+    fail = False
     # Allocate the device-side packed buffer (same size as segreduce_upload).
     var total = n_slots * n if n_slots * n > 0 else 1
     var cols_d = ctx.enqueue_create_buffer[DType.int64](total)
@@ -2302,12 +2390,51 @@ def _colpool_assemble_cols_d(
         var col_name = st.mat_cols[mj]
         var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
         # Host pointer to this slot's already-packed int64 values (slot*n..+n).
+        # For an OMITTED slot this host region is UNFILLED (the packing loop and
+        # the feed both skipped it) -- it MUST be sourced from the pool, never from
+        # host. For a non-omitted slot it holds the freshly-packed bytes.
         var slot_host = cols_host + slot * n
+        var omit = omit_slot[slot] if slot < len(omit_slot) else False
+
+        if omit:
+            # SKIP-MATERIALIZE: the column was NOT scanned/fed. It is GUARANTEED
+            # resident -- materialize_sql only omitted it after taking an in-use
+            # LEASE (refcount++) on this exact key, and a leased column is never
+            # evicted by _colpool_make_room, so the probe->finalize race is closed.
+            # col_pool_borrow returns the buffer WITHOUT a refcount bump (the
+            # materialize lease in st.colpool_omit_leases is the only +1 for this
+            # column; the finalize transfers ALL of those to the GpuPinned after a
+            # successful assemble, so we DO NOT append `key` to out_lease_keys here
+            # -- that would double-count the lease). was_hit backstop (landmine #4):
+            # if the column is somehow gone (impossible while leased), we CANNOT
+            # reconstruct it (it was never fed) -> signal failure -> finalize nonzero
+            # rc -> CPU fallback (never wrong). slot_host is unfilled, never read.
+            var er = col_pool_borrow(ctx, key)
+            if not (er.ok and er.was_hit):
+                fail = True
+                if pin_log:
+                    print(
+                        "[gpu-op colpool] OMIT-MISS (fallback) col=", col_name,
+                        " n=", n, file=FileDescriptor(2),
+                    )
+                # Return early; the caller checks `fail` and bails to CPU.
+                return cols_d^
+            var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
+            ctx.enqueue_copy(dst, er.buf)
+            skipped_cols += 1
+            if pin_log:
+                print(
+                    "[gpu-op colpool] SKIP-MAT col=", col_name,
+                    " n=", n, file=FileDescriptor(2),
+                )
+            continue
+
         # Budget: make room for one more resident column (n int64) before a miss.
         # (HITs add nothing, but make_room is cheap when already within budget.)
         _colpool_make_room(n * 8)
         var er = ensure_column(
-            ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE, slot_host, n
+            ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE, slot_host, n,
+            st.cols[mj].type_tag,
         )
         if er.ok:
             out_lease_keys.append(key)
@@ -2338,6 +2465,12 @@ def _colpool_assemble_cols_d(
         ctx.enqueue_copy(dst, slot_host)
 
     ctx.synchronize()
+    if pin_log and skipped_cols > 0:
+        print(
+            "[gpu-op colpool] skipped_cols=", skipped_cols,
+            " (fact cols sourced from pool, not scanned/fed)",
+            file=FileDescriptor(2),
+        )
     return cols_d^
 
 
@@ -2783,6 +2916,9 @@ def mojo_gpu_desc_materialize_sql(
         var sql = String("")
         if i == 0:
             # --- request 0: the fact-table query ---
+            # KEEP mat_cols = the FULL list (the finalize slot map + result
+            # assembly index by it). SKIP-MATERIALIZE only narrows the SELECT (and
+            # the feed) -- it never changes mat_cols.
             var cols = _materialize_columns(d)
             # Lazily create the exec state, sized for the fact columns + dims.
             if key not in m:
@@ -2794,15 +2930,101 @@ def mojo_gpu_desc_materialize_sql(
                 for de in range(n_dims):
                     counts.append(len(_dim_columns(d, de)))
                 m[key].init_dims(counts)
-            sql += "SELECT "
+
+            # --- SKIP-MATERIALIZE: compute which fact columns to OMIT. ---
+            # Omit col c IFF skip-materialize is active for this query AND a column
+            # is pool-resident under the EXACT key the finalize will form
+            # (fact_table, c, REPR_INT64_PACKED, STORAGE, resident_n) AND we can
+            # take an in-use LEASE on it. The lease (held from here to the finalize)
+            # closes the probe->finalize eviction race: a leased column can never be
+            # evicted by _colpool_make_room, so the finalize HIT is GUARANTEED. Any
+            # exception -> emit the FULL SELECT (omit nothing) -> correct.
+            #
+            # materialize_sql(0) is called TWICE by C++ (length then fill), so first
+            # RELEASE any leases a prior call took, then recompute from scratch.
+            for li in range(len(m[key].colpool_omit_leases)):
+                release_lease(m[key].colpool_omit_leases[li])
+            m[key].colpool_omit_leases = []
+
+            var omit: List[Bool] = []
+            for _ in range(len(cols)):
+                omit.append(False)
+            var any_omit = False
+            var resident_n = -1
+            var omit_leases: List[String] = []
+            if _skipmat_active(d):
+                try:
+                    for c in range(len(cols)):
+                        var rn = col_pool_resident_nrows(
+                            d.fact_table, cols[c], REPR_INT64_PACKED,
+                            ORDERING_STORAGE,
+                        )
+                        if rn < 0:
+                            continue
+                        # All resident fact cols of one predicate-independent table
+                        # share the row count; capture it once. Only omit at THAT n.
+                        if resident_n < 0:
+                            resident_n = rn
+                        if rn != resident_n:
+                            continue
+                        # Take the lease on the EXACT key the finalize will form.
+                        var ck = col_key(
+                            d.fact_table, cols[c], REPR_INT64_PACKED,
+                            ORDERING_STORAGE, rn,
+                        )
+                        if col_pool_lease(ck):
+                            omit[c] = True
+                            any_omit = True
+                            omit_leases.append(ck)
+                        # lease failed (raced away) -> leave omit[c] False (feed it).
+                except:
+                    # Omit computation failed -> release any leases we took and
+                    # emit the FULL SELECT (feed all). Never omit on uncertainty.
+                    for li in range(len(omit_leases)):
+                        release_lease(omit_leases[li])
+                    omit_leases = []
+                    for c in range(len(cols)):
+                        omit[c] = False
+                    any_omit = False
+                    resident_n = -1
+            m[key].colpool_omit_leases = omit_leases.copy()
+
+            # Record the omit mask + the emitted-position -> mat_cols-index map so
+            # feed_column can keep st.cols indexed by FULL mat_cols order. (When
+            # nothing is omitted these are all-False / the identity -- so the
+            # feed/finalize behave exactly as Phase 1.)
+            m[key].colpool_omit = omit.copy()
+            var fpm: List[Int] = []
             for c in range(len(cols)):
-                if c > 0:
+                if not omit[c]:
+                    fpm.append(c)
+            m[key].fed_pos_to_matcol = fpm.copy()
+
+            # If ALL fact columns are omitted (everything resident), a 0-column
+            # SELECT is illegal SQL. Seed st.n_rows from the resident row count so
+            # the C++ side can SKIP the fact query and rely on it (feed_rowcount is
+            # the belt-and-suspenders backstop). The finalize sources every column
+            # from the pool. We still emit the (empty) "SELECT  FROM <table>" so
+            # the byte length signals C++ via the all-omit detection; C++ checks
+            # the parsed column count, not the literal text.
+            if any_omit and len(fpm) == 0 and resident_n >= 0:
+                m[key].n_rows = resident_n
+
+            sql += "SELECT "
+            var emitted = 0
+            for c in range(len(cols)):
+                if omit[c]:
+                    continue
+                if emitted > 0:
                     sql += ", "
                 sql += cols[c]
+                emitted += 1
             sql += " FROM " + d.fact_table
             # SORT_SEGREDUCE: order by the FACT group key (the segment key, e.g.
             # l_orderkey) so each order's lineitems are contiguous for one-warp-
             # per-segment reduction. Dim-carried group keys are NOT sort columns.
+            # (SORT_SEGREDUCE is never skip-materialize eligible -> omit is all
+            # False here, so this rebuilds the full ORDER-BY SELECT unchanged.)
             if d.strategy == STRAT_SORT_SEGREDUCE and len(d.group_keys) > 0:
                 var sort_col = String("")
                 for gk in range(len(d.group_keys)):
@@ -3062,9 +3284,22 @@ def mojo_gpu_feed_column(
             elem_size = 8
         # Request 0 is the fact table; requests 1..n_dims are dim-edge queries.
         if req_i == 0:
-            if col_j < 0 or col_j >= len(st.cols):
+            # SKIP-MATERIALIZE: the narrowed SELECT fed fewer fact columns, so
+            # `col_j` indexes the EMITTED order. Translate it to the FULL mat_cols
+            # index via fed_pos_to_matcol so st.cols stays indexed by mat_cols
+            # order (the finalize slot map is unchanged). materialize_sql(0) always
+            # populates fed_pos_to_matcol (the identity when nothing is omitted),
+            # and C++ feeds exactly the emitted columns, so col_j is always a valid
+            # index into it. Fall back to the raw col_j only if the map is empty
+            # (a defensively-created state where materialize_sql(0) didn't run).
+            var mj = col_j
+            if len(st.fed_pos_to_matcol) > 0:
+                if col_j < 0 or col_j >= len(st.fed_pos_to_matcol):
+                    return 3
+                mj = st.fed_pos_to_matcol[col_j]
+            if mj < 0 or mj >= len(st.cols):
                 return 3
-            st.cols[col_j].fill(ptr, n_rows, elem_size, type_tag)
+            st.cols[mj].fill(ptr, n_rows, elem_size, type_tag)
             st.n_rows = n_rows
             return 0
         var de = req_i - 1
@@ -3077,6 +3312,47 @@ def mojo_gpu_feed_column(
         return 0
     except:
         return 4
+
+
+# SKIP-MATERIALIZE landmine #1: set st.n_rows for the FACT request UNCONDITIONALLY
+# from the row count C++ observed. Called for request 0 BEFORE the feed loop with
+# `res->RowCount()`. When the narrowed SELECT omits ALL fact columns (everything
+# resident), C++ SKIPS the fact Connection::Query entirely (a 0-column SELECT is
+# illegal) and this is the ONLY thing that sets st.n_rows -- so the finalize knows
+# the row count even with no fed fact column. When at least one column is fed,
+# feed_column ALSO sets st.n_rows to the same value (same predicate-independent
+# scan), so this is harmless/idempotent. Returns 0 on success.
+@export("mojo_gpu_feed_rowcount")
+def mojo_gpu_feed_rowcount(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    n_rows: Int,
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 1
+    try:
+        ref m = _exec_ptr()[]
+        var key = Int(handle)
+        if key not in m:
+            return 2
+        m[key].n_rows = n_rows
+        return 0
+    except:
+        return 3
+
+
+# SKIP-MATERIALIZE: is the narrow-SQL skip-materialize path active for THIS query?
+# C++ calls it BEFORE the feed loop to decide whether to (a) bypass the GPU-direct
+# fact feed (it uses the narrowed SQL feed instead) and (b) call feed_rowcount +
+# detect a 0-column SELECT. Returns 1 (active) / 0 (not). Same gate as the Mojo
+# omit decision so C++ and Mojo agree exactly.
+@export("mojo_gpu_skipmat_active")
+def mojo_gpu_skipmat_active(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 0
+    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    return 1 if _skipmat_active(d) else 0
 
 
 # Map a fed column index to a typed (immutable-origin) pointer over the owned
@@ -3845,13 +4121,30 @@ def _pin_finalize_generic(
             numeric_matcols.append(j)
     var n_numeric = len(numeric_matcols)
 
+    # SKIP-MATERIALIZE: per-numeric-slot omit mask. omit_slot[slot] True => the
+    # column was NOT scanned/fed (sourced from the pool); never read st.cols[mj]
+    # for it. Empty/all-False when skip-materialize is inactive (== Phase 1).
+    var omit_slot = _omit_slot_mask(st, numeric_matcols)
+
     # Per-numeric-slot decimal scale, used only for AVG's DOUBLE rescale. Seed
     # from the fed type (DATE/INTEGER/BIGINT -> 0); refine decimal-backed int64
     # columns from any fact filter const that compares against them, else 2 (the
     # TPC-H lineitem decimal scale -- l_quantity/extendedprice/discount/tax).
+    # SKIP-MATERIALIZE landmine #2: for an OMITTED slot st.cols[mj].type_tag is
+    # UNSET (0) -> would wrongly seed scale 2 (e.g. for a DATE) -> wrong AVG. Read
+    # the type_tag the column was POOLED with instead (col_pool_type_tag on the
+    # exact resident key), recovering the correct DATE/INTEGER/BIGINT->0 vs ->2.
     var col_scale_of_slot: List[Int64] = []
     for slot in range(n_numeric):
-        var tt = st.cols[numeric_matcols[slot]].type_tag
+        var tt: Int64
+        if slot < len(omit_slot) and omit_slot[slot]:
+            var ok2 = col_key(
+                d.fact_table, st.mat_cols[numeric_matcols[slot]],
+                REPR_INT64_PACKED, ORDERING_STORAGE, st.n_rows,
+            )
+            tt = col_pool_type_tag(ok2)
+        else:
+            tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
         else:
@@ -3980,6 +4273,18 @@ def _pin_finalize_generic(
         for i in range(n):
             pass_col[i] = Int64(0)
     else:
+        # SKIP-MATERIALIZE airtight guard: the host pass-bake reads fact filter
+        # columns. Omitting a filter column is ONLY safe when the in-kernel
+        # predicate replaces this bake (q6_pred_on / gen_pred_on) -- guaranteed by
+        # _skipmat_active. If we are HERE (host bake) yet a filter slot is omitted,
+        # that is a contract violation -> fail closed (CPU fallback), never read an
+        # unfilled st.cols[mj].
+        for fi in range(n_filters):
+            var fs = f_slot[fi]
+            if fs < len(omit_slot) and omit_slot[fs]:
+                pass_col.free()
+                row_gid.free()
+                return 8
         for i in range(n):
             var ok = True
             for fi in range(n_filters):
@@ -3993,6 +4298,11 @@ def _pin_finalize_generic(
     var n_slots = pass_slot + 1
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
+        # SKIP-MATERIALIZE: an OMITTED slot is sourced from the pool by
+        # _colpool_assemble_cols_d (D2D); its st.cols[mj] is UNFILLED, so DO NOT
+        # pack it here (leave the host region untouched -- it is never read).
+        if slot < len(omit_slot) and omit_slot[slot]:
+            continue
         var mj = numeric_matcols[slot]
         for i in range(n):
             cols[slot * n + i] = _col_val(st, mj, i)
@@ -4124,10 +4434,35 @@ def _pin_finalize_generic(
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colpool_on():
+        var assemble_fail = False
         var cols_d = _colpool_assemble_cols_d(
             ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
-            pool_lease_keys,
+            omit_slot, pool_lease_keys, assemble_fail,
         )
+        if assemble_fail:
+            # SKIP-MATERIALIZE backstop (landmine #4): an OMITTED column was not a
+            # guaranteed pool HIT. It was never scanned/fed, so we cannot rebuild
+            # it -> bail to CPU (nonzero rc -> C++ throws). Release all leases (the
+            # non-omitted ensure-leases in pool_lease_keys + the materialize-time
+            # omit leases) so they don't pin VRAM, then clear the omit leases.
+            for li in range(len(pool_lease_keys)):
+                release_lease(pool_lease_keys[li])
+            for li in range(len(st.colpool_omit_leases)):
+                release_lease(st.colpool_omit_leases[li])
+            st.colpool_omit_leases = []
+            seg_off_dummy.free()
+            dims_dummy.free()
+            doff_dummy.free()
+            cols.free()
+            pass_col.free()
+            row_gid.free()
+            return 11
+        # SUCCESS: transfer the materialize-time omit leases into the per-signature
+        # lease set so the GpuPinned owns them (released when it is evicted). Clear
+        # the exec-state copy (ownership moved -> no double release).
+        for li in range(len(st.colpool_omit_leases)):
+            pool_lease_keys.append(st.colpool_omit_leases[li])
+        st.colpool_omit_leases = []
         resident = segreduce_upload_from_packed(
             ctx, cols_d^, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
         )
@@ -4648,9 +4983,14 @@ def _pin_finalize_q5(
             var pool_lease_keys: List[String] = []
             var resident: SegResident
             if _colpool_on():
+                # Q5 is NOT skip-materialize-eligible (deferred): the omit mask is
+                # all-False, so no column is ever pool-sourced and `_assemble_fail`
+                # stays False. We still pass them for the unified signature.
+                var omit_slot_q5 = _omit_slot_mask(st, numeric_matcols)
+                var assemble_fail = False
                 var cols_d = _colpool_assemble_cols_d(
                     ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
-                    pool_lease_keys,
+                    omit_slot_q5, pool_lease_keys, assemble_fail,
                 )
                 resident = segreduce_upload_from_packed(
                     ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
@@ -4960,9 +5300,12 @@ def _pin_finalize_q5(
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colpool_on():
+        # Q5 deferred: omit mask all-False (see the Path-A Q5 site above).
+        var omit_slot_q5 = _omit_slot_mask(st, numeric_matcols)
+        var assemble_fail = False
         var cols_d = _colpool_assemble_cols_d(
             ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
-            pool_lease_keys,
+            omit_slot_q5, pool_lease_keys, assemble_fail,
         )
         resident = segreduce_upload_from_packed(
             ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
@@ -5064,10 +5407,24 @@ def _pin_finalize_generic_dims(
             numeric_matcols.append(j)
     var n_numeric = len(numeric_matcols)
 
-    # Per-numeric-slot decimal scale (for AVG rescale; Q14 has no AVG).
+    # SKIP-MATERIALIZE: per-numeric-slot omit mask (see _pin_finalize_generic).
+    var omit_slot = _omit_slot_mask(st, numeric_matcols)
+
+    # Per-numeric-slot decimal scale (for AVG rescale; Q14 has no AVG). For an
+    # OMITTED slot st.cols[mj].type_tag is unset (0) -> recover the pooled type_tag
+    # (landmine #2). Q14 has no AVG so this is precautionary here, but it keeps the
+    # generic-dims path airtight for any future AVG-bearing FK-join shape.
     var col_scale_of_slot: List[Int64] = []
     for slot in range(n_numeric):
-        var tt = st.cols[numeric_matcols[slot]].type_tag
+        var tt: Int64
+        if slot < len(omit_slot) and omit_slot[slot]:
+            var ok2 = col_key(
+                d.fact_table, st.mat_cols[numeric_matcols[slot]],
+                REPR_INT64_PACKED, ORDERING_STORAGE, st.n_rows,
+            )
+            tt = col_pool_type_tag(ok2)
+        else:
+            tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
         else:
@@ -5404,6 +5761,15 @@ def _pin_finalize_generic_dims(
         for i in range(n):
             pass_col[i] = Int64(0)
     else:
+        # SKIP-MATERIALIZE airtight guard (see _pin_finalize_generic): omitting a
+        # fact filter column is only safe when the in-kernel predicate replaces the
+        # host bake (gen_pred_on). If we are on the host-bake path yet a filter slot
+        # is omitted, fail closed (CPU fallback) rather than read an unfilled slot.
+        for fi in range(n_filters):
+            var fs = f_slot[fi]
+            if fs < len(omit_slot) and omit_slot[fs]:
+                pass_col.free(); dims_host.free(); doff_host.free()
+                return 8
         for i in range(n):
             var ok = True
             for fi in range(n_filters):
@@ -5416,6 +5782,10 @@ def _pin_finalize_generic_dims(
     # --- pack the fact columns + pass column ---
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
+        # SKIP-MATERIALIZE: an OMITTED slot is sourced from the pool (D2D); its
+        # st.cols[mj] is UNFILLED, so DO NOT pack it (the host region is unread).
+        if slot < len(omit_slot) and omit_slot[slot]:
+            continue
         var mj = numeric_matcols[slot]
         for i in range(n):
             cols[slot * n + i] = _col_val(st, mj, i)
@@ -5520,9 +5890,13 @@ def _pin_finalize_generic_dims(
         var pool_lease_keys_h: List[String] = []
         var resident: SegResident
         if _colpool_on():
+            # HASH_GROUP (Q3) is NOT skip-materialize-eligible (excluded): omit_slot
+            # is all-False here, so nothing is pool-sourced and `_assemble_fail`
+            # stays False. Passed for the unified signature.
+            var assemble_fail = False
             var cols_d = _colpool_assemble_cols_d(
                 ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
-                pool_lease_keys_h,
+                omit_slot, pool_lease_keys_h, assemble_fail,
             )
             resident = segreduce_upload_from_packed(
                 ctx, cols_d^, n_slots, n, seg_off_dummy_h, 0,
@@ -5715,10 +6089,29 @@ def _pin_finalize_generic_dims(
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colpool_on():
+        # SKIP-MATERIALIZE (Q14 in scope): omit_slot carries the pool-resident
+        # fact columns omitted from the narrowed SELECT. On a non-HIT for an
+        # omitted slot the helper sets `assemble_fail` -> bail to CPU (the column
+        # was never scanned/fed, so we cannot rebuild it -> never wrong).
+        var assemble_fail = False
         var cols_d = _colpool_assemble_cols_d(
             ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
-            pool_lease_keys,
+            omit_slot, pool_lease_keys, assemble_fail,
         )
+        if assemble_fail:
+            for li in range(len(pool_lease_keys)):
+                release_lease(pool_lease_keys[li])
+            for li in range(len(st.colpool_omit_leases)):
+                release_lease(st.colpool_omit_leases[li])
+            st.colpool_omit_leases = []
+            seg_off_dummy.free()
+            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            return 11
+        # SUCCESS: transfer the materialize-time omit leases to the per-signature
+        # set (GpuPinned owns them); clear the exec-state copy (no double release).
+        for li in range(len(st.colpool_omit_leases)):
+            pool_lease_keys.append(st.colpool_omit_leases[li])
+        st.colpool_omit_leases = []
         resident = segreduce_upload_from_packed(
             ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
             dims_host, doff_host, n_dim_arrays,
