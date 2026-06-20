@@ -1900,6 +1900,25 @@ int64_t LogicalTypeToTag(const LogicalType &t) {
   return tag;
 }
 
+// Phase G Stage 1 (flag-gated, additive): for the COLD fact-materialize request
+// of a fully-fixed-width-decodable aggregate, feed the fact columns from the
+// GPU-direct DuckDB-native segment decoder instead of running the nested
+// Connection::Query + chunk-gather. Defined after the native-storage helpers
+// (ResolveNativeColumn / ForEachColumnSegment / CodecToMojo / TypeCodeForSize),
+// so it is forward-declared here for use in GetGlobalSourceState.
+//
+// `fact_cols` are the projected fact column names parsed from the request-0
+// materialize SQL (deterministic `SELECT c0, c1, ... FROM <fact_table>` form).
+// Returns true iff every fact column was decoded on-GPU and fed (the request is
+// fully satisfied); false means NOTHING was fed and the caller MUST run the
+// normal Connection::Query feed for the whole request (never partial). When it
+// returns true, `*out_bytes_moved` carries the host->device bytes uploaded (sum
+// of decoded segment byte sizes) for optional instrumentation.
+bool TryGpuDirectFactFeed(ClientContext &context, void *h,
+                          const std::string &fact_table,
+                          const std::vector<std::string> &fact_cols,
+                          int64_t kind, int64_t *out_bytes_moved);
+
 struct GpuAggSourceGlobalState : public GlobalSourceState {
   void *handle = nullptr;   // descriptor handle (owned by PhysicalGpuAgg, not freed here)
   idx_t n_rows = 0;
@@ -1943,6 +1962,59 @@ public:
         sql.resize((size_t)len);
         if (len > 0) {
           mojo_gpu_desc_materialize_sql(h, i, reinterpret_cast<uint8_t *>(&sql[0]), len);
+        }
+
+        // Phase G Stage 1 (flag-gated): for the FACT request (i==0) ONLY, when
+        // GPU_OP_NATIVE_DECODE is set and every projected fact column resolves to
+        // a fully-decodable native column, feed the fact columns from the
+        // GPU-direct segment decoder instead of this nested SQL query + gather.
+        // Eligibility / decode is all-or-nothing per request; on any unsupported
+        // column/segment TryGpuDirectFactFeed feeds NOTHING and returns false, so
+        // we fall through to the unchanged Connection::Query feed below.
+        if (i == 0 && std::getenv("GPU_OP_NATIVE_DECODE")) {
+          int64_t kind = mojo_gpu_desc_kind(h);
+          // Allow Q6 (ungrouped, all-fixed-width fact request). Other kinds stay
+          // on the SQL feed even with the flag on (tightly scoped first cut).
+          if (kind == rp::KIND_Q6) {
+            char fbuf[256] = {0};
+            int64_t flen2 = mojo_gpu_desc_fact_table(
+                h, reinterpret_cast<uint8_t *>(fbuf), (int64_t)sizeof(fbuf) - 1);
+            if (flen2 < 0) { flen2 = 0; }
+            if (flen2 > (int64_t)sizeof(fbuf) - 1) { flen2 = (int64_t)sizeof(fbuf) - 1; }
+            fbuf[flen2] = '\0';
+            std::string fact_table(fbuf);
+            // Parse the projected fact column names out of the deterministic
+            // request-0 SQL: "SELECT c0, c1, ... FROM <fact_table>" (no ORDER BY
+            // for Q6 / UNGROUPED). This is the exact column order feed_column
+            // expects (matches _materialize_columns).
+            std::vector<std::string> fact_cols;
+            {
+              const std::string kSel = "SELECT ";
+              const std::string kFrom = " FROM ";
+              auto p0 = sql.find(kSel);
+              auto p1 = sql.find(kFrom);
+              if (p0 == 0 && p1 != std::string::npos && p1 > kSel.size()) {
+                std::string mid = sql.substr(kSel.size(), p1 - kSel.size());
+                size_t start = 0;
+                while (start <= mid.size()) {
+                  size_t comma = mid.find(',', start);
+                  std::string tok = mid.substr(
+                      start, comma == std::string::npos ? std::string::npos : comma - start);
+                  // trim surrounding whitespace
+                  size_t a = tok.find_first_not_of(" \t");
+                  size_t b = tok.find_last_not_of(" \t");
+                  if (a != std::string::npos) { fact_cols.push_back(tok.substr(a, b - a + 1)); }
+                  if (comma == std::string::npos) { break; }
+                  start = comma + 1;
+                }
+              }
+            }
+            int64_t bytes_moved = 0;
+            if (!fact_cols.empty() &&
+                TryGpuDirectFactFeed(context, h, fact_table, fact_cols, kind, &bytes_moved)) {
+              continue;  // request fully fed via GPU-direct decode; skip SQL feed
+            }
+          }
         }
 
         Connection con(*context.db);
@@ -2574,6 +2646,125 @@ void RegisterGpuNativeGroupDumpTableFunction(ExtensionLoader &loader) {
   TableFunction tf("gpu_native_group_dump", {LogicalType::VARCHAR, LogicalType::VARCHAR},
                    GpuNativeGroupDumpFunc, GpuNativeGroupDumpBind, GpuNativeTFInit);
   loader.RegisterFunction(tf);
+}
+
+// === Phase G Stage 1: GPU-direct fact-column feed (flag-gated, additive) ======
+// Decode every fact column's native storage segments on the GPU (the exact path
+// gpu_native_decode_check proves bit-exact) and feed them via mojo_gpu_feed_column
+// in the same column order the SQL feed would. All-or-nothing per request.
+//
+// One column's segments, decoded into a single contiguous host buffer in scan
+// order, with the metadata feed_column needs.
+struct DecodedFactColumn {
+  int type_code = -1;          // 0 = int32 (4B), 1 = int64 (8B)
+  int64_t tag = rp::TYPE_INVALID;
+  idx_t n_rows = 0;
+  int64_t bytes_moved = 0;     // sum of decoded segment byte sizes (H->D)
+  std::vector<int32_t> v32;
+  std::vector<int64_t> v64;
+};
+
+// Decode all DATA segments of one native column. Returns false (leaving `out`
+// untouched/partial) the moment any segment is unsupported -- the caller treats
+// that as ineligible for the whole request. Mirrors gpu_native_decode_check:
+//   * only the top-level data column path ("[N]", no comma) is decoded;
+//   * codec must be UNCOMPRESSED or BITPACKING (CodecToMojo >= 0);
+//   * the segment must be pinnable (base != null);
+//   * for BITPACKING, every 2048-row group's mode must be one of the four
+//     implemented fixed-width modes (FOR/CONSTANT/CONSTANT_DELTA/DELTA_FOR);
+//   * has_updates segments are rejected (the persistent block bytes would be
+//     stale -- extra-conservative beyond the proven check).
+bool DecodeNativeColumnForFeed(ClientContext &context, NativeColumnRef &ref,
+                               DecodedFactColumn &out) {
+  out.type_code = TypeCodeForSize(ref.physical_type_size);
+  if (out.type_code < 0) { return false; }
+  out.tag = LogicalTypeToTag(ref.type);
+
+  bool ok = true;
+  idx_t global_row = 0;
+  ForEachColumnSegment(context, ref, [&](idx_t /*idx*/, PinnedSegment &ps) {
+    if (!ok) { return; }
+    // Only the top-level data column ("[N]"); skip validity / nested children.
+    if (ps.info.column_path.find(',') != std::string::npos) { return; }
+    if (ps.info.has_updates) { ok = false; return; }
+    int codec = CodecToMojo(EnumUtil::FromString<CompressionType>(ps.info.compression_type.c_str()));
+    if (!ps.base || codec < 0) { ok = false; return; }
+    idx_t count = ps.info.segment_count;
+    idx_t start = global_row;
+    global_row += count;
+    if (codec == 1) {
+      idx_t n_groups = (count + 2048 - 1) / 2048;
+      for (idx_t g = 0; g < n_groups; g++) {
+        std::string m; int64_t f, w, doff;
+        ParseBitpackingGroup(ps.base, ps.seg_bytes, ref.physical_type_size, g, m, f, w, doff);
+        if (!(m == "FOR" || m == "CONSTANT" || m == "CONSTANT_DELTA" || m == "DELTA_FOR")) {
+          ok = false; return;
+        }
+      }
+    }
+    // Decode into the contiguous output at the running global offset.
+    int32_t rc;
+    if (out.type_code == 0) {
+      out.v32.resize(start + count);
+      rc = mojo_gpu_decode_segment(ps.base, NumericCast<int64_t>(ps.seg_bytes),
+                                   NumericCast<int64_t>(count), codec, 0, out.v32.data() + start);
+    } else {
+      out.v64.resize(start + count);
+      rc = mojo_gpu_decode_segment(ps.base, NumericCast<int64_t>(ps.seg_bytes),
+                                   NumericCast<int64_t>(count), codec, 1, out.v64.data() + start);
+    }
+    if (rc != 0) { ok = false; return; }
+    out.bytes_moved += NumericCast<int64_t>(ps.seg_bytes);
+  });
+  if (!ok) { return false; }
+  out.n_rows = global_row;
+  return true;
+}
+
+bool TryGpuDirectFactFeed(ClientContext &context, void *h,
+                          const std::string &fact_table,
+                          const std::vector<std::string> &fact_cols,
+                          int64_t /*kind*/, int64_t *out_bytes_moved) {
+  // Pass 1: resolve + decode every fact column. Any failure => feed nothing.
+  std::vector<DecodedFactColumn> decoded(fact_cols.size());
+  idx_t expect_rows = 0;
+  int64_t total_bytes = 0;
+  for (size_t c = 0; c < fact_cols.size(); c++) {
+    NativeColumnRef ref;
+    try {
+      ref = ResolveNativeColumn(context, fact_table, fact_cols[c]);
+    } catch (...) {
+      return false;  // e.g. parquet-backed / no native segments / bad name
+    }
+    if (!DecodeNativeColumnForFeed(context, ref, decoded[c])) { return false; }
+    total_bytes += decoded[c].bytes_moved;
+    if (c == 0) { expect_rows = decoded[c].n_rows; }
+    else if (decoded[c].n_rows != expect_rows) { return false; }  // ragged => bail
+  }
+  if (decoded.empty() || expect_rows == 0) { return false; }
+
+  // Pass 2: feed each decoded column once, in the SQL-feed column order.
+  for (size_t c = 0; c < fact_cols.size(); c++) {
+    void *ptr = (decoded[c].type_code == 0)
+                    ? static_cast<void *>(decoded[c].v32.data())
+                    : static_cast<void *>(decoded[c].v64.data());
+    int64_t rc = mojo_gpu_feed_column(h, 0, (int64_t)c, ptr,
+                                      NumericCast<int64_t>(decoded[c].n_rows), decoded[c].tag);
+    if (rc != 0) {
+      // A feed failure mid-request would leave the request half-fed; the feed
+      // path overwrites per (req,col) and finalize would read stale slots. This
+      // is not expected (the columns decoded cleanly), so surface it loudly.
+      throw InvalidInputException("GPU_AGG: native-decode feed_column failed (rc " +
+                                  std::to_string(rc) + ") for fact col " + fact_cols[c]);
+    }
+    fprintf(stderr, "[native-decode] fed fact col %s (rows=%lld) via GPU-direct decode\n",
+            fact_cols[c].c_str(), (long long)decoded[c].n_rows);
+  }
+  if (out_bytes_moved) { *out_bytes_moved = total_bytes; }
+  fprintf(stderr,
+          "[native-decode] fact request fed %zu cols, %lld rows, %lld host->device bytes\n",
+          fact_cols.size(), (long long)expect_rows, (long long)total_bytes);
+  return true;
 }
 
 // --- Phase C: gpu_native_decode_check(table, column) --------------------------
