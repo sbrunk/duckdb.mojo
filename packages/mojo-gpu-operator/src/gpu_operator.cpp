@@ -253,6 +253,15 @@ int64_t mojo_gpu_result_i128(void *handle, int64_t row, int64_t col, int64_t *lo
 int64_t mojo_gpu_result_i64(void *handle, int64_t row, int64_t col);
 double  mojo_gpu_result_f64(void *handle, int64_t row, int64_t col);
 int64_t mojo_gpu_result_str(void *handle, int64_t row, int64_t col, uint8_t *out, int64_t cap);
+// Phase 1 column pool (GPU_OP_COLPOOL): monotonic count of bytes pushed H2D on
+// pool misses. The dedup proof reads the DELTA across queries (a shared column
+// uploaded once => later queries add nothing). Surfaced to SQL by the
+// gpu_colpool_status() table function for the measurement.
+int64_t mojo_gpu_colpool_uploaded_bytes();
+// Current RESIDENT bytes held by the pool (sum of pooled-column footprints) and
+// by the tracked aggregate residency (_pin2). For the VRAM-bound assertion.
+int64_t mojo_gpu_colpool_pool_bytes();
+int64_t mojo_gpu_colpool_pin2_bytes();
 }
 
 namespace duckdb {
@@ -3034,6 +3043,47 @@ void RegisterGpuPinStatusTableFunction(ExtensionLoader &loader) {
   loader.RegisterFunction(tf);
 }
 
+// gpu_colpool_status() -> one row (uploaded_bytes BIGINT): the monotonic count
+// of bytes the column pool pushed H2D on misses (GPU_OP_COLPOOL). The dedup
+// proof selects this between queries; the DELTA shrinks once shared columns are
+// resident. Observability only -- does not touch the pool / affect results.
+struct GpuColPoolStatusBindData : public TableFunctionData {
+  int64_t uploaded_bytes = 0;
+  int64_t pool_bytes = 0;
+  int64_t pin2_bytes = 0;
+  int64_t budget_mb = 0;
+};
+
+unique_ptr<FunctionData> GpuColPoolStatusBind(ClientContext &, TableFunctionBindInput &,
+                                              vector<LogicalType> &return_types, vector<string> &names) {
+  auto bd = make_uniq<GpuColPoolStatusBindData>();
+  bd->uploaded_bytes = mojo_gpu_colpool_uploaded_bytes();
+  bd->pool_bytes = mojo_gpu_colpool_pool_bytes();
+  bd->pin2_bytes = mojo_gpu_colpool_pin2_bytes();
+  bd->budget_mb = NumericCast<int64_t>(PinBudgetBytes() / (1024ull * 1024ull));
+  return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT,
+                  LogicalType::BIGINT};
+  names = {"uploaded_bytes", "pool_bytes", "pin2_bytes", "budget_mb"};
+  return std::move(bd);
+}
+
+void GpuColPoolStatusFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+  auto &bd = data.bind_data->Cast<GpuColPoolStatusBindData>();
+  auto &gs = data.global_state->Cast<GpuNativeTFState>();
+  if (gs.offset > 0) { output.SetCardinality(0); return; }
+  FlatVector::GetData<int64_t>(output.data[0])[0] = bd.uploaded_bytes;
+  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.pool_bytes;
+  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.pin2_bytes;
+  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.budget_mb;
+  output.SetCardinality(1);
+  gs.offset += 1;
+}
+
+void RegisterGpuColPoolStatusTableFunction(ExtensionLoader &loader) {
+  TableFunction tf("gpu_colpool_status", {}, GpuColPoolStatusFunc, GpuColPoolStatusBind, GpuNativeTFInit);
+  loader.RegisterFunction(tf);
+}
+
 // gpu_unpin(key) / gpu_unpin_all(): free resident pins. Returns one row
 // (freed BIGINT, skipped_in_use BIGINT). Skips in-use entries (a query holds a
 // lease) — they are reported in skipped_in_use, never force-freed.
@@ -3187,6 +3237,7 @@ void LoadInternal(ExtensionLoader &loader) {
   RegisterGpuNativeGroupDumpTableFunction(loader);    // debug: per-group mode/width dump
   RegisterGpuNativeDecodeCheckTableFunction(loader);  // Phase C: GPU-direct decode bit-exact check
   RegisterGpuPinStatusTableFunction(loader);          // pin cache observability (resident pins)
+  RegisterGpuColPoolStatusTableFunction(loader);      // column-pool uploaded-bytes (dedup proof)
   RegisterGpuUnpinTableFunctions(loader);             // explicit unpin (key / all)
   RegisterGpuPinTableTableFunction(loader);           // pre-pin a kNN embedding column warm
 }

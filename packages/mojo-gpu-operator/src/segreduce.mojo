@@ -1105,6 +1105,62 @@ def segreduce_upload(
 
 
 # ---------------------------------------------------------------------------
+# segreduce_upload_from_packed: variant of segreduce_upload for the column-pool
+# (GPU_OP_COLPOOL) path. The packed columns buffer `cols_d` has ALREADY been
+# assembled on the device (by D2D copies from the pooled per-column buffers into
+# their slot offsets), so this SKIPS the cols enqueue_create_buffer + enqueue_copy
+# entirely. Everything else -- the dim arrays, dim_offsets, and sort-segment
+# offsets -- is uploaded EXACTLY as segreduce_upload does (same n_dims==0 /
+# n_seg==0 dummy-buffer handling, same final synchronize), and the returned
+# SegResident is identical in shape. Because `cols_d` is byte-identical to what
+# segreduce_upload would have produced (same per-column _col_val bytes at the same
+# slot offsets), the kernels read it unchanged => bit-identical results.
+#
+# `cols_d` ownership transfers in (the caller assembled it and hands it over).
+# ---------------------------------------------------------------------------
+def segreduce_upload_from_packed(
+    ctx: DeviceContext,
+    var cols_d: DeviceBuffer[DType.int64],
+    n_cols: Int,
+    n_rows: Int,
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_seg: Int,
+    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_dims: Int,
+) raises -> SegResident:
+    # ---- packed columns: already assembled on device; NO upload here. ----
+
+    # ---- FK-join dim arrays (concatenated). dims_total == dim_offsets_host[n_dims].
+    # Allocate at least 1 element so the buffer is always valid (n_dims==0 path).
+    var dims_total = Int(dim_offsets_host[n_dims]) if n_dims > 0 else 0
+    var dims_n = dims_total if dims_total > 0 else 1
+    var dims_d = ctx.enqueue_create_buffer[DType.int64](dims_n)
+    if dims_total > 0:
+        # dims_n == dims_total here, so copy fills the whole buffer.
+        ctx.enqueue_copy(dims_d, dims_host)
+
+    # ---- small host copy of the dim offsets (length n_dims+1; empty if n_dims==0).
+    var dim_offsets = List[Int64]()
+    if n_dims > 0:
+        for i in range(n_dims + 1):
+            dim_offsets.append(dim_offsets_host[i])
+
+    # ---- sort-segment offsets. Allocate at least 1 element (n_seg==0 path).
+    var soff_n = n_seg + 1 if n_seg > 0 else 1
+    var seg_off_d = ctx.enqueue_create_buffer[DType.int64](soff_n)
+    if n_seg > 0:
+        # soff_n == n_seg+1 here, so copy fills the whole buffer.
+        ctx.enqueue_copy(seg_off_d, seg_off_host)
+
+    ctx.synchronize()
+    return SegResident(
+        ctx, cols_d^, n_rows, n_cols, dims_d, dim_offsets^, n_dims,
+        seg_off_d, n_seg,
+    )
+
+
+# ---------------------------------------------------------------------------
 # segreduce_run: upload ONLY the (small) filter + metric program buffers, launch
 # the mode's kernel on `res`'s resident buffers, and perform the int128 host
 # reduction. Returns result[g * M + m] over n_out_groups (same shape as today).

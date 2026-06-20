@@ -91,10 +91,25 @@ from raw_plan_tags import (
 )
 from segreduce import (
     segreduce_upload,
+    segreduce_upload_from_packed,
     segreduce_run,
     segreduce_run_hash,
     HashGroupResult,
     SegResident,
+)
+from col_pool import (
+    col_key,
+    ensure_column,
+    release_lease,
+    evict_lru,
+    pool_bytes,
+    uploaded_bytes as col_pool_uploaded_bytes,
+    pin2_register,
+    pin2_unregister,
+    pin2_resident_bytes,
+    pin2_oldest_key,
+    REPR_INT64_PACKED,
+    ORDERING_STORAGE,
 )
 from std.collections import Dict
 
@@ -489,6 +504,37 @@ def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
     st.cand_id_h.free()
     p.destroy_pointee()
     p.free()
+
+
+# Phase 1 column-pool measurement hook: the monotonic count of bytes actually
+# pushed host->device on pool MISSES (GPU_OP_COLPOOL). The dedup proof reads the
+# DELTA across queries -- once a shared column is resident later signatures HIT
+# and add nothing, so the per-query delta shrinks. Returns 0 if the pool was
+# never touched (flag off / no eligible query). Diagnostic only.
+@export("mojo_gpu_colpool_uploaded_bytes")
+def mojo_gpu_colpool_uploaded_bytes() abi("C") -> Int64:
+    try:
+        return col_pool_uploaded_bytes()
+    except:
+        return Int64(0)
+
+
+# Current RESIDENT pool footprint (sum of pooled per-column buffer bytes) and the
+# tracked _pin2 footprint. For the VRAM-bound assertion (stays under budget).
+@export("mojo_gpu_colpool_pool_bytes")
+def mojo_gpu_colpool_pool_bytes() abi("C") -> Int64:
+    try:
+        return Int64(pool_bytes())
+    except:
+        return Int64(0)
+
+
+@export("mojo_gpu_colpool_pin2_bytes")
+def mojo_gpu_colpool_pin2_bytes() abi("C") -> Int64:
+    try:
+        return Int64(pin2_resident_bytes())
+    except:
+        return Int64(0)
 
 
 # ===-------------------------------------------------------------------===#
@@ -2050,6 +2096,13 @@ struct GpuPinned(Movable):
     var q5_pred_slots: List[Int]  # [l_orderkey_slot, l_suppkey_slot]
     var q5_region_names: List[String]
     var q5_region_keys: List[Int64]
+    # --- Phase 1 column pool (GPU_OP_COLPOOL): the pooled-column ColKeys this
+    # entry leased to assemble its cols_d. The lease lifetime == this cached
+    # entry's lifetime, so the NEXT signature can dedup against the same resident
+    # columns. Released (refcount--) when this entry is evicted from _pin2 (under
+    # budget pressure). EMPTY when the flag is off or the path didn't pool (then
+    # there is nothing to release -> byte-identical behavior).
+    var pool_lease_keys: List[String]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2089,6 +2142,7 @@ struct GpuPinned(Movable):
         self.q5_pred_slots = []
         self.q5_region_names = []
         self.q5_region_keys = []
+        self.pool_lease_keys = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2100,6 +2154,191 @@ comptime _pin2 = _Global["mojo_gpu_pin2", _make_pin2]
 
 def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutAnyOrigin]:
     return _pin2.get_or_create_ptr()
+
+
+# ===-------------------------------------------------------------------===#
+# Phase 1 column pool (GPU_OP_COLPOOL) -- helpers shared by the 3 cold paths.
+#
+# The pool deduplicates the COLD H2D upload of aggregate FACT columns shared
+# across query signatures. KERNELS AND C++ ARE UNTOUCHED: each query still owns a
+# packed `cols_d` of the SAME bytes/layout/length as today; the only change is
+# HOW it gets filled -- shared columns are D2D-copied from a resident per-column
+# buffer instead of re-uploaded from host. Flag off => none of this runs and the
+# behavior is byte-identical (incl. _pin2 unbounded).
+# ===-------------------------------------------------------------------===#
+
+def _colpool_on() -> Bool:
+    return getenv("GPU_OP_COLPOOL", "") != ""
+
+
+# Resident-byte budget in bytes. Mirrors the C++ PinBudgetBytes: GPU_OP_PIN_BUDGET_MB
+# overrides (in MB); default 4 GiB. 0 => unbounded. Read every call (cheap; the
+# value is a process-wide policy but re-reading keeps it stateless on the Mojo side).
+def _pin_budget_bytes() -> Int:
+    var env = getenv("GPU_OP_PIN_BUDGET_MB", "")
+    if env != "":
+        try:
+            var mb = Int(env)
+            if mb >= 0:
+                return mb * 1024 * 1024
+        except:
+            pass
+    return 4096 * 1024 * 1024  # 4 GiB default cap
+
+
+# Approximate VRAM footprint of one cached GpuPinned's resident device buffers
+# (the SegResident). cols_d (n_cols*n_rows int64) dominates; add the dim arrays +
+# seg offsets. Conservative so the budget never under-counts what is resident.
+def _gp_footprint_bytes(gp: GpuPinned) -> Int:
+    var b = gp.res.n_cols * gp.res.n_rows * 8
+    # dim arrays: dim_offsets[n_dims] elements (int64); seg offsets: n_seg+1.
+    if gp.res.n_dims > 0 and len(gp.res.dim_offsets) > gp.res.n_dims:
+        b += Int(gp.res.dim_offsets[gp.res.n_dims]) * 8
+    if gp.res.n_seg > 0:
+        b += (gp.res.n_seg + 1) * 8
+    return b
+
+
+# Footprints of all cached _pin2 entries (the column bytes the aggregate
+# residency holds outside the pool). Tracked via the pool's side-bookkeeping
+# (the Movable-only _pin2 Dict can't be iterated under this nightly), kept in
+# lockstep by _pin2_cache() / _evict_one_pin2(). Charged with pool_bytes()
+# against the budget when GPU_OP_COLPOOL is on.
+def _pin2_resident_bytes() raises -> Int:
+    return pin2_resident_bytes()
+
+
+# Register a just-inserted _pin2 entry's footprint with the pool side-bookkeeping
+# (flag-on only). Called right AFTER `p2[sig] = gp^` at every wired insertion
+# site, using a footprint captured BEFORE the move. Uses the col_pool global
+# (not _pin2), so it never re-borrows the live `ref p2`. Flag off => no-op, so
+# _pin2 stays exactly as today (unbounded, untracked).
+def _pin2_track(sig: String, footprint_bytes: Int) raises:
+    if _colpool_on():
+        pin2_register(sig, footprint_bytes)
+
+
+# Evict the oldest (insertion-order ~ LRU for a single-source stream) cached
+# _pin2 entry to reclaim VRAM. Releases the entry's pooled-column leases first
+# (so those columns become evictable), unregisters its footprint, then drops the
+# entry (freeing its SegResident device buffers). Returns the freed footprint
+# bytes, or 0 if the cache is empty. Used only under budget pressure with the
+# flag on. Correctness-safe: an evicted signature simply goes COLD next run.
+def _evict_one_pin2() raises -> Int:
+    var victim = pin2_oldest_key()
+    if victim == "":
+        return 0
+    ref p2 = _pin2_ptr()[]
+    if victim not in p2:
+        # Side list drifted (shouldn't happen); drop the stale key + retry once.
+        pin2_unregister(victim, 0)
+        return 0
+    var freed = _gp_footprint_bytes(p2[victim])
+    # Release this entry's pooled-column leases so they can be evicted too.
+    for k in range(len(p2[victim].pool_lease_keys)):
+        release_lease(p2[victim].pool_lease_keys[k])
+    _ = p2.pop(victim)
+    pin2_unregister(victim, freed)
+    return freed
+
+
+# Make room for `need` more resident bytes (a pending pool miss) under the
+# budget. Evict pooled LRU columns FIRST (conservative: prefer dropping pooled
+# columns over the aggregate residency, to avoid warm-hit regression), then LRU
+# _pin2 entries. Stops when within budget or nothing more is evictable (the
+# subsequent allocation's OOM-retry is the backstop). budget == 0 => unbounded.
+def _colpool_make_room(need: Int) raises:
+    var budget = _pin_budget_bytes()
+    if budget == 0:
+        return
+    while True:
+        var resident = pool_bytes() + _pin2_resident_bytes()
+        if resident + need <= budget:
+            return
+        # Prefer evicting pooled columns (cheap to D2D-refill on a later cold
+        # miss) over the cached aggregate residency.
+        var freed = evict_lru()
+        if freed > 0:
+            continue
+        # No evictable pooled column left -> drop an aggregate residency.
+        freed = _evict_one_pin2()
+        if freed == 0:
+            return  # nothing evictable; allocation OOM-retry handles the rest
+
+
+# Assemble the per-signature packed `cols_d` via the column pool (flag-on,
+# STORAGE-only callers). `cols_host` is the FULLY packed host buffer the cold
+# path already built (numeric slots + gid/pass slots), byte-identical to today.
+# For each NUMERIC fact slot we ensure_column the pooled per-column buffer and
+# D2D-copy it into slot offset `slot*n`; non-numeric/derived slots (gid, pass)
+# are H2D-copied from `cols_host` as today (they are per-query derived, never
+# pooled). On a not-poolable / fallback slot we H2D-copy that slot straight from
+# `cols_host` -- so the result is ALWAYS byte-identical regardless of HIT/MISS/
+# fallback. Returns the assembled cols_d (ownership to caller) and appends the
+# leased ColKeys to `out_lease_keys` (stored in the GpuPinned for release on
+# eviction). Per-column HIT/MISS is logged when GPU_OP_PIN_LOG is set.
+#
+# `mat_col_of_slot[slot]` is the mat_cols index of numeric slot `slot` (i.e.
+# numeric_matcols); slots >= n_numeric are derived (gid/pass) and copied whole.
+def _colpool_assemble_cols_d(
+    ctx: DeviceContext,
+    fact_table: String,
+    st: GpuExecState,
+    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_slots: Int,
+    n: Int,
+    numeric_matcols: List[Int],
+    mut out_lease_keys: List[String],
+) raises -> DeviceBuffer[DType.int64]:
+    var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+    var n_numeric = len(numeric_matcols)
+    # Allocate the device-side packed buffer (same size as segreduce_upload).
+    var total = n_slots * n if n_slots * n > 0 else 1
+    var cols_d = ctx.enqueue_create_buffer[DType.int64](total)
+
+    # --- numeric fact slots: dedup via the pool, D2D into slot offset. ---
+    for slot in range(n_numeric):
+        var mj = numeric_matcols[slot]
+        var col_name = st.mat_cols[mj]
+        var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
+        # Host pointer to this slot's already-packed int64 values (slot*n..+n).
+        var slot_host = cols_host + slot * n
+        # Budget: make room for one more resident column (n int64) before a miss.
+        # (HITs add nothing, but make_room is cheap when already within budget.)
+        _colpool_make_room(n * 8)
+        var er = ensure_column(
+            ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE, slot_host, n
+        )
+        if er.ok:
+            out_lease_keys.append(key)
+            # D2D copy the resident column into THIS query's slot offset.
+            var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
+            ctx.enqueue_copy(dst, er.buf)
+            if pin_log:
+                var tag = "HIT" if er.was_hit else "MISS"
+                print(
+                    "[gpu-op colpool] ", tag, " col=", col_name,
+                    " n=", n, file=FileDescriptor(2),
+                )
+        else:
+            # Not poolable / nothing evictable -> upload this slot straight from
+            # host, exactly as today (byte-identical; just not deduped).
+            var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
+            ctx.enqueue_copy(dst, slot_host)
+            if pin_log:
+                print(
+                    "[gpu-op colpool] FALLBACK col=", col_name,
+                    " n=", n, file=FileDescriptor(2),
+                )
+
+    # --- derived slots (gid, pass): H2D straight from the packed host buffer. ---
+    for slot in range(n_numeric, n_slots):
+        var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
+        var slot_host = cols_host + slot * n
+        ctx.enqueue_copy(dst, slot_host)
+
+    ctx.synchronize()
+    return cols_d^
 
 
 # Re-run the resident kernel + assemble the result table into `dst` from the
@@ -3872,6 +4111,9 @@ def _pin_finalize_generic(
         gk_i64_vals.append(iv^)
 
     # --- upload the resident buffers once (no FK-join dims for this class) ---
+    # This class is UNGROUPED / DENSE_GROUP => STORAGE row order (no ORDER BY),
+    # so it is column-pool eligible. When GPU_OP_COLPOOL is on we dedup the per-
+    # column H2D via the pool and assemble cols_d by D2D repack; off => verbatim.
     var ctx = shared_device_context()
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
@@ -3879,9 +4121,20 @@ def _pin_finalize_generic(
     dims_dummy[0] = 0
     var doff_dummy = alloc[Int64](1)
     doff_dummy[0] = 0
-    var resident = segreduce_upload(
-        ctx, cols, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
-    )
+    var pool_lease_keys: List[String] = []
+    var resident: SegResident
+    if _colpool_on():
+        var cols_d = _colpool_assemble_cols_d(
+            ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+            pool_lease_keys,
+        )
+        resident = segreduce_upload_from_packed(
+            ctx, cols_d^, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
+        )
+    else:
+        resident = segreduce_upload(
+            ctx, cols, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
+        )
     seg_off_dummy.free()
     dims_dummy.free()
     doff_dummy.free()
@@ -3891,6 +4144,7 @@ def _pin_finalize_generic(
 
     # --- construct + cache the GpuPinned, then assemble via the shared path ---
     var gp = GpuPinned(resident^)
+    gp.pool_lease_keys = pool_lease_keys^
     gp.mode = mode
     gp.G = G
     gp.gid_slot = gid_slot if gid_slot >= 0 else 0
@@ -3933,7 +4187,9 @@ def _pin_finalize_generic(
             gcmps.append(f_cmp[fi])
         gp.gen_pred_slots = gslots^
         gp.gen_pred_cmps = gcmps^
+    var _fp = _gp_footprint_bytes(gp) if _colpool_on() else 0
     p2[sig] = gp^
+    _pin2_track(sig, _fp)
 
     ref dst = m[key]
     # The COLD path assembles with THIS query's bounds too (the kernel is the same
@@ -4383,13 +4639,28 @@ def _pin_finalize_q5(
                 gk_i64_vals.append(iv^)
 
             # --- upload the resident buffers once (DENSE_GROUP, 4 dim arrays). ---
+            # Q5 is DENSE_GROUP => STORAGE row order, so the fact columns are
+            # column-pool eligible. gid_slot (raw supp_nation[l_suppkey]) is a
+            # per-query derived slot (>= n_numeric) => NOT pooled, copied whole.
             var ctx = shared_device_context()
             var seg_off_dummy = alloc[Int64](1)
             seg_off_dummy[0] = 0
-            var resident = segreduce_upload(
-                ctx, cols, n_slots, n, seg_off_dummy, 0,
-                dims_host, doff_host, n_dim_arrays,
-            )
+            var pool_lease_keys: List[String] = []
+            var resident: SegResident
+            if _colpool_on():
+                var cols_d = _colpool_assemble_cols_d(
+                    ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+                    pool_lease_keys,
+                )
+                resident = segreduce_upload_from_packed(
+                    ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
+                    dims_host, doff_host, n_dim_arrays,
+                )
+            else:
+                resident = segreduce_upload(
+                    ctx, cols, n_slots, n, seg_off_dummy, 0,
+                    dims_host, doff_host, n_dim_arrays,
+                )
             seg_off_dummy.free()
 
             nation_region.free(); cust_nation.free()
@@ -4404,6 +4675,7 @@ def _pin_finalize_q5(
             var agg_m1: List[Int] = [-1]
 
             var gp = GpuPinned(resident^)
+            gp.pool_lease_keys = pool_lease_keys^
             gp.mode = STRAT_DENSE_GROUP
             gp.G = G
             gp.gid_slot = gid_slot
@@ -4432,7 +4704,9 @@ def _pin_finalize_q5(
             gp.q5_pred_slots = [lok_slot, lsk_slot]
             gp.q5_region_names = q5_region_names.copy()
             gp.q5_region_keys = q5_region_keys.copy()
+            var _fp5p = _gp_footprint_bytes(gp) if _colpool_on() else 0
             p2[sig] = gp^
+            _pin2_track(sig, _fp5p)
 
             ref dst = m[key]
             # COLD assembles with THIS query's scalars too (same kernel as WARM):
@@ -4678,13 +4952,27 @@ def _pin_finalize_q5(
         gk_i64_vals.append(iv^)
 
     # --- upload the resident buffers once (DENSE_GROUP, 4 dim arrays) ---
+    # DENSE_GROUP => STORAGE row order; fact columns are column-pool eligible.
+    # gid_slot (per-query derived supp-group) is >= n_numeric => copied whole.
     var ctx = shared_device_context()
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
-    var resident = segreduce_upload(
-        ctx, cols, n_slots, n, seg_off_dummy, 0,
-        dims_host, doff_host, n_dim_arrays,
-    )
+    var pool_lease_keys: List[String] = []
+    var resident: SegResident
+    if _colpool_on():
+        var cols_d = _colpool_assemble_cols_d(
+            ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+            pool_lease_keys,
+        )
+        resident = segreduce_upload_from_packed(
+            ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
+    else:
+        resident = segreduce_upload(
+            ctx, cols, n_slots, n, seg_off_dummy, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
     seg_off_dummy.free()
 
     nation_in_asia.free(); gid_of_nation.free(); cust_nation.free()
@@ -4699,6 +4987,7 @@ def _pin_finalize_q5(
     var agg_m1: List[Int] = [-1]
 
     var gp = GpuPinned(resident^)
+    gp.pool_lease_keys = pool_lease_keys^
     gp.mode = STRAT_DENSE_GROUP
     gp.G = G
     gp.gid_slot = gid_slot
@@ -4723,7 +5012,9 @@ def _pin_finalize_q5(
     gp.emit_agg = 0  # gate on revenue
     gp.emit_gt0 = False  # emit iff revenue != 0 (stock GROUP BY over passers)
     gp.kind = d.kind  # routes Q5 to the comptime-specialized dense kernel
+    var _fp5 = _gp_footprint_bytes(gp) if _colpool_on() else 0
     p2[sig] = gp^
+    _pin2_track(sig, _fp5)
 
     ref dst = m[key]
     _assemble(dst, p2[sig])
@@ -5221,12 +5512,27 @@ def _pin_finalize_generic_dims(
                 hash_gk_dim_arr.append(List[Int64]())
 
         # Upload resident buffers once (no seg offsets needed for hash).
+        # HASH_GROUP appends NO ORDER BY => STORAGE row order, so the fact columns
+        # (incl. the integer fact group key l_orderkey, read in storage order) are
+        # column-pool eligible. pass_slot is per-query derived => copied whole.
         var seg_off_dummy_h = alloc[Int64](1)
         seg_off_dummy_h[0] = 0
-        var resident = segreduce_upload(
-            ctx, cols, n_slots, n, seg_off_dummy_h, 0,
-            dims_host, doff_host, n_dim_arrays,
-        )
+        var pool_lease_keys_h: List[String] = []
+        var resident: SegResident
+        if _colpool_on():
+            var cols_d = _colpool_assemble_cols_d(
+                ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+                pool_lease_keys_h,
+            )
+            resident = segreduce_upload_from_packed(
+                ctx, cols_d^, n_slots, n, seg_off_dummy_h, 0,
+                dims_host, doff_host, n_dim_arrays,
+            )
+        else:
+            resident = segreduce_upload(
+                ctx, cols, n_slots, n, seg_off_dummy_h, 0,
+                dims_host, doff_host, n_dim_arrays,
+            )
         seg_off_dummy_h.free()
         cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
 
@@ -5243,6 +5549,7 @@ def _pin_finalize_generic_dims(
             gk_is_str.append(False)
 
         var gp = GpuPinned(resident^)
+        gp.pool_lease_keys = pool_lease_keys_h^
         gp.mode = STRAT_HASH_GROUP
         gp.G = 1
         gp.gid_slot = 0
@@ -5270,7 +5577,9 @@ def _pin_finalize_generic_dims(
         gp.hash_cap = cap
         gp.hash_gk_dim_arr = hash_gk_dim_arr^
         gp.kind = d.kind  # Q3 HASH_GROUP stays on the generic interpreter path
+        var _fph = _gp_footprint_bytes(gp) if _colpool_on() else 0
         p2[sig] = gp^
+        _pin2_track(sig, _fph)
 
         ref dst = m[key]
         _assemble_hash(dst, p2[sig])
@@ -5397,12 +5706,28 @@ def _pin_finalize_generic_dims(
         return 0
 
     # --- upload resident buffers once (UNGROUPED, n_dims = n_dim_arrays) ---
+    # UNGROUPED (Q14) appends NO ORDER BY => STORAGE row order, so the fact
+    # columns are column-pool eligible. pass_slot is per-query derived (copied
+    # whole). (The SORT_SEGREDUCE branch above returned already; it is the only
+    # ineligible strategy here and stays VERBATIM -- it never pools.)
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
-    var resident = segreduce_upload(
-        ctx, cols, n_slots, n, seg_off_dummy, 0,
-        dims_host, doff_host, n_dim_arrays,
-    )
+    var pool_lease_keys: List[String] = []
+    var resident: SegResident
+    if _colpool_on():
+        var cols_d = _colpool_assemble_cols_d(
+            ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
+            pool_lease_keys,
+        )
+        resident = segreduce_upload_from_packed(
+            ctx, cols_d^, n_slots, n, seg_off_dummy, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
+    else:
+        resident = segreduce_upload(
+            ctx, cols, n_slots, n, seg_off_dummy, 0,
+            dims_host, doff_host, n_dim_arrays,
+        )
     seg_off_dummy.free()
     cols.free()
     pass_col.free()
@@ -5420,6 +5745,7 @@ def _pin_finalize_generic_dims(
         agg_m1.append(-1)
 
     var gp = GpuPinned(resident^)
+    gp.pool_lease_keys = pool_lease_keys^
     gp.mode = STRAT_UNGROUPED
     gp.G = 1
     gp.gid_slot = 0
@@ -5455,7 +5781,9 @@ def _pin_finalize_generic_dims(
             gcmps.append(f_cmp[fi])
         gp.gen_pred_slots = gslots^
         gp.gen_pred_cmps = gcmps^
+    var _fpud = _gp_footprint_bytes(gp) if _colpool_on() else 0
     p2[sig] = gp^
+    _pin2_track(sig, _fpud)
 
     ref dst = m[key]
     # COLD assembles with THIS query's bounds too (same kernel code as WARM).
