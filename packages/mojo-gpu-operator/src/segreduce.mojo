@@ -287,6 +287,71 @@ def seg_ungrouped_kernel_q6(
             partials[blk * M + m] = s
 
 
+# Q6 PREDICATE-INDEPENDENT (Phase G Stage 2, flag-gated): identical to
+# seg_ungrouped_kernel_q6 except the row filter is evaluated IN-KERNEL from the
+# resident filter-input columns + the 5 Q6 bounds passed as LAUNCH PARAMS, rather
+# than from a host-baked 0/1 pass column. This decouples residency from the filter
+# constants: the resident `cols` buffers already hold ALL rows (the materialize
+# SQL has no WHERE), so the same buffers serve any constant set; only the bounds
+# below change per run.
+#
+# The predicate is byte-for-byte the host pass-column's semantics
+# (`_pred_pass(v, cmp, k)` in gpu_kernels.mojo) for the fixed Q6 shape:
+#   l_shipdate >= ship_lo (CMP_GE)  AND  l_shipdate <  ship_hi (CMP_LT)
+#   l_discount >= disc_lo (CMP_GE)  AND  l_discount <= disc_hi (CMP_LE)
+#   l_quantity <  qty_hi  (CMP_LT)
+# All five operands are read from `cols[slot * n_rows + row]` — the SAME int64-
+# packed values _col_val widened into the buffer — so the pass set is identical.
+# The metric is evaluated with the SAME eval_program_fast as the stock Q6 kernel,
+# so passing rows contribute identical products and the int128 reduction matches.
+def seg_ungrouped_kernel_q6_pred(
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    ship_slot: Int,
+    disc_slot: Int,
+    qty_slot: Int,
+    ship_lo: Int64,
+    ship_hi: Int64,
+    disc_lo: Int64,
+    disc_hi: Int64,
+    qty_hi: Int64,
+):
+    var lane = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * WARP
+    var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
+    var i = Int(block_idx.x) * WARP + lane
+    while i < n_rows:
+        var sd = cols[ship_slot * n_rows + i]
+        var dc = cols[disc_slot * n_rows + i]
+        var qt = cols[qty_slot * n_rows + i]
+        if (
+            sd >= ship_lo
+            and sd < ship_hi
+            and dc >= disc_lo
+            and dc <= disc_hi
+            and qt < qty_hi
+        ):
+            for m in range(M):
+                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                acc[m] += eval_program_fast(
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    dims, dim_offsets,
+                )
+        i += stride
+    var blk = Int(block_idx.x)
+    for m in range(M):
+        var s = warp.sum(acc[m])
+        if lane == 0:
+            partials[blk * M + m] = s
+
+
 # Q14 (UNGROUPED + 1 dim): same shape as Q6's ungrouped kernel, but the pass
 # program and metric programs use OP_LOAD_DIM gathers (handled by the fast path /
 # its fallback). Kept as a distinct symbol for clarity + per-kind dispatch.
@@ -841,6 +906,19 @@ def segreduce_run(
     gid_slot: Int,
     G: Int,
     kind: Int64 = KIND_UNKNOWN,
+    # Phase G Stage 2 (flag-gated): Q6 predicate-independent residency. When
+    # `q6_pred_active` is True (UNGROUPED + KIND_Q6 only), the row filter is
+    # evaluated IN-KERNEL from these resident slots + per-run bounds instead of a
+    # host-baked pass column (pass_len is then 0). Off by default -> stock path.
+    q6_pred_active: Bool = False,
+    q6_ship_slot: Int = 0,
+    q6_disc_slot: Int = 0,
+    q6_qty_slot: Int = 0,
+    q6_ship_lo: Int64 = 0,
+    q6_ship_hi: Int64 = 0,
+    q6_disc_lo: Int64 = 0,
+    q6_disc_hi: Int64 = 0,
+    q6_qty_hi: Int64 = 0,
 ) raises -> List[Int128]:
     var ctx = res.ctx
     var cols_d = res.cols_d
@@ -956,7 +1034,22 @@ def segreduce_run(
     # default: STRAT_UNGROUPED
     var npart = SEG_NBLOCKS * M
     var part_d = ctx.enqueue_create_buffer[DType.int64](npart)
-    if use_mw:
+    if q6_pred_active:
+        # Phase G Stage 2: Q6 in-kernel predicate over resident columns + per-run
+        # bounds (no host pass column). Takes priority over use_mw because the
+        # pass column is absent (pass_len==0) on this path; the predicate kernel
+        # is the only one that evaluates the filter from the bounds. The lane
+        # striding / warp.sum / partial layout match seg_ungrouped_kernel_q6.
+        ctx.enqueue_function[seg_ungrouped_kernel_q6_pred](
+            cols_d, n_rows,
+            mp_d, moff_d, mlen_d, M,
+            dims_d, doff_d,
+            part_d,
+            q6_ship_slot, q6_disc_slot, q6_qty_slot,
+            q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
+            grid_dim=SEG_NBLOCKS, block_dim=WARP,
+        )
+    elif use_mw:
         # Multi-warp occupancy variant is unchanged (generic interpreter).
         ctx.enqueue_function[seg_ungrouped_kernel_mw](
             cols_d, n_rows,

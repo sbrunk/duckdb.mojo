@@ -25,6 +25,7 @@ from std.gpu.memory import AddressSpace
 from gpu_platform import WARP
 from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
+from std.io import FileDescriptor
 from std.os import abort, getenv
 from std.sys.info import (
     has_nvidia_gpu_accelerator,
@@ -2016,6 +2017,15 @@ struct GpuPinned(Movable):
     # Query KIND (KIND_Q1/Q6/Q14/Q5/...), used to route segreduce_run to the
     # comptime-specialized kernel for that shape (KIND_UNKNOWN -> generic VM).
     var kind: Int64
+    # --- Phase G Stage 2: Q6 predicate-independent residency (flag-gated) ---
+    # When `q6_pred` is True, the resident columns include the Q6 filter inputs and
+    # the filter is evaluated IN-KERNEL from these slots + the CURRENT query's
+    # bounds (threaded into _assemble every run), NOT from a host pass column. The
+    # slots are constant-independent (they depend only on the column layout), so
+    # they live in the cache entry; the bounds do NOT (they come from `d`).
+    # Slot order: [ship_slot, disc_slot, qty_slot].
+    var q6_pred: Bool
+    var q6_pred_slots: List[Int]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2046,6 +2056,8 @@ struct GpuPinned(Movable):
         self.hash_cap = 0
         self.hash_gk_dim_arr = []
         self.kind = KIND_UNKNOWN
+        self.q6_pred = False
+        self.q6_pred_slots = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2063,7 +2075,22 @@ def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutAnyOrigin]:
 # cached GpuPinned metadata + the freshly-computed sums. Used by BOTH the COLD
 # path (after it builds + stores the GpuPinned) and the WARM path, so the two
 # can never drift. Reads NO fed host columns.
-def _assemble(mut dst: GpuExecState, mut gp: GpuPinned) raises:
+#
+# Phase G Stage 2: `q6_bounds` carries the CURRENT query's Q6 filter bounds when
+# `gp.q6_pred` is set. They are NOT part of the cache entry (the whole point is
+# warm-across-constants), so they are passed in fresh every run from the live
+# descriptor. When `gp.q6_pred` is False the spec is ignored (stock pass-column
+# path). The slots come from the cache entry (constant-independent); the bounds
+# from `q6_bounds`.
+def _assemble(
+    mut dst: GpuExecState,
+    mut gp: GpuPinned,
+    q6_bounds: Q6PredSpec = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0),
+) raises:
+    var q6_active = gp.q6_pred and gp.kind == KIND_Q6
+    var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
+    var ds = gp.q6_pred_slots[1] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
+    var qs = gp.q6_pred_slots[2] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
     var sums = segreduce_run(
         gp.res,
         gp.mode,
@@ -2077,6 +2104,15 @@ def _assemble(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         gp.gid_slot,
         gp.G,
         gp.kind,
+        q6_pred_active=q6_active,
+        q6_ship_slot=ss,
+        q6_disc_slot=ds,
+        q6_qty_slot=qs,
+        q6_ship_lo=q6_bounds.ship_lo,
+        q6_ship_hi=q6_bounds.ship_hi,
+        q6_disc_lo=q6_bounds.disc_lo,
+        q6_disc_hi=q6_bounds.disc_hi,
+        q6_qty_hi=q6_bounds.qty_hi,
     )
 
     var n_cols = gp.n_cols
@@ -2534,6 +2570,28 @@ def _signature(d: GpuPlanDescriptor) -> String:
         var dcols = _dim_columns(d, de)
         for c in range(len(dcols)):
             sig += dcols[c] + ","
+    # Phase G Stage 2: for the Q6 predicate-independent path the resident columns'
+    # CONTENT is filter-const-independent (materialize SQL has no WHERE) and the
+    # filter is evaluated in-kernel from per-run bounds, so a WARM hit across
+    # DIFFERENT constants reuses the same resident buffers. EXCLUDE the filter
+    # constants (but keep cmp/column structure) so distinct-constant Q6 maps to one
+    # signature. We still fold in the cmp+column shape so a genuinely different
+    # predicate STRUCTURE keys distinctly. The bounds are threaded per run.
+    if _q6_pred_enabled(d):
+        for gi in range(len(d.gets)):
+            ref g = d.gets[gi]
+            for fi in range(len(g.filters)):
+                ref p = g.filters[fi]
+                sig += (
+                    "|q6f="
+                    + p.col.table
+                    + "."
+                    + p.col.column
+                    + ":"
+                    + String(Int(p.cmp))
+                )
+        sig += "|q6_pred=1"
+        return sig
     # Filter CONSTANTS: every GET's predicates (fact AND dim) by table.column,
     # cmp, and the const lo/hi (+ str_val for VARCHAR consts). This is what makes
     # a WARM hit guarantee an identical predicate so the cached layout is valid.
@@ -2584,10 +2642,19 @@ def mojo_gpu_pin_begin(
 
         var sig = _signature(d)
         ref p2 = _pin2_ptr()[]
+        # Phase G Stage 2 observability: gated WARM/COLD + signature trace on
+        # stderr (GPU_OP_PIN_LOG). Diagnostic only -- does not affect results.
+        var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
         if sig in p2:
             m[key].warm = True
+            if pin_log:
+                print(
+                    "[gpu-op pin] WARM sig=", sig, file=FileDescriptor(2)
+                )
             return 0
         m[key].warm = False
+        if pin_log:
+            print("[gpu-op pin] COLD sig=", sig, file=FileDescriptor(2))
         return 1
     except:
         return 1
@@ -2972,6 +3039,175 @@ def _pred_pass(v: Int64, cmp: Int64, k: Int64) -> Bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Phase G Stage 2: Q6 predicate-independent residency spec.
+#
+# Resolved view of the Q6 WHERE clause as 3 column slots + 5 int64 bounds, so the
+# kernel can evaluate the filter in-kernel (over the resident columns) for ANY
+# constant set without a host-baked pass column. `eligible` is False unless the
+# descriptor's filters are EXACTLY the canonical Q6 shape, in which case the
+# caller MUST fall back to the per-constant pass-column path (correctness rule).
+#
+# Slot indices index `cols[slot * n_rows + row]` (mat_cols / numeric-slot order);
+# for Q6 every fact column is numeric so the slot == the _materialize_columns
+# index. Bounds are the raw `const.lo` int64s — the exact `k` _pred_pass uses.
+@fieldwise_init
+struct Q6PredSpec(ImplicitlyCopyable, Movable):
+    var eligible: Bool
+    var ship_slot: Int
+    var disc_slot: Int
+    var qty_slot: Int
+    var ship_lo: Int64
+    var ship_hi: Int64
+    var disc_lo: Int64
+    var disc_hi: Int64
+    var qty_hi: Int64
+
+
+# Resolve the canonical Q6 predicate from the descriptor. Matches the filter set
+# by (column, cmp) ROLE rather than hardcoded names, so it is robust to schema
+# renaming while staying strictly the Q6 shape:
+#   * one column with BOTH a CMP_GE (-> ship_lo) and a CMP_LT (-> ship_hi) bound
+#   * one column with BOTH a CMP_GE (-> disc_lo) and a CMP_LE (-> disc_hi) bound
+#   * one column with a single CMP_LT (-> qty_hi) bound
+# All filters must be on the fact table, there must be EXACTLY 5 of them, exactly
+# these three columns, and no group keys / dims (UNGROUPED scalar). Any deviation
+# => eligible == False (the caller stays on the per-constant signature).
+def _q6_pred_spec(d: GpuPlanDescriptor) -> Q6PredSpec:
+    var bad = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0)
+    if d.kind != KIND_Q6:
+        return bad
+    if d.strategy != STRAT_UNGROUPED:
+        return bad
+    if len(d.group_keys) != 0 or len(d.dim_edges) != 0:
+        return bad
+
+    # Collect fact-table filters as (column, cmp, const.lo) triples.
+    var fcol: List[String] = []
+    var fcmp: List[Int64] = []
+    var fk: List[Int64] = []
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if g.table != d.fact_table:
+            # A non-fact GET with filters means a join/dim shape, not pure Q6.
+            for fi in range(len(g.filters)):
+                _ = fi
+                return bad
+            continue
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            if p.col.table != d.fact_table:
+                return bad
+            fcol.append(p.col.column)
+            fcmp.append(p.cmp)
+            fk.append(d.consts[p.const_id].lo)
+    if len(fcol) != 5:
+        return bad
+
+    # Bucket bounds per column by cmp role. Each column may carry GE/LT/LE bounds.
+    var names: List[String] = []
+    var has_ge: List[Bool] = []
+    var has_lt: List[Bool] = []
+    var has_le: List[Bool] = []
+    var v_ge: List[Int64] = []
+    var v_lt: List[Int64] = []
+    var v_le: List[Int64] = []
+
+    def _idx(mut names: List[String], name: String) -> Int:
+        for i in range(len(names)):
+            if names[i] == name:
+                return i
+        return -1
+
+    for fi in range(len(fcol)):
+        var ci = _idx(names, fcol[fi])
+        if ci < 0:
+            ci = len(names)
+            names.append(fcol[fi])
+            has_ge.append(False)
+            has_lt.append(False)
+            has_le.append(False)
+            v_ge.append(Int64(0))
+            v_lt.append(Int64(0))
+            v_le.append(Int64(0))
+        if fcmp[fi] == CMP_GE:
+            if has_ge[ci]:
+                return bad  # duplicate GE on same column -> not canonical Q6
+            has_ge[ci] = True
+            v_ge[ci] = fk[fi]
+        elif fcmp[fi] == CMP_LT:
+            if has_lt[ci]:
+                return bad
+            has_lt[ci] = True
+            v_lt[ci] = fk[fi]
+        elif fcmp[fi] == CMP_LE:
+            if has_le[ci]:
+                return bad
+            has_le[ci] = True
+            v_le[ci] = fk[fi]
+        else:
+            return bad  # only GE/LT/LE appear in Q6
+    if len(names) != 3:
+        return bad
+
+    # Classify the three columns by their bound roles.
+    var ship_ci = -1
+    var disc_ci = -1
+    var qty_ci = -1
+    for ci in range(3):
+        if has_ge[ci] and has_lt[ci] and not has_le[ci]:
+            if ship_ci >= 0:
+                return bad
+            ship_ci = ci  # [lo, hi) range  -> l_shipdate
+        elif has_ge[ci] and has_le[ci] and not has_lt[ci]:
+            if disc_ci >= 0:
+                return bad
+            disc_ci = ci  # [lo, hi] range -> l_discount
+        elif has_lt[ci] and not has_ge[ci] and not has_le[ci]:
+            if qty_ci >= 0:
+                return bad
+            qty_ci = ci  # < hi          -> l_quantity
+        else:
+            return bad
+    if ship_ci < 0 or disc_ci < 0 or qty_ci < 0:
+        return bad
+
+    # Map column names to numeric slots (== _materialize_columns index for Q6).
+    var mat = _materialize_columns(d)
+    def _slot(mat: List[String], name: String) -> Int:
+        for i in range(len(mat)):
+            if mat[i] == name:
+                return i
+        return -1
+
+    var ship_slot = _slot(mat, names[ship_ci])
+    var disc_slot = _slot(mat, names[disc_ci])
+    var qty_slot = _slot(mat, names[qty_ci])
+    if ship_slot < 0 or disc_slot < 0 or qty_slot < 0:
+        return bad
+
+    return Q6PredSpec(
+        True,
+        ship_slot,
+        disc_slot,
+        qty_slot,
+        v_ge[ship_ci],
+        v_lt[ship_ci],
+        v_ge[disc_ci],
+        v_le[disc_ci],
+        v_lt[qty_ci],
+    )
+
+
+# Phase G Stage 2 master switch: the Q6 predicate-independent residency path is
+# only taken when the native-decode flag is on (Stage 1 feeds Q6's fact columns
+# GPU-direct, the prerequisite) AND the descriptor is the canonical Q6 shape.
+def _q6_pred_enabled(d: GpuPlanDescriptor) -> Bool:
+    if getenv("GPU_OP_NATIVE_DECODE", "") == "":
+        return False
+    return _q6_pred_spec(d).eligible
+
+
 # The fully generic finalize for n_dims == 0 (UNGROUPED + DENSE_GROUP).
 def _pin_finalize_generic(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -2984,12 +3220,16 @@ def _pin_finalize_generic(
 
     # WARM: the resident buffers + assembly metadata are cached under `sig`
     # (pin_begin returned 0, so C++ fed nothing). Re-run the kernel on the
-    # resident buffers and assemble from the cached metadata alone.
+    # resident buffers and assemble from the cached metadata alone. For the Q6
+    # predicate-independent path the CURRENT query's filter bounds are extracted
+    # from the live descriptor `d` and threaded into the re-run (the resident
+    # buffers are constant-independent; the kernel applies THIS query's predicate).
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
     if sig in p2:
         ref dst = m[key]
-        _assemble(dst, p2[sig])
+        var q6b = _q6_pred_spec(d)
+        _assemble(dst, p2[sig], q6b)
         return 0
 
     # COLD: build the host inputs + programs + assembly metadata, upload the
@@ -3101,6 +3341,16 @@ def _pin_finalize_generic(
         G = n_groups
         gid_slot = n_numeric  # gid is the slot right after the numeric cols
 
+    # Phase G Stage 2: is the Q6 predicate-independent path active for this entry?
+    # (flag on + canonical Q6 shape). When True we DO NOT pre-bake a host pass
+    # column; the kernel evaluates the filter in-kernel from the resident filter-
+    # input columns + per-run bounds. The pass_slot column still exists in the
+    # packed buffer (kept zero) so the layout / slot indices are unchanged.
+    var q6_spec = _q6_pred_spec(d)
+    var q6_pred_on = (
+        getenv("GPU_OP_NATIVE_DECODE", "") != "" and q6_spec.eligible
+    )
+
     # --- host pass column: AND of the fact range predicates (one int64/row) ---
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
     # feed it via a 1-op `LOAD_COL(pass_slot)` pass program (exact + simplest).
@@ -3126,14 +3376,19 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    for i in range(n):
-        var ok = True
-        for fi in range(n_filters):
-            var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
-            if not _pred_pass(v, f_cmp[fi], f_k[fi]):
-                ok = False
-                break
-        pass_col[i] = Int64(1) if ok else Int64(0)
+    if q6_pred_on:
+        # No host pass bake: zero the slot (the in-kernel predicate gates rows).
+        for i in range(n):
+            pass_col[i] = Int64(0)
+    else:
+        for i in range(n):
+            var ok = True
+            for fi in range(n_filters):
+                var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
+                if not _pred_pass(v, f_cmp[fi], f_k[fi]):
+                    ok = False
+                    break
+            pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
     var n_slots = pass_slot + 1
@@ -3228,7 +3483,13 @@ def _pin_finalize_generic(
     var M = len(metric_offsets)
 
     # --- pass program: 1-op LOAD_COL(pass_slot) ---
+    # Phase G Stage 2: the Q6 predicate-independent kernel evaluates the filter
+    # in-kernel from per-run bounds, so there is NO pass program (pass_len 0).
     var pass_prog: List[Int64] = [OP_LOAD_COL, Int64(pass_slot), Int64(0)]
+    var pass_len_eff = 1
+    if q6_pred_on:
+        pass_prog = []
+        pass_len_eff = 0
 
     # --- per-candidate group-key cells (constant for the cache entry) ---
     # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: n_groups candidates, the
@@ -3275,7 +3536,7 @@ def _pin_finalize_generic(
     gp.gid_slot = gid_slot if gid_slot >= 0 else 0
     gp.M = M
     gp.pass_prog = pass_prog^
-    gp.pass_len = 1
+    gp.pass_len = pass_len_eff
     gp.metric_ops = metric_ops^
     gp.n_ops_total = n_ops_total
     gp.metric_offsets = metric_offsets^
@@ -3294,10 +3555,19 @@ def _pin_finalize_generic(
     gp.emit_agg = -1
     gp.emit_gt0 = False
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
+    # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
+    # WARM path can re-run the in-kernel filter with a fresh constant set.
+    gp.q6_pred = q6_pred_on
+    if q6_pred_on:
+        gp.q6_pred_slots = [
+            q6_spec.ship_slot, q6_spec.disc_slot, q6_spec.qty_slot
+        ]
     p2[sig] = gp^
 
     ref dst = m[key]
-    _assemble(dst, p2[sig])
+    # The COLD path assembles with THIS query's bounds too (the kernel is the same
+    # code as WARM; q6_spec carries the first constant set).
+    _assemble(dst, p2[sig], q6_spec)
     return 0
 
 
