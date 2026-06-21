@@ -7343,7 +7343,18 @@ def _pin_finalize_generic_dims(
     for de in range(n_dims_edges):
         if fk_slot_of_de[de] < 0:
             continue  # child edge: folded into its parent below, not ANDed here
-        var needs_pass = False
+        # FK-EXISTENCE (audit Group E, case 2): force a pass array for EVERY
+        # fact->dim INNER edge, not only edges that carry a filter / child fold.
+        # The kind-2 build below seeds the array to 0 for every PK slot and sets
+        # 1 only for PKs that actually exist in the dim (and pass any filters), so
+        # ANDing it into the row pass via OP_LOAD_DIM+OP_MUL ELIMINATES fact rows
+        # whose FK has no matching dim row -- the INNER-join semantics the dense
+        # `dims[off+key]` gather otherwise silently violates for a non-covering
+        # (partial) dim. Harmless for covering dims (Q14/Q3: every FK exists, so
+        # every present PK -> 1 -> all rows pass, a no-op). `needs_pass` is now
+        # unconditionally True for a fact-edge; the filter / child-fold scans below
+        # only affect WHAT the kind-2 build ANDs in, not WHETHER the array exists.
+        var needs_pass = True
         for gi in range(len(d.gets)):
             if d.gets[gi].table == d.dim_edges[de].dim_table and len(
                 d.gets[gi].filters

@@ -30,6 +30,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
+#include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/execution/physical_operator.hpp"
@@ -59,6 +60,7 @@
 #include "raw_plan.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -552,6 +554,16 @@ struct SavedDisabled {
 };
 thread_local std::unordered_map<const ClientContext *, SavedDisabled> g_saved_disabled;
 
+// The ClientContext currently being optimized, published by GpuCosineOptimize for
+// the duration of OptimizeNode so the join-uniqueness check (Part 2 of audit Group
+// E) can issue a bounded nested probe (count(*) == count(DISTINCT key)) on a dim
+// table whose join key is NOT covered by a declared PRIMARY KEY / UNIQUE
+// constraint. nullptr outside an optimize pass -> the check then fail-closes on any
+// non-constraint dim key (declines the offload). Set/cleared on the same thread the
+// optimizer runs on; the nested probe runs on a FRESH Connection (its own
+// ClientContext), so it does not collide with this pointer or g_saved_disabled.
+thread_local ClientContext *g_gpu_op_context = nullptr;
+
 void GpuPreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &) {
   try {
     auto &context = input.context;
@@ -587,9 +599,12 @@ void GpuCosineOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperato
     // best-effort restore
   }
   try {
+    g_gpu_op_context = &input.context;
     OptimizeNode(plan);
+    g_gpu_op_context = nullptr;
   } catch (...) {
     // Never let a rewrite failure break the query; fall back to stock DuckDB.
+    g_gpu_op_context = nullptr;
   }
 }
 
@@ -1350,6 +1365,239 @@ LogicalGet *FindGet(const JoinTree &jt, const char *table_name) {
     if (te && te->name == table_name) { return g; }
   }
   return nullptr;
+}
+
+// ===========================================================================
+// JOIN-UNIQUENESS GATE (audit Group E, case 1: SILENT WRONG RESULT).
+//
+// The engine lowers every FK->dim INNER join as a dense per-key gather
+// dims[off + key] -- ONE dim row per fact row. That is only correct when the
+// DIM side of the join key is UNIQUE; against a non-unique build side a true
+// many-to-many join collapses to 1x (the gather picks one dim row) and the
+// aggregate comes out too low. So we accept a fact->dim edge ONLY when the
+// dim-side join column is PROVABLY unique. Fail-closed: if we can't prove it,
+// DECLINE the whole offload (-> stock DuckDB CPU, which is correct).
+//
+// Two signals, cheapest first:
+//   (1) a declared PRIMARY KEY / UNIQUE single-column constraint on the dim
+//       column (covers user tables that declare keys -- no probe needed); then
+//   (2) an EXACT distinct-count probe: count(*) == count(DISTINCT <col>) over
+//       the dim table, run on a fresh nested Connection. This is needed because
+//       the tpch extension's dbgen creates the TPC-H tables with ONLY NOT NULL
+//       constraints (no PRIMARY KEY), and DuckDB's HLL approx-distinct stat is
+//       far too inaccurate at scale to use as a uniqueness oracle (e.g. sf1
+//       o_orderkey: 1.5M distinct reported as ~1.49M, p_partkey 200k as ~156k).
+//       The dim tables are small relative to the fact, so the probe is bounded.
+// ===========================================================================
+
+// (1) True if `col_name` is covered by a single-column PRIMARY KEY or UNIQUE
+// constraint on the GET's catalog table.
+bool ColHasUniqueConstraint(LogicalGet *g, const std::string &col_name) {
+  if (!g) { return false; }
+  auto te = g->GetTable();
+  if (!te) { return false; }
+  for (auto &cons : te->GetConstraints()) {
+    if (cons->type != ConstraintType::UNIQUE) { continue; }
+    auto &uc = cons->Cast<UniqueConstraint>();
+    const auto &names = uc.GetColumnNames();
+    if (names.size() == 1 && names[0] == col_name) { return true; }
+  }
+  return false;
+}
+
+// Cheap CURRENT exact row count for the dim table behind `g`, WITHOUT a scan:
+// read it straight off the storage row-group collection (DataTable::GetTotalRows,
+// which is just row_groups->GetTotalRows() -- a counter, no I/O). Used as the
+// cache-validity stamp for the uniqueness probe below. Returns -1 if a cheap
+// exact count is unavailable (non-duck/virtual table, no storage); callers then
+// fall back to keying the cache on estimated_cardinality (weaker for DML-safety).
+int64_t DimTableExactRowCount(LogicalGet *g) {
+  if (!g) { return -1; }
+  auto te = g->GetTable();
+  if (!te) { return -1; }
+  if (!te->IsDuckTable()) { return -1; }  // base GetStorage() throws otherwise
+  try {
+    return (int64_t)te->GetStorage().GetTotalRows();
+  } catch (...) {
+    return -1;
+  }
+}
+
+// Session cache for the EXACT-distinct uniqueness probe. The optimizer re-runs on
+// every query compilation, so without this the count(DISTINCT <col>) probe over a
+// 1.5M-row dim (orders) re-executes on EVERY warm Q5 iteration (~5-6ms each),
+// eroding the warm win the operator exists for. We cache the verdict ALONGSIDE the
+// dim table's row count AT PROBE TIME, keyed per (database, table, column): a
+// subsequent probe is a cache hit only if the row count still matches, so any DML
+// that changes the row count (insert/delete) invalidates the entry and forces a
+// re-probe.
+//
+// thread_local: the optimizer pass (and the nested probe Connection) run on the
+// query's thread; this matches the existing g_gpu_op_context thread_local model
+// and avoids cross-thread locking. The cache is keyed per DatabaseInstance pointer
+// to avoid cross-db collisions when one process attaches several databases.
+//
+// RESIDUAL CAVEAT (documented, accepted): a delete+insert (or update) that keeps
+// the row count IDENTICAL while changing the column's uniqueness would reuse a
+// stale verdict. This gate is a heuristic safety net (it only ever DECLINES an
+// offload to fall back to correct stock DuckDB), and analytic dim tables are
+// effectively static, so this edge is acceptable.
+struct UniqProbeEntry {
+  bool result;        // probed verdict: column is exactly distinct over the table
+  int64_t rowcount;   // dim-table row count when the probe ran (cache stamp)
+};
+thread_local std::unordered_map<std::string, UniqProbeEntry> g_uniq_probe_cache;
+
+// US (\x1f) is not a legal SQL identifier char (plain_ident rejects it), so it is
+// a collision-free separator between the db-pointer / table / column key parts.
+std::string UniqProbeCacheKey(const ClientContext *ctx, const std::string &table,
+                              const std::string &col) {
+  char dbbuf[32];
+  std::snprintf(dbbuf, sizeof(dbbuf), "%p",
+                (void *)(ctx ? ctx->db.get() : nullptr));
+  return std::string(dbbuf) + "\x1f" + table + "\x1f" + col;
+}
+
+// (2) Exact distinct-count probe: count(*) == count(DISTINCT <col>) on `table`.
+// Quotes identifiers (defensive); returns false on any error / unexpected shape
+// (fail-closed). Runs on a fresh Connection so it does not perturb the optimizer
+// state of the query being compiled.
+//
+// `current_rowcount` is the dim table's current exact row count (from
+// DimTableExactRowCount, fetched where the LogicalGet is in scope), or a weaker
+// estimated_cardinality fallback if an exact count is unavailable. It is used both
+// as the cache-validity stamp and to short-circuit on a cache hit (no query).
+bool ColIsExactUniqueProbe(ClientContext *ctx, const std::string &table,
+                           const std::string &col, int64_t current_rowcount,
+                           bool dbg) {
+  if (!ctx) { return false; }
+  // Cache lookup: reuse the cached verdict iff the row count is unchanged.
+  std::string key = UniqProbeCacheKey(ctx, table, col);
+  auto it = g_uniq_probe_cache.find(key);
+  if (it != g_uniq_probe_cache.end() && it->second.rowcount == current_rowcount) {
+    if (dbg) { fprintf(stderr, "[gpu-uniq] %s.%s cache-hit unique=%d rows=%lld\n",
+                       table.c_str(), col.c_str(), (int)it->second.result,
+                       (long long)current_rowcount); }
+    return it->second.result;
+  }
+  // Reject anything that isn't a plain identifier so the probe SQL can't be
+  // anything but a simple aggregate over one table (no injection, no surprises).
+  auto plain_ident = [](const std::string &s) {
+    if (s.empty()) { return false; }
+    for (char c : s) {
+      if (!(std::isalnum((unsigned char)c) || c == '_')) { return false; }
+    }
+    return true;
+  };
+  if (!plain_ident(table) || !plain_ident(col)) { return false; }
+  // The nested query re-enters our optimize hook, which sets g_gpu_op_context to
+  // its own (fresh) context and clears it to nullptr on exit -- save/restore the
+  // outer pass's pointer so sibling aggregate nodes in the SAME outer plan still
+  // see a valid context after this probe returns.
+  ClientContext *saved_ctx = g_gpu_op_context;
+  try {
+    Connection con(*ctx->db);
+    auto res = con.Query("SELECT count(*) = count(DISTINCT " + col +
+                         ") FROM " + table);
+    g_gpu_op_context = saved_ctx;
+    if (!res || res->HasError()) { return false; }
+    auto chunk = res->Fetch();
+    if (!chunk || chunk->size() == 0) { return false; }
+    auto v = chunk->GetValue(0, 0);
+    if (v.IsNull()) { return false; }            // empty table -> can't prove
+    bool result = v.GetValue<bool>();
+    // Cache the real probe verdict against the row count we probed at. (Error /
+    // empty / non-ident paths above intentionally do NOT cache: they are transient
+    // fail-closed returns, re-checked next time.)
+    g_uniq_probe_cache[key] = UniqProbeEntry{result, current_rowcount};
+    return result;
+  } catch (...) {
+    g_gpu_op_context = saved_ctx;
+    return false;
+  }
+}
+
+// Require that every DIRECT fact->dim join edge gathers from a UNIQUE build key.
+// The engine lowers a fact->dim INNER join as a dense per-key gather
+// dims[off + fact_fk] (one dim row per FACT row); against a non-unique dim build
+// side a true many-to-many join silently collapses to 1x and the aggregate comes
+// out too low (audit Group E, case 1). So we DECLINE the offload unless the
+// dim-side key of every fact->dim edge is provably unique.
+//
+// We gate ONLY edges with the fact table on one side (the dim is the OTHER side's
+// table/column). dim<->dim conditions are deliberately NOT gated here:
+//   * a same-row correlated equality (Q5 c_nationkey=s_nationkey) is applied as a
+//     row filter (OP_EQ), introduces no fanout; and
+//   * a transitive dim<->dim edge (e.g. nation attaching via customer.c_nationkey)
+//     can name a non-key column on a dim that is NOT how that dim is actually
+//     gathered -- gating it would over-decline Q5 (which executes on the bespoke
+//     KIND_Q5 path, not the generic dense gather). Q5's two FACT edges
+//     (l_orderkey->o_orderkey, l_suppkey->s_suppkey) ARE gated and unique.
+//
+// fact = max estimated_cardinality GET (== descriptor.mojo). Fail-closed on any
+// unresolved fact-edge dim table. Q5/Q14/Q3 keep routing: their fact->dim keys
+// (o_orderkey, s_suppkey, p_partkey) pass the exact-distinct probe (dbgen tables
+// carry NO PK constraint, so the constraint fast-path alone would not suffice).
+bool JoinDimKeysProvablyUnique(const JoinTree &jt,
+                               const std::vector<JoinEq> &eqs) {
+  if (eqs.empty()) { return true; }  // single GET -> no join -> nothing to gate
+  bool dbg = (std::getenv("GPU_OP_UNIQ_DEBUG") != nullptr);
+  // Snapshot the optimize-pass context once: the exact-distinct probe runs a
+  // nested query whose own optimize hook resets g_gpu_op_context to nullptr, so
+  // reading the thread_local again on a later edge would see null.
+  ClientContext *ctx = g_gpu_op_context;
+
+  // fact = max estimated_cardinality among the collected GETs (== descriptor.mojo).
+  std::string fact_table;
+  int64_t fact_card = -1;
+  for (auto *g : jt.gets) {
+    auto te = g->GetTable();
+    if (!te) { return false; }
+    if ((int64_t)g->estimated_cardinality > fact_card) {
+      fact_card = (int64_t)g->estimated_cardinality;
+      fact_table = te->name;
+    }
+  }
+  if (fact_table.empty()) { return false; }
+  if (dbg) {
+    fprintf(stderr, "[gpu-uniq] fact=%s gets:", fact_table.c_str());
+    for (auto *g : jt.gets) { auto te = g->GetTable(); fprintf(stderr, " %s(%lld)",
+        te ? te->name.c_str() : "?", (long long)g->estimated_cardinality); }
+    fprintf(stderr, "\n[gpu-uniq] eqs:");
+    for (auto &e : eqs) { fprintf(stderr, " %s.%s=%s.%s", e.lt.c_str(), e.lc.c_str(),
+        e.rt.c_str(), e.rc.c_str()); }
+    fprintf(stderr, "\n");
+  }
+
+  // Gate each DIRECT fact->dim edge (fact on exactly one side).
+  for (auto &e : eqs) {
+    std::string dim_table, dim_col;
+    if (e.lt == fact_table && e.rt != fact_table) {
+      dim_table = e.rt; dim_col = e.rc;
+    } else if (e.rt == fact_table && e.lt != fact_table) {
+      dim_table = e.lt; dim_col = e.lc;
+    } else {
+      continue;  // dim<->dim (or fact-self) edge: not a direct fact gather here
+    }
+    LogicalGet *dim_g = FindGet(jt, dim_table.c_str());
+    if (!dim_g) { return false; }  // unresolved fact-edge dim -> fail-closed
+    if (ColHasUniqueConstraint(dim_g, dim_col)) {
+      if (dbg) { fprintf(stderr, "[gpu-uniq] %s.%s constraint-unique\n",
+                         dim_table.c_str(), dim_col.c_str()); }
+      continue;
+    }
+    // Row count stamp for the probe cache: cheap exact storage count where
+    // available, else the GET's estimated_cardinality (weaker DML-safety, noted
+    // on the cache). dim_g (the dim LogicalGet) is in scope here.
+    int64_t dim_rows = DimTableExactRowCount(dim_g);
+    if (dim_rows < 0) { dim_rows = (int64_t)dim_g->estimated_cardinality; }
+    bool probed = ColIsExactUniqueProbe(ctx, dim_table, dim_col, dim_rows, dbg);
+    if (dbg) { fprintf(stderr, "[gpu-uniq] %s.%s ctx=%p rows=%lld probe-unique=%d\n",
+                       dim_table.c_str(), dim_col.c_str(), (void *)ctx,
+                       (long long)dim_rows, (int)probed); }
+    if (!probed) { return false; }  // fact-edge dim key not unique -> decline
+  }
+  return true;
 }
 
 // Resolve a group-by BoundColumnRef (points into a join output, which forwards a
@@ -2208,6 +2456,14 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
 
   // 4. JOINS (one INNER entry with the resolved conds; none if single GET).
   if (!single_get) {
+    // JOIN-UNIQUENESS GATE (audit Group E, case 1). The FK->dim gather lowering
+    // is only correct when each edge's DIM-side join key is unique; against a
+    // non-unique build side a many-to-many join silently collapses to 1x. Decline
+    // the whole offload unless every dim key is provably unique. This runs BEFORE
+    // serializing the join (so a non-unique join never even forms a descriptor
+    // that could misclassify as Q3/Q5/Q14). Q5/Q14/Q3's FK->PK keys are recognized
+    // by the exact distinct probe (their dbgen tables carry no PK constraint).
+    if (!JoinDimKeysProvablyUnique(jt, eqs)) { return false; }
     RawPlanBuilder::Join jn;
     jn.join_type_tag = rp::JOIN_INNER;
     for (auto &e : eqs) {
