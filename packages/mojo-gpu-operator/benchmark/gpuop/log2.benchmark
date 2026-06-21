@@ -1,0 +1,16 @@
+# name: benchmark/gpuop/log2.benchmark
+# description: GPU log2
+# group: [gpuop]
+
+cache gpuop_decimal.duckdb
+
+load
+CREATE TABLE gpuop_t AS SELECT
+  ((i % 1000000) + 1)::DECIMAL(15,2)    AS price,
+  ((i % 50) + 1)::DECIMAL(15,2)         AS qty,
+  ((i % 100) * 0.01)::DECIMAL(15,4)     AS disc,
+  chr((65 + (i % 4))::INTEGER)          AS grp
+FROM range(50000000) tbl(i);
+
+run
+SELECT sum(log2(price)) FROM gpuop_t;
