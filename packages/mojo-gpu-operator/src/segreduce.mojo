@@ -17,6 +17,20 @@ int64; only the cross-block / cross-segment reduction widens to int128, done on
 the HOST. So the device side is pure int64 integer arithmetic and the result is
 bit-exact vs a CPU int128 reference.
 
+KNOWN LIMITATION (audit Group B, int64-overflow): the contract above assumes the
+per-row metric value AND each per-block partial sum fit int64. That holds for
+realistic-magnitude data (incl. all TPC-H sf1..sf100) but is NOT enforced at
+runtime: a per-element expr-VM product that overflows int64 (e.g. sum(x*y) with
+x,y ~1e10), or a per-block partial that overflows (huge DECIMAL(15,2) values
+summed densely), silently WRAPS where stock DuckDB widens to HUGEINT (or raises
+on overflow-checked decimal). This canNOT be declined at plan time without also
+declining the correct int128-result TPC-H sums (Q1/Q6 produce DECIMAL(38,x)
+int128 results via this very int64-partial + host-int128-fold path, and are
+correct). The proper fix is runtime overflow detection in the int64 accumulate /
+expr-VM mul (signal -> CPU fallback), matching stock's overflow-checked add --
+deferred (an int128 per-lane accumulator is the heavier alternative; note Apple
+lacks 64-bit GPU atomics for the dense-group variant). Documented, not yet fixed.
+
 ROW FILTER
 ----------
 The row-pass predicate is itself an expression VM program (`pass_prog`) that
