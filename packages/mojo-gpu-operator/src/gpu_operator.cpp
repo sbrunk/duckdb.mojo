@@ -1607,7 +1607,16 @@ int64_t AddValueConst(RawPlanBuilder &b, const Value &v) {
     lo = v.GetValue<int64_t>(); hi = lo < 0 ? -1 : 0; break;
   case LogicalTypeId::DOUBLE:
   case LogicalTypeId::FLOAT: {
-    int64_t raw = (int64_t)llround(v.GetValue<double>());
+    // The const tape stores a scaled int64 + a divisor; a DOUBLE/FLOAT carries no
+    // decimal scale, so only INTEGER-VALUED doubles round-trip exactly. Refuse a
+    // fractional double (return -1 -> caller fails closed) rather than silently
+    // llround-ing it: e.g. sum(sqrt(x)*1.5) would otherwise emit *2, exp(x*0.3)
+    // would emit *0. (Fractional DECIMAL literals are unaffected — they take the
+    // scale-aware DECIMAL case above and round-trip exactly via col/const_div.)
+    double d = v.GetValue<double>();
+    double rr = (double)llround(d);
+    if (rr != d) { return -1; }
+    int64_t raw = (int64_t)rr;
     lo = raw; hi = raw < 0 ? -1 : 0; break;
   }
   default: break;
@@ -1659,6 +1668,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   }
   if (cls == ExpressionClass::BOUND_CONSTANT) {
     int64_t cid = AddValueConst(b, e.Cast<BoundConstantExpression>().value);
+    if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) -> fail-closed
     prog.push_back({rp::OP_PUSH_CONST, cid, 0});
     return true;
   }
@@ -1696,6 +1706,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
           if (r == d && std::fabs(r) <= 64.0) {
             if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
             int64_t cid = AddValueConst(b, ev);
+            if (cid < 0) { return false; }  // (integer-valued -> never; defensive)
             prog.push_back({rp::OP_PUSH_CONST, cid, 0});
             prog.push_back({rp::OP_POW, 0, 0});
             return true;
@@ -1904,6 +1915,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       int64_t cmp = MapCmp(cf.comparison_type);
       if (cmp == 0) { return false; }
       int64_t cid = AddValueConst(out, cf.constant);
+      if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) filter const -> decline
       ge.filters.push_back({out.intern(g->names[col_idx]), cmp, cid});
       return true;
     };
