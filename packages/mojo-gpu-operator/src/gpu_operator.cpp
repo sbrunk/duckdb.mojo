@@ -233,6 +233,10 @@ int64_t mojo_gpu_build_descriptor(const int64_t *tape, int64_t tape_len,
                                   const uint8_t *blob, int64_t blob_len);
 void mojo_gpu_desc_free(void *handle);
 int64_t mojo_gpu_desc_kind(void *handle);
+// GPU_OP_TRANSCENDENTAL: 1 if the descriptor has a transcendental aggregate
+// (sqrt/exp/ln/log10/sin/cos in any metric program). Enables routing for an
+// otherwise KIND_UNKNOWN transcendental (e.g. a grouped sum/avg of f(col)).
+int64_t mojo_gpu_desc_is_transcendental(void *handle);
 int64_t mojo_gpu_desc_strategy(void *handle);
 int64_t mojo_gpu_desc_n_dims(void *handle);
 int64_t mojo_gpu_desc_n_aggs(void *handle);
@@ -2429,6 +2433,18 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   if (kind == rp::KIND_Q14 && (all || std::strstr(gen, "q14"))) { enabled = true; }
   if (kind == rp::KIND_Q3 && (all || std::strstr(gen, "q3"))) { enabled = true; }
   if (kind == rp::KIND_Q5 && (all || std::strstr(gen, "q5"))) { enabled = true; }
+
+  // GPU_OP_TRANSCENDENTAL: a transcendental sum/avg of f(col) has no TPC-H kind
+  // when grouped (KIND_UNKNOWN for a GROUP BY shape), and an UNGROUPED one borrows
+  // KIND_Q6 (1 agg, no dims). Enable routing whenever the descriptor carries a
+  // transcendental op (the Mojo scope guard already validated the shape +
+  // NVIDIA-only + flag-gated the op emission). Honors GPU_OP_GENERIC restriction
+  // only via off/none above; a named restriction (e.g. "q3") does not list a
+  // transcendental, so route it unless GPU_OP_GENERIC explicitly excludes all.
+  if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+      mojo_gpu_desc_is_transcendental(h)) {
+    enabled = true;
+  }
 
   if (!enabled) { mojo_gpu_desc_free(h); return false; }
 

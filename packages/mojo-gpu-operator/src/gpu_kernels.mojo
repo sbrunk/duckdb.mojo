@@ -100,7 +100,9 @@ from segreduce import (
     segreduce_run,
     segreduce_run_f64,
     segreduce_run_hash,
+    segreduce_run_hash_f64,
     HashGroupResult,
+    HashGroupResultF64,
     SegResident,
 )
 from col_pool import (
@@ -1829,6 +1831,22 @@ def mojo_gpu_desc_kind(
     return Int(handle.bitcast[GpuPlanDescriptor]()[].kind)
 
 
+# GPU_OP_TRANSCENDENTAL: 1 if any aggregate's metric program contains a
+# transcendental op (sqrt/exp/ln/log10/sin/cos). The C++ router uses this to
+# enable routing for a transcendental aggregate whose KIND is UNKNOWN (e.g. a
+# grouped sum/avg of f(col) -- no TPC-H kind matches the GROUP BY shape). The
+# Mojo descriptor scope guard already validated the shape (UNGROUPED/DENSE/HASH,
+# no FK dims, sum/avg/count, NVIDIA-only); a non-buildable shape returns a null
+# handle, so this only ever sees an accepted transcendental descriptor.
+@export("mojo_gpu_desc_is_transcendental")
+def mojo_gpu_desc_is_transcendental(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 0
+    return 1 if _has_transcendental(handle.bitcast[GpuPlanDescriptor]()[]) else 0
+
+
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -2740,14 +2758,16 @@ def _colpool_assemble_col_ptrs(
 # `gp.gen_pred` is set. Like `q6_bounds`, they are threaded fresh from the live
 # descriptor every run; the constant-INDEPENDENT slots + cmps come from the cache
 # entry. The (slot,cmp,bound) triples are assembled here into `fpred_list`.
-# GPU_OP_TRANSCENDENTAL float64 result assembly (UNGROUPED sum/avg of f(col)).
-# Runs the float64 ungrouped accumulator and places M doubles into res_f64. The
-# f64 VM already reconstructed TRUE doubles from scaled-int64 storage via col_div/
-# const_div, so there is NO scale division here (unlike the int128 AVG rescale):
-#   AGG_SUM  -> res_f64 = fsums[m0]
-#   AGG_AVG  -> res_f64 = fsums[m0] / fsums[m1]   (m1 = float count metric)
+# GPU_OP_TRANSCENDENTAL float64 result assembly (sum/avg/count of f(col)). Runs
+# the float64 accumulator (UNGROUPED -> M doubles; DENSE_GROUP -> G*M doubles laid
+# out fsums[g*M+m]) and places per-group DOUBLEs into res_f64. The f64 VM already
+# reconstructed TRUE doubles from scaled-int64 storage via col_div/const_div, so
+# there is NO scale division here (unlike the int128 AVG rescale):
+#   AGG_SUM  -> res_f64 = fsums[g*M+m0]
+#   AGG_AVG  -> res_f64 = fsums[g*M+m0] / fsums[g*M+m1]   (m1 = float count metric)
 #   AGG_COUNT_STAR -> placed as int64 (count fits exactly; same as the int path)
-# Single candidate (no group keys), so n_keys == 0 and n_cand == 1.
+# UNGROUPED: 1 candidate, no keys. DENSE_GROUP: gp.n_cand candidates, group-key
+# cells from gp.gk_str_vals / gp.gk_i64_vals (mirrors _assemble's placement).
 def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
     var fsums = segreduce_run_f64(
         gp.res,
@@ -2761,29 +2781,115 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         gp.col_div.unsafe_ptr(),
         gp.n_slots,
         gp.const_div.unsafe_ptr(),
+        mode=gp.mode,
+        gid_slot=gp.gid_slot,
+        G=gp.G,
     )
     var n_cols = gp.n_cols
-    var n_keys = gp.n_keys  # 0 for the supported UNGROUPED float shape
+    var n_keys = gp.n_keys
+    # DENSE: the per-group passing-row counts are appended after the G*M sums
+    # (result[G*M + g]). The dense gid is built over ALL materialized rows, so a
+    # group can have 0 passing rows; a stock GROUP BY emits a group only when it
+    # has >=1 passing row -> gate emit on the count. UNGROUPED has no count tail.
+    var dense = gp.mode == STRAT_DENSE_GROUP
+    var gm = gp.G * gp.M
     var res_lo: List[Int64] = []
     var res_hi: List[Int64] = []
     var res_f64: List[Float64] = []
     var res_str: List[String] = []
-    for _ in range(n_cols):
-        res_lo.append(0)
-        res_hi.append(0)
-        res_f64.append(0.0)
-        res_str.append(String(""))
-    for ai in range(len(gp.agg_kind)):
-        var col = n_keys + ai
-        if gp.agg_kind[ai] == AGG_COUNT_STAR:
-            # The float count metric sums 1.0 per row -> exact integer count.
-            res_lo[col] = Int64(fsums[gp.agg_m0[ai]])
-        elif gp.agg_kind[ai] == AGG_AVG:
-            var cnt = fsums[gp.agg_m1[ai]]
-            res_f64[col] = (fsums[gp.agg_m0[ai]] / cnt) if cnt != 0.0 else 0.0
-        else:  # AGG_SUM -> DOUBLE sum, already in true-double units
-            res_f64[col] = fsums[gp.agg_m0[ai]]
-    dst.res_rows = 1
+    var out_rows = 0
+    for g in range(gp.n_cand):
+        if dense and fsums[gm + g] == 0.0:
+            continue  # group had no passing rows -> not emitted (matches stock)
+        for _ in range(n_cols):
+            res_lo.append(0)
+            res_hi.append(0)
+            res_f64.append(0.0)
+            res_str.append(String(""))
+        var base = out_rows * n_cols
+        # group-key cells (DENSE_GROUP: VARCHAR keys via gk_str_vals).
+        for gk in range(n_keys):
+            if gp.gk_is_str[gk]:
+                res_str[base + gk] = gp.gk_str_vals[g][gk]
+            else:
+                res_lo[base + gk] = gp.gk_i64_vals[g][gk]
+        # aggregate cells (per candidate g; fsums is g*M+m).
+        for ai in range(len(gp.agg_kind)):
+            var col = n_keys + ai
+            if gp.agg_kind[ai] == AGG_COUNT_STAR:
+                # The float count metric sums 1.0 per row -> exact integer count.
+                res_lo[base + col] = Int64(fsums[g * gp.M + gp.agg_m0[ai]])
+            elif gp.agg_kind[ai] == AGG_AVG:
+                var cnt = fsums[g * gp.M + gp.agg_m1[ai]]
+                res_f64[base + col] = (
+                    fsums[g * gp.M + gp.agg_m0[ai]] / cnt
+                ) if cnt != 0.0 else 0.0
+            else:  # AGG_SUM -> DOUBLE sum, already in true-double units
+                res_f64[base + col] = fsums[g * gp.M + gp.agg_m0[ai]]
+        out_rows += 1
+    dst.res_rows = out_rows
+    dst.res_cols = n_cols
+    dst.res_lo = res_lo^
+    dst.res_hi = res_hi^
+    dst.res_f64 = res_f64^
+    dst.res_str = res_str^
+
+
+# GPU_OP_TRANSCENDENTAL float64 HASH_GROUP result assembly (sum/avg/count of
+# f(col) GROUP BY <integer fact key>). Runs the float64 hash accumulator (one f64
+# atomic-add per slot), then emits one row per occupied slot: the group key in the
+# (single, fact) group-key cell + the DOUBLE aggregates. No emit gate (a stock
+# GROUP BY emits every group that has >=1 passing row; an occupied slot means a
+# row reached it). Output order is hash-slot order (the parent ORDER BY sorts).
+def _assemble_hash_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
+    var hr = segreduce_run_hash_f64(
+        gp.res,
+        gp.hash_gk_slot,
+        gp.hash_cap,
+        gp.pass_prog.unsafe_ptr(),
+        gp.pass_len,
+        gp.metric_ops.unsafe_ptr(),
+        gp.n_ops_total,
+        gp.metric_offsets.unsafe_ptr(),
+        gp.metric_lens.unsafe_ptr(),
+        gp.M,
+        gp.col_div.unsafe_ptr(),
+        gp.n_slots,
+        gp.const_div.unsafe_ptr(),
+    )
+    var n_groups = len(hr.keys)
+    var n_cols = gp.n_cols
+    var n_keys = gp.n_keys
+    var res_lo: List[Int64] = []
+    var res_hi: List[Int64] = []
+    var res_f64: List[Float64] = []
+    var res_str: List[String] = []
+    var out_rows = 0
+    for g in range(n_groups):
+        for _ in range(n_cols):
+            res_lo.append(0)
+            res_hi.append(0)
+            res_f64.append(0.0)
+            res_str.append(String(""))
+        var base = out_rows * n_cols
+        var gkey = hr.keys[g]
+        # group key: the integer fact key (no FK-join dims in the transcendental
+        # scope, so n_keys==1 and it is the fact key itself).
+        for gk in range(n_keys):
+            res_lo[base + gk] = gkey
+        for ai in range(len(gp.agg_kind)):
+            var col = n_keys + ai
+            if gp.agg_kind[ai] == AGG_COUNT_STAR:
+                res_lo[base + col] = Int64(hr.fsums[g * gp.M + gp.agg_m0[ai]])
+            elif gp.agg_kind[ai] == AGG_AVG:
+                var cnt = hr.fsums[g * gp.M + gp.agg_m1[ai]]
+                res_f64[base + col] = (
+                    hr.fsums[g * gp.M + gp.agg_m0[ai]] / cnt
+                ) if cnt != 0.0 else 0.0
+            else:  # AGG_SUM
+                res_f64[base + col] = hr.fsums[g * gp.M + gp.agg_m0[ai]]
+        out_rows += 1
+    dst.res_rows = out_rows
     dst.res_cols = n_cols
     dst.res_lo = res_lo^
     dst.res_hi = res_hi^
@@ -2798,12 +2904,15 @@ def _assemble(
     gen_bounds: List[Int64] = [],
     q5_bounds: List[Int64] = [],
 ) raises:
-    # GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate, UNGROUPED only. Route
-    # to the float64 ungrouped accumulator and assemble straight into res_f64. The
-    # int128 path below is bypassed entirely (this query never has dims / group keys
-    # / q6-gen-q5 predicate residency -- the descriptor scope guard forbade them).
+    # GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate (UNGROUPED / DENSE /
+    # HASH). Route to the float64 accumulator and assemble straight into res_f64.
+    # The int128 path below is bypassed entirely (the descriptor scope guard forbade
+    # FK-join dims and q6/gen/q5 predicate residency for this shape).
     if gp.is_float64:
-        _assemble_f64(dst, gp)
+        if gp.mode == STRAT_HASH_GROUP:
+            _assemble_hash_f64(dst, gp)
+        else:
+            _assemble_f64(dst, gp)
         return
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
     var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
@@ -4694,7 +4803,37 @@ def _pin_finalize_generic(
     var order: List[Int] = []
     var gkey_vals: List[List[String]] = []  # per group-key col, per distinct-idx
     var row_gid = alloc[Int64](n if n > 0 else 1)
-    if len(d.group_keys) > 0:
+    # GPU_OP_TRANSCENDENTAL HASH_GROUP (integer fact group key, no FK-join dims):
+    # no dense gid is built; the float64 hash accumulator keys directly on the fact
+    # key column read from `hash_gk_slot`. Only reachable when the transcendental
+    # scope guard accepted a HASH_GROUP shape (the high-card decline was bypassed).
+    var hash_gk_slot = -1
+    var hash_cap = 0
+    if d.strategy == STRAT_HASH_GROUP and len(d.group_keys) > 0:
+        mode = STRAT_HASH_GROUP
+        # The integer fact group key must be a materialized numeric fact column.
+        var fact_gk = String("")
+        for gk in range(len(d.group_keys)):
+            if (
+                d.group_keys[gk].table == d.fact_table
+                and d.group_keys[gk].column in col_slot
+            ):
+                fact_gk = d.group_keys[gk].column
+                break
+        if fact_gk == "":
+            row_gid.free()
+            return 3  # integer fact group key not materialized -> CPU fallback
+        hash_gk_slot = col_slot[fact_gk]
+        # cap = next pow2 >= 2*(distinct bound). Fact row count `n` is a safe
+        # superset of the distinct fact-key count; load factor stays <= 0.5.
+        var cap = 1
+        var target = 2 * n + 1
+        while cap < target:
+            cap <<= 1
+        if cap < 2:
+            cap = 2
+        hash_cap = cap
+    elif len(d.group_keys) > 0:
         mode = STRAT_DENSE_GROUP
         var n_keys = len(d.group_keys)
         # mat_cols index of each group-key column.
@@ -4995,22 +5134,27 @@ def _pin_finalize_generic(
     # --- per-candidate group-key cells (constant for the cache entry) ---
     # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: n_groups candidates, the
     # group-key strings ordered by gid (g -> order[g] -> didx -> gkey_vals).
+    # HASH_GROUP (transcendental): the integer fact key cell is placed at result
+    # time from the kernel-discovered key (_assemble_hash_f64), so no per-candidate
+    # cells are pre-baked here; n_keys==1, the cell is int64 (gk_is_str False).
     var n_keys = len(d.group_keys)
     var gk_is_str: List[Bool] = []
     for _ in range(n_keys):
-        gk_is_str.append(True)  # n_dims==0 group keys are VARCHAR
+        # n_dims==0 DENSE group keys are VARCHAR; the HASH integer fact key is int64.
+        gk_is_str.append(mode != STRAT_HASH_GROUP)
     var gk_str_vals: List[List[String]] = []
     var gk_i64_vals: List[List[Int64]] = []
-    for g in range(n_groups):
-        var sv: List[String] = []
-        var iv: List[Int64] = []
-        if n_keys > 0:
-            var didx = order[g]
-            for gk in range(n_keys):
-                sv.append(gkey_vals[gk][didx])
-                iv.append(Int64(0))
-        gk_str_vals.append(sv^)
-        gk_i64_vals.append(iv^)
+    if mode != STRAT_HASH_GROUP:
+        for g in range(n_groups):
+            var sv: List[String] = []
+            var iv: List[Int64] = []
+            if n_keys > 0:
+                var didx = order[g]
+                for gk in range(n_keys):
+                    sv.append(gkey_vals[gk][didx])
+                    iv.append(Int64(0))
+            gk_str_vals.append(sv^)
+            gk_i64_vals.append(iv^)
 
     # --- upload the resident buffers once (no FK-join dims for this class) ---
     # This class is UNGROUPED / DENSE_GROUP => STORAGE row order (no ORDER BY),
@@ -5125,7 +5269,14 @@ def _pin_finalize_generic(
     gp.n_cand = n_groups
     gp.emit_agg = -1
     gp.emit_gt0 = False
-    # GPU_OP_TRANSCENDENTAL: route this entry to the float64 ungrouped accumulator.
+    # GPU_OP_TRANSCENDENTAL HASH_GROUP: the float64 hash accumulator keys on this
+    # fact-column slot; cap is the (pow2) hash-table size. Unused (0/-1) on the
+    # UNGROUPED/DENSE float paths and the int128 path. n_cand is unused for HASH
+    # (_assemble_hash_f64 emits one row per occupied slot).
+    gp.hash_gk_slot = hash_gk_slot if hash_gk_slot >= 0 else 0
+    gp.hash_cap = hash_cap
+    gp.hash_gk_dim_arr = []
+    # GPU_OP_TRANSCENDENTAL: route this entry to the float64 accumulator.
     gp.is_float64 = is_float64
     gp.col_div = col_div^
     gp.n_slots = n_numeric
@@ -7000,6 +7151,19 @@ def mojo_gpu_pin_finalize(
         # for every class. No-join (Q6 UNGROUPED / Q1 DENSE_GROUP):
         if len(d.dim_edges) == 0 and (
             d.strategy == STRAT_UNGROUPED or d.strategy == STRAT_DENSE_GROUP
+        ):
+            return _pin_finalize_generic(handle)
+
+        # GPU_OP_TRANSCENDENTAL: a no-FK-join HASH_GROUP (integer fact group key,
+        # e.g. GROUP BY l_partkey) is only reachable when the transcendental scope
+        # guard accepted it (the high-card decline is bypassed for transcendentals).
+        # It has no dim_edges, so the generic no-dim finalize handles it (it routes
+        # to the float64 HASH accumulator). Non-transcendental no-dim HASH never
+        # routes here (it is declined by _should_decline) -> returns 3 below.
+        if (
+            len(d.dim_edges) == 0
+            and d.strategy == STRAT_HASH_GROUP
+            and _has_transcendental(d)
         ):
             return _pin_finalize_generic(handle)
 

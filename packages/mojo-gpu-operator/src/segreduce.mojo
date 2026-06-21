@@ -398,6 +398,188 @@ def seg_ungrouped_kernel_f64[
         abort("seg_ungrouped_kernel_f64 requires NVIDIA (kernel f64)")
 
 
+# ===========================================================================
+# FLOAT64 DENSE_GROUP transcendental accumulator (GPU_OP_TRANSCENDENTAL).
+#
+# ADDITIVE + SEPARATE from the int128 dense kernel (seg_dense_kernel): never runs
+# unless the operator routes a grouped DOUBLE transcendental aggregate (sum/avg of
+# f(col) GROUP BY <few VARCHAR keys>) to it. Mirrors seg_dense_kernel's per-lane
+# G*M accumulators + dense gid read (slot `gid_slot`), but evaluates each metric
+# with the FLOAT64 VM and reduces in float64.
+#
+# float64 has no warp.sum dtype, so each block (ONE warp: WARP threads, like the
+# int128 seg_dense_kernel) reduces its G*M accumulators in shared memory (tree
+# reduction over the WARP lanes) and lane 0 atomic-adds the block partials into a
+# SINGLE per-(group,metric) global accumulator `fpartials[g * M + m]`. The host
+# reads G*M doubles directly (no cross-block host fold). G*M <= SEG_MAX_METRICS^2
+# (the existing dense-kernel acc bound). Shared footprint is WARP*64*8 = 16KB
+# (a SEG_BLK=128-thread block would need 64KB > the 48KB/block cap).
+# ===========================================================================
+def seg_dense_kernel_f64[
+    USE_COLPTR: Bool = False
+](
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    # Per-group passing-row count (G doubles). The dense gid is built over ALL
+    # materialized rows (the materialize SQL has no WHERE; the filter is the
+    # in-kernel pass program), so a group can exist in the gid map yet have ZERO
+    # passing rows. A stock GROUP BY emits a group only if it has >=1 passing row,
+    # so the host gates emit on gcount[g] > 0. (G*M sums alone can't distinguish a
+    # genuine 0 sum from "no rows" for sign-bearing metrics like sin/cos.)
+    gcount: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+):
+    comptime if is_nvidia_gpu():
+        # Shared reduction buffer: WARP lanes x (G*M <= SEG_MAX_METRICS^2). 16KB.
+        var smem = stack_allocation[
+            WARP * SEG_MAX_METRICS * SEG_MAX_METRICS,
+            Scalar[DType.float64],
+            address_space = AddressSpace.SHARED,
+        ]()
+        # Separate per-group count reduction buffer (WARP lanes x G).
+        var scnt = stack_allocation[
+            WARP * SEG_MAX_METRICS * SEG_MAX_METRICS,
+            Scalar[DType.float64],
+            address_space = AddressSpace.SHARED,
+        ]()
+        var lane = Int(thread_idx.x)
+        var stride = SEG_NBLOCKS * WARP
+        var gm = G * M
+        var acc = InlineArray[Float64, SEG_MAX_METRICS * SEG_MAX_METRICS](
+            fill=0.0
+        )
+        var cnt = InlineArray[Float64, SEG_MAX_METRICS * SEG_MAX_METRICS](
+            fill=0.0
+        )
+        var i = Int(block_idx.x) * WARP + lane
+        while i < n_rows:
+            if _row_passes[USE_COLPTR](
+                pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+            ):
+                var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
+                cnt[g] += 1.0
+                var base = g * M
+                for m in range(M):
+                    var moff = Int(metric_offsets[m])
+                    var prog = metric_progs + 3 * moff
+                    acc[base + m] += eval_program_f64[USE_COLPTR](
+                        prog, Int(metric_lens[m]), cols, n_rows, i,
+                        col_div, const_div + moff, dims, dim_offsets,
+                    )
+            i += stride
+        # Tree reduction in shared memory, per (group, metric); lane 0 atomic-adds.
+        var smbase = lane * (SEG_MAX_METRICS * SEG_MAX_METRICS)
+        for x in range(gm):
+            smem[smbase + x] = acc[x]
+        for g in range(G):
+            scnt[smbase + g] = cnt[g]
+        barrier()
+        var active = WARP
+        while active > 1:
+            active >>= 1
+            if lane < active:
+                var ob = (lane + active) * (SEG_MAX_METRICS * SEG_MAX_METRICS)
+                for x in range(gm):
+                    smem[smbase + x] = smem[smbase + x] + smem[ob + x]
+                for g in range(G):
+                    scnt[smbase + g] = scnt[smbase + g] + scnt[ob + g]
+            barrier()
+        if lane == 0:
+            for x in range(gm):
+                _ = Atomic.fetch_add(fpartials + x, smem[x])
+            for g in range(G):
+                _ = Atomic.fetch_add(gcount + g, scnt[g])
+    else:
+        abort("seg_dense_kernel_f64 requires NVIDIA (kernel f64)")
+
+
+# ===========================================================================
+# FLOAT64 HASH_GROUP transcendental accumulator (GPU_OP_TRANSCENDENTAL).
+#
+# ADDITIVE + SEPARATE from the int128 hash kernel (seg_hash_kernel): never runs
+# unless the operator routes a grouped DOUBLE transcendental aggregate keyed by a
+# high-cardinality integer fact key (sum/avg of f(col) GROUP BY <int fact key>).
+# Open-addressing (linear-probe) hash table:
+#   slot_key[cap]      : the claimed group key, or HASH_EMPTY if free.
+#   slot_facc[cap * M]  : M FLOAT64 metric accumulators per slot.
+# One thread per fact row (grid-stride). A passing row computes its group key +
+# each metric (the float64 VM), claims/finds its slot via an atomic compare-
+# exchange on the key word (identical to seg_hash_kernel), then float64
+# atomic-adds each metric into the slot. NVIDIA has f64 global atomicAdd, so the
+# device side is pure f64 atomics; the host reads back occupied slots directly.
+# NVIDIA-only (Apple lacks both kernel f64 AND 64-bit atomics; never launched).
+# ===========================================================================
+def seg_hash_kernel_f64[
+    USE_COLPTR: Bool = False
+](
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gk_slot: Int,
+    cap: Int,  # hash table capacity (power of two)
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    slot_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    slot_facc: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+):
+    comptime if is_nvidia_gpu():
+        var i = Int(global_idx.x)
+        var grid = Int(block_dim.x) * Int(grid_dim.x)
+        var mask = cap - 1  # cap is pow2 => key & mask == key % cap
+        while i < n_rows:
+            if _row_passes[USE_COLPTR](
+                pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+            ):
+                var key = _col_at[USE_COLPTR](cols, n_rows, gk_slot, i)
+                var h = Int((UInt64(key) * 0x9E3779B97F4A7C15) >> 33) & mask
+                var slot = h
+                var placed = False
+                var guard = 0
+                while guard <= cap:
+                    var expected = HASH_EMPTY
+                    if Atomic[DType.int64].compare_exchange(
+                        slot_key + slot, expected, key
+                    ):
+                        placed = True
+                    elif expected == key:
+                        placed = True
+                    if placed:
+                        var base = slot * M
+                        for m in range(M):
+                            var moff = Int(metric_offsets[m])
+                            var prog = metric_progs + 3 * moff
+                            var v = eval_program_f64[USE_COLPTR](
+                                prog, Int(metric_lens[m]), cols, n_rows, i,
+                                col_div, const_div + moff, dims, dim_offsets,
+                            )
+                            _ = Atomic.fetch_add(slot_facc + base + m, v)
+                        break
+                    slot = (slot + 1) & mask
+                    guard += 1
+            i += grid
+    else:
+        abort("seg_hash_kernel_f64 requires NVIDIA (kernel f64 + atomics)")
+
+
 # Q6 PREDICATE-INDEPENDENT (Phase G Stage 2, flag-gated): identical to
 # seg_ungrouped_kernel_q6 except the row filter is evaluated IN-KERNEL from the
 # resident filter-input columns + the 5 Q6 bounds passed as LAUNCH PARAMS, rather
@@ -1735,6 +1917,13 @@ def segreduce_run_f64(
     col_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
     n_slots: Int,
     const_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    # GROUPED transcendental (GPU_OP_TRANSCENDENTAL): mode==STRAT_DENSE_GROUP routes
+    # to the float64 DENSE accumulator (G*M float64 globals, gid read from
+    # `gid_slot`) and returns G*M doubles laid out result[g*M+m]. The default
+    # (STRAT_UNGROUPED, G==1) is byte-identical to the original ungrouped path.
+    mode: Int64 = STRAT_UNGROUPED,
+    gid_slot: Int = 0,
+    G: Int = 1,
 ) raises -> List[Float64]:
     var ctx = res.ctx
     var n_rows = res.n_rows
@@ -1774,19 +1963,50 @@ def segreduce_run_f64(
     if metric_progs_n_ops > 0:
         ctx.enqueue_copy(kdiv_d, const_div_host)
 
-    # Single per-metric float accumulator (zero-initialized; the kernel atomic-
-    # adds each block partial into it, so the host reads M doubles directly).
-    var fpart_d = ctx.enqueue_create_buffer[DType.float64](M)
+    # Per-(group,metric) float accumulator (zero-initialized; the kernel atomic-
+    # adds each block partial into it). nout == M for UNGROUPED, G*M for DENSE.
+    var nout = G * M if mode == STRAT_DENSE_GROUP else M
+    var fpart_d = ctx.enqueue_create_buffer[DType.float64](nout)
     fpart_d.enqueue_fill(Float64(0))
+    # DENSE: per-group passing-row count (for the emit gate; appended to result).
+    var gcnt_n = G if mode == STRAT_DENSE_GROUP else 1
+    var gcnt_d = ctx.enqueue_create_buffer[DType.float64](gcnt_n)
+    gcnt_d.enqueue_fill(Float64(0))
 
-    # Launch the float64 ungrouped accumulator. The kernel itself comptime-guards
-    # its body on `is_nvidia_gpu()` (Apple compiles to abort, never launched — the
-    # host descriptor never routes a transcendental aggregate to Apple). This host
+    # Launch the float64 accumulator. Each kernel body comptime-guards on
+    # `is_nvidia_gpu()` (Apple compiles to abort, never launched — the host
+    # descriptor never routes a transcendental aggregate to Apple). This host
     # function uses NO `is_nvidia_gpu()` guard: that is an in-KERNEL target check
     # which is always False in HOST code (mirrors segreduce_run_hash, which also
     # launches its NVIDIA-only kernel directly and relies on the kernel-body guard).
     var result = List[Float64]()
-    if use_colptr:
+    if mode == STRAT_DENSE_GROUP:
+        # ONE warp per block (block_dim=WARP): the f64 dense kernel reduces G*M
+        # accumulators in shared mem over the WARP lanes; a 128-thread block would
+        # exceed the 48KB/block shared cap (WARP keeps it at 16KB).
+        if use_colptr:
+            comptime kfd = seg_dense_kernel_f64[True]
+            ctx.enqueue_function[kfd](
+                col_ptrs_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                cdiv_d, kdiv_d,
+                dims_d, doff_d,
+                fpart_d, gcnt_d,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+        else:
+            comptime kfd0 = seg_dense_kernel_f64[False]
+            ctx.enqueue_function[kfd0](
+                res.cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                cdiv_d, kdiv_d,
+                dims_d, doff_d,
+                fpart_d, gcnt_d,
+                grid_dim=SEG_NBLOCKS, block_dim=WARP,
+            )
+    elif use_colptr:
         comptime kf = seg_ungrouped_kernel_f64[True]
         ctx.enqueue_function[kf](
             col_ptrs_d, n_rows,
@@ -1808,13 +2028,26 @@ def segreduce_run_f64(
             fpart_d,
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
         )
-    var fpart_h = alloc[Float64](M)
-    var fpart_sub = DeviceBuffer(ctx, fpart_d.unsafe_ptr(), M, owning=False)
+    var fpart_h = alloc[Float64](nout)
+    var fpart_sub = DeviceBuffer(ctx, fpart_d.unsafe_ptr(), nout, owning=False)
     ctx.enqueue_copy(fpart_h, fpart_sub)
+    # DENSE: also read back the per-group passing-row counts (appended to result).
+    var gcnt_h = alloc[Float64](gcnt_n)
+    if mode == STRAT_DENSE_GROUP:
+        var gcnt_sub = DeviceBuffer(
+            ctx, gcnt_d.unsafe_ptr(), gcnt_n, owning=False
+        )
+        ctx.enqueue_copy(gcnt_h, gcnt_sub)
     ctx.synchronize()
-    for m in range(M):
-        result.append(fpart_h[m])
+    for x in range(nout):
+        result.append(fpart_h[x])
+    # DENSE: append G per-group counts after the G*M sums (the host slices them by
+    # G off the end: result[G*M + g] == passing-row count of group g).
+    if mode == STRAT_DENSE_GROUP:
+        for g in range(G):
+            result.append(gcnt_h[g])
     fpart_h.free()
+    gcnt_h.free()
     return result^
 
 
@@ -1943,6 +2176,131 @@ def segreduce_run_hash(
     key_h.free()
     acc_h.free()
     return HashGroupResult(keys^, sums^, M)
+
+
+# ---------------------------------------------------------------------------
+# FLOAT64 HASH_GROUP result: the occupied-slot integer group keys + their float64
+# metric sums, laid out fsums[g * M + m]. Mirrors HashGroupResult but the
+# accumulators are DOUBLE (GPU_OP_TRANSCENDENTAL grouped path).
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct HashGroupResultF64(Movable):
+    var keys: List[Int64]
+    var fsums: List[Float64]
+    var M: Int
+
+
+# ---------------------------------------------------------------------------
+# segreduce_run_hash_f64: the FLOAT64 HASH_GROUP driver (NVIDIA-only; flag
+# GPU_OP_TRANSCENDENTAL). Mirrors segreduce_run_hash but the metric accumulators
+# are float64 (seg_hash_kernel_f64 does the f64 atomic-adds) and the read-back is
+# direct doubles (no int128 widening). col_div / const_div are the float64 VM's
+# scale-reconstruction arrays (see segreduce_run_f64). NVIDIA-only: the kernel
+# body comptime-guards on is_nvidia_gpu() (Apple lacks f64 + 64-bit atomics; the
+# host descriptor never routes a transcendental aggregate to Apple).
+# ---------------------------------------------------------------------------
+def segreduce_run_hash_f64(
+    mut res: SegResident,
+    gk_slot: Int,
+    cap: Int,
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_n_ops: Int,
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    col_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    n_slots: Int,
+    const_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+) raises -> HashGroupResultF64:
+    var ctx = res.ctx
+    var cols_d = res.cols_d
+    var n_rows = res.n_rows
+    var dims_d = res.dims_d
+    var use_colptr = res.use_colptr
+    var col_ptrs_d = res.col_ptrs_d
+
+    var doff_n = res.n_dims + 1 if res.n_dims > 0 else 1
+    var doff_d = ctx.enqueue_create_buffer[DType.int64](doff_n)
+    if res.n_dims > 0:
+        ctx.enqueue_copy(doff_d, res.dim_offsets.unsafe_ptr())
+
+    var pass_n = pass_len * 3 if pass_len > 0 else 1
+    var pass_d = ctx.enqueue_create_buffer[DType.int64](pass_n)
+    if pass_len > 0:
+        ctx.enqueue_copy(pass_d, pass_prog_host)
+
+    var mp_n = metric_progs_n_ops * 3 if metric_progs_n_ops > 0 else 1
+    var mp_d = ctx.enqueue_create_buffer[DType.int64](mp_n)
+    if metric_progs_n_ops > 0:
+        ctx.enqueue_copy(mp_d, metric_progs_host)
+    var moff_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(moff_d, metric_offsets_host)
+    var mlen_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(mlen_d, metric_lens_host)
+
+    var cdiv_n = n_slots if n_slots > 0 else 1
+    var cdiv_d = ctx.enqueue_create_buffer[DType.float64](cdiv_n)
+    if n_slots > 0:
+        ctx.enqueue_copy(cdiv_d, col_div_host)
+    var kdiv_n = metric_progs_n_ops if metric_progs_n_ops > 0 else 1
+    var kdiv_d = ctx.enqueue_create_buffer[DType.float64](kdiv_n)
+    if metric_progs_n_ops > 0:
+        ctx.enqueue_copy(kdiv_d, const_div_host)
+
+    # device hash table: keys init HASH_EMPTY, float accumulators init 0.0.
+    var slot_key_d = ctx.enqueue_create_buffer[DType.int64](cap)
+    var slot_facc_d = ctx.enqueue_create_buffer[DType.float64](cap * M)
+    slot_key_d.enqueue_fill(HASH_EMPTY)
+    slot_facc_d.enqueue_fill(Float64(0))
+
+    var nblocks = (n_rows + HASH_BLOCK - 1) // HASH_BLOCK
+    if nblocks < 1:
+        nblocks = 1
+    if nblocks > SEG_NBLOCKS:
+        nblocks = SEG_NBLOCKS
+    if use_colptr:
+        comptime khash = seg_hash_kernel_f64[True]
+        ctx.enqueue_function[khash](
+            col_ptrs_d, n_rows, gk_slot, cap,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            cdiv_d, kdiv_d,
+            dims_d, doff_d,
+            slot_key_d, slot_facc_d,
+            grid_dim=nblocks, block_dim=HASH_BLOCK,
+        )
+    else:
+        comptime khash0 = seg_hash_kernel_f64[False]
+        ctx.enqueue_function[khash0](
+            cols_d, n_rows, gk_slot, cap,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            cdiv_d, kdiv_d,
+            dims_d, doff_d,
+            slot_key_d, slot_facc_d,
+            grid_dim=nblocks, block_dim=HASH_BLOCK,
+        )
+
+    var key_h = alloc[Int64](cap)
+    var acc_h = alloc[Float64](cap * M)
+    ctx.enqueue_copy(key_h, slot_key_d)
+    var acc_sub = DeviceBuffer(ctx, slot_facc_d.unsafe_ptr(), cap * M, owning=False)
+    ctx.enqueue_copy(acc_h, acc_sub)
+    ctx.synchronize()
+
+    var keys = List[Int64]()
+    var fsums = List[Float64]()
+    for slot in range(cap):
+        if key_h[slot] == HASH_EMPTY:
+            continue
+        keys.append(key_h[slot])
+        for m in range(M):
+            fsums.append(acc_h[slot * M + m])
+    key_h.free()
+    acc_h.free()
+    return HashGroupResultF64(keys^, fsums^, M)
 
 
 # ---------------------------------------------------------------------------

@@ -638,25 +638,46 @@ def build_descriptor_impl(
     desc.strategy = strategy
     desc.kind = kind
 
-    # Transcendental scope guard (GPU_OP_TRANSCENDENTAL): the only float64 kernel
-    # that exists is the UNGROUPED sum/avg accumulator (seg_ungrouped_kernel_f64).
-    # A transcendental program is therefore ONLY accepted as UNGROUPED, no FK-join
-    # dims, with every aggregate a SUM or AVG (DOUBLE result). ANY other shape
-    # (grouped, dim-join, min/max) DECLINES -> stock DuckDB CPU. Fail-closed: never
-    # wrong. (With the flag off no transcendental op is ever emitted by the C++
-    # EmitProgram, so this branch is dead -> byte-identical default behavior.)
+    # Transcendental scope guard (GPU_OP_TRANSCENDENTAL): the float64 kernels are
+    # the UNGROUPED accumulator (seg_ungrouped_kernel_f64) and the DENSE_GROUP
+    # accumulator (seg_dense_kernel_f64). A transcendental program is therefore
+    # accepted as UNGROUPED or DENSE_GROUP only, with NO FK-join dims (the
+    # transcendental arg is a pure fact column / const), and every aggregate a
+    # SUM / AVG / COUNT(*) (DOUBLE result, AVG = sum + per-group count). ANY other
+    # shape DECLINES -> stock DuckDB CPU. Fail-closed: never wrong. (With the flag
+    # off no transcendental op is ever emitted by the C++ EmitProgram, so this
+    # branch is dead -> byte-identical default behavior.)
+    #
+    # HASH_GROUP (high-cardinality integer fact key) is correct end-to-end (kernel
+    # + driver + assembler all validated bit-exact) but MEASURED SLOWER than stock
+    # (RTX 4090: sf1 0.48x, sf10 0.3-0.5x warm vs stock): the 200k+-group hash-
+    # aggregate + the per-run PCIe read-back of every occupied slot dominate, and
+    # DuckDB's multithreaded hash-aggregate wins this regime -- the SAME reason
+    # _should_decline declines the Q3 high-card shape. So HASH_GROUP transcendental
+    # is DECLINED here (kept on CPU); the f64 hash machinery stays dormant behind
+    # this guard for a future tighter-cap / fewer-output-rows revisit.
     if _has_transcendental(desc):
-        # NVIDIA-ONLY: the float64 transcendental kernel needs in-kernel f64, which
-        # Apple Metal lacks (the kernel is abort-only there) and AMD is unvalidated.
-        # Decline on non-NVIDIA -> stock CPU (never route into the abort kernel).
+        # NVIDIA-ONLY: the float64 transcendental kernels need in-kernel f64, which
+        # Apple Metal lacks (abort-only there) and AMD is unvalidated. Decline on
+        # non-NVIDIA -> stock CPU (never route into the abort kernel).
         if not has_nvidia_gpu_accelerator():
             return None
-        if strategy != STRAT_UNGROUPED or n_gkeys != 0 or n_dims != 0:
+        # No FK-join dims (the transcendental arg is a fact column / const); only
+        # UNGROUPED + DENSE_GROUP (the float kernels that WIN). HASH_GROUP declines.
+        if n_dims != 0:
+            return None
+        if strategy != STRAT_UNGROUPED and strategy != STRAT_DENSE_GROUP:
             return None
         for ai in range(len(desc.aggregates)):
             var ak = desc.aggregates[ai].kind
             if ak != AGG_SUM and ak != AGG_AVG and ak != AGG_COUNT_STAR:
                 return None
+        # ACCEPT directly, bypassing `_should_decline`. Its high-cardinality
+        # GROUP-BY decline (the Q3 shape) targets LIGHT per-row work; an UNGROUPED
+        # or small-DENSE transcendental is HEAVY per-row math the GPU wins (sum(sqrt)
+        # ~3-8x warm vs stock) and DuckDB does NOT GPU-accelerate. The shape is
+        # validated above (no dims, no HASH, sum/avg/count) and the flag is opt-in.
+        return desc^
 
     # Offload-vs-CPU-fallback policy (see `_should_decline`): keeps the
     # high-cardinality-group-by decline (Q3 shape) and carries a default-off
