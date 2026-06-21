@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/execution/physical_operator.hpp"
@@ -1901,6 +1902,33 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     return false;
   }
   if (jt.gets.empty()) { return false; }
+
+  // NULL-SAFETY GATE. The materialize/feed path copies only the column DATA array
+  // (FedColumn::fill = a raw memcpy) and does NOT carry DuckDB's validity mask, so a
+  // NULL row is read as raw garbage int64 -> SILENT WRONG RESULTS (sum off, avg=0,
+  // filtered-sum=garbage, sqrt=nan). Until the feed path applies validity, DECLINE the
+  // offload whenever any projected column of any GET is nullable (lacks a NOT NULL
+  // constraint). This is provably complete: GetColumnIds() is a SUPERSET of the columns
+  // the GPU reads (aggregate args, group keys, filter columns, join keys, gathered dim
+  // columns). TPC-H tables are created all-NOT-NULL (dbgen) so the accepted classes never
+  // regress; tables with nullable columns fall back to stock DuckDB (which is correct).
+  for (auto *g : jt.gets) {
+    auto te = g->GetTable();
+    if (!te) { return false; }  // non-table GET (table function etc.): can't verify -> decline
+    for (auto &ci : g->GetColumnIds()) {
+      if (ci.IsRowIdColumn() || ci.IsVirtualColumn()) { continue; }
+      idx_t cidx = ci.GetPrimaryIndex();
+      bool is_not_null = false;
+      for (auto &cons : te->GetConstraints()) {
+        if (cons->type == ConstraintType::NOT_NULL &&
+            cons->Cast<NotNullConstraint>().index.index == cidx) {
+          is_not_null = true;
+          break;
+        }
+      }
+      if (!is_not_null) { return false; }  // nullable -> NULL read as garbage -> decline
+    }
+  }
 
   // 3. GETS.
   for (auto *g : jt.gets) {
