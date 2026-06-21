@@ -88,6 +88,7 @@ by the planner for the supported TPC-H shapes never exceed this depth.
 """
 
 from std.gpu.memory import AddressSpace
+from std.math import sqrt, exp, log, sin, cos
 from raw_plan_tags import (
     OP_LOAD_COL,
     OP_PUSH_CONST,
@@ -97,6 +98,12 @@ from raw_plan_tags import (
     OP_SELECT,
     OP_LOAD_DIM,
     OP_EQ,
+    OP_SQRT,
+    OP_EXP,
+    OP_LN,
+    OP_LOG10,
+    OP_SIN,
+    OP_COS,
 )
 
 comptime EXPR_STACK_MAX = 16
@@ -220,3 +227,131 @@ def eval_program[
         # unknown op: ignore (defensive; planner only emits the ops above)
         k += 1
     return stack[0] if sp > 0 else Int64(0)
+
+
+# ---------------------------------------------------------------------------
+# FLOAT64 expression VM (transcendental aggregate path; GPU_OP_TRANSCENDENTAL).
+#
+# Purely ADDITIVE: the int64 eval_program above is untouched and byte-identical.
+# This VM is only invoked by the float64 segreduce accumulator for a
+# DOUBLE-returning transcendental aggregate (sum/avg of f(col)). It evaluates the
+# SAME postfix encoding but on a float64 stack, and -- crucially -- reconstructs
+# the TRUE double of each operand from the SCALED int64 column / const:
+#
+#   OP_LOAD_COL a  -> push Float64(cols[a][row]) / col_div[a]
+#   OP_PUSH_CONST a-> push Float64(a) / const_div_of_this_op   (a is scaled int64)
+#   OP_ADD/SUB/MUL -> float arithmetic
+#   OP_SQRT/EXP/LN/LOG10/SIN/COS -> unary: pop x, push f(x)
+#
+# `col_div[slot]` = 10^scale (as Float64) for that column; 1.0 for DATE/INTEGER.
+# `const_div` is a parallel array indexed by op position k (only meaningful for
+# PUSH_CONST ops; 1.0 otherwise) carrying the const's 10^scale divisor.
+#
+# Precise f64 sqrt: stdlib sqrt(Float64) routes to the NVVM approx path which is
+# constrained off for f64 on NVIDIA. We seed from the f32 approx and do ONE
+# Newton step (~1e-14 rel err, validated vs DuckDB). x>=0 by construction for the
+# DECIMAL/price columns these aggregates apply to.
+# ---------------------------------------------------------------------------
+@always_inline
+def _vm_sqrt_f64(x: Float64) -> Float64:
+    var y = Float64(sqrt(x.cast[DType.float32]()))
+    if y > 0.0:
+        y = 0.5 * (y + x / y)
+    return y
+
+
+# 1 / ln(10): log10(x) = log(x) * this. NVIDIA has no f64 log10 (libm, CPU-only),
+# but f64 `log` (natural) works -> derive log10 exactly from it.
+comptime _INV_LN10: Float64 = 0.43429448190325182765112891891660508229439700580367
+
+
+# NVIDIA has no precise f64 sin/cos (only f32 approx PTX; the f64 path is libm /
+# CPU-only). sin/cos are the lowest-value transcendental aggregates (~1.17x even
+# on CPU-SIMD per R7), so we compute them via the f32 approx here: ~1e-7 relative
+# accuracy, which is acceptable for a flag-gated DOUBLE aggregate where DuckDB's
+# own double sum already varies at ~1e-12 from thread order. (sqrt/exp/ln/log10
+# are f64-precise; only sin/cos take this f32 route.)
+@always_inline
+def _vm_sin_f64(x: Float64) -> Float64:
+    return Float64(sin(x.cast[DType.float32]()))
+
+
+@always_inline
+def _vm_cos_f64(x: Float64) -> Float64:
+    return Float64(cos(x.cast[DType.float32]()))
+
+
+@always_inline
+def eval_program_f64[
+    USE_COLPTR: Bool = False
+](
+    prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    prog_len: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    row: Int,
+    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+) -> Float64:
+    """Evaluate one postfix program for a single row on a float64 stack.
+
+    Reconstructs each operand's true double from the scaled int64 storage via
+    `col_div` / `const_div`, then applies arithmetic + transcendental ops.
+    Returns the per-row float64 metric value. See module note above.
+    """
+    var stack = InlineArray[Float64, EXPR_STACK_MAX](fill=0.0)
+    var sp = 0
+    var k = 0
+    while k < prog_len:
+        var op = prog[3 * k + 0]
+        var a = prog[3 * k + 1]
+        if op == OP_LOAD_COL:
+            var raw = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
+            stack[sp] = Float64(raw) / col_div[Int(a)]
+            sp += 1
+        elif op == OP_LOAD_DIM:
+            var b = prog[3 * k + 2]
+            var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
+            stack[sp] = Float64(dims[Int(dim_offsets[Int(a)]) + key])
+            sp += 1
+        elif op == OP_PUSH_CONST:
+            stack[sp] = Float64(a) / const_div[k]
+            sp += 1
+        elif op == OP_ADD:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = lhs + rhs
+        elif op == OP_SUB:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = lhs - rhs
+        elif op == OP_MUL:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = lhs * rhs
+        elif op == OP_SELECT:
+            var else_v = stack[sp - 1]
+            var then_v = stack[sp - 2]
+            var pred = stack[sp - 3]
+            sp -= 2
+            stack[sp - 1] = then_v if pred != 0.0 else else_v
+        elif op == OP_SQRT:
+            stack[sp - 1] = _vm_sqrt_f64(stack[sp - 1])
+        elif op == OP_EXP:
+            stack[sp - 1] = exp(stack[sp - 1])
+        elif op == OP_LN:
+            stack[sp - 1] = log(stack[sp - 1])
+        elif op == OP_LOG10:
+            stack[sp - 1] = log(stack[sp - 1]) * _INV_LN10
+        elif op == OP_SIN:
+            stack[sp - 1] = _vm_sin_f64(stack[sp - 1])
+        elif op == OP_COS:
+            stack[sp - 1] = _vm_cos_f64(stack[sp - 1])
+        # unknown op: ignore (defensive)
+        k += 1
+    return stack[0] if sp > 0 else Float64(0.0)

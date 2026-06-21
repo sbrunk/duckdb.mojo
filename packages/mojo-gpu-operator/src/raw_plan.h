@@ -59,6 +59,18 @@ enum : int64_t {
   OP_LOAD_DIM = 8,   // a=dim-array index, b=fact-key column slot:
                      //   push dim_arrays[a][ cols[b][row] ] (FK gather)
   OP_EQ = 9,         // pop b, a -> push (a == b) ? 1 : 0
+  // --- Transcendental unary ops (FLOAT eval path only; GPU_OP_TRANSCENDENTAL).
+  // These appear ONLY in a metric program evaluated by the float64 VM
+  // (eval_program_f64); the int64 VM (eval_program) treats them as no-ops and
+  // never sees them (the builder emits them only for a DOUBLE-returning
+  // transcendental aggregate routed to the float accumulator). Unary: pop a,
+  // push f(a) where `a` is the reconstructed true double of the operand.
+  OP_SQRT = 10,
+  OP_EXP = 11,
+  OP_LN = 12,
+  OP_LOG10 = 13,
+  OP_SIN = 14,
+  OP_COS = 15,
 };
 
 // Descriptor kind (Stage-1 shadow validation introspection)

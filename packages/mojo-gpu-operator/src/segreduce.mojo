@@ -80,7 +80,7 @@ from raw_plan_tags import (
     CMP_GT,
     CMP_GE,
 )
-from expr_vm import eval_program, _col_at
+from expr_vm import eval_program, eval_program_f64, _col_at
 
 comptime SEG_NBLOCKS = 4096  # one warp per block (matches the existing kernels)
 # Multi-warp block variant (GPU_OP_BLOCK128): on sm_89 a 1-warp block caps
@@ -306,6 +306,88 @@ def seg_ungrouped_kernel_q6(
         var s = warp.sum(acc[m])
         if lane == 0:
             partials[blk * M + m] = s
+
+
+# ===========================================================================
+# FLOAT64 UNGROUPED transcendental accumulator (GPU_OP_TRANSCENDENTAL).
+#
+# ADDITIVE + SEPARATE from the int128 path: this kernel never runs unless the
+# operator routes a DOUBLE-returning transcendental aggregate (sum/avg of f(col))
+# to it; all existing int64/int128 kernels are untouched. It mirrors
+# seg_ungrouped_kernel_q6's grid-stride + filter structure, but evaluates each
+# metric with the FLOAT64 VM (eval_program_f64: true-double reconstruction via
+# col_div/const_div + transcendental ops) and reduces in float64.
+#
+# float64 has no warp.sum dtype here, so each block reduces M metrics in shared
+# memory (tree reduction) and thread 0 atomic-adds the block partial into the M
+# float64 outputs `fpartials[m]` (single global accumulator per metric -- the
+# host reads M doubles, no cross-block host fold needed). Block size SEG_BLK
+# (multi-warp) for occupancy. Filter is the host-baked 0/1 pass column (pass_len
+# 1-op LOAD_COL), identical to the int path's lowering.
+#
+# AVG decomposes upstream into two metrics (sum of f(col), count) -- the count
+# metric is just OP_PUSH_CONST(1) with col_div/const_div=1.0, summing to the row
+# count; the host divides. So this one kernel covers both sum and avg.
+# ===========================================================================
+def seg_ungrouped_kernel_f64[
+    USE_COLPTR: Bool = False
+](
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+):
+    # Shared reduction buffer: SEG_BLK threads x SEG_MAX_METRICS metrics.
+    var smem = stack_allocation[
+        SEG_BLK * SEG_MAX_METRICS,
+        Scalar[DType.float64],
+        address_space = AddressSpace.SHARED,
+    ]()
+    var tid = Int(thread_idx.x)
+    var stride = SEG_NBLOCKS * SEG_BLK
+    var acc = InlineArray[Float64, SEG_MAX_METRICS](fill=0.0)
+    var i = Int(block_idx.x) * SEG_BLK + tid
+    while i < n_rows:
+        if _row_passes[USE_COLPTR](
+            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+        ):
+            for m in range(M):
+                var moff = Int(metric_offsets[m])
+                var prog = metric_progs + 3 * moff
+                # const_div is parallel to the op tape (one entry per OP), so it
+                # is sliced by the SAME per-metric op offset as the program; then
+                # eval_program_f64 indexes it by LOCAL op index k.
+                acc[m] += eval_program_f64[USE_COLPTR](
+                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    col_div, const_div + moff, dims, dim_offsets,
+                )
+        i += stride
+    # Tree reduction in shared memory, per metric, then thread 0 atomic-adds.
+    for m in range(M):
+        smem[tid * SEG_MAX_METRICS + m] = acc[m]
+    barrier()
+    var active = SEG_BLK
+    while active > 1:
+        active >>= 1
+        if tid < active:
+            for m in range(M):
+                smem[tid * SEG_MAX_METRICS + m] = (
+                    smem[tid * SEG_MAX_METRICS + m]
+                    + smem[(tid + active) * SEG_MAX_METRICS + m]
+                )
+        barrier()
+    if tid == 0:
+        for m in range(M):
+            _ = Atomic.fetch_add(fpartials + m, smem[m])
 
 
 # Q6 PREDICATE-INDEPENDENT (Phase G Stage 2, flag-gated): identical to

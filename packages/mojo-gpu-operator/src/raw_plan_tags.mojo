@@ -47,6 +47,15 @@ comptime OP_SELECT: Int64 = 6
 comptime OP_PROMO_PRED: Int64 = 7
 comptime OP_LOAD_DIM: Int64 = 8  # a=dim-array index, b=fact-key column slot
 comptime OP_EQ: Int64 = 9  # pop b, a -> push (a == b) ? 1 : 0
+# Transcendental unary ops (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Handled
+# by eval_program_f64, never by the int64 eval_program. pop a -> push f(a) where
+# `a` is the reconstructed true double of the operand. See raw_plan.h lockstep.
+comptime OP_SQRT: Int64 = 10
+comptime OP_EXP: Int64 = 11
+comptime OP_LN: Int64 = 12
+comptime OP_LOG10: Int64 = 13
+comptime OP_SIN: Int64 = 14
+comptime OP_COS: Int64 = 15
 
 # Descriptor kind
 comptime KIND_UNKNOWN: Int64 = 0
