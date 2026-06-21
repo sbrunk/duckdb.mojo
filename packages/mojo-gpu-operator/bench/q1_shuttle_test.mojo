@@ -203,6 +203,8 @@ def build_q1_tape(mut b: TapeBuilder, ship_cutoff: Int):
     # a7: count_star() BIGINT
     b.put(AGG_COUNT_STAR); b.put(TYPE_BIGINT); b.puti(0); b.puti(0); b.puti(0)
     b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
 
 
 # Build a synthetic DuckDB string_t (16 bytes) for a short ASCII string into the

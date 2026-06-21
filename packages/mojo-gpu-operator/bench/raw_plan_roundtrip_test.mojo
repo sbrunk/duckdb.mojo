@@ -164,6 +164,8 @@ def build_q6() -> RawPlanReader:
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_ext)
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
     return reader_from(b)
 
 
@@ -214,6 +216,8 @@ def build_q1() -> RawPlanReader:
         b.put(AGG_AVG); b.put(TYPE_DECIMAL); b.puti(6); b.puti(38); b.puti(1)
         b.puti(1); b.put(OP_LOAD_COL); b.puti(s_li); b.puti(avgcols[ci])
     b.put(AGG_COUNT_STAR); b.put(TYPE_BIGINT); b.puti(0); b.puti(0); b.puti(0)
+    b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
     b.puti(0)
     return reader_from(b)
 
@@ -280,6 +284,8 @@ def build_q14() -> RawPlanReader:
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_SUB); b.puti(0); b.puti(0)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
     return reader_from(b)
 
 
@@ -347,6 +353,8 @@ def build_q3() -> RawPlanReader:
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_SUB); b.puti(0); b.puti(0)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
     return reader_from(b)
 
 
@@ -425,6 +433,8 @@ def build_q5() -> RawPlanReader:
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_SUB); b.puti(0); b.puti(0)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
     return reader_from(b)
 
 

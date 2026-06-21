@@ -186,6 +186,14 @@ struct GpuGet(Copyable, Movable):
     var table: String
     var est_cardinality: Int64
     var filters: List[GpuPredicate]
+    # NR3 (GPU_OP_FILTER_OR): an OR-of-equalities residual-filter PASS-PROGRAM
+    # (postfix, ONLY OP_LOAD_COL/PUSH_CONST/EQ/ADD/MUL) the on-GPU expr-VM
+    # AND-composes into the host pass column. Empty unless the C++ writer emitted a
+    # PASS_PROGRAMS entry for this GET. `pass_load_cols` resolves the program's
+    # OP_LOAD_COL ops to (table,col), in program order -- same rationale as an
+    # aggregate's load_cols (the raw string ids are gone after the reader's table).
+    var pass_prog: List[GpuExprOp]
+    var pass_load_cols: List[GpuColRef]
 
 
 # A join cond: resolved (table,col) pairs for the left and right side.
@@ -279,7 +287,9 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
             var cid = Int(r.next())
             var col = GpuColRef(r.string_at(table_sid), r.string_at(col_sid))
             filters.append(GpuPredicate(col^, cmp, cid))
-        gets.append(GpuGet(r.string_at(table_sid), est, filters^))
+        # pass_prog / pass_load_cols start empty; filled from the trailing
+        # PASS_PROGRAMS section after the AGGREGATES loop (NR3, GPU_OP_FILTER_OR).
+        gets.append(GpuGet(r.string_at(table_sid), est, filters^, [], []))
 
     # JOINS
     var joins: List[GpuJoin] = []
@@ -344,6 +354,35 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
                 promo_cols^,
             )
         )
+
+    # PASS_PROGRAMS (NR3, GPU_OP_FILTER_OR). Trailing additive section: a residual
+    # OR-of-equalities filter's postfix program, attached to a GET by ordinal. n_pass
+    # is 0 unless the C++ writer emitted one (flag on + serializable shape), so the
+    # default path reads a single trailing 0 (the lockstep token every hand-built
+    # tape now appends). For each OP_LOAD_COL we resolve (a,b) string ids to a
+    # GpuColRef now (the reader's string table is dropped afterwards), exactly like
+    # the aggregate load_cols above.
+    var n_pass = Int(r.next())
+    for _ in range(n_pass):
+        var get_ord = Int(r.next())
+        var n_ops = Int(r.next())
+        var pp_prog: List[GpuExprOp] = []
+        var pp_cols: List[GpuColRef] = []
+        for _ in range(n_ops):
+            var op = r.next()
+            var a = r.next()
+            var b = r.next()
+            if op == OP_LOAD_COL:
+                pp_cols.append(GpuColRef(r.string_at(Int(a)), r.string_at(Int(b))))
+            pp_prog.append(GpuExprOp(op, a, b))
+        # Guard the ordinal; out-of-range -> drop (the build guard then declines any
+        # GET whose pass_prog is empty when one was expected is N/A -- a dropped
+        # program just leaves the GET unfiltered, but build_descriptor_impl only
+        # routes GETs whose pass_prog is consistent; a bad ordinal cannot happen from
+        # our own writer). Stay defensive: only attach when in range.
+        if get_ord >= 0 and get_ord < len(gets):
+            gets[get_ord].pass_prog = pp_prog^
+            gets[get_ord].pass_load_cols = pp_cols^
 
     return GpuPlanDescriptor(
         group_index,
@@ -665,6 +704,35 @@ def build_descriptor_impl(
     desc.strategy = strategy
     desc.kind = kind
 
+    # NR3 (GPU_OP_FILTER_OR) scope guard. A residual OR-of-equalities PASS-PROGRAM
+    # is composed into the HOST pass column ONLY on the int128 ungrouped / dense-
+    # group path (_pin_finalize_generic resolves + AND-MULs it there). It is NOT
+    # wired into the FK-join (dims) path, the HASH/SORT segreduce paths, or the f64
+    # (transcendental/stats) path -- those use an in-kernel fpred / different
+    # finalize that does NOT consult get.pass_prog. So fail-closed: decline whenever
+    # any GET carries a pass_prog but the shape is NOT a plain-int128 (no dims AND
+    # strategy in {UNGROUPED, DENSE_GROUP} AND not an f64 transcendental/stats
+    # query). Declining there is correct (stock CPU) and -- critically -- avoids
+    # SILENTLY DROPPING the OR predicate on a path that ignores pass_prog. With the
+    # flag off no pass_prog is ever emitted, so this branch is dead -> byte-identical
+    # default behavior. Placed BEFORE the transcendental/stats guards (which
+    # return desc^ early) so an OR-filtered f64 query is declined here.
+    var has_passprog = False
+    for gi in range(len(desc.gets)):
+        if len(desc.gets[gi].pass_prog) > 0:
+            has_passprog = True
+            break
+    if has_passprog:
+        if n_dims != 0:
+            return None
+        if strategy != STRAT_UNGROUPED and strategy != STRAT_DENSE_GROUP:
+            return None
+        # The f64 paths (transcendental/stats) thread the filter through an
+        # in-kernel fpred, not get.pass_prog -> declining keeps the OR predicate
+        # honored (on stock CPU) instead of silently dropped.
+        if _has_transcendental(desc) or _has_stats(desc):
+            return None
+
     # Transcendental scope guard (GPU_OP_TRANSCENDENTAL): the float64 kernels are
     # the UNGROUPED accumulator (seg_ungrouped_kernel_f64) and the DENSE_GROUP
     # accumulator (seg_dense_kernel_f64). A transcendental program is therefore
@@ -809,7 +877,10 @@ def fact_projected_columns(desc: GpuPlanDescriptor) -> List[String]:
                 return
         cols.append(name)
 
-    # Fact filters first (in filter order), then aggregate-program LOAD_COLs.
+    # Fact filters first (in filter order), then the NR3 OR-filter PASS-PROGRAM's
+    # columns (so the OR's columns get materialized/fed -- the host AND-compose in
+    # _pin_finalize_generic resolves each pass_load_cols column via col_slot, which
+    # only contains FED columns), then aggregate-program LOAD_COLs.
     for gi in range(len(desc.gets)):
         ref g = desc.gets[gi]
         if g.table != desc.fact_table:
@@ -818,6 +889,12 @@ def fact_projected_columns(desc: GpuPlanDescriptor) -> List[String]:
             ref p = g.filters[fi]
             if p.col.table == desc.fact_table:
                 _add(cols, p.col.column)
+    for gi in range(len(desc.gets)):
+        ref g = desc.gets[gi]
+        for li in range(len(g.pass_load_cols)):
+            ref c = g.pass_load_cols[li]
+            if c.table == desc.fact_table:
+                _add(cols, c.column)
     for ai in range(len(desc.aggregates)):
         ref agg = desc.aggregates[ai]
         for li in range(len(agg.load_cols)):

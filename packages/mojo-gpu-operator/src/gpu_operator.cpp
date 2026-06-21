@@ -26,6 +26,8 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -1445,6 +1447,14 @@ struct RawPlanBuilder {
   };
   std::vector<Agg> aggregates;
 
+  // PASS_PROGRAMS (NR3, GPU_OP_FILTER_OR). A trailing additive section: for a
+  // single-table residual OR-of-equalities LogicalFilter, the postfix program
+  // (reusing the aggregate `Op` type) the on-GPU expr-VM AND-composes into the
+  // GET's pass program. `get_ordinal` indexes GETS in emit order. Empty (n_pass=0)
+  // unless the flag is on AND the residual filter serialized -> default byte-identical.
+  struct PassProg { int64_t get_ordinal; std::vector<Op> ops; };
+  std::vector<PassProg> pass_programs;
+
   // HEADER.
   int64_t group_index = rp::IDX_NONE;
   int64_t aggregate_index = 0;
@@ -1527,6 +1537,16 @@ struct RawPlanBuilder {
         tape.push_back(op.op_tag); tape.push_back(op.a); tape.push_back(op.b);
       }
     }
+    // PASS_PROGRAMS (NR3, trailing additive). n_pass==0 by default -> the reader
+    // sees the same trailing token a flag-off build emits (no layout change).
+    tape.push_back((int64_t)pass_programs.size());
+    for (auto &pp : pass_programs) {
+      tape.push_back(pp.get_ordinal);
+      tape.push_back((int64_t)pp.ops.size());
+      for (auto &op : pp.ops) {
+        tape.push_back(op.op_tag); tape.push_back(op.a); tape.push_back(op.b);
+      }
+    }
     return tape;
   }
 };
@@ -1590,6 +1610,13 @@ static bool GpuOpFlagOn(const char *name) {
   return !(std::strcmp(v, "off") == 0 || std::strcmp(v, "0") == 0 ||
            std::strcmp(v, "none") == 0);
 }
+
+// NR3 (GPU_OP_FILTER_OR): route a single-table residual LogicalFilter that is an
+// OR-of-equalities (and small sparse IN, which DuckDB lowers to OR-of-equalities)
+// over INTEGER/DATE columns, serialized into an expression-VM PASS-PROGRAM. This
+// flag is DEFAULT-OFF (presence-only, like GPU_OP_NATIVE_DECODE): unset => OFF,
+// so the descent capture below is skipped and behavior is BYTE-IDENTICAL to today.
+static bool GpuOpFilterOrOn() { return std::getenv("GPU_OP_FILTER_OR") != nullptr; }
 
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
@@ -1892,6 +1919,82 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
   return true;
 }
 
+// NR3 (GPU_OP_FILTER_OR): serialize a residual single-table filter expression
+// into a postfix PASS-PROGRAM (the same `Op` tape the aggregates use). FAIL-CLOSED
+// (return false -> caller declines the whole offload) on ANYTHING outside the safe
+// envelope; never drop a predicate. Handles ONLY:
+//   - CONJUNCTION_OR  -> children chained with OP_ADD (!=0 iff any branch passes;
+//                        every leaf is 0/1 so the sum is >=0 and !=0 iff some leaf is 1).
+//   - CONJUNCTION_AND -> children chained with OP_MUL (!=0 iff all branches pass).
+//   - COMPARE_EQUAL   -> col=const over THIS GET on an INTEGER/DATE column:
+//                        LOAD_COL slot; PUSH_CONST const_id; OP_EQ (0/1).
+// `gets` is the single-element {this GET}; resolution reuses ResolveJoinColref +
+// AddValueConst exactly as the aggregate EmitProgram does. `op_count` is bumped per
+// emitted op and the whole thing declines if it exceeds 64 (stack stays <=2..3 by
+// construction; the cap bounds the program size). VARCHAR/DECIMAL/BIGINT/BOOLEAN
+// colrefs and any non-EQUAL comparison / non-constant side fail-closed (so a VARCHAR
+// const never reaches AddValueConst -- which would silently intern a str_id and
+// compare vs 0 down the int eval path).
+bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
+              RawPlanBuilder &b, std::vector<RawPlanBuilder::Op> &prog,
+              int64_t &op_count) {
+  if (op_count > 64) { return false; }
+  auto cls = e.GetExpressionClass();
+  if (cls == ExpressionClass::BOUND_CONJUNCTION) {
+    auto &conj = e.Cast<BoundConjunctionExpression>();
+    if (conj.children.size() < 2) { return false; }
+    int64_t combine;
+    if (e.type == ExpressionType::CONJUNCTION_OR) { combine = rp::OP_ADD; }
+    else if (e.type == ExpressionType::CONJUNCTION_AND) { combine = rp::OP_MUL; }
+    else { return false; }
+    if (!EmitOrEq(*conj.children[0], gets, b, prog, op_count)) { return false; }
+    for (idx_t i = 1; i < conj.children.size(); i++) {
+      if (!EmitOrEq(*conj.children[i], gets, b, prog, op_count)) { return false; }
+      prog.push_back({combine, 0, 0});
+      op_count++;
+      if (op_count > 64) { return false; }
+    }
+    return true;
+  }
+  if (cls == ExpressionClass::BOUND_COMPARISON) {
+    if (e.type != ExpressionType::COMPARE_EQUAL) { return false; }  // LT/GT/LE/GE/NE decline
+    auto &cmp = e.Cast<BoundComparisonExpression>();
+    // One side a colref on THIS get, the other a bound constant (either order).
+    const Expression *col_side = nullptr;
+    const Expression *const_side = nullptr;
+    if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+        cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+      col_side = cmp.left.get(); const_side = cmp.right.get();
+    } else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+               cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+      col_side = cmp.right.get(); const_side = cmp.left.get();
+    } else {
+      return false;  // colref-vs-colref / function side / etc. -> decline
+    }
+    auto &ref = col_side->Cast<BoundColumnRefExpression>();
+    // TYPE GATE: only INTEGER / DATE go down the int eval path. EXCLUDE everything
+    // else (VARCHAR/DECIMAL/BIGINT/BOOLEAN/...) -> fail-closed BEFORE AddValueConst.
+    auto tid = ref.return_type.id();
+    if (tid != LogicalTypeId::INTEGER && tid != LogicalTypeId::DATE) { return false; }
+    auto col = ResolveJoinColref(ref, gets);
+    if (col.col_name.empty()) { return false; }  // not on this GET
+    int64_t t = b.intern(col.table_name);
+    int64_t c = b.intern(col.col_name);
+    // The const must match the column's INTEGER/DATE family (same id) so the int
+    // limb is exact; AddValueConst returns -1 only for fractional doubles (n/a here).
+    auto &cval = const_side->Cast<BoundConstantExpression>().value;
+    if (cval.type().id() != tid) { return false; }
+    int64_t cid = AddValueConst(b, cval);
+    if (cid < 0) { return false; }
+    prog.push_back({rp::OP_LOAD_COL, t, c});
+    prog.push_back({rp::OP_PUSH_CONST, cid, 0});
+    prog.push_back({rp::OP_EQ, 0, 0});
+    op_count += 3;
+    return true;
+  }
+  return false;  // any other expression class -> decline
+}
+
 // Walk the supported LogicalAggregate class generically and fill the builder.
 // Returns false on anything outside the class (-> caller logs "unsupported").
 bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
@@ -1910,6 +2013,27 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     proj = &below->Cast<LogicalProjection>();
     if (proj->children.size() != 1) { return false; }
     below = proj->children[0].get();
+  }
+
+  // NR3 (GPU_OP_FILTER_OR): capture a single-table residual LogicalFilter whose
+  // single child is a LOGICAL_GET and whose .expressions are non-empty (an OR-of-
+  // equalities / sparse-IN that DuckDB leaves above the scan). When captured, we
+  // descend past it (`below = filter.children[0]`) so the dispatch below proceeds
+  // as a single GET, and serialize the filter's predicate into a PASS_PROGRAM after
+  // the GETS section. When the flag is OFF (or the shape differs) we do NOTHING ->
+  // `below` stays the LOGICAL_FILTER -> it falls into the `else { return false; }`
+  // dispatch below -> BYTE-IDENTICAL decline. (A join-tree residual filter stays
+  // declined by CollectJoinTree's non-empty-expressions guard; this path is
+  // single-GET only.)
+  const LogicalFilter *residual_filter = nullptr;
+  if (GpuOpFilterOrOn() && below->type == LogicalOperatorType::LOGICAL_FILTER) {
+    auto &flt = below->Cast<LogicalFilter>();
+    if (flt.children.size() == 1 &&
+        flt.children[0]->type == LogicalOperatorType::LOGICAL_GET &&
+        !flt.expressions.empty()) {
+      residual_filter = &flt;
+      below = flt.children[0].get();
+    }
   }
 
   JoinTree jt;
@@ -1981,11 +2105,46 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
           if (cfp->filter_type != TableFilterType::CONSTANT_COMPARISON) { return false; }
           if (!add_filter(col_idx, cfp->Cast<ConstantFilter>())) { return false; }
         }
+      } else if (tf.filter_type == TableFilterType::OPTIONAL_FILTER && residual_filter) {
+        // NR3 (GPU_OP_FILTER_OR): an OptionalFilter is a zone-map pruning hint only,
+        // never authoritative for correctness. DuckDB pushes one as the partial copy
+        // of the residual IN/OR predicate that also remains as the LogicalFilter we
+        // captured above this GET. Since we serialize that residual into the
+        // PASS_PROGRAM below, the optional copy is subsumed -> safe to skip. Gated on
+        // residual_filter so the flag-OFF path keeps declining on OPTIONAL_FILTER
+        // exactly as before (byte-identical default behavior).
+        continue;
       } else {
         return false;  // unmodeled filter shape
       }
     }
     out.gets.push_back(std::move(ge));
+  }
+
+  // 3b. PASS_PROGRAMS (NR3, GPU_OP_FILTER_OR). If a single-table residual filter
+  // was captured, serialize EACH of its (implicitly ANDed) expressions into ONE
+  // postfix program, chaining the per-expression results with OP_MUL (AND). It
+  // attaches to GET ordinal 0 (the single GET this path supports). If ANY
+  // expression fails to serialize -> DECLINE the whole offload (never drop a
+  // predicate -> never a wrong answer). residual_filter is non-null only when the
+  // flag is on, so this whole block is dead by default.
+  if (residual_filter) {
+    if (jt.gets.size() != 1 || !single_get) { return false; }  // single-GET only
+    std::vector<RawPlanBuilder::Op> ops;
+    int64_t op_count = 0;
+    for (idx_t i = 0; i < residual_filter->expressions.size(); i++) {
+      if (!EmitOrEq(*residual_filter->expressions[i], jt.gets, out, ops,
+                    op_count)) {
+        return false;
+      }
+      if (i > 0) {
+        ops.push_back({rp::OP_MUL, 0, 0});  // AND across the filter's expressions
+        op_count++;
+        if (op_count > 64) { return false; }
+      }
+    }
+    if (ops.empty()) { return false; }  // captured non-empty filter must emit ops
+    out.pass_programs.push_back({(int64_t)0, std::move(ops)});
   }
 
   // 4. JOINS (one INNER entry with the resolved conds; none if single GET).

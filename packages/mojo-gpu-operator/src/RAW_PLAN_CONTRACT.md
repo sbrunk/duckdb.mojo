@@ -58,6 +58,12 @@ AGGREGATES
     ret_type_tag, ret_scale, ret_width, ret_is_int128
     prog_len
     repeat prog_len: op_tag, operand_a, operand_b
+PASS_PROGRAMS                      // NR3 (GPU_OP_FILTER_OR); TRAILING additive section
+  n_pass                           //   0 when no residual OR-filter (the default)
+  repeat n_pass:
+    get_ordinal                    //   indexes GETS in emit order (the GET this filter sits above)
+    n_ops
+    repeat n_ops: op_tag, operand_a, operand_b   // same postfix Op triples as AGGREGATES
 ```
 
 A program is **postfix** (RPN). `operand_b` is 0 unless noted.
@@ -127,6 +133,21 @@ OP_PROMO_PRED = 7   # operand_a = table_strid, operand_b = col_strid (p_type),
   `PROMO_PRED(p_type); <then-program: ext*(1-disc)>; PUSH_CONST(0); SELECT`.
 - `OUT_TYPES` order is exactly the operator's output: all group columns first
   (in group-key order), then all aggregate columns (in aggregate order).
+- `PASS_PROGRAMS` (NR3, behind `GPU_OP_FILTER_OR`) is a **trailing additive** section
+  after `AGGREGATES`; it does NOT change `MAGIC` or any prior section's layout. It
+  carries a single-table residual `LogicalFilter` that is an OR-of-equalities (and
+  small sparse `IN`, which DuckDB lowers to OR-of-equalities) over INTEGER/DATE
+  columns, serialized as a postfix program over the EXISTING opcodes only:
+  equality `col=k` -> `OP_LOAD_COL slot; OP_PUSH_CONST const_id; OP_EQ` (pushes 0/1);
+  **OR** of N branches -> chain with `OP_ADD` (sum is `!=0` iff any leaf is 1, since
+  every leaf is 0/1 -> the sum is `>=0`); **AND** of M sub-results (a
+  `CONJUNCTION_AND` and the implicitly-ANDed `LogicalFilter.expressions[]`) -> chain
+  with `OP_MUL` (`!=0` iff all). A row passes iff `eval_program(...) != 0`. The Mojo
+  side AND-composes this into the host pass column via `OP_MUL`, so the pushed range
+  filters and the OR predicate are both honored. `n_pass == 0` when there is no such
+  filter (the default), and `get_ordinal` indexes `GETS` in emit order. Hand-built
+  tapes (the round-trip + shuttle tests) MUST append the `n_pass=0` token so the
+  reader does not overrun.
 
 ## Mojo C-ABI surface (exported from engine, Stage 1 subset)
 

@@ -175,6 +175,8 @@ def build_q14_tape(mut b: TapeBuilder, ship_lo: Int, ship_hi: Int):
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_SUB); b.puti(0); b.puti(0)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
 
 
 def main() raises:

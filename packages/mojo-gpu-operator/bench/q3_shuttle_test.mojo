@@ -199,6 +199,8 @@ def build_q3_tape(
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_SUB); b.puti(0); b.puti(0)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    # PASS_PROGRAMS: none (NR3 trailing additive section)
+    b.puti(0)
 
 
 # Build a contiguous DuckDB string_t (16-byte) array for a list of strings, using

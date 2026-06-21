@@ -3972,6 +3972,39 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     )
             for lc in range(len(agg.load_cols)):
                 sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
+    # NR3 (GPU_OP_FILTER_OR) collision guard. Fold the OR-of-equalities PASS-PROGRAM
+    # SHAPE (op tags + each LOAD_COL's table.column) AND the resolved OP_PUSH_CONST
+    # VALUES into the signature. The OR constants are BAKED into the cached program
+    # at finalize (the host AND-compose resolves PUSH_CONST(const_id) -> consts[id].lo),
+    # so a WARM hit MUST NOT reuse stale constants -- unlike the pushed range filters
+    # (kernel args, threaded per run), the OR consts are frozen in the resolved
+    # pass_prog. This is the conservative correct-first choice: it SACRIFICES warming
+    # across different OR constants (e.g. `a IN (2,9,40)` vs `a IN (3,8,41)` re-pin
+    # cold) for guaranteed correctness. A future refinement could thread the OR
+    # consts per-run like the range filters; not done here. Empty (no pass_prog) on
+    # every non-NR3 query -> byte-identical signature for the existing classes.
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if len(g.pass_prog) == 0:
+            continue
+        sig += "|pp=" + g.table + ":"
+        var pp_load_i = 0
+        for k in range(len(g.pass_prog)):
+            ref o = g.pass_prog[k]
+            sig += String(Int(o.op)) + ","
+            if o.op == OP_LOAD_COL:
+                if pp_load_i < len(g.pass_load_cols):
+                    sig += (
+                        g.pass_load_cols[pp_load_i].table
+                        + "."
+                        + g.pass_load_cols[pp_load_i].column
+                    )
+                pp_load_i += 1
+            elif o.op == OP_PUSH_CONST:
+                var cid = Int(o.a)
+                if cid >= 0 and cid < len(d.consts):
+                    sig += "v" + String(Int(d.consts[cid].lo))
+            sig += ";"
     return sig
 
 
@@ -4401,6 +4434,53 @@ def _resolve_program(
             ops.append(o.a)
             ops.append(o.b)
     return MetricPlan(ops^, len(agg.program))
+
+
+# NR3 (GPU_OP_FILTER_OR): resolve a GET's OR-of-equalities PASS-PROGRAM (postfix:
+# OP_LOAD_COL/PUSH_CONST/EQ/ADD/MUL) into flattened (op,a,b) VM triples, the same
+# lowering _resolve_program does for an aggregate metric:
+#   OP_LOAD_COL  -> (OP_LOAD_COL, col_slot[pass_load_cols[next].column], 0)
+#   OP_PUSH_CONST(const_id) -> (OP_PUSH_CONST, d.consts[const_id].lo, 0)
+#   OP_EQ/ADD/MUL pass through unchanged.
+# The const value is taken at its raw int64 limb (`lo`). NR3 only emits INTEGER/DATE
+# consts (the C++ type gate), whose scale is 0, so `lo` is the exact comparison
+# value the column slot holds (INTEGER/DATE columns are fed scale-0). Sets
+# `missing` True (and returns an empty list) if a referenced column is not in
+# col_slot -> the caller maps this to the existing missing-column error (return 8).
+def _resolve_pass_prog(
+    d: GpuPlanDescriptor,
+    fact_get_index: Int,
+    col_slot: Dict[String, Int],
+    mut missing: Bool,
+) raises -> List[Int64]:
+    var ops: List[Int64] = []
+    missing = False
+    ref g = d.gets[fact_get_index]
+    var load_i = 0
+    for k in range(len(g.pass_prog)):
+        ref o = g.pass_prog[k]
+        if o.op == OP_LOAD_COL:
+            var name = g.pass_load_cols[load_i].column
+            load_i += 1
+            if name not in col_slot:
+                missing = True
+                return []
+            ops.append(OP_LOAD_COL)
+            ops.append(Int64(col_slot[name]))
+            ops.append(Int64(0))
+        elif o.op == OP_PUSH_CONST:
+            var cid = Int(o.a)
+            if cid < 0 or cid >= len(d.consts):
+                missing = True
+                return []
+            ops.append(OP_PUSH_CONST)
+            ops.append(d.consts[cid].lo)
+            ops.append(Int64(0))
+        else:
+            ops.append(o.op)
+            ops.append(o.a)
+            ops.append(o.b)
+    return ops^
 
 
 # Build the float64 VM's `const_div`, parallel to one aggregate's op tape (one
@@ -5818,6 +5898,46 @@ def _pin_finalize_generic(
     if q6_pred_on or gen_pred_on or f64_pred_on:
         pass_prog = []
         pass_len_eff = 0
+
+    # NR3 (GPU_OP_FILTER_OR): AND the residual OR-of-equalities PASS-PROGRAM into the
+    # host pass column. Find the fact GET carrying a pass_prog (NR3 attaches it to
+    # GET ordinal 0; the build guard already restricts this to no-dims UNGROUPED/
+    # DENSE_GROUP int128 shapes). Append its resolved ops AFTER the host pass-column
+    # LOAD_COL, then OP_MUL: the VM computes (host_pass_col != 0) AND (OR-program != 0)
+    # because every OR leaf is 0/1, OR chains via ADD (>=0, !=0 iff any), AND chains
+    # via MUL. We do NOT overwrite the host pass-column term -- the pushed range
+    # filters (if any) still gate. If there are zero pushed filters the host pass col
+    # is all-1 (see the pass-bake `else` above), so the result is just the OR program.
+    #
+    # If an in-kernel-fpred path (q6/gen/f64) is active we have NO host pass program
+    # to AND into AND those paths do not consult get.pass_prog -> the OR predicate
+    # would be SILENTLY DROPPED. The build guard already declines f64 OR-filtered
+    # queries; for q6/gen we fail-closed here (return 8 -> CPU fallback) rather than
+    # drop the predicate.
+    var fact_passget = -1
+    for gi in range(len(d.gets)):
+        if d.gets[gi].table == d.fact_table and len(d.gets[gi].pass_prog) > 0:
+            fact_passget = gi
+            break
+    if fact_passget >= 0:
+        if q6_pred_on or gen_pred_on or f64_pred_on:
+            cols.free()
+            pass_col.free()
+            row_gid.free()
+            return 8
+        var missing = False
+        var or_ops = _resolve_pass_prog(d, fact_passget, col_slot, missing)
+        if missing:
+            cols.free()
+            pass_col.free()
+            row_gid.free()
+            return 8
+        for x in range(len(or_ops)):
+            pass_prog.append(or_ops[x])
+        pass_prog.append(OP_MUL)
+        pass_prog.append(Int64(0))
+        pass_prog.append(Int64(0))
+        pass_len_eff = len(pass_prog) // 3
 
     # --- per-candidate group-key cells (constant for the cache entry) ---
     # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: n_groups candidates, the
