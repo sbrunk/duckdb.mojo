@@ -404,12 +404,18 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
 # Helpers.
 # ---------------------------------------------------------------------------
 def _agg_kind_supported(k: Int64) -> Bool:
+    # AGG_MIN / AGG_MAX are deliberately NOT supported: the segreduce path is a SUM
+    # reduction and there is no min/max reduction kernel, so a routed min/max was
+    # silently SUMMED -- a pre-existing default-on wrong result (e.g. min(x)/max(x)
+    # returning sum(x); an int64-backed DECIMAL min/max additionally crashed on the
+    # i128 result read). DuckDB folds an *unfiltered* ungrouped MIN/MAX into a
+    # constant (no Aggregate node -- see gpu_operator.cpp:531), so only a FILTERED
+    # min/max ever reaches here; decline it to correct CPU stock. Re-enable ONLY
+    # alongside real min/max reduction kernels + a _assemble min/max branch.
     return (
         k == AGG_SUM
         or k == AGG_AVG
         or k == AGG_COUNT_STAR
-        or k == AGG_MIN
-        or k == AGG_MAX
         # GPU_OP_STATS: statistical aggregates [STDDEV_SAMP, REGR_COUNT]. Only ever
         # emitted by the C++ MapAggKind under the flag; the stats scope guard below
         # then enforces the supported shape (UNGROUPED/DENSE, no dims, NVIDIA).
