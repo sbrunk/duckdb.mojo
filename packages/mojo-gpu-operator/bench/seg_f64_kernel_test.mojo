@@ -105,6 +105,9 @@ def main() raises:
 
     var fpart_d = ctx.enqueue_create_buffer[DType.float64](2)
     fpart_d.enqueue_fill(0.0)
+    # Empty fpred (n_fpred 0 -> in-kernel filter is a no-op; the pass program
+    # alone gates rows, exactly the original behavior this test validates).
+    var fpred_d = ctx.enqueue_create_buffer[DType.int64](1)
     ctx.synchronize()
 
     comptime k = seg_ungrouped_kernel_f64[False]
@@ -115,6 +118,7 @@ def main() raises:
         cdiv_d.unsafe_ptr(), nstdiv_d.unsafe_ptr(),
         dims_d.unsafe_ptr(), dimoff_d.unsafe_ptr(),
         fpart_d.unsafe_ptr(),
+        fpred_d.unsafe_ptr(), 0,
         grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
     )
     ctx.synchronize()

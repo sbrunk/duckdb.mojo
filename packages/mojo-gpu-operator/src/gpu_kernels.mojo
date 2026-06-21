@@ -2941,7 +2941,34 @@ def _stat_value(
 
 # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: gp.n_cand candidates, group-key
 # cells from gp.gk_str_vals / gp.gk_i64_vals (mirrors _assemble's placement).
-def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
+#
+# PREDICATE-INDEPENDENT (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): when `gp.gen_pred`
+# is set (UNGROUPED f64 with a canonical fact-range filter), the in-kernel filter
+# is evaluated from per-run bounds (`gen_bounds`, one int64 per fact filter, in
+# descriptor order -- mirrors _assemble's int128 gen_pred path). The constant-
+# INDEPENDENT slots + cmps come from the cache entry (gp.gen_pred_slots /
+# gp.gen_pred_cmps); the bounds are threaded fresh per run so the SAME resident
+# (full, unfiltered) columns serve any constant -> warm-across-constants. When
+# `gp.gen_pred` is False the fpred_list is empty (the host-baked pass column path,
+# byte-identical to the original f64 wiring).
+def _assemble_f64(
+    mut dst: GpuExecState, mut gp: GpuPinned, gen_bounds: List[Int64] = []
+) raises:
+    # Build the (slot,cmp,bound) fpred tape from the cached slots/cmps + this run's
+    # bounds. Guards mirror _assemble: lengths must align AND > 0, else empty (->
+    # falls back to the pass-column path the COLD bake produced -- still correct).
+    var gen_active = (
+        gp.gen_pred
+        and len(gen_bounds) > 0
+        and len(gp.gen_pred_slots) == len(gen_bounds)
+        and len(gp.gen_pred_slots) == len(gp.gen_pred_cmps)
+    )
+    var fpred_list: List[Int64] = []
+    if gen_active:
+        for p in range(len(gp.gen_pred_slots)):
+            fpred_list.append(Int64(gp.gen_pred_slots[p]))
+            fpred_list.append(gp.gen_pred_cmps[p])
+            fpred_list.append(gen_bounds[p])
     var fsums = segreduce_run_f64(
         gp.res,
         gp.pass_prog.unsafe_ptr(),
@@ -2957,6 +2984,7 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         mode=gp.mode,
         gid_slot=gp.gid_slot,
         G=gp.G,
+        fpred_list=fpred_list^,
     )
     var n_cols = gp.n_cols
     var n_keys = gp.n_keys
@@ -3108,7 +3136,11 @@ def _assemble(
         if gp.mode == STRAT_HASH_GROUP:
             _assemble_hash_f64(dst, gp)
         else:
-            _assemble_f64(dst, gp)
+            # Thread THIS run's fact-filter bounds into the f64 accumulator. When
+            # gp.gen_pred is set (UNGROUPED f64 + canonical fact-range filter) the
+            # in-kernel fpred applies them over the resident full columns (warm-
+            # across-constants); otherwise gen_bounds is empty -> pass-column path.
+            _assemble_f64(dst, gp, gen_bounds)
         return
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
     var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
@@ -3792,6 +3824,49 @@ def _signature(d: GpuPlanDescriptor) -> String:
                         + String(Int(p.cmp))
                     )
         sig += "|q5_pred=1"
+        return sig
+    # FLOAT64 predicate-independent (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): the
+    # resident columns are the FULL unfiltered table (materialize SQL has no WHERE)
+    # and the fact-range filter is evaluated in-kernel from per-run bounds, so
+    # DIFFERENT constants reuse the same residency. EXCLUDE the fact-filter constants
+    # (keep cmp+column structure). CRITICAL: unlike the int128 kinds (where each kind
+    # fixes the aggregate shape per column set), two f64 queries over the SAME column
+    # with DIFFERENT functions (sum(sqrt(x)) vs sum(exp(x))) share columns/strat/kind,
+    # so the base signature alone would COLLIDE -> a warm hit would reuse the wrong
+    # metric program. Fold in a fingerprint of every aggregate's kind + op tape
+    # (op/a/b) + each LOAD_COL's table.column, so distinct functions / metric programs
+    # key distinctly. (This also hardens the committed transcendental path, which had
+    # the same latent collision even with constants included.)
+    if _f64_pred_enabled(d):
+        for gi in range(len(d.gets)):
+            ref g = d.gets[gi]
+            for fi in range(len(g.filters)):
+                ref p = g.filters[fi]
+                sig += (
+                    "|ff="
+                    + p.col.table
+                    + "."
+                    + p.col.column
+                    + ":"
+                    + String(Int(p.cmp))
+                )
+        sig += "|f64_pred=1"
+        # Aggregate program fingerprint (kind + op tape + load-col refs).
+        for ai in range(len(d.aggregates)):
+            ref agg = d.aggregates[ai]
+            sig += "|fa=" + String(Int(agg.kind)) + ":"
+            for k in range(len(agg.program)):
+                ref o = agg.program[k]
+                sig += (
+                    String(Int(o.op))
+                    + ","
+                    + String(Int(o.a))
+                    + ","
+                    + String(Int(o.b))
+                    + ";"
+                )
+            for lc in range(len(agg.load_cols)):
+                sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
         return sig
     # Filter CONSTANTS: every GET's predicates (fact AND dim) by table.column,
     # cmp, and the const lo/hi (+ str_val for VARCHAR consts). This is what makes
@@ -4900,6 +4975,80 @@ def _gen_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
 
 
 # ---------------------------------------------------------------------------
+# PREDICATE-INDEPENDENT residency for the FLOAT64 path (GPU_OP_TRANSCENDENTAL /
+# GPU_OP_STATS). The f64 transcendental/stats UNGROUPED accumulator today bakes a
+# host pass column from the filter constants, so DIFFERENT constants re-pay the
+# full cold materialize/upload. This gives it the SAME in-kernel fact-range filter
+# the int128 gen_pred path uses (seg_ungrouped_kernel_f64's fpred tape), so the
+# resident FULL unfiltered columns serve any constant warm; only the bounds change
+# per run.
+#
+#   * `_f64_pred_eligible(d)` -- a PURE structural gate: this is an f64 (transcendental
+#     OR stats) query, UNGROUPED, NO FK-join dims, and >=1 fact-table filter, ALL
+#     range-only (CMP_LT/LE/GT/GE -- the in-kernel fpred mirrors host _pred_pass),
+#     ALL on fact columns, and NO dim-table filters (a dim filter carries a
+#     constant we'd otherwise drop from the signature -> unsound to decouple). The
+#     in-kernel fpred handles any number of fact columns (unlike the int128
+#     _gen_pred_eligible's single-column Q1/Q14 restriction), since each (slot,cmp,
+#     bound) triple is independent. ANY deviation -> False -> the f64 query stays on
+#     the per-constant pass-column path (still correct, just cold-per-constant).
+#   * `_f64_pred_enabled(d)` -- the master switch: the same GPU_OP_NATIVE_DECODE
+#     gate the int128 gen_pred path uses (the prerequisite for predicate-independent
+#     residency) AND _f64_pred_eligible.
+#   * `_f64_pred_bounds(d)` -- per-run bounds (one int64 per fact filter, in
+#     descriptor order -- the SAME order the finalize collects f_slot/f_cmp).
+def _f64_pred_eligible(d: GpuPlanDescriptor) -> Bool:
+    if not (_has_transcendental(d) or _has_stats(d)):
+        return False
+    if d.strategy != STRAT_UNGROUPED:
+        return False
+    if len(d.dim_edges) != 0:
+        return False
+    var n_fact = 0
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if g.table != d.fact_table:
+            if len(g.filters) > 0:
+                return False  # a dim filter is constant-coupled -> not eligible
+            continue
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            if p.col.table != d.fact_table:
+                return False
+            if not (
+                p.cmp == CMP_LT
+                or p.cmp == CMP_LE
+                or p.cmp == CMP_GT
+                or p.cmp == CMP_GE
+            ):
+                return False
+            n_fact += 1
+    if n_fact < 1:
+        return False
+    return True
+
+
+def _f64_pred_enabled(d: GpuPlanDescriptor) -> Bool:
+    if getenv("GPU_OP_NATIVE_DECODE", "") == "":
+        return False
+    return _f64_pred_eligible(d)
+
+
+def _f64_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
+    var bounds: List[Int64] = []
+    if not _f64_pred_eligible(d):
+        return bounds^
+    for gi in range(len(d.gets)):
+        ref g = d.gets[gi]
+        if g.table != d.fact_table:
+            continue
+        for fi in range(len(g.filters)):
+            ref p = g.filters[fi]
+            bounds.append(d.consts[p.const_id].lo)
+    return bounds^
+
+
+# ---------------------------------------------------------------------------
 # Phase G Stage 2 (Path B): Q5 predicate-independent residency.
 #
 # Mirrors the Q6/Q1/Q14 mechanism for the Q5 shape: the resident dim arrays + gid
@@ -5043,8 +5192,14 @@ def _pin_finalize_generic(
     if sig in p2:
         ref dst = m[key]
         var q6b = _q6_pred_spec(d)
-        # Generalized Q1 (DENSE_GROUP): thread THIS query's fact-filter bounds.
-        var genb = _gen_pred_bounds(d)
+        # Generalized Q1 (DENSE_GROUP) / FLOAT64 (UNGROUPED transcendental+stats):
+        # thread THIS query's fact-filter bounds into the in-kernel fpred. The f64
+        # path (kind-agnostic) uses _f64_pred_bounds; the int128 Q1/Q14 path uses
+        # _gen_pred_bounds. _f64_pred_enabled(d) returns False unless the f64 query
+        # is pred-independent, so the int128 paths see the original _gen_pred_bounds.
+        var genb = (
+            _f64_pred_bounds(d) if _f64_pred_enabled(d) else _gen_pred_bounds(d)
+        )
         _assemble(dst, p2[sig], q6b, genb^)
         return 0
 
@@ -5226,6 +5381,17 @@ def _pin_finalize_generic(
     # bounds. f_slot/f_cmp collected below (descriptor order) are the cached
     # constant-independent slots+cmps; the bounds are threaded per run.
     var gen_pred_on = _gen_pred_enabled(d) and d.kind == KIND_Q1
+    # FLOAT64 predicate-independent path (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS):
+    # an UNGROUPED f64 query with a canonical fact-range filter. Like gen_pred_on it
+    # skips the host pass bake (the in-kernel fpred gates rows from per-run bounds),
+    # but routes the in-kernel filter through _assemble_f64 (kind-agnostic: an f64
+    # transcendental classifies KIND_Q6 for 1 agg / KIND_UNKNOWN for multi, so it is
+    # NOT gated on d.kind). NVIDIA-only (the f64 kernels are NVIDIA-only; the scope
+    # guard already declined non-NVIDIA before this finalize runs). When True, the
+    # cached f_slot/f_cmp are the constant-independent slots+cmps (reused as
+    # gen_pred_slots/cmps); the bounds are threaded per run. (_f64_pred_eligible
+    # already requires the f64 path, so no extra is_float64 conjunct is needed.)
+    var f64_pred_on = _f64_pred_enabled(d)
 
     # --- host pass column: AND of the fact range predicates (one int64/row) ---
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
@@ -5258,7 +5424,7 @@ def _pin_finalize_generic(
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var t_packpass0 = perf_counter_ns() if pin_log else 0
-    if q6_pred_on or gen_pred_on:
+    if q6_pred_on or gen_pred_on or f64_pred_on:
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         # Cheap memset; left serial in both modes (the pack loops are the cost).
         for i in range(n):
@@ -5561,7 +5727,7 @@ def _pin_finalize_generic(
     # in-kernel from per-run bounds, so there is NO pass program (pass_len 0).
     var pass_prog: List[Int64] = [OP_LOAD_COL, Int64(pass_slot), Int64(0)]
     var pass_len_eff = 1
-    if q6_pred_on or gen_pred_on:
+    if q6_pred_on or gen_pred_on or f64_pred_on:
         pass_prog = []
         pass_len_eff = 0
 
@@ -5731,10 +5897,13 @@ def _pin_finalize_generic(
         gp.q6_pred_slots = [
             q6_spec.ship_slot, q6_spec.disc_slot, q6_spec.qty_slot
         ]
-    # Generalized Q1: cache the constant-independent fact-filter slots + cmps (in
-    # descriptor order, == f_slot/f_cmp here). The bounds are threaded per run.
-    gp.gen_pred = gen_pred_on
-    if gen_pred_on:
+    # Generalized Q1 / FLOAT64: cache the constant-independent fact-filter slots +
+    # cmps (in descriptor order, == f_slot/f_cmp here). The bounds are threaded per
+    # run. The int128 gen_pred path (gen_pred_on) and the f64 pred-independent path
+    # (f64_pred_on) share the SAME mechanism (in-kernel fpred over per-run bounds);
+    # _assemble routes by gp.is_float64. Either gate -> mark this entry pred-indep.
+    gp.gen_pred = gen_pred_on or f64_pred_on
+    if gen_pred_on or f64_pred_on:
         var gslots: List[Int] = []
         var gcmps: List[Int64] = []
         for fi in range(n_filters):
@@ -5748,8 +5917,10 @@ def _pin_finalize_generic(
 
     ref dst = m[key]
     # The COLD path assembles with THIS query's bounds too (the kernel is the same
-    # code as WARM; q6_spec / gen-bounds carry the first constant set).
-    var gen_b0 = _gen_pred_bounds(d)
+    # code as WARM; q6_spec / gen-bounds carry the first constant set). For the f64
+    # pred-independent path the bounds come from _f64_pred_bounds (kind-agnostic);
+    # the int128 path uses _gen_pred_bounds (Q1/Q14 only). Both are descriptor-order.
+    var gen_b0 = _f64_pred_bounds(d) if f64_pred_on else _gen_pred_bounds(d)
     _assemble(dst, p2[sig], q6_spec, gen_b0^)
     return 0
 

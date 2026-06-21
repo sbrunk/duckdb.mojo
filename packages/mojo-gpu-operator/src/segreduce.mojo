@@ -345,6 +345,19 @@ def seg_ungrouped_kernel_f64[
     dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    # PREDICATE-INDEPENDENT (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): the general
+    # in-kernel fact-range filter, evaluated per row from `fpred` launch params
+    # (n_fpred (slot,cmp,bound) triples) instead of a host-baked pass column --
+    # exactly the int128 _fpred_pass_dev contract. When `n_fpred == 0` this is a
+    # no-op (the row gate is the pass program alone), so the existing host-pass-
+    # column f64 path is byte-identical. When `n_fpred > 0` the host emits NO pass
+    # program (pass_len 0) and the row passes iff _fpred_pass_dev passes. The fpred
+    # reads int64-packed fact columns (date/decimal storage ints), so it is f64-
+    # agnostic; the metric eval stays float64. The resident columns are the FULL
+    # unfiltered table (the materialize SQL has no WHERE), so DIFFERENT bound sets
+    # reuse the same residency -> warm-across-constants.
+    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_fpred: Int,
 ):
     # NVIDIA-only: Metal has no kernel-side f64 (and no f64 global atomics). The
     # host never routes a transcendental aggregate to Apple (the descriptor only
@@ -363,9 +376,13 @@ def seg_ungrouped_kernel_f64[
         var acc = InlineArray[Float64, SEG_MAX_METRICS](fill=0.0)
         var i = Int(block_idx.x) * SEG_BLK + tid
         while i < n_rows:
+            # Row gate: the pass program (host-baked column path; pass_len 0 when
+            # the in-kernel fpred is active) AND the general fact-range fpred. When
+            # n_fpred==0 the fpred is True for every row (no-op) -> the pass program
+            # alone gates, identical to the original f64 path.
             if _row_passes[USE_COLPTR](
                 pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
-            ):
+            ) and _fpred_pass_dev[USE_COLPTR](cols, n_rows, i, fpred, n_fpred):
                 for m in range(M):
                     var moff = Int(metric_offsets[m])
                     var prog = metric_progs + 3 * moff
@@ -1924,6 +1941,12 @@ def segreduce_run_f64(
     mode: Int64 = STRAT_UNGROUPED,
     gid_slot: Int = 0,
     G: Int = 1,
+    # PREDICATE-INDEPENDENT (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS, UNGROUPED): the
+    # flattened (slot,cmp,bound) fpred triples (len == 3*n_fpred), threaded fresh
+    # per run from the live descriptor's filter constants. Empty (default) -> the
+    # host-baked pass-column path (byte-identical). The DENSE path ignores it (the
+    # f64 pred-independent scope is UNGROUPED only -- see the descriptor guard).
+    fpred_list: List[Int64] = [],
 ) raises -> List[Float64]:
     var ctx = res.ctx
     var n_rows = res.n_rows
@@ -1962,6 +1985,15 @@ def segreduce_run_f64(
     var kdiv_d = ctx.enqueue_create_buffer[DType.float64](kdiv_n)
     if metric_progs_n_ops > 0:
         ctx.enqueue_copy(kdiv_d, const_div_host)
+
+    # fpred tape: (slot,cmp,bound) triples for the in-kernel fact-range filter.
+    # The buffer is always valid (>=1 element); the kernel reads only n_fpred
+    # triples (0 -> the filter is a no-op, identical to the pass-column path).
+    var n_fpred = len(fpred_list) // 3
+    var fpred_n = len(fpred_list) if len(fpred_list) > 0 else 1
+    var fpred_d = ctx.enqueue_create_buffer[DType.int64](fpred_n)
+    if len(fpred_list) > 0:
+        ctx.enqueue_copy(fpred_d, fpred_list.unsafe_ptr())
 
     # Per-(group,metric) float accumulator (zero-initialized; the kernel atomic-
     # adds each block partial into it). nout == M for UNGROUPED, G*M for DENSE.
@@ -2015,6 +2047,7 @@ def segreduce_run_f64(
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             fpart_d,
+            fpred_d, n_fpred,
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
         )
     else:
@@ -2026,6 +2059,7 @@ def segreduce_run_f64(
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             fpart_d,
+            fpred_d, n_fpred,
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
         )
     var fpart_h = alloc[Float64](nout)

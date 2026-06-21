@@ -2890,6 +2890,7 @@ void RegisterGpuNativeGroupDumpTableFunction(ExtensionLoader &loader) {
 struct DecodedFactColumn {
   int type_code = -1;          // 0 = int32 (4B), 1 = int64 (8B)
   int64_t tag = rp::TYPE_INVALID;
+  int64_t dec_scale = 0;       // DECIMAL scale (0 for non-DECIMAL); GPU_OP_STATS
   idx_t n_rows = 0;
   int64_t bytes_moved = 0;     // sum of decoded segment byte sizes (H->D)
   std::vector<int32_t> v32;
@@ -2911,6 +2912,12 @@ bool DecodeNativeColumnForFeed(ClientContext &context, NativeColumnRef &ref,
   out.type_code = TypeCodeForSize(ref.physical_type_size);
   if (out.type_code < 0) { return false; }
   out.tag = LogicalTypeToTag(ref.type);
+  // DECIMAL scale (0 for non-DECIMAL). The GPU_OP_STATS f64 path needs the real
+  // scale to build col_div (10^scale); the transcendental path defaults to the
+  // TPC-H scale-2 fallback, but threading the true scale here is always correct.
+  out.dec_scale = (ref.type.id() == LogicalTypeId::DECIMAL)
+                      ? (int64_t)DecimalType::GetScale(ref.type)
+                      : 0;
 
   bool ok = true;
   idx_t global_row = 0;
@@ -2980,11 +2987,15 @@ bool TryGpuDirectFactFeed(ClientContext &context, void *h,
     void *ptr = (decoded[c].type_code == 0)
                     ? static_cast<void *>(decoded[c].v32.data())
                     : static_cast<void *>(decoded[c].v64.data());
-    // Native-decode (skip-materialize) is never used by the stats path (which
-    // declines skip-materialize), so dec_scale is irrelevant here -> pass 0.
+    // Thread the real DECIMAL scale so the GPU_OP_STATS f64 path builds col_div
+    // (10^scale) correctly. With predicate-independent residency the stats/
+    // transcendental f64 path NOW feeds through native-decode (it is the
+    // GPU_OP_NATIVE_DECODE-gated residency prerequisite), so a hardcoded 0 here
+    // gave dimensioned stats (stddev/var/covar) a 100x scale error. 0 for non-
+    // DECIMAL columns (dates/ints), matching the SQL-feed path's GetScale.
     int64_t rc = mojo_gpu_feed_column(h, 0, (int64_t)c, ptr,
                                       NumericCast<int64_t>(decoded[c].n_rows),
-                                      decoded[c].tag, 0);
+                                      decoded[c].tag, decoded[c].dec_scale);
     if (rc != 0) {
       // A feed failure mid-request would leave the request half-fed; the feed
       // path overwrites per (req,col) and finalize would read stale slots. This
