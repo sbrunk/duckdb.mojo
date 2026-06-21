@@ -1541,6 +1541,14 @@ void MapType(const LogicalType &t, int64_t &tag, int64_t &scale, int64_t &width)
   case LogicalTypeId::INTEGER:  tag = rp::TYPE_INTEGER; break;
   case LogicalTypeId::BIGINT:   tag = rp::TYPE_BIGINT; break;
   case LogicalTypeId::HUGEINT:  tag = rp::TYPE_HUGEINT; break;
+  // Unsigned integer result types (GPU_OP_STATS only: DuckDB's regr_count returns
+  // UINTEGER / UBIGINT). PRESERVE the exact type -- LogicalGpuAgg replaces the whole
+  // aggregate node, so its declared output schema must match what the parent plan
+  // expects (mapping these to BIGINT would mismatch a UINT32 parent vector).
+  case LogicalTypeId::UTINYINT:  tag = rp::TYPE_UTINYINT; break;
+  case LogicalTypeId::USMALLINT: tag = rp::TYPE_USMALLINT; break;
+  case LogicalTypeId::UINTEGER:  tag = rp::TYPE_UINTEGER; break;
+  case LogicalTypeId::UBIGINT:   tag = rp::TYPE_UBIGINT; break;
   case LogicalTypeId::FLOAT:    tag = rp::TYPE_FLOAT; break;
   case LogicalTypeId::DOUBLE:   tag = rp::TYPE_DOUBLE; break;
   case LogicalTypeId::DATE:     tag = rp::TYPE_DATE; break;
@@ -2046,6 +2054,10 @@ LogicalType TagToLogicalType(int64_t tag, int64_t scale, int64_t width) {
   case rp::TYPE_DATE:     return LogicalType::DATE;
   case rp::TYPE_VARCHAR:  return LogicalType::VARCHAR;
   case rp::TYPE_DECIMAL:  return LogicalType::DECIMAL((uint8_t)width, (uint8_t)scale);
+  case rp::TYPE_UTINYINT:  return LogicalType::UTINYINT;
+  case rp::TYPE_USMALLINT: return LogicalType::USMALLINT;
+  case rp::TYPE_UINTEGER:  return LogicalType::UINTEGER;
+  case rp::TYPE_UBIGINT:   return LogicalType::UBIGINT;
   default:
     throw InvalidInputException("GPU_AGG: unsupported descriptor type tag " +
                                 std::to_string(tag));
@@ -2409,6 +2421,29 @@ public:
         }
         case LogicalTypeId::BIGINT: {
           FlatVector::GetData<int64_t>(chunk.data[c])[r] = mojo_gpu_result_i64(h, row, (int64_t)c);
+          break;
+        }
+        // Unsigned integer results (GPU_OP_STATS: regr_count). The assembler stores
+        // the non-negative count as a signed int64 (res_lo); narrow to the column's
+        // unsigned physical width here so the output vector matches the parent plan.
+        case LogicalTypeId::UTINYINT: {
+          FlatVector::GetData<uint8_t>(chunk.data[c])[r] =
+              (uint8_t)mojo_gpu_result_i64(h, row, (int64_t)c);
+          break;
+        }
+        case LogicalTypeId::USMALLINT: {
+          FlatVector::GetData<uint16_t>(chunk.data[c])[r] =
+              (uint16_t)mojo_gpu_result_i64(h, row, (int64_t)c);
+          break;
+        }
+        case LogicalTypeId::UINTEGER: {
+          FlatVector::GetData<uint32_t>(chunk.data[c])[r] =
+              (uint32_t)mojo_gpu_result_i64(h, row, (int64_t)c);
+          break;
+        }
+        case LogicalTypeId::UBIGINT: {
+          FlatVector::GetData<uint64_t>(chunk.data[c])[r] =
+              (uint64_t)mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
         case LogicalTypeId::VARCHAR: {

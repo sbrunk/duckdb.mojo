@@ -2985,6 +2985,22 @@ def _assemble_f64(
         gid_slot=gp.gid_slot,
         G=gp.G,
         fpred_list=fpred_list^,
+        # DENSE accumulator kernel selection. The shared-reduction dense kernel
+        # (seg_dense_kernel_f64) reduces per-lane in registers first -> NUMERICALLY
+        # ACCURATE (~1e-13 on covariance), but its per-lane array is sized
+        # SEG_MAX_METRICS^2 == 64, so it is SAFE only while G*M <= 64. The GLOBAL
+        # kernel (seg_dense_kernel_f64_global) does a direct per-row f64 atomic-add
+        # into fpartials[g*M+m] -> CORRECT FOR ANY G (no bound), but its arbitrary-
+        # order atomic accumulation loses low-order bits (catastrophic on the
+        # covariance cancellation, ~1e-8). So: use the accurate shared kernel
+        # whenever it FITS (G*M <= 64 -- the common gated case: a few VARCHAR groups
+        # x <=6 stat metrics = ~18-24), and fall back to the global kernel ONLY when
+        # G*M would overflow it (the safety net that keeps any G correct without a
+        # crash). For transcendentals (M=1) G*M==G; G<=64 always uses the shared
+        # kernel (byte-identical to before). 64 == SEG_MAX_METRICS*SEG_MAX_METRICS.
+        dense_global=(
+            gp.mode == STRAT_DENSE_GROUP and gp.G * gp.M > 64
+        ),
     )
     var n_cols = gp.n_cols
     var n_keys = gp.n_keys
@@ -3890,6 +3906,30 @@ def _signature(d: GpuPlanDescriptor) -> String:
                 + ":"
                 + c.str_val
             )
+    # FLOAT64 collision guard (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS, NON-pred-
+    # independent fallback -- e.g. DENSE stats, or a filtered f64 query that did not
+    # qualify for the pred-independent branch above). Two f64 queries over the SAME
+    # columns / strat / kind / filters but DIFFERENT functions (stddev(x) vs var(x)
+    # GROUP BY k; sum(sqrt(x)) vs sum(exp(x))) would otherwise share a signature and
+    # a WARM hit would reuse the WRONG metric program. Fold in the same aggregate-
+    # program fingerprint the pred-independent branch uses (kind + op tape + load-col
+    # refs). No-op on the int128 path (it is never f64).
+    if _has_transcendental(d) or _has_stats(d):
+        for ai in range(len(d.aggregates)):
+            ref agg = d.aggregates[ai]
+            sig += "|fa=" + String(Int(agg.kind)) + ":"
+            for k in range(len(agg.program)):
+                ref o = agg.program[k]
+                sig += (
+                    String(Int(o.op))
+                    + ","
+                    + String(Int(o.a))
+                    + ","
+                    + String(Int(o.b))
+                    + ";"
+                )
+            for lc in range(len(agg.load_cols)):
+                sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
     return sig
 
 

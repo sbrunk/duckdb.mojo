@@ -708,10 +708,11 @@ def build_descriptor_impl(
     # transcendental path -- f64 VM + seg_ungrouped_kernel_f64 / seg_dense_kernel_f64
     # + a host closed-form finalize). DuckDB computes these with a serial scalar
     # Welford accumulator (12-15x slower than sum at sf10), unaccelerated, so this
-    # is a NEW win class. Accepted as UNGROUPED ONLY (see the DENSE note below), with
-    # NO FK-join dims (the stat args are pure fact columns / consts). ANY other shape
-    # DECLINES -> stock CPU. Fail-closed: with the flag off the C++ MapAggKind never
-    # emits a stat AggKind, so this branch is dead -> byte-identical default behavior.
+    # is a NEW win class. Accepted as UNGROUPED or DENSE_GROUP (see the DENSE gate
+    # below), with NO FK-join dims (the stat args are pure fact columns / consts).
+    # ANY other shape DECLINES -> stock CPU. Fail-closed: with the flag off the C++
+    # MapAggKind never emits a stat AggKind, so this branch is dead -> byte-identical
+    # default behavior.
     if _has_stats(desc):
         # NVIDIA-ONLY: the float64 kernels need in-kernel f64 (Apple Metal lacks it,
         # abort-only there; AMD unvalidated). Decline on non-NVIDIA -> stock CPU.
@@ -719,17 +720,50 @@ def build_descriptor_impl(
             return None
         if n_dims != 0:
             return None
-        # UNGROUPED-ONLY for stats. The DENSE f64 kernel's per-lane accumulator is a
-        # fixed SEG_MAX_METRICS^2 (=64) array indexed [g*M + m], so it is SAFE only
-        # while G*M <= 64. A stat plan has up to M=6 shared-sum metrics, and the
-        # DENSE classification (n_gkeys<=4) does NOT bound the group COUNT G (a
-        # high-cardinality VARCHAR key still classifies DENSE), so G*M can exceed 64
-        # -> out-of-bounds device write (CUDA_ERROR_ILLEGAL_ADDRESS). G is data-
-        # dependent (unknown at plan time) and a finalize failure throws (no post-
-        # route CPU fallback), so DENSE stats DECLINE to stock CPU here -- the
-        # task-sanctioned fallback. UNGROUPED keeps full GPU + NULL fidelity. (The
-        # plain SUM/AVG int128 DENSE paths are unaffected: this guard is stats-only.)
-        if strategy != STRAT_UNGROUPED:
+        # GROUP-BY GATE for DENSE stats (no RawPlan header / binary-contract change).
+        # The DENSE f64 stat kernel now uses a GLOBAL per-group accumulator
+        # (seg_dense_kernel_f64_global: one f64 atomic-add into fpartials[g*M+m] per
+        # passing row), so it is CORRECT for ANY group count G -- the old fixed
+        # SEG_MAX_METRICS^2 (=64) per-lane array bound is gone. What remains is a
+        # PERFORMANCE/footprint risk: a HIGH-CARDINALITY group key makes G*M huge
+        # (slow O(rows) host gid-build + a G*M*8B device accumulator) and, like the
+        # Q3 hash-aggregate shape, LOSES to DuckDB's multithreaded aggregate. A
+        # finalize failure THROWS (no post-route CPU fallback), so high-card must be
+        # declined at PLAN TIME -- and the plan carries NO group-count / NDV estimate
+        # (we deliberately do NOT add one to the header). The gate is therefore a
+        # pure-TYPE heuristic over info ALREADY in the descriptor (out_types[gk],
+        # group columns first -- the same source the strategy classifier reads):
+        #
+        #   * STRAT_HASH_GROUP / STRAT_SORT_SEGREDUCE  -> an INTEGER fact group key,
+        #     which the strategy classifier already routes here for HIGH-CARDINALITY
+        #     keys (Q3 l_orderkey). DECLINE (the measured Q3 loser).
+        #   * STRAT_DENSE_GROUP with a VARCHAR group key -> the EDA dimension case
+        #     (l_returnflag / l_linestatus / l_shipmode: a small FIXED domain in
+        #     practice). ROUTE (the win; global accumulator keeps it correct at any G).
+        #   * STRAT_DENSE_GROUP with a continuous/wide key (DATE / DECIMAL / FLOAT /
+        #     DOUBLE / INTEGER): grouping by such a key is high-NDV by nature
+        #     (per-date / per-value groups), the high-card loser regime -> DECLINE.
+        #
+        # The heuristic is conservative: it accepts only VARCHAR DENSE keys (the
+        # low-card EDA dimensions this win targets) and declines everything else to
+        # stock CPU. A free-text VARCHAR (e.g. l_comment, ~1.5M NDV) would be wrongly
+        # accepted -- but that is a PERFORMANCE regression on a pathological query,
+        # never a wrong answer (the global accumulator is exact), and is far outside
+        # the EDA / dimension-key shape this class is for. (The plain SUM/AVG int128
+        # DENSE paths are unaffected: this guard is stats-only.)
+        if strategy == STRAT_UNGROUPED:
+            pass  # always safe (G == 1)
+        elif strategy == STRAT_DENSE_GROUP:
+            # Every group key must be VARCHAR (out_types: group cols first, in key
+            # order). Any non-VARCHAR (continuous/wide) key -> high-NDV risk -> decline.
+            if n_gkeys == 0 or n_gkeys > len(desc.out_types):
+                return None
+            for gk in range(n_gkeys):
+                if desc.out_types[gk][0] != TYPE_VARCHAR:
+                    return None
+        else:
+            # STRAT_HASH_GROUP / STRAT_SORT_SEGREDUCE (integer high-card key, Q3
+            # shape) -- the measured loser. DECLINE to stock CPU.
             return None
         # Every aggregate must be a recognized stat agg, OR a plain SUM/AVG/COUNT(*)
         # (so a mixed `SELECT count(*), corr(x,y) ...` is still offloadable on the

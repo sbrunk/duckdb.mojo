@@ -523,6 +523,70 @@ def seg_dense_kernel_f64[
 
 
 # ===========================================================================
+# FLOAT64 DENSE_GROUP accumulator, GLOBAL per-group (GPU_OP_STATS / DENSE stats).
+#
+# Same shape + inputs as seg_dense_kernel_f64, but WITHOUT the per-lane register /
+# shared-memory G*M accumulator array. That array (acc/cnt of size
+# SEG_MAX_METRICS^2 = 64, indexed [g*M+m]) bounds the group count to G*M <= 64,
+# which is fine for M=1 transcendentals but OVERFLOWS for stat plans (up to M=6
+# shared sums) once G exceeds ~10. Here EVERY passing row does a DIRECT global f64
+# atomic-add into fpartials[g*M+m] (and gcount[g] += 1), so the kernel is CORRECT
+# for ANY group count G -- no register/shared array indexed by group, no G*M<=64
+# limit. The host allocates fpartials (G*M) + gcount (G) and reads them back
+# directly (no cross-block host fold), exactly as for seg_dense_kernel_f64.
+#
+# NVIDIA has a native f64 global atomicAdd (the ungrouped + hash f64 kernels use
+# the same primitive), so the device side is pure f64 atomics. Launched with a
+# full grid (SEG_BLK threads/block) since there is no per-block shared reduction.
+# NVIDIA-only (Apple lacks kernel f64 + 64-bit atomics; compiles to abort).
+# ===========================================================================
+def seg_dense_kernel_f64_global[
+    USE_COLPTR: Bool = False
+](
+    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    n_rows: Int,
+    gid_slot: Int,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    G: Int,
+    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    # Per-group passing-row count (G doubles) -- same emit-gate semantics as
+    # seg_dense_kernel_f64: a group with 0 passing rows is not emitted by the host.
+    gcount: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+):
+    comptime if is_nvidia_gpu():
+        var stride = grid_dim.x * block_dim.x
+        var i = Int(global_idx.x)
+        while i < n_rows:
+            if _row_passes[USE_COLPTR](
+                pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+            ):
+                var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
+                if g >= 0 and g < G:
+                    var base = g * M
+                    _ = Atomic.fetch_add(gcount + g, Float64(1.0))
+                    for m in range(M):
+                        var moff = Int(metric_offsets[m])
+                        var prog = metric_progs + 3 * moff
+                        var v = eval_program_f64[USE_COLPTR](
+                            prog, Int(metric_lens[m]), cols, n_rows, i,
+                            col_div, const_div + moff, dims, dim_offsets,
+                        )
+                        _ = Atomic.fetch_add(fpartials + (base + m), v)
+            i += stride
+    else:
+        abort("seg_dense_kernel_f64_global requires NVIDIA (kernel f64 + atomics)")
+
+
+# ===========================================================================
 # FLOAT64 HASH_GROUP transcendental accumulator (GPU_OP_TRANSCENDENTAL).
 #
 # ADDITIVE + SEPARATE from the int128 hash kernel (seg_hash_kernel): never runs
@@ -1947,6 +2011,13 @@ def segreduce_run_f64(
     # host-baked pass-column path (byte-identical). The DENSE path ignores it (the
     # f64 pred-independent scope is UNGROUPED only -- see the descriptor guard).
     fpred_list: List[Int64] = [],
+    # DENSE_GROUP only: when True, launch the GLOBAL per-group accumulator kernel
+    # (seg_dense_kernel_f64_global -- one f64 atomic-add into fpartials[g*M+m] per
+    # passing row, correct for ANY G), instead of the shared-reduction kernel whose
+    # per-lane G*M array bounds G*M <= 64. Set by the DENSE STATS path (M up to 6,
+    # high group counts); the M=1 transcendental DENSE path keeps the default
+    # shared-reduction kernel (tiny G, byte-identical to before).
+    dense_global: Bool = False,
 ) raises -> List[Float64]:
     var ctx = res.ctx
     var n_rows = res.n_rows
@@ -2012,7 +2083,33 @@ def segreduce_run_f64(
     # which is always False in HOST code (mirrors segreduce_run_hash, which also
     # launches its NVIDIA-only kernel directly and relies on the kernel-body guard).
     var result = List[Float64]()
-    if mode == STRAT_DENSE_GROUP:
+    if mode == STRAT_DENSE_GROUP and dense_global:
+        # GLOBAL per-group accumulator (DENSE STATS): one f64 atomic-add into
+        # fpartials[g*M+m] per passing row -- correct for ANY G (no G*M<=64 bound).
+        # Full grid (block_dim=SEG_BLK): there is no per-block shared reduction.
+        if use_colptr:
+            comptime kfg = seg_dense_kernel_f64_global[True]
+            ctx.enqueue_function[kfg](
+                col_ptrs_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                cdiv_d, kdiv_d,
+                dims_d, doff_d,
+                fpart_d, gcnt_d,
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+            )
+        else:
+            comptime kfg0 = seg_dense_kernel_f64_global[False]
+            ctx.enqueue_function[kfg0](
+                res.cols_d, n_rows, gid_slot,
+                pass_d, pass_len,
+                mp_d, moff_d, mlen_d, M, G,
+                cdiv_d, kdiv_d,
+                dims_d, doff_d,
+                fpart_d, gcnt_d,
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+            )
+    elif mode == STRAT_DENSE_GROUP:
         # ONE warp per block (block_dim=WARP): the f64 dense kernel reduces G*M
         # accumulators in shared mem over the WARP lanes; a 128-thread block would
         # exceed the 48KB/block shared cap (WARP keeps it at 16KB).

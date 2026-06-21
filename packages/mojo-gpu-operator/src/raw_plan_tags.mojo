@@ -18,6 +18,13 @@ comptime TYPE_DOUBLE: Int64 = 8
 comptime TYPE_DECIMAL: Int64 = 9
 comptime TYPE_DATE: Int64 = 10
 comptime TYPE_VARCHAR: Int64 = 11
+# Unsigned integer RESULT types (GPU_OP_STATS; see raw_plan.h). Additive vocabulary
+# -- only ever an aggregate OUT_TYPE / ret_type tag (regr_count -> UINTEGER/UBIGINT),
+# never a tape-section field-count, so the fixed header + shuttle tapes are unaffected.
+comptime TYPE_UTINYINT: Int64 = 12
+comptime TYPE_USMALLINT: Int64 = 13
+comptime TYPE_UINTEGER: Int64 = 14
+comptime TYPE_UBIGINT: Int64 = 15
 
 # CmpTag
 comptime CMP_EQ: Int64 = 1

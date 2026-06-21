@@ -21,6 +21,16 @@ enum : int64_t {
   TYPE_DECIMAL = 9,
   TYPE_DATE = 10,
   TYPE_VARCHAR = 11,
+  // Unsigned integer RESULT types (GPU_OP_STATS only -- DuckDB's regr_count
+  // returns UINTEGER/UBIGINT). Additive to the TypeTag vocabulary: they appear
+  // ONLY in an aggregate's OUT_TYPE / ret_type slot, never in a group key, filter
+  // const, or any tape-section field-count, so the fixed header layout + the
+  // hand-built shuttle tapes are unaffected. They round-trip through the existing
+  // (tag, scale, width) OUT_TYPES triples with no layout change.
+  TYPE_UTINYINT = 12,
+  TYPE_USMALLINT = 13,
+  TYPE_UINTEGER = 14,
+  TYPE_UBIGINT = 15,
 };
 
 // CmpTag
