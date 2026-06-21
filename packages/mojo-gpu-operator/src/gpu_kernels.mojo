@@ -2301,6 +2301,13 @@ struct GpuPinned(Movable):
     var agg_msy2: List[Int]  # index of metric Sy2 (sum of y*y)
     var agg_msxy: List[Int]  # index of metric Sxy (sum of x*y)
     var agg_mn: List[Int]  # index of metric n (count of passing rows)
+    # Audit Group H (numerical stability): the per-stat shift constants applied to
+    # the x / y args before squaring (centered moments). sx/sx2/sy/sy2/sxy are sums
+    # over (x-cx)/(y-cy); _stat_value's mean-returning kinds add cx/cy back. 0.0 when
+    # unshifted (the legacy fallback path), so those kinds reduce to the original
+    # formulas. Parallel to agg_kind; 0.0 for non-stat aggregates.
+    var agg_cx: List[Float64]
+    var agg_cy: List[Float64]
     # NULL-on-empty fix (UNGROUPED only): metric index of a count-of-passing-rows
     # metric (PUSH_CONST(1) summed). When `mode == STRAT_UNGROUPED` the assemble
     # reads sums[ungrouped_count_m]; if it is 0 the single output row had ZERO
@@ -2359,6 +2366,8 @@ struct GpuPinned(Movable):
         self.agg_msy2 = []
         self.agg_msxy = []
         self.agg_mn = []
+        self.agg_cx = []
+        self.agg_cy = []
         self.ungrouped_count_m = -1
 
 
@@ -2880,9 +2889,17 @@ def _colpool_assemble_col_ptrs(
 #   avgx = y_mean (independent) ; avgy = x_mean (dependent)
 # `out_valid` (mut) is set False when the cell is a SQL NULL, True otherwise; the
 # returned Float64 is the value (ignored by the caller when out_valid is False).
+# GPU_OP_STATS numerical stability (audit Group H): sx / sx2 / sy / sy2 / sxy are
+# accumulated over the SHIFTED data (x-cx, y-cy) -- see _shift_arg. The variance /
+# covariance / corr / regr_slope/r2/sxx/syy/sxy closed forms are SHIFT-INVARIANT and
+# use the shifted sums unchanged. The MEAN-returning kinds (regr_avgx / regr_avgy /
+# regr_intercept) add the shift back: mean(x) = cx + sx/n, mean(y) = cy + sy/n.
+# cx / cy are 0 on the legacy (unshifted) fallback, so those branches reduce to the
+# original formulas byte-for-byte.
 def _stat_value(
     kind: Int64, n: Float64, sx: Float64, sx2: Float64,
     sy: Float64, sy2: Float64, sxy: Float64,
+    cx: Float64, cy: Float64,
     mut out_valid: Bool,
 ) -> Float64:
     var NAN = nan[DType.float64]()
@@ -2907,10 +2924,10 @@ def _stat_value(
     # 2-arg: covar / corr / regr_*. avgx/avgy use the regr convention.
     if kind == AGG_REGR_AVGX:
         out_valid = n > 0.0  # independent (arg1) mean; NULL iff n==0
-        return sy / n
+        return cy + sy / n  # shifted: add the y shift back
     if kind == AGG_REGR_AVGY:
         out_valid = n > 0.0  # dependent (arg0) mean; NULL iff n==0
-        return sx / n
+        return cx + sx / n  # shifted: add the x shift back
     if kind == AGG_COVAR_POP:
         out_valid = n > 0.0  # NULL iff n==0
         return sxy / n - (sx * sy) / (n * n)
@@ -2955,7 +2972,8 @@ def _stat_value(
             out_valid = False  # NULL
             return NAN
         var slope = Sxy / Syy_indep
-        return sx / n - slope * (sy / n)  # x_mean - slope*y_mean
+        # x_mean - slope*y_mean, with the shifts added back (mean = c + S'/n).
+        return (cx + sx / n) - slope * (cy + sy / n)
     out_valid = False
     return NAN
 
@@ -3093,9 +3111,12 @@ def _assemble_f64(
                 var sy = fsums[gbase + gp.agg_msy[ai]] if gp.agg_msy[ai] >= 0 else 0.0
                 var sy2 = fsums[gbase + gp.agg_msy2[ai]] if gp.agg_msy2[ai] >= 0 else 0.0
                 var sxy = fsums[gbase + gp.agg_msxy[ai]] if gp.agg_msxy[ai] >= 0 else 0.0
+                # Audit Group H: shift constants applied before squaring (centered).
+                var cx = gp.agg_cx[ai]
+                var cy = gp.agg_cy[ai]
                 var is_valid = True
                 var v = _stat_value(
-                    gp.agg_kind[ai], nn, sx, sx2, sy, sy2, sxy, is_valid
+                    gp.agg_kind[ai], nn, sx, sx2, sy, sy2, sxy, cx, cy, is_valid
                 )
                 # is_valid=False -> emit a SQL NULL (mark the result cell invalid).
                 res_valid[base + col] = is_valid
@@ -4709,6 +4730,145 @@ def _mul_metric(
     return ops^
 
 
+# ===-------------------------------------------------------------------===#
+# GPU_OP_STATS NUMERICAL STABILITY (audit Group H): centered (shifted-data) sums.
+#
+# The closed forms in `_stat_value` derive variance / covariance from RAW second
+# moments: Var = Sx2/n - (Sx/n)^2 where Sx2 = sum(x*x). For large-magnitude x
+# (e.g. DECIMAL(18,2) ~1e8) `Sx2` saturates f64's 53-bit mantissa and the
+# difference `Sx2 - Sx*Sx/n` CATASTROPHICALLY CANCELS -> negative / nan variance.
+#
+# FIX (Option A, shifted-data, single-pass): subtract a per-column representative
+# constant c (close to the data magnitude) from each value BEFORE squaring, i.e.
+# accumulate Sx' = sum(x-c), Sx2' = sum((x-c)^2), Sxy' = sum((x-cx)*(y-cy)).
+# Variance / covariance / corr / regr_slope/r2/sxx/syy/sxy are SHIFT-INVARIANT, so
+# `_stat_value`'s closed forms work UNCHANGED on the shifted sums (the cancellation
+# is gone because (x-c) is O(spread), not O(1e8)). Only the MEAN-returning kinds
+# (regr_avgx/avgy, regr_intercept) must add the shift back (mean = c + S1'/n) --
+# `_stat_value` does this via the cx/cy parameters. c==0 is the old (broken)
+# behavior; any c near the data magnitude kills the cancellation. We pick c as the
+# INTEGER-ROUNDED row-0 value of the arg program (encoded as PUSH_CONST with
+# const_div 1.0, so it stays exact), which is cheap and always near the data.
+# ===-------------------------------------------------------------------===#
+
+# A picked per-arg shift: the SCALED int64 constant `c_scaled` + its divisor
+# `c_div`, plus the reconstructed true double `c = c_scaled/c_div` (what the f64 VM
+# computes for PUSH_CONST(c_scaled) under const_div c_div) and `ok`. Encoding the
+# shift at the SAME scale as the source column (c_div == 10^scale, c_scaled == the
+# raw int64) makes the VM reconstruct c BYTE-IDENTICALLY to a data value, so the
+# centered subtraction (x-c) is Sterbenz-exact at the leading magnitude (the 1e8
+# part cancels exactly) -> the residual is only each value's own reconstruction
+# rounding, ~2 orders of magnitude better than an integer shift. c==0 / ok=False is
+# the legacy unshifted fallback (byte-identical to before the fix).
+@fieldwise_init
+struct StatShift(Copyable, Movable):
+    var c_scaled: Int64
+    var c_div: Float64
+    var c: Float64
+    var ok: Bool
+
+
+# Evaluate a resolved arg op tape (flattened op,a,b triples; the same encoding the
+# f64 VM runs) on ROW 0, host-side, to pick a representative shift near the column
+# magnitude. For the common BARE-COLUMN arg (a single LOAD_COL -- var/stddev/covar/
+# corr/regr on plain columns), the shift is the column's raw row-0 int64 at the
+# column scale (c_scaled=raw, c_div=10^scale) -> Sterbenz-exact centering. For an
+# EXPRESSION arg the row-0 value is evaluated as a double (mirroring eval_program_f64)
+# and rounded to an integer (c_div=1.0); being merely NEAR the magnitude still kills
+# the cancellation (variance is shift-invariant). ok=False (caller -> c=0, legacy)
+# when there are no rows, a LOAD_COL slot is OMITTED (skip-materialize -> no host
+# buffer), or an unexpected op appears. FK-join dim gathers cannot appear in stat
+# args (n_dims==0 gate), so OP_LOAD_DIM is not handled.
+def _metric_arg_shift(
+    read ops: List[Int64],
+    read divs: List[Float64],
+    col_scale_of_slot: List[Int64],
+    st: GpuExecState,
+    numeric_matcols: List[Int],
+    omit_slot: List[Bool],
+    n_rows: Int,
+) raises -> StatShift:
+    if n_rows <= 0:
+        return StatShift(Int64(0), Float64(1), Float64(0), False)
+    var n_op = len(ops) // 3
+    # Fast path: a bare single LOAD_COL -> shift at the column scale (Sterbenz-exact).
+    if n_op == 1 and ops[0] == OP_LOAD_COL:
+        var slot = Int(ops[1])
+        if slot < len(omit_slot) and omit_slot[slot]:
+            return StatShift(Int64(0), Float64(1), Float64(0), False)
+        var mj = numeric_matcols[slot]
+        var raw = _col_i64(st, mj)[0]  # row 0
+        var div = Float64(1)
+        for _ in range(Int(col_scale_of_slot[slot])):
+            div *= 10.0
+        return StatShift(raw, div, Float64(raw) / div, True)
+    # General path: evaluate the expression on row 0 as a double, integer-round it.
+    var stack = InlineArray[Float64, 16](fill=0.0)
+    var sp = 0
+    for k in range(n_op):
+        var op = ops[3 * k + 0]
+        var a = ops[3 * k + 1]
+        if op == OP_LOAD_COL:
+            var slot = Int(a)
+            if slot < len(omit_slot) and omit_slot[slot]:
+                return StatShift(Int64(0), Float64(1), Float64(0), False)
+            var mj = numeric_matcols[slot]
+            var raw = _col_i64(st, mj)[0]  # row 0
+            var div = Float64(1)
+            for _ in range(Int(col_scale_of_slot[slot])):
+                div *= 10.0
+            stack[sp] = Float64(raw) / div
+            sp += 1
+        elif op == OP_PUSH_CONST:
+            stack[sp] = Float64(a) / divs[k]
+            sp += 1
+        elif op == OP_ADD:
+            var rhs = stack[sp - 1]
+            sp -= 1
+            stack[sp - 1] = stack[sp - 1] + rhs
+        elif op == OP_SUB:
+            var rhs = stack[sp - 1]
+            sp -= 1
+            stack[sp - 1] = stack[sp - 1] - rhs
+        elif op == OP_MUL:
+            var rhs = stack[sp - 1]
+            sp -= 1
+            stack[sp - 1] = stack[sp - 1] * rhs
+        else:
+            # SELECT/EQ/transcendental cannot occur in a stat-arg program; if some
+            # future shape introduced one, fall back to the no-shift (legacy) path.
+            return StatShift(Int64(0), Float64(1), Float64(0), False)
+    if sp <= 0:
+        return StatShift(Int64(0), Float64(1), Float64(0), False)
+    var v = stack[0]
+    var ci = Int64(v + 0.5) if v >= 0.0 else Int64(v - 0.5)  # round to nearest
+    return StatShift(ci, Float64(1), Float64(ci), True)
+
+
+# Wrap a resolved arg op tape into the SHIFTED tape `<ops> PUSH_CONST(c_scaled) SUB`
+# (centered value x-c), with its parallel const_div extended by [c_div, 1.0] (the
+# PUSH_CONST carries the scaled const + its divisor -- so the VM reconstructs c the
+# same way it reconstructs a column value; the SUB op -> 1.0). When the shift is not
+# ok (legacy fallback) the original tape is returned unchanged -> byte-identical
+# legacy behavior (no extra ops, dedup key unchanged).
+def _shift_arg(
+    read ops: List[Int64], read divs: List[Float64], sh: StatShift
+) -> Tuple[List[Int64], List[Float64]]:
+    if not sh.ok:
+        return (ops.copy(), divs.copy())
+    var out_ops = ops.copy()
+    out_ops.append(OP_PUSH_CONST)
+    out_ops.append(sh.c_scaled)
+    out_ops.append(Int64(0))
+    out_ops.append(OP_SUB)
+    out_ops.append(Int64(0))
+    out_ops.append(Int64(0))
+    var out_div = divs.copy()
+    out_div.append(sh.c_div)  # PUSH_CONST(c_scaled) reconstructed as c_scaled/c_div
+    out_div.append(Float64(1))  # the SUB op
+    return (out_ops^, out_div^)
+
+
 # A stable key for a resolved metric op tape (for cross-aggregate dedup).
 def _metric_key(read ops: List[Int64]) -> String:
     var s = String("")
@@ -5790,6 +5950,9 @@ def _pin_finalize_generic(
     var agg_msy2: List[Int] = []
     var agg_msxy: List[Int] = []
     var agg_mn: List[Int] = []
+    # Audit Group H: per-stat shift constants (centered moments). 0.0 = unshifted.
+    var agg_cx: List[Float64] = []
+    var agg_cy: List[Float64] = []
     var stat_metric_key = Dict[String, Int]()  # op-tape key -> metric index
 
     def _emit_count(
@@ -5866,6 +6029,8 @@ def _pin_finalize_generic(
         agg_msy2.append(-1)
         agg_msxy.append(-1)
         agg_mn.append(-1)
+        agg_cx.append(Float64(0))  # Audit Group H: shift (0 = unshifted default)
+        agg_cy.append(Float64(0))
         if _is_stat_agg_kind(agg.kind):
             # Stat aggregate: resolve x/y arg programs, build the base-metric tapes
             # the closed form needs, emit them DEDUPED, record their indices. The
@@ -5891,6 +6056,23 @@ def _pin_finalize_generic(
                 out.append(Float64(1))  # the MUL op
                 return out^
 
+            # Audit Group H (numerical stability): CENTER the args before squaring.
+            # Pick a per-arg shift c near the data magnitude (row-0 value) so the
+            # accumulated second moments are O(spread^2) instead of O(magnitude^2) ->
+            # no catastrophic cancellation in `_stat_value`. _metric_arg_shift returns
+            # (0, False) when no host value is available (no rows / omitted slot) ->
+            # c stays 0 (legacy unshifted tape, byte-identical). _shift_arg wraps the
+            # tape into `<arg> PUSH_CONST(c) SUB`; with c==0 it returns the tape
+            # unchanged (dedup key + metric set identical to before).
+            var shx = _metric_arg_shift(
+                sp.x_ops, sp.x_div, col_scale_of_slot, st,
+                numeric_matcols, omit_slot, n,
+            )
+            var cx = shx.c
+            var sxw = _shift_arg(sp.x_ops, sp.x_div, shx)
+            var xw_ops = sxw[0].copy()
+            var xw_div = sxw[1].copy()
+
             # n (count): canonical PUSH_CONST(1) (deduped, shared across stats).
             var cnt_ops: List[Int64] = [OP_PUSH_CONST, Int64(1), Int64(0)]
             var cnt_div: List[Float64] = [Float64(1)]
@@ -5898,36 +6080,46 @@ def _pin_finalize_generic(
                 cnt_ops, cnt_div, metric_ops, metric_offsets, metric_lens,
                 const_div, n_ops_total, stat_metric_key,
             )
-            # Sx and Sx2 (always needed).
+            # Sx' = sum(x-cx) and Sx2' = sum((x-cx)^2) (centered; always needed).
             var msx = _emit_metric_dedup(
-                sp.x_ops, sp.x_div, metric_ops, metric_offsets, metric_lens,
+                xw_ops, xw_div, metric_ops, metric_offsets, metric_lens,
                 const_div, n_ops_total, stat_metric_key,
             )
             var msx2 = _emit_metric_dedup(
-                _mul_metric(sp.x_ops, sp.x_ops),
-                _prod_div(sp.x_div, sp.x_div),
+                _mul_metric(xw_ops, xw_ops),
+                _prod_div(xw_div, xw_div),
                 metric_ops, metric_offsets, metric_lens,
                 const_div, n_ops_total, stat_metric_key,
             )
             agg_mn[ai] = mn
             agg_msx[ai] = msx
             agg_msx2[ai] = msx2
+            agg_cx[ai] = cx
             agg_m0.append(msx)  # reuse m0/m1 loosely; stat assemble uses agg_ms*
             agg_m1.append(mn)
             if two_arg:
+                var shy = _metric_arg_shift(
+                    sp.y_ops, sp.y_div, col_scale_of_slot, st,
+                    numeric_matcols, omit_slot, n,
+                )
+                var cy = shy.c
+                var syw = _shift_arg(sp.y_ops, sp.y_div, shy)
+                var yw_ops = syw[0].copy()
+                var yw_div = syw[1].copy()
+                agg_cy[ai] = cy
                 agg_msy[ai] = _emit_metric_dedup(
-                    sp.y_ops, sp.y_div, metric_ops, metric_offsets, metric_lens,
+                    yw_ops, yw_div, metric_ops, metric_offsets, metric_lens,
                     const_div, n_ops_total, stat_metric_key,
                 )
                 agg_msy2[ai] = _emit_metric_dedup(
-                    _mul_metric(sp.y_ops, sp.y_ops),
-                    _prod_div(sp.y_div, sp.y_div),
+                    _mul_metric(yw_ops, yw_ops),
+                    _prod_div(yw_div, yw_div),
                     metric_ops, metric_offsets, metric_lens,
                     const_div, n_ops_total, stat_metric_key,
                 )
                 agg_msxy[ai] = _emit_metric_dedup(
-                    _mul_metric(sp.x_ops, sp.y_ops),
-                    _prod_div(sp.x_div, sp.y_div),
+                    _mul_metric(xw_ops, yw_ops),
+                    _prod_div(xw_div, yw_div),
                     metric_ops, metric_offsets, metric_lens,
                     const_div, n_ops_total, stat_metric_key,
                 )
@@ -6237,6 +6429,8 @@ def _pin_finalize_generic(
     gp.agg_msy2 = agg_msy2^
     gp.agg_msxy = agg_msxy^
     gp.agg_mn = agg_mn^
+    gp.agg_cx = agg_cx^
+    gp.agg_cy = agg_cy^
     gp.ungrouped_count_m = ungrouped_count_m
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
