@@ -412,20 +412,25 @@ def main() raises:
                 h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE
             )
         elif name == "l_quantity":
+            # Feed the TRUE decimal scale (2), exactly as the C++ extension does via
+            # DecimalType::GetScale. These columns are scale-2 raw int64s. (Earlier
+            # this fed the default dec_scale=0 and relied on the finalize hardcoding
+            # scale 2 for plain AVG; that hardcode was a bug -- now the AVG honors
+            # the fed scale, so the test must feed the real scale like production.)
             rc = mojo_gpu_feed_column(
-                h, 0, j, qty.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, qty.bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_extendedprice":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_discount":
             rc = mojo_gpu_feed_column(
-                h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_tax":
             rc = mojo_gpu_feed_column(
-                h, 0, j, tax.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, tax.bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         else:
             raise Error("unexpected column: " + name)

@@ -5452,18 +5452,19 @@ def _pin_finalize_generic(
             tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
-        elif (
-            (_has_transcendental(d) or _has_stats(d))
-            and not (slot < len(omit_slot) and omit_slot[slot])
-        ):
-            # Use the column's ACTUAL fed decimal scale on the FLOAT64 paths (both
-            # GPU_OP_STATS and GPU_OP_TRANSCENDENTAL). (Previously only the stats branch
-            # threaded the true scale; the transcendental/power path fell to the `else`
-            # and hardcoded scale 2 -> silently 100x-wrong on any DECIMAL(_, s!=2) arg,
-            # e.g. sum(sqrt(DECIMAL(15,4))). Scale-2 columns are unaffected since the fed
-            # scale is then 2.) Restricted to the f64 paths so the int128 AVG rescale
-            # (Q1) keeps its scale-2 default. An omitted (skip-materialize) slot's scale
-            # is not fed -> the else keeps the legacy default.
+        elif not (slot < len(omit_slot) and omit_slot[slot]):
+            # Use the column's ACTUAL fed decimal scale for every non-omitted
+            # numeric (DECIMAL) slot. This feeds the int64-backed AVG rescale
+            # (_program_scale -> agg_scale -> /10^scale) AND the FLOAT64
+            # transcendental/stats col_div. (Previously the true scale was used
+            # ONLY on the transcendental/stats branch; plain int64-backed AVG fell
+            # to the `else` and hardcoded scale 2 -> silently 10^(s-2)-wrong on any
+            # DECIMAL(_, s!=2) arg, e.g. avg(DECIMAL(15,0)) was /100 too small.
+            # Scale-2 columns are unaffected since the fed scale is then 2.) The
+            # int128 grouped AVG (Q1) seeds agg_scale from ret_scale directly in the
+            # dedicated int128 finalize paths -- it does NOT read col_scale_of_slot,
+            # so it is unaffected. An omitted (skip-materialize) slot's scale is not
+            # fed -> the else keeps the legacy scale-2 default.
             col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
@@ -5947,6 +5948,23 @@ def _pin_finalize_generic(
                 const_div.append(Float64(1))
 
     var M = len(metric_offsets)
+
+    # FIX D (int128 DENSE_GROUP overrun guard): the int128 dense-group kernels
+    # (seg_dense_kernel / _q1 / _q5 and their _pred variants) accumulate into a
+    # FIXED per-lane InlineArray[Int64, SEG_MAX_METRICS*SEG_MAX_METRICS] (== 64)
+    # indexed acc[g*M+m]. The DENSE strategy is chosen by group-key COLUMN count at
+    # plan time, NOT by the runtime distinct-group count G, so a high-cardinality
+    # GROUP BY with many metrics can have G*M > 64 and overrun the accumulator
+    # (groups beyond floor(64/M) get all-zero aggregates -> silent wrong result).
+    # This is data-dependent (G is only known here, after the dense gid build), so
+    # it CANNOT be declined at plan time. Fail closed to CPU stock (return 3) when
+    # it would overflow. The f64 dense path is exempt: it already switches to the
+    # unbounded global atomic kernel (dense_global, see _assemble) for G*M > 64.
+    if mode == STRAT_DENSE_GROUP and not is_float64 and G * M > 64:
+        cols.free()
+        pass_col.free()
+        row_gid.free()
+        return 3
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
     # the float64 VM. col_scale_of_slot already holds each slot's decimal scale.
@@ -6838,6 +6856,16 @@ def _pin_finalize_q5(
     if G <= 0:
         nation_in_asia.free(); gid_of_nation.free()
         return 23
+    # FIX D (int128 DENSE_GROUP overrun guard): the Q5 dense kernel
+    # (seg_dense_kernel_q5 / _q5_pred) accumulates into a per-lane InlineArray of
+    # SEG_MAX_METRICS*SEG_MAX_METRICS == 64 cells indexed acc[g*M+m]. Q5 has M==1,
+    # so the bound is G <= 64. G == number of ASIA nations here (schema-bounded to
+    # ~25 for TPC-H), but a non-standard `nation` table could exceed it -> fail
+    # closed to CPU stock. (The pred-independent path above has the same G>64 guard,
+    # which falls to THIS per-constant path; the guard here is its backstop.)
+    if G > 64:
+        nation_in_asia.free(); gid_of_nation.free()
+        return 23
 
     # --- customer: cust_nation[c_custkey] ---
     var c_cck = _dim_src_col(st, de_customer, "c_custkey")
@@ -7178,14 +7206,13 @@ def _pin_finalize_generic_dims(
             tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
-        elif (
-            (_has_transcendental(d) or _has_stats(d))
-            and not (slot < len(omit_slot) and omit_slot[slot])
-        ):
-            # Real fed decimal scale on the FLOAT64 grouped paths (DENSE stats +
-            # transcendental). Gated to f64 so the int128 grouped AVG rescale (Q1)
-            # keeps its scale-2 default (the shuttle feeds dec_scale=0). Fixes the
-            # hardcoded-scale-2 100x error on DECIMAL(_, s!=2).
+        elif not (slot < len(omit_slot) and omit_slot[slot]):
+            # Real fed decimal scale for every non-omitted numeric (DECIMAL) slot
+            # (mirrors _pin_finalize_generic). The int128 grouped/dims AVG/SUM seeds
+            # agg_scale from ret_scale directly in the dedicated int128 finalize
+            # paths below and never reads col_scale_of_slot, so this is safe; it
+            # keeps any future AVG-bearing FK-join f64 shape airtight (no hardcoded
+            # scale-2 10^(s-2) error). Omitted slots keep the scale-2 default.
             col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
