@@ -22,6 +22,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -1640,6 +1641,28 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       prog.push_back({binop, 0, 0});
       return true;
     }
+    // Transcendental unary functions (flag GPU_OP_TRANSCENDENTAL only). Maps a
+    // 1-child sqrt/exp/ln(or log)/log10/sin/cos to the matching OP_* opcode, which
+    // ONLY the float64 expr-VM handles (sum/avg of f(col) -> DOUBLE). When the flag
+    // is off these stay UNRECOGNIZED -> fail-closed (decline, prior behavior).
+    // The scope guard (UNGROUPED-only + DOUBLE accumulator) is enforced on the Mojo
+    // side (build_descriptor_impl + finalize); anything else declines -> CPU.
+    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr && fn.children.size() == 1) {
+      int64_t uop = 0;
+      // DuckDB semantics: ln(x)=natural log; log(x)==log10(x)=base-10; log10(x)
+      // base-10. (Verified: SELECT ln(10),log(10),log10(10) -> 2.302,1.0,1.0.)
+      if (nm == "sqrt") { uop = rp::OP_SQRT; }
+      else if (nm == "exp") { uop = rp::OP_EXP; }
+      else if (nm == "ln") { uop = rp::OP_LN; }
+      else if (nm == "log10" || nm == "log") { uop = rp::OP_LOG10; }
+      else if (nm == "sin") { uop = rp::OP_SIN; }
+      else if (nm == "cos") { uop = rp::OP_COS; }
+      if (uop) {
+        if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
+        prog.push_back({uop, 0, 0});
+        return true;
+      }
+    }
   }
   if (cls == ExpressionClass::BOUND_CASE) {
     // Q14 promo CASE: PROMO_PRED(p_type); <then-program>; PUSH_CONST(0); SELECT.
@@ -1661,6 +1684,30 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       return true;
     }
   }
+  // Transparent numeric CAST pass-through (flag GPU_OP_TRANSCENDENTAL only).
+  // DuckDB wraps the transcendental's argument in a CAST (e.g. sqrt(CAST(
+  // l_extendedprice AS DOUBLE))). The float64 expr-VM reconstructs the TRUE double
+  // of every column from its scaled-int64 storage via col_div (= 10^scale), which
+  // is EXACTLY a DECIMAL/INTEGER -> DOUBLE/FLOAT cast. So emitting the child's
+  // program unchanged is value-correct; the cast becomes a no-op at the VM level.
+  // Restricted to numeric source+target (the only thing the VM models) and to the
+  // flag, so the int128 path is untouched. Anything else still fails closed.
+  if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+      cls == ExpressionClass::BOUND_CAST) {
+    auto &ce = e.Cast<BoundCastExpression>();
+    auto tid = e.return_type.id();
+    auto sid = ce.child->return_type.id();
+    auto is_num = [](LogicalTypeId id) {
+      return id == LogicalTypeId::DOUBLE || id == LogicalTypeId::FLOAT ||
+             id == LogicalTypeId::DECIMAL || id == LogicalTypeId::BIGINT ||
+             id == LogicalTypeId::INTEGER || id == LogicalTypeId::SMALLINT ||
+             id == LogicalTypeId::TINYINT || id == LogicalTypeId::HUGEINT;
+    };
+    if (is_num(tid) && is_num(sid)) {
+      return EmitProgram(*ce.child, jt, b, prog, proj);
+    }
+  }
+
   // Unfamiliar (e.g. sqrt/exp/ln — no GPU expr-VM opcode): fail-closed so the
   // caller declines the offload to stock/overrides rather than emitting sum(0).
   return false;

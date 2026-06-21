@@ -32,6 +32,12 @@ from raw_plan_tags import (
     AGG_MAX,
     OP_LOAD_COL,
     OP_PROMO_PRED,
+    OP_SQRT,
+    OP_EXP,
+    OP_LN,
+    OP_LOG10,
+    OP_SIN,
+    OP_COS,
     JOIN_INNER,
     KIND_UNKNOWN,
     KIND_Q6,
@@ -364,6 +370,30 @@ def _agg_kind_supported(k: Int64) -> Bool:
     )
 
 
+# True if an op tag is a transcendental unary op (handled ONLY by the float64
+# expr-VM / DOUBLE accumulator; GPU_OP_TRANSCENDENTAL path).
+def _is_transcendental_op(op: Int64) -> Bool:
+    return (
+        op == OP_SQRT
+        or op == OP_EXP
+        or op == OP_LN
+        or op == OP_LOG10
+        or op == OP_SIN
+        or op == OP_COS
+    )
+
+
+# True if any aggregate's metric program contains a transcendental op (so the
+# whole offload must use the DOUBLE accumulator + the float64 ungrouped kernel).
+def _has_transcendental(desc: GpuPlanDescriptor) -> Bool:
+    for ai in range(len(desc.aggregates)):
+        ref prog = desc.aggregates[ai].program
+        for k in range(len(prog)):
+            if _is_transcendental_op(prog[k].op):
+                return True
+    return False
+
+
 # True if (table,col) is the named table's column on either side of the cond,
 # returning via `out_other` the (table,col) on the opposite side.
 def _cond_touches(
@@ -607,6 +637,26 @@ def build_descriptor_impl(
     desc.dim_edges = dim_edges^
     desc.strategy = strategy
     desc.kind = kind
+
+    # Transcendental scope guard (GPU_OP_TRANSCENDENTAL): the only float64 kernel
+    # that exists is the UNGROUPED sum/avg accumulator (seg_ungrouped_kernel_f64).
+    # A transcendental program is therefore ONLY accepted as UNGROUPED, no FK-join
+    # dims, with every aggregate a SUM or AVG (DOUBLE result). ANY other shape
+    # (grouped, dim-join, min/max) DECLINES -> stock DuckDB CPU. Fail-closed: never
+    # wrong. (With the flag off no transcendental op is ever emitted by the C++
+    # EmitProgram, so this branch is dead -> byte-identical default behavior.)
+    if _has_transcendental(desc):
+        # NVIDIA-ONLY: the float64 transcendental kernel needs in-kernel f64, which
+        # Apple Metal lacks (the kernel is abort-only there) and AMD is unvalidated.
+        # Decline on non-NVIDIA -> stock CPU (never route into the abort kernel).
+        if not has_nvidia_gpu_accelerator():
+            return None
+        if strategy != STRAT_UNGROUPED or n_gkeys != 0 or n_dims != 0:
+            return None
+        for ai in range(len(desc.aggregates)):
+            var ak = desc.aggregates[ai].kind
+            if ak != AGG_SUM and ak != AGG_AVG and ak != AGG_COUNT_STAR:
+                return None
 
     # Offload-vs-CPU-fallback policy (see `_should_decline`): keeps the
     # high-cardinality-group-by decline (Q3 shape) and carries a default-off

@@ -52,6 +52,8 @@ from descriptor import (
     GpuAggregate,
     RawPlanReader,
     build_descriptor_impl,
+    _has_transcendental,
+    _is_transcendental_op,
 )
 from raw_plan_tags import (
     KIND_UNKNOWN,
@@ -96,6 +98,7 @@ from segreduce import (
     segreduce_upload_from_packed,
     segreduce_upload_from_colptr,
     segreduce_run,
+    segreduce_run_f64,
     segreduce_run_hash,
     HashGroupResult,
     SegResident,
@@ -2197,6 +2200,17 @@ struct GpuPinned(Movable):
     # budget pressure). EMPTY when the flag is off or the path didn't pool (then
     # there is nothing to release -> byte-identical behavior).
     var pool_lease_keys: List[String]
+    # --- GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate (UNGROUPED) ---
+    # When `is_float64` the entry routes to segreduce_run_f64 (float64 ungrouped
+    # accumulator) instead of segreduce_run; results land in res_f64 (per agg).
+    # col_div[slot]=10^scale per resident numeric slot, n_slots its length;
+    # const_div is parallel to the concatenated metric op tape (10^scale at
+    # PUSH_CONST ops, 1.0 elsewhere). Empty / False when the flag is off ->
+    # byte-identical int128 path. NVIDIA-only (Apple never builds the float desc).
+    var is_float64: Bool
+    var col_div: List[Float64]
+    var n_slots: Int
+    var const_div: List[Float64]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2237,6 +2251,10 @@ struct GpuPinned(Movable):
         self.q5_region_names = []
         self.q5_region_keys = []
         self.pool_lease_keys = []
+        self.is_float64 = False
+        self.col_div = []
+        self.n_slots = 0
+        self.const_div = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2722,6 +2740,57 @@ def _colpool_assemble_col_ptrs(
 # `gp.gen_pred` is set. Like `q6_bounds`, they are threaded fresh from the live
 # descriptor every run; the constant-INDEPENDENT slots + cmps come from the cache
 # entry. The (slot,cmp,bound) triples are assembled here into `fpred_list`.
+# GPU_OP_TRANSCENDENTAL float64 result assembly (UNGROUPED sum/avg of f(col)).
+# Runs the float64 ungrouped accumulator and places M doubles into res_f64. The
+# f64 VM already reconstructed TRUE doubles from scaled-int64 storage via col_div/
+# const_div, so there is NO scale division here (unlike the int128 AVG rescale):
+#   AGG_SUM  -> res_f64 = fsums[m0]
+#   AGG_AVG  -> res_f64 = fsums[m0] / fsums[m1]   (m1 = float count metric)
+#   AGG_COUNT_STAR -> placed as int64 (count fits exactly; same as the int path)
+# Single candidate (no group keys), so n_keys == 0 and n_cand == 1.
+def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
+    var fsums = segreduce_run_f64(
+        gp.res,
+        gp.pass_prog.unsafe_ptr(),
+        gp.pass_len,
+        gp.metric_ops.unsafe_ptr(),
+        gp.n_ops_total,
+        gp.metric_offsets.unsafe_ptr(),
+        gp.metric_lens.unsafe_ptr(),
+        gp.M,
+        gp.col_div.unsafe_ptr(),
+        gp.n_slots,
+        gp.const_div.unsafe_ptr(),
+    )
+    var n_cols = gp.n_cols
+    var n_keys = gp.n_keys  # 0 for the supported UNGROUPED float shape
+    var res_lo: List[Int64] = []
+    var res_hi: List[Int64] = []
+    var res_f64: List[Float64] = []
+    var res_str: List[String] = []
+    for _ in range(n_cols):
+        res_lo.append(0)
+        res_hi.append(0)
+        res_f64.append(0.0)
+        res_str.append(String(""))
+    for ai in range(len(gp.agg_kind)):
+        var col = n_keys + ai
+        if gp.agg_kind[ai] == AGG_COUNT_STAR:
+            # The float count metric sums 1.0 per row -> exact integer count.
+            res_lo[col] = Int64(fsums[gp.agg_m0[ai]])
+        elif gp.agg_kind[ai] == AGG_AVG:
+            var cnt = fsums[gp.agg_m1[ai]]
+            res_f64[col] = (fsums[gp.agg_m0[ai]] / cnt) if cnt != 0.0 else 0.0
+        else:  # AGG_SUM -> DOUBLE sum, already in true-double units
+            res_f64[col] = fsums[gp.agg_m0[ai]]
+    dst.res_rows = 1
+    dst.res_cols = n_cols
+    dst.res_lo = res_lo^
+    dst.res_hi = res_hi^
+    dst.res_f64 = res_f64^
+    dst.res_str = res_str^
+
+
 def _assemble(
     mut dst: GpuExecState,
     mut gp: GpuPinned,
@@ -2729,6 +2798,13 @@ def _assemble(
     gen_bounds: List[Int64] = [],
     q5_bounds: List[Int64] = [],
 ) raises:
+    # GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate, UNGROUPED only. Route
+    # to the float64 ungrouped accumulator and assemble straight into res_f64. The
+    # int128 path below is bypassed entirely (this query never has dims / group keys
+    # / q6-gen-q5 predicate residency -- the descriptor scope guard forbade them).
+    if gp.is_float64:
+        _assemble_f64(dst, gp)
+        return
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
     var ss = gp.q6_pred_slots[0] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
     var ds = gp.q6_pred_slots[1] if (q6_active and len(gp.q6_pred_slots) == 3) else 0
@@ -3859,6 +3935,34 @@ def _resolve_program(
     return MetricPlan(ops^, len(agg.program))
 
 
+# Build the float64 VM's `const_div`, parallel to one aggregate's op tape (one
+# Float64 per op, in program order, matching _resolve_program's emission). For an
+# OP_PUSH_CONST op it is 10^(const decimal scale) -> eval_program_f64 reconstructs
+# the true double via Float64(a)/const_div[k]; every other op is 1.0 (unused). The
+# whole-query const_div is these per-metric lists concatenated in metric order
+# (parallel to metric_ops), so the f64 kernel slices it by metric_offsets exactly
+# as it slices metric_ops. Used only for the GPU_OP_TRANSCENDENTAL float path.
+def _resolve_const_div(
+    d: GpuPlanDescriptor,
+    agg: GpuAggregate,
+) raises -> List[Float64]:
+    var divs: List[Float64] = []
+    for k in range(len(agg.program)):
+        ref o = agg.program[k]
+        if o.op == OP_PUSH_CONST:
+            var cid = Int(o.a)
+            var sc = Int(d.consts[cid].scale) if (
+                cid >= 0 and cid < len(d.consts)
+            ) else 0
+            var div = Float64(1)
+            for _ in range(sc):
+                div *= 10.0
+            divs.append(div)
+        else:
+            divs.append(Float64(1))
+    return divs^
+
+
 # Symbolically evaluate the decimal scale a metric program produces, given a
 # per-(numeric)-column scale map (indexed by fact-column slot). Mirrors the VM:
 # LOAD_COL -> the column's scale; PUSH_CONST -> its const scale; ADD/SUB keep the
@@ -4780,6 +4884,12 @@ def _pin_finalize_generic(
     var metric_offsets: List[Int64] = []  # op-offset per metric
     var metric_lens: List[Int64] = []  # op-count per metric
     var n_ops_total = 0
+    # GPU_OP_TRANSCENDENTAL: when this query has a transcendental aggregate, build
+    # const_div parallel to metric_ops (one Float64 per op, 10^scale at PUSH_CONST,
+    # 1.0 elsewhere) so the float64 VM can reconstruct true doubles. Stays empty on
+    # the int path. (`_has_transcendental` already gated UNGROUPED-only upstream.)
+    var is_float64 = _has_transcendental(d)
+    var const_div: List[Float64] = []
 
     def _emit_count(
         mut metric_ops: List[Int64],
@@ -4811,6 +4921,10 @@ def _pin_finalize_generic(
         n_ops_total += plan.n_ops
         return idx
 
+    # const_div appended in LOCKSTEP with the metric_ops emitted below (the f64
+    # path requires it parallel to the op tape; on the int path it stays empty and
+    # is never read). PUSH_CONST(1) count metric -> [1.0]; a resolved program ->
+    # _resolve_const_div (one entry per op).
     for ai in range(len(d.aggregates)):
         ref agg = d.aggregates[ai]
         agg_kind.append(agg.kind)
@@ -4819,6 +4933,8 @@ def _pin_finalize_generic(
             var mi = _emit_count(
                 metric_ops, metric_offsets, metric_lens, n_ops_total
             )
+            if is_float64:
+                const_div.append(Float64(1))
             agg_m0.append(mi)
             agg_m1.append(-1)
         elif agg.kind == AGG_AVG:
@@ -4831,9 +4947,15 @@ def _pin_finalize_generic(
             var mi = _emit_prog(
                 plan, metric_ops, metric_offsets, metric_lens, n_ops_total
             )
+            if is_float64:
+                var cd = _resolve_const_div(d, agg)
+                for x in range(len(cd)):
+                    const_div.append(cd[x])
             var ci = _emit_count(
                 metric_ops, metric_offsets, metric_lens, n_ops_total
             )
+            if is_float64:
+                const_div.append(Float64(1))  # the count metric's PUSH_CONST(1)
             agg_m0.append(mi)
             agg_m1.append(ci)
         else:  # AGG_SUM (MIN/MAX not in the n_dims==0 classes here)
@@ -4842,10 +4964,24 @@ def _pin_finalize_generic(
             var mi = _emit_prog(
                 plan, metric_ops, metric_offsets, metric_lens, n_ops_total
             )
+            if is_float64:
+                var cd = _resolve_const_div(d, agg)
+                for x in range(len(cd)):
+                    const_div.append(cd[x])
             agg_m0.append(mi)
             agg_m1.append(-1)
 
     var M = len(metric_offsets)
+
+    # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
+    # the float64 VM. col_scale_of_slot already holds each slot's decimal scale.
+    var col_div: List[Float64] = []
+    if is_float64:
+        for slot in range(n_numeric):
+            var div = Float64(1)
+            for _ in range(Int(col_scale_of_slot[slot])):
+                div *= 10.0
+            col_div.append(div)
 
     # --- pass program: 1-op LOAD_COL(pass_slot) ---
     # Phase G Stage 2: the Q6 predicate-independent kernel evaluates the filter
@@ -4989,6 +5125,11 @@ def _pin_finalize_generic(
     gp.n_cand = n_groups
     gp.emit_agg = -1
     gp.emit_gt0 = False
+    # GPU_OP_TRANSCENDENTAL: route this entry to the float64 ungrouped accumulator.
+    gp.is_float64 = is_float64
+    gp.col_div = col_div^
+    gp.n_slots = n_numeric
+    gp.const_div = const_div^
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
     # WARM path can re-run the in-kernel filter with a fresh constant set.

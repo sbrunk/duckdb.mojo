@@ -346,48 +346,56 @@ def seg_ungrouped_kernel_f64[
     dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
 ):
-    # Shared reduction buffer: SEG_BLK threads x SEG_MAX_METRICS metrics.
-    var smem = stack_allocation[
-        SEG_BLK * SEG_MAX_METRICS,
-        Scalar[DType.float64],
-        address_space = AddressSpace.SHARED,
-    ]()
-    var tid = Int(thread_idx.x)
-    var stride = SEG_NBLOCKS * SEG_BLK
-    var acc = InlineArray[Float64, SEG_MAX_METRICS](fill=0.0)
-    var i = Int(block_idx.x) * SEG_BLK + tid
-    while i < n_rows:
-        if _row_passes[USE_COLPTR](
-            pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
-        ):
-            for m in range(M):
-                var moff = Int(metric_offsets[m])
-                var prog = metric_progs + 3 * moff
-                # const_div is parallel to the op tape (one entry per OP), so it
-                # is sliced by the SAME per-metric op offset as the program; then
-                # eval_program_f64 indexes it by LOCAL op index k.
-                acc[m] += eval_program_f64[USE_COLPTR](
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
-                    col_div, const_div + moff, dims, dim_offsets,
-                )
-        i += stride
-    # Tree reduction in shared memory, per metric, then thread 0 atomic-adds.
-    for m in range(M):
-        smem[tid * SEG_MAX_METRICS + m] = acc[m]
-    barrier()
-    var active = SEG_BLK
-    while active > 1:
-        active >>= 1
-        if tid < active:
-            for m in range(M):
-                smem[tid * SEG_MAX_METRICS + m] = (
-                    smem[tid * SEG_MAX_METRICS + m]
-                    + smem[(tid + active) * SEG_MAX_METRICS + m]
-                )
-        barrier()
-    if tid == 0:
+    # NVIDIA-only: Metal has no kernel-side f64 (and no f64 global atomics). The
+    # host never routes a transcendental aggregate to Apple (the descriptor only
+    # accepts the float path under GPU_OP_TRANSCENDENTAL, which is itself a
+    # NVIDIA-only feature; segreduce_run_f64 also comptime-guards the launch). The
+    # else-branch keeps the Apple build clean (compiles to abort, never launched).
+    comptime if is_nvidia_gpu():
+        # Shared reduction buffer: SEG_BLK threads x SEG_MAX_METRICS metrics.
+        var smem = stack_allocation[
+            SEG_BLK * SEG_MAX_METRICS,
+            Scalar[DType.float64],
+            address_space = AddressSpace.SHARED,
+        ]()
+        var tid = Int(thread_idx.x)
+        var stride = SEG_NBLOCKS * SEG_BLK
+        var acc = InlineArray[Float64, SEG_MAX_METRICS](fill=0.0)
+        var i = Int(block_idx.x) * SEG_BLK + tid
+        while i < n_rows:
+            if _row_passes[USE_COLPTR](
+                pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
+            ):
+                for m in range(M):
+                    var moff = Int(metric_offsets[m])
+                    var prog = metric_progs + 3 * moff
+                    # const_div is parallel to the op tape (one entry per OP), so
+                    # it is sliced by the SAME per-metric op offset as the program;
+                    # then eval_program_f64 indexes it by LOCAL op index k.
+                    acc[m] += eval_program_f64[USE_COLPTR](
+                        prog, Int(metric_lens[m]), cols, n_rows, i,
+                        col_div, const_div + moff, dims, dim_offsets,
+                    )
+            i += stride
+        # Tree reduction in shared memory, per metric, then thread 0 atomic-adds.
         for m in range(M):
-            _ = Atomic.fetch_add(fpartials + m, smem[m])
+            smem[tid * SEG_MAX_METRICS + m] = acc[m]
+        barrier()
+        var active = SEG_BLK
+        while active > 1:
+            active >>= 1
+            if tid < active:
+                for m in range(M):
+                    smem[tid * SEG_MAX_METRICS + m] = (
+                        smem[tid * SEG_MAX_METRICS + m]
+                        + smem[(tid + active) * SEG_MAX_METRICS + m]
+                    )
+            barrier()
+        if tid == 0:
+            for m in range(M):
+                _ = Atomic.fetch_add(fpartials + m, smem[m])
+    else:
+        abort("seg_ungrouped_kernel_f64 requires NVIDIA (kernel f64)")
 
 
 # Q6 PREDICATE-INDEPENDENT (Phase G Stage 2, flag-gated): identical to
@@ -1697,6 +1705,116 @@ def segreduce_run(
             acc += Int128(part_h[b * M + m])
         result.append(acc)
     part_h.free()
+    return result^
+
+
+# ---------------------------------------------------------------------------
+# segreduce_run_f64: the FLOAT64 transcendental-aggregate driver (NVIDIA-only;
+# flag GPU_OP_TRANSCENDENTAL). Mirrors segreduce_run's small-program upload, but
+# launches the float64 UNGROUPED accumulator (seg_ungrouped_kernel_f64) and reads
+# back M doubles (the kernel atomic-adds block partials into a single per-metric
+# global accumulator, so there is no cross-block host fold). SCOPE: UNGROUPED only
+# (the only float kernel that exists). col_div[slot] = 10^scale per resident
+# column; const_div is parallel to the concatenated metric op tape (10^scale at
+# PUSH_CONST positions, 1.0 elsewhere). Returns result[m] (length M).
+#
+# Apple is guarded out at COMPILE time: the launch lives under `comptime if
+# is_nvidia_gpu()`, so Apple never instantiates the f64 device kernel (clean
+# build) and aborts host-side if (impossibly) reached. The host descriptor never
+# routes a transcendental aggregate to Apple anyway.
+# ---------------------------------------------------------------------------
+def segreduce_run_f64(
+    mut res: SegResident,
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_len: Int,
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_n_ops: Int,
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    M: Int,
+    col_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    n_slots: Int,
+    const_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+) raises -> List[Float64]:
+    var ctx = res.ctx
+    var n_rows = res.n_rows
+    var dims_d = res.dims_d
+    var use_colptr = res.use_colptr
+    var col_ptrs_d = res.col_ptrs_d
+
+    # dim-offsets buffer (always valid; n_dims==0 for the supported float shape).
+    var doff_n = res.n_dims + 1 if res.n_dims > 0 else 1
+    var doff_d = ctx.enqueue_create_buffer[DType.int64](doff_n)
+    if res.n_dims > 0:
+        ctx.enqueue_copy(doff_d, res.dim_offsets.unsafe_ptr())
+
+    var pass_n = pass_len * 3 if pass_len > 0 else 1
+    var pass_d = ctx.enqueue_create_buffer[DType.int64](pass_n)
+    if pass_len > 0:
+        ctx.enqueue_copy(pass_d, pass_prog_host)
+
+    var mp_n = metric_progs_n_ops * 3 if metric_progs_n_ops > 0 else 1
+    var mp_d = ctx.enqueue_create_buffer[DType.int64](mp_n)
+    if metric_progs_n_ops > 0:
+        ctx.enqueue_copy(mp_d, metric_progs_host)
+
+    var moff_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(moff_d, metric_offsets_host)
+    var mlen_d = ctx.enqueue_create_buffer[DType.int64](M)
+    ctx.enqueue_copy(mlen_d, metric_lens_host)
+
+    # col_div: one Float64 per resident numeric slot (10^scale).
+    var cdiv_n = n_slots if n_slots > 0 else 1
+    var cdiv_d = ctx.enqueue_create_buffer[DType.float64](cdiv_n)
+    if n_slots > 0:
+        ctx.enqueue_copy(cdiv_d, col_div_host)
+    # const_div: one Float64 per op across the concatenated metric tape.
+    var kdiv_n = metric_progs_n_ops if metric_progs_n_ops > 0 else 1
+    var kdiv_d = ctx.enqueue_create_buffer[DType.float64](kdiv_n)
+    if metric_progs_n_ops > 0:
+        ctx.enqueue_copy(kdiv_d, const_div_host)
+
+    # Single per-metric float accumulator (zero-initialized; the kernel atomic-
+    # adds each block partial into it, so the host reads M doubles directly).
+    var fpart_d = ctx.enqueue_create_buffer[DType.float64](M)
+    fpart_d.enqueue_fill(Float64(0))
+
+    # Launch the float64 ungrouped accumulator. The kernel itself comptime-guards
+    # its body on `is_nvidia_gpu()` (Apple compiles to abort, never launched — the
+    # host descriptor never routes a transcendental aggregate to Apple). This host
+    # function uses NO `is_nvidia_gpu()` guard: that is an in-KERNEL target check
+    # which is always False in HOST code (mirrors segreduce_run_hash, which also
+    # launches its NVIDIA-only kernel directly and relies on the kernel-body guard).
+    var result = List[Float64]()
+    if use_colptr:
+        comptime kf = seg_ungrouped_kernel_f64[True]
+        ctx.enqueue_function[kf](
+            col_ptrs_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            cdiv_d, kdiv_d,
+            dims_d, doff_d,
+            fpart_d,
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+        )
+    else:
+        comptime kf0 = seg_ungrouped_kernel_f64[False]
+        ctx.enqueue_function[kf0](
+            res.cols_d, n_rows,
+            pass_d, pass_len,
+            mp_d, moff_d, mlen_d, M,
+            cdiv_d, kdiv_d,
+            dims_d, doff_d,
+            fpart_d,
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
+        )
+    var fpart_h = alloc[Float64](M)
+    var fpart_sub = DeviceBuffer(ctx, fpart_d.unsafe_ptr(), M, owning=False)
+    ctx.enqueue_copy(fpart_h, fpart_sub)
+    ctx.synchronize()
+    for m in range(M):
+        result.append(fpart_h[m])
+    fpart_h.free()
     return result^
 
 
