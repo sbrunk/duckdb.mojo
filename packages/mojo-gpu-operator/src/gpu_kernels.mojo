@@ -32,7 +32,7 @@ from std.sys.info import (
     has_apple_gpu_accelerator,
     num_logical_cores,
 )
-from std.math import sqrt, ceildiv
+from std.math import sqrt, ceildiv, nan
 from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
 from std.algorithm import parallelize
@@ -54,6 +54,8 @@ from descriptor import (
     build_descriptor_impl,
     _has_transcendental,
     _is_transcendental_op,
+    _has_stats,
+    _is_stat_agg_kind,
 )
 from raw_plan_tags import (
     KIND_UNKNOWN,
@@ -77,6 +79,22 @@ from raw_plan_tags import (
     AGG_SUM,
     AGG_AVG,
     AGG_COUNT_STAR,
+    AGG_STDDEV_SAMP,
+    AGG_STDDEV_POP,
+    AGG_VAR_SAMP,
+    AGG_VAR_POP,
+    AGG_COVAR_SAMP,
+    AGG_COVAR_POP,
+    AGG_CORR,
+    AGG_REGR_SLOPE,
+    AGG_REGR_INTERCEPT,
+    AGG_REGR_R2,
+    AGG_REGR_AVGX,
+    AGG_REGR_AVGY,
+    AGG_REGR_SXX,
+    AGG_REGR_SYY,
+    AGG_REGR_SXY,
+    AGG_REGR_COUNT,
     CMP_EQ,
     CMP_NE,
     CMP_GE,
@@ -92,6 +110,7 @@ from raw_plan_tags import (
     OP_PROMO_PRED,
     OP_LOAD_DIM,
     OP_EQ,
+    OP_ARGSEP,
 )
 from segreduce import (
     segreduce_upload,
@@ -1847,6 +1866,19 @@ def mojo_gpu_desc_is_transcendental(
     return 1 if _has_transcendental(handle.bitcast[GpuPlanDescriptor]()[]) else 0
 
 
+# GPU_OP_STATS: 1 if any aggregate is a statistical aggregate (stddev/var/covar/
+# corr/regr_*). The C++ router uses this to enable routing for a stat plan whose
+# KIND is UNKNOWN. The Mojo scope guard already validated the shape (UNGROUPED/
+# DENSE, no FK dims, NVIDIA-only); a non-buildable shape returns a null handle.
+@export("mojo_gpu_desc_is_stats")
+def mojo_gpu_desc_is_stats(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 0
+    return 1 if _has_stats(handle.bitcast[GpuPlanDescriptor]()[]) else 0
+
+
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -1904,6 +1936,11 @@ struct FedColumn(Movable):
     var n_rows: Int
     var elem_size: Int
     var type_tag: Int64
+    # Decimal scale of the source column (0 for non-DECIMAL). GPU_OP_STATS reads
+    # this to build col_div for a stat-argument fact column that is NOT a filter
+    # column (filter columns get their scale from the filter constant). The legacy
+    # TPC-H paths hardcode scale 2 and never read this (only the stat path does).
+    var dec_scale: Int64
     # For VARCHAR columns: an owned byte heap holding the deep copy of every
     # non-inlined string's bytes. The copied string_t structs in `data` are
     # rewritten to point into this heap so the column is self-contained after the
@@ -1915,6 +1952,7 @@ struct FedColumn(Movable):
         self.n_rows = 0
         self.elem_size = 0
         self.type_tag = 0
+        self.dec_scale = 0
         self.str_heap = None
 
     def fill(
@@ -2039,6 +2077,10 @@ struct GpuExecState(Movable):
     var res_f64: List[Float64]
     # String result cells, same row-major layout (group-key columns).
     var res_str: List[String]
+    # GPU_OP_STATS: per-cell validity, same row-major layout. False -> SQL NULL.
+    # Default True (valid); only the stat finalize sets cells invalid, so the int /
+    # transcendental paths leave this all-True (or empty) -> byte-identical behavior.
+    var res_valid: List[Bool]
     var res_rows: Int
     var res_cols: Int
 
@@ -2059,6 +2101,7 @@ struct GpuExecState(Movable):
         self.res_hi = []
         self.res_f64 = []
         self.res_str = []
+        self.res_valid = []
         self.res_rows = 0
         self.res_cols = 0
 
@@ -2229,6 +2272,22 @@ struct GpuPinned(Movable):
     var col_div: List[Float64]
     var n_slots: Int
     var const_div: List[Float64]
+    # --- GPU_OP_STATS: statistical aggregate (stddev/var/covar/corr/regr_*) ---
+    # When `is_stats`, each output aggregate's shared-sum metric indices are recorded
+    # here (parallel to agg_kind; -1 = unused/not-a-stat). _assemble_f64 reads the
+    # accumulated f64 metric sums at these indices and computes the closed form per
+    # stat kind. Shared sums are DEDUPED across all aggregates (same metric op tape
+    # -> one metric), so the 6-stat fused query computes {n, Sx, Sx2, Sy, Sy2, Sxy}
+    # exactly ONCE. m0/m1 (sum/count) are reused for the plain SUM/AVG/COUNT path;
+    # stats use the extended set below. Empty / False on the int + transcendental
+    # paths -> unchanged behavior.
+    var is_stats: Bool
+    var agg_msx: List[Int]  # index of metric Sx (sum of x); -1 if unused
+    var agg_msx2: List[Int]  # index of metric Sx2 (sum of x*x)
+    var agg_msy: List[Int]  # index of metric Sy (sum of y); 2-arg stats only
+    var agg_msy2: List[Int]  # index of metric Sy2 (sum of y*y)
+    var agg_msxy: List[Int]  # index of metric Sxy (sum of x*y)
+    var agg_mn: List[Int]  # index of metric n (count of passing rows)
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2273,6 +2332,13 @@ struct GpuPinned(Movable):
         self.col_div = []
         self.n_slots = 0
         self.const_div = []
+        self.is_stats = False
+        self.agg_msx = []
+        self.agg_msx2 = []
+        self.agg_msy = []
+        self.agg_msy2 = []
+        self.agg_msxy = []
+        self.agg_mn = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -2766,6 +2832,113 @@ def _colpool_assemble_col_ptrs(
 #   AGG_SUM  -> res_f64 = fsums[g*M+m0]
 #   AGG_AVG  -> res_f64 = fsums[g*M+m0] / fsums[g*M+m1]   (m1 = float count metric)
 #   AGG_COUNT_STAR -> placed as int64 (count fits exactly; same as the int path)
+# GPU_OP_STATS: closed-form combine of one stat aggregate from the shared sums.
+# `kind` is the stat AggKind; n/sx/sx2/sy/sy2/sxy are the accumulated f64 metric
+# sums for this (group's) passing rows (sy/sy2/sxy are 0 for 1-arg stats). Returns
+# (value, is_valid): is_valid=False means the cell is a SQL NULL (the caller marks
+# the result-vector validity invalid). EVERY degenerate case matches DuckDB 1.5.3
+# EXACTLY -- verified in the CLI across 0-row / 1-row / zero-variance / normal:
+#
+#   var_pop / stddev_pop / covar_pop : NULL iff n==0;  n>=1 -> value (n==1 -> 0).
+#   var_samp / stddev_samp / covar_samp : NULL iff n<2; n>=2 -> value (0 if zero var).
+#   corr        : NULL iff n==0;  else value (DuckDB emits *nan* on zero variance,
+#                 NOT null -> we return nan, valid).
+#   regr_slope  : NULL iff n==0;  else value (nan when regr_sxx==0, valid).
+#   regr_intercept : NULL iff n==0 OR regr_sxx==0.
+#   regr_r2     : NULL iff n==0 OR regr_sxx==0; else 1.0 when regr_syy==0; else corr^2.
+#   regr_avgx / regr_avgy : NULL iff n==0.
+#   regr_sxx / regr_syy / regr_sxy : NULL iff n==0; n>=1 -> value (n==1 -> 0).
+#   regr_count  : BIGINT, never NULL (0 for empty); returned as (n, True).
+#
+# regr arg order: DuckDB regr_*(y_dependent, x_independent). In our metric layout x
+# is arg0 (the dependent / stddev-var subject), y is arg1 (the independent). So for
+# regression the INDEPENDENT variable's sums are the y-sums:
+#   regr_sxx = Syy_indep = sy2 - sy^2/n  ;  regr_syy = Sxx_dep = sx2 - sx^2/n
+#   regr_sxy = sxy - sx*sy/n  ;  slope = regr_sxy / regr_sxx
+#   intercept = x_mean - slope*y_mean    (x = dependent mean, y = independent mean)
+#   avgx = y_mean (independent) ; avgy = x_mean (dependent)
+# `out_valid` (mut) is set False when the cell is a SQL NULL, True otherwise; the
+# returned Float64 is the value (ignored by the caller when out_valid is False).
+def _stat_value(
+    kind: Int64, n: Float64, sx: Float64, sx2: Float64,
+    sy: Float64, sy2: Float64, sxy: Float64,
+    mut out_valid: Bool,
+) -> Float64:
+    var NAN = nan[DType.float64]()
+    out_valid = True  # most kinds are valid; the NULL branches below flip it
+    if kind == AGG_REGR_COUNT:
+        return n  # BIGINT count; never NULL (0 for empty)
+    # var/stddev over x (the stddev/var subject = arg0).
+    var var_p_x = sx2 / n - (sx / n) * (sx / n) if n > 0.0 else NAN
+    var var_s_x = (sx2 - sx * sx / n) / (n - 1.0) if n > 1.0 else NAN
+    if kind == AGG_VAR_POP:
+        out_valid = n > 0.0  # NULL iff n==0
+        return var_p_x
+    if kind == AGG_VAR_SAMP:
+        out_valid = n > 1.0  # NULL iff n<2
+        return var_s_x
+    if kind == AGG_STDDEV_POP:
+        out_valid = n > 0.0
+        return sqrt(var_p_x) if var_p_x >= 0.0 else 0.0
+    if kind == AGG_STDDEV_SAMP:
+        out_valid = n > 1.0
+        return sqrt(var_s_x) if var_s_x >= 0.0 else 0.0
+    # 2-arg: covar / corr / regr_*. avgx/avgy use the regr convention.
+    if kind == AGG_REGR_AVGX:
+        out_valid = n > 0.0  # independent (arg1) mean; NULL iff n==0
+        return sy / n
+    if kind == AGG_REGR_AVGY:
+        out_valid = n > 0.0  # dependent (arg0) mean; NULL iff n==0
+        return sx / n
+    if kind == AGG_COVAR_POP:
+        out_valid = n > 0.0  # NULL iff n==0
+        return sxy / n - (sx * sy) / (n * n)
+    if kind == AGG_COVAR_SAMP:
+        out_valid = n > 1.0  # NULL iff n<2
+        return (sxy - sx * sy / n) / (n - 1.0)
+    # Centered sums of squares / cross products.
+    var Sxx_dep = sx2 - sx * sx / n if n > 0.0 else NAN  # over dependent (arg0)
+    var Syy_indep = sy2 - sy * sy / n if n > 0.0 else NAN  # over independent (arg1)
+    var Sxy = sxy - sx * sy / n if n > 0.0 else NAN
+    if kind == AGG_REGR_SXX:
+        out_valid = n > 0.0  # over the INDEPENDENT (2nd) arg; NULL iff n==0
+        return Syy_indep
+    if kind == AGG_REGR_SYY:
+        out_valid = n > 0.0  # over the DEPENDENT (1st) arg; NULL iff n==0
+        return Sxx_dep
+    if kind == AGG_REGR_SXY:
+        out_valid = n > 0.0  # NULL iff n==0
+        return Sxy
+    if kind == AGG_CORR:
+        # DuckDB: NULL iff n==0; else value (emits *nan* on zero variance, not null).
+        out_valid = n > 0.0
+        var denom = sqrt(Sxx_dep * Syy_indep)
+        return Sxy / denom if denom != 0.0 else NAN
+    if kind == AGG_REGR_R2:
+        # DuckDB: NULL iff n==0 OR regr_sxx (=var of indep =Syy_indep) ==0; else
+        # 1.0 when regr_syy (=var of dep =Sxx_dep) ==0; else corr^2.
+        if not (n > 0.0) or Syy_indep == 0.0:
+            out_valid = False  # NULL
+            return NAN
+        if Sxx_dep == 0.0:
+            return 1.0
+        var r = Sxy / sqrt(Sxx_dep * Syy_indep)
+        return r * r
+    if kind == AGG_REGR_SLOPE:
+        # DuckDB: NULL iff n==0; else value (nan when regr_sxx==0, NOT null).
+        out_valid = n > 0.0
+        return Sxy / Syy_indep if Syy_indep != 0.0 else NAN
+    if kind == AGG_REGR_INTERCEPT:
+        # DuckDB: NULL iff n==0 OR regr_sxx (=Syy_indep) ==0.
+        if not (n > 0.0) or Syy_indep == 0.0:
+            out_valid = False  # NULL
+            return NAN
+        var slope = Sxy / Syy_indep
+        return sx / n - slope * (sy / n)  # x_mean - slope*y_mean
+    out_valid = False
+    return NAN
+
+
 # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: gp.n_cand candidates, group-key
 # cells from gp.gk_str_vals / gp.gk_i64_vals (mirrors _assemble's placement).
 def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
@@ -2797,6 +2970,7 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
     var res_hi: List[Int64] = []
     var res_f64: List[Float64] = []
     var res_str: List[String] = []
+    var res_valid: List[Bool] = []  # GPU_OP_STATS: per-cell NULL mask (True=valid)
     var out_rows = 0
     for g in range(gp.n_cand):
         if dense and fsums[gm + g] == 0.0:
@@ -2806,6 +2980,7 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
             res_hi.append(0)
             res_f64.append(0.0)
             res_str.append(String(""))
+            res_valid.append(True)
         var base = out_rows * n_cols
         # group-key cells (DENSE_GROUP: VARCHAR keys via gk_str_vals).
         for gk in range(n_keys):
@@ -2816,16 +2991,36 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         # aggregate cells (per candidate g; fsums is g*M+m).
         for ai in range(len(gp.agg_kind)):
             var col = n_keys + ai
-            if gp.agg_kind[ai] == AGG_COUNT_STAR:
+            var gbase = g * gp.M
+            if gp.is_stats and _is_stat_agg_kind(gp.agg_kind[ai]):
+                # GPU_OP_STATS: combine the shared sums into the closed form. Unused
+                # metric indices are -1 (1-arg stats have no y/Sy2/Sxy) -> 0.0.
+                var nn = fsums[gbase + gp.agg_mn[ai]]
+                var sx = fsums[gbase + gp.agg_msx[ai]]
+                var sx2 = fsums[gbase + gp.agg_msx2[ai]]
+                var sy = fsums[gbase + gp.agg_msy[ai]] if gp.agg_msy[ai] >= 0 else 0.0
+                var sy2 = fsums[gbase + gp.agg_msy2[ai]] if gp.agg_msy2[ai] >= 0 else 0.0
+                var sxy = fsums[gbase + gp.agg_msxy[ai]] if gp.agg_msxy[ai] >= 0 else 0.0
+                var is_valid = True
+                var v = _stat_value(
+                    gp.agg_kind[ai], nn, sx, sx2, sy, sy2, sxy, is_valid
+                )
+                # is_valid=False -> emit a SQL NULL (mark the result cell invalid).
+                res_valid[base + col] = is_valid
+                if gp.agg_kind[ai] == AGG_REGR_COUNT:
+                    res_lo[base + col] = Int64(v)  # BIGINT count
+                else:
+                    res_f64[base + col] = v
+            elif gp.agg_kind[ai] == AGG_COUNT_STAR:
                 # The float count metric sums 1.0 per row -> exact integer count.
-                res_lo[base + col] = Int64(fsums[g * gp.M + gp.agg_m0[ai]])
+                res_lo[base + col] = Int64(fsums[gbase + gp.agg_m0[ai]])
             elif gp.agg_kind[ai] == AGG_AVG:
-                var cnt = fsums[g * gp.M + gp.agg_m1[ai]]
+                var cnt = fsums[gbase + gp.agg_m1[ai]]
                 res_f64[base + col] = (
-                    fsums[g * gp.M + gp.agg_m0[ai]] / cnt
+                    fsums[gbase + gp.agg_m0[ai]] / cnt
                 ) if cnt != 0.0 else 0.0
             else:  # AGG_SUM -> DOUBLE sum, already in true-double units
-                res_f64[base + col] = fsums[g * gp.M + gp.agg_m0[ai]]
+                res_f64[base + col] = fsums[gbase + gp.agg_m0[ai]]
         out_rows += 1
     dst.res_rows = out_rows
     dst.res_cols = n_cols
@@ -2833,6 +3028,7 @@ def _assemble_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
     dst.res_hi = res_hi^
     dst.res_f64 = res_f64^
     dst.res_str = res_str^
+    dst.res_valid = res_valid^
 
 
 # GPU_OP_TRANSCENDENTAL float64 HASH_GROUP result assembly (sum/avg/count of
@@ -3678,6 +3874,10 @@ def mojo_gpu_feed_column(
     ptr: UnsafePointer[NoneType, MutAnyOrigin],
     n_rows: Int,
     type_tag: Int64,
+    # GPU_OP_STATS: source-column decimal scale (0 for non-DECIMAL). Used to build
+    # col_div for non-filter stat-argument columns; the legacy TPC-H paths ignore
+    # it (they hardcode scale 2). The C++ caller passes DecimalType::GetScale.
+    dec_scale: Int64 = 0,
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -3716,6 +3916,7 @@ def mojo_gpu_feed_column(
             if mj < 0 or mj >= len(st.cols):
                 return 3
             st.cols[mj].fill(ptr, n_rows, elem_size, type_tag)
+            st.cols[mj].dec_scale = dec_scale
             st.n_rows = n_rows
             return 0
         var de = req_i - 1
@@ -3724,6 +3925,7 @@ def mojo_gpu_feed_column(
         if col_j < 0 or col_j >= len(st.dim_cols[de]):
             return 3
         st.dim_cols[de][col_j].fill(ptr, n_rows, elem_size, type_tag)
+        st.dim_cols[de][col_j].dec_scale = dec_scale
         st.dim_n_rows[de] = n_rows
         return 0
     except:
@@ -4070,6 +4272,118 @@ def _resolve_const_div(
         else:
             divs.append(Float64(1))
     return divs^
+
+
+# ===-------------------------------------------------------------------===#
+# GPU_OP_STATS: per-stat shared-sum metric resolution.
+#
+# A stat aggregate carries its argument program(s) in agg.program: 1-arg
+# (stddev/var) is just the x program; a 2-arg stat (covar/corr/regr_*) is the
+# dependent-y program, OP_ARGSEP, then the independent-x program (DuckDB's
+# regr_*(y, x) order). We resolve each arg sub-program into VM op triples + its
+# parallel const_div (identical lowering to _resolve_program / _resolve_const_div),
+# then form the base-metric op tapes the closed form needs:
+#   Sx   = <x>
+#   Sx2  = <x> <x> MUL
+#   Sy   = <y>                (2-arg only)
+#   Sy2  = <y> <y> MUL        (2-arg only)
+#   Sxy  = <x> <y> MUL        (2-arg only)
+# Each base metric is keyed by its resolved op tape and DEDUPED across all
+# aggregates in _pin_finalize_generic, so shared sums compute exactly once.
+# ===-------------------------------------------------------------------===#
+@fieldwise_init
+struct StatArgPlan(Copyable, Movable):
+    var two_arg: Bool
+    # Resolved op tapes (flattened op,a,b triples) for x and y, + parallel const_div.
+    var x_ops: List[Int64]
+    var x_div: List[Float64]
+    var y_ops: List[Int64]
+    var y_div: List[Float64]
+
+
+# Resolve a stat aggregate's argument program(s) into resolved x / y op tapes +
+# their const_div arrays. Splits on OP_ARGSEP for 2-arg stats. The load_col cursor
+# walks agg.load_cols in program order (OP_ARGSEP is not a LOAD_COL, so it does not
+# advance the cursor), so x then y resolve their LOAD_COLs in the correct order.
+def _resolve_stat_args(
+    d: GpuPlanDescriptor,
+    agg: GpuAggregate,
+    col_slot: Dict[String, Int],
+    two_arg: Bool,
+) raises -> StatArgPlan:
+    var x_ops: List[Int64] = []
+    var x_div: List[Float64] = []
+    var y_ops: List[Int64] = []
+    var y_div: List[Float64] = []
+    var in_y = False
+    var load_i = 0
+    for k in range(len(agg.program)):
+        ref o = agg.program[k]
+        if o.op == OP_ARGSEP:
+            in_y = True
+            continue
+        var op_out: Int64
+        var a_out: Int64
+        var b_out: Int64
+        var div_out = Float64(1)
+        if o.op == OP_LOAD_COL:
+            var name = agg.load_cols[load_i].column
+            load_i += 1
+            if name not in col_slot:
+                raise Error("stats: LOAD_COL references unfed column " + name)
+            op_out = OP_LOAD_COL
+            a_out = Int64(col_slot[name])
+            b_out = Int64(0)
+        elif o.op == OP_PUSH_CONST:
+            var cid = Int(o.a)
+            if cid < 0 or cid >= len(d.consts):
+                raise Error("stats: PUSH_CONST bad const id")
+            op_out = OP_PUSH_CONST
+            a_out = d.consts[cid].lo
+            b_out = Int64(0)
+            var sc = Int(d.consts[cid].scale)
+            for _ in range(sc):
+                div_out *= 10.0
+        else:
+            op_out = o.op
+            a_out = o.a
+            b_out = o.b
+        if in_y:
+            y_ops.append(op_out)
+            y_ops.append(a_out)
+            y_ops.append(b_out)
+            y_div.append(div_out)
+        else:
+            x_ops.append(op_out)
+            x_ops.append(a_out)
+            x_ops.append(b_out)
+            x_div.append(div_out)
+    return StatArgPlan(two_arg, x_ops^, x_div^, y_ops^, y_div^)
+
+
+# Concatenate op tapes a ++ b ++ MUL (product metric: <a><b>MUL). Both inputs are
+# already resolved (op,a,b) triples; the result is a valid f64-VM metric program.
+def _mul_metric(
+    read a_ops: List[Int64], read b_ops: List[Int64]
+) -> List[Int64]:
+    var ops: List[Int64] = []
+    for i in range(len(a_ops)):
+        ops.append(a_ops[i])
+    for i in range(len(b_ops)):
+        ops.append(b_ops[i])
+    ops.append(OP_MUL)
+    ops.append(Int64(0))
+    ops.append(Int64(0))
+    return ops^
+
+
+# A stable key for a resolved metric op tape (for cross-aggregate dedup).
+def _metric_key(read ops: List[Int64]) -> String:
+    var s = String("")
+    for i in range(len(ops)):
+        s += String(ops[i])
+        s += String(",")
+    return s
 
 
 # Symbolically evaluate the decimal scale a metric program produces, given a
@@ -4780,6 +5094,13 @@ def _pin_finalize_generic(
             tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
+        elif _has_stats(d) and not (slot < len(omit_slot) and omit_slot[slot]):
+            # GPU_OP_STATS: use the column's ACTUAL fed decimal scale (the legacy
+            # TPC-H paths hardcode scale 2; a stat argument may be DECIMAL(_, s!=2)).
+            # A non-fed (skip-materialize omitted) slot cannot happen on the stats
+            # path (the scope guard never runs with skip-materialize active), so the
+            # else covers it defensively with the legacy default.
+            col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
     for gi in range(len(d.gets)):
@@ -5023,12 +5344,23 @@ def _pin_finalize_generic(
     var metric_offsets: List[Int64] = []  # op-offset per metric
     var metric_lens: List[Int64] = []  # op-count per metric
     var n_ops_total = 0
-    # GPU_OP_TRANSCENDENTAL: when this query has a transcendental aggregate, build
-    # const_div parallel to metric_ops (one Float64 per op, 10^scale at PUSH_CONST,
-    # 1.0 elsewhere) so the float64 VM can reconstruct true doubles. Stays empty on
-    # the int path. (`_has_transcendental` already gated UNGROUPED-only upstream.)
-    var is_float64 = _has_transcendental(d)
+    # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: when this query has a transcendental OR
+    # statistical aggregate, build const_div parallel to metric_ops (one Float64 per
+    # op, 10^scale at PUSH_CONST, 1.0 elsewhere) so the float64 VM can reconstruct
+    # true doubles. Stays empty on the int path. (The scope guards gated UNGROUPED/
+    # DENSE-only upstream.)
+    var is_stats = _has_stats(d)
+    var is_float64 = _has_transcendental(d) or is_stats
     var const_div: List[Float64] = []
+    # GPU_OP_STATS: per-output-agg shared-sum metric indices (parallel to agg_kind;
+    # -1 unused). Stats DEDUP base metrics across aggregates via `stat_metric_key`.
+    var agg_msx: List[Int] = []
+    var agg_msx2: List[Int] = []
+    var agg_msy: List[Int] = []
+    var agg_msy2: List[Int] = []
+    var agg_msxy: List[Int] = []
+    var agg_mn: List[Int] = []
+    var stat_metric_key = Dict[String, Int]()  # op-tape key -> metric index
 
     def _emit_count(
         mut metric_ops: List[Int64],
@@ -5060,6 +5392,36 @@ def _pin_finalize_generic(
         n_ops_total += plan.n_ops
         return idx
 
+    # GPU_OP_STATS: emit a resolved base-metric op tape (+ its const_div), DEDUPED
+    # by op-tape key across all aggregates, so shared sums (Sx, Sx2, Sxy, ...) are
+    # computed exactly once. Returns the metric index (existing or newly emitted).
+    # `divs` is parallel to the tape (one Float64 per op). For the count metric pass
+    # an empty `ops` -> the canonical PUSH_CONST(1) (also deduped).
+    def _emit_metric_dedup(
+        read ops: List[Int64],
+        read divs: List[Float64],
+        mut metric_ops: List[Int64],
+        mut metric_offsets: List[Int64],
+        mut metric_lens: List[Int64],
+        mut const_div: List[Float64],
+        mut n_ops_total: Int,
+        mut keymap: Dict[String, Int],
+    ) raises -> Int:
+        var key = _metric_key(ops)
+        if key in keymap:
+            return keymap[key]
+        var idx = len(metric_offsets)
+        metric_offsets.append(Int64(n_ops_total))
+        var n_op = len(ops) // 3
+        for x in range(len(ops)):
+            metric_ops.append(ops[x])
+        for x in range(len(divs)):
+            const_div.append(divs[x])
+        metric_lens.append(Int64(n_op))
+        n_ops_total += n_op
+        keymap[key] = idx
+        return idx
+
     # const_div appended in LOCKSTEP with the metric_ops emitted below (the f64
     # path requires it parallel to the op tape; on the int path it stays empty and
     # is never read). PUSH_CONST(1) count metric -> [1.0]; a resolved program ->
@@ -5067,7 +5429,79 @@ def _pin_finalize_generic(
     for ai in range(len(d.aggregates)):
         ref agg = d.aggregates[ai]
         agg_kind.append(agg.kind)
-        if agg.kind == AGG_COUNT_STAR:
+        # Default stat metric indices to -1 (overridden in the stat branch below).
+        agg_msx.append(-1)
+        agg_msx2.append(-1)
+        agg_msy.append(-1)
+        agg_msy2.append(-1)
+        agg_msxy.append(-1)
+        agg_mn.append(-1)
+        if _is_stat_agg_kind(agg.kind):
+            # Stat aggregate: resolve x/y arg programs, build the base-metric tapes
+            # the closed form needs, emit them DEDUPED, record their indices. The
+            # count metric `n` is the canonical PUSH_CONST(1) (deduped, shared).
+            agg_scale.append(Int64(0))
+            var two_arg = not (
+                agg.kind == AGG_STDDEV_SAMP
+                or agg.kind == AGG_STDDEV_POP
+                or agg.kind == AGG_VAR_SAMP
+                or agg.kind == AGG_VAR_POP
+            )
+            var sp = _resolve_stat_args(d, agg, col_slot, two_arg)
+
+            # const_div for a product tape <a><b>MUL: a's divs ++ b's divs ++ [1.0].
+            def _prod_div(
+                read da: List[Float64], read db: List[Float64]
+            ) -> List[Float64]:
+                var out: List[Float64] = []
+                for x in range(len(da)):
+                    out.append(da[x])
+                for x in range(len(db)):
+                    out.append(db[x])
+                out.append(Float64(1))  # the MUL op
+                return out^
+
+            # n (count): canonical PUSH_CONST(1) (deduped, shared across stats).
+            var cnt_ops: List[Int64] = [OP_PUSH_CONST, Int64(1), Int64(0)]
+            var cnt_div: List[Float64] = [Float64(1)]
+            var mn = _emit_metric_dedup(
+                cnt_ops, cnt_div, metric_ops, metric_offsets, metric_lens,
+                const_div, n_ops_total, stat_metric_key,
+            )
+            # Sx and Sx2 (always needed).
+            var msx = _emit_metric_dedup(
+                sp.x_ops, sp.x_div, metric_ops, metric_offsets, metric_lens,
+                const_div, n_ops_total, stat_metric_key,
+            )
+            var msx2 = _emit_metric_dedup(
+                _mul_metric(sp.x_ops, sp.x_ops),
+                _prod_div(sp.x_div, sp.x_div),
+                metric_ops, metric_offsets, metric_lens,
+                const_div, n_ops_total, stat_metric_key,
+            )
+            agg_mn[ai] = mn
+            agg_msx[ai] = msx
+            agg_msx2[ai] = msx2
+            agg_m0.append(msx)  # reuse m0/m1 loosely; stat assemble uses agg_ms*
+            agg_m1.append(mn)
+            if two_arg:
+                agg_msy[ai] = _emit_metric_dedup(
+                    sp.y_ops, sp.y_div, metric_ops, metric_offsets, metric_lens,
+                    const_div, n_ops_total, stat_metric_key,
+                )
+                agg_msy2[ai] = _emit_metric_dedup(
+                    _mul_metric(sp.y_ops, sp.y_ops),
+                    _prod_div(sp.y_div, sp.y_div),
+                    metric_ops, metric_offsets, metric_lens,
+                    const_div, n_ops_total, stat_metric_key,
+                )
+                agg_msxy[ai] = _emit_metric_dedup(
+                    _mul_metric(sp.x_ops, sp.y_ops),
+                    _prod_div(sp.x_div, sp.y_div),
+                    metric_ops, metric_offsets, metric_lens,
+                    const_div, n_ops_total, stat_metric_key,
+                )
+        elif agg.kind == AGG_COUNT_STAR:
             agg_scale.append(Int64(0))
             var mi = _emit_count(
                 metric_ops, metric_offsets, metric_lens, n_ops_total
@@ -5276,11 +5710,19 @@ def _pin_finalize_generic(
     gp.hash_gk_slot = hash_gk_slot if hash_gk_slot >= 0 else 0
     gp.hash_cap = hash_cap
     gp.hash_gk_dim_arr = []
-    # GPU_OP_TRANSCENDENTAL: route this entry to the float64 accumulator.
+    # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: route this entry to the float64 accumulator.
     gp.is_float64 = is_float64
     gp.col_div = col_div^
     gp.n_slots = n_numeric
     gp.const_div = const_div^
+    # GPU_OP_STATS: per-output-agg shared-sum metric indices (closed-form finalize).
+    gp.is_stats = is_stats
+    gp.agg_msx = agg_msx^
+    gp.agg_msx2 = agg_msx2^
+    gp.agg_msy = agg_msy^
+    gp.agg_msy2 = agg_msy2^
+    gp.agg_msxy = agg_msxy^
+    gp.agg_mn = agg_mn^
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
     # WARM path can re-run the in-kernel filter with a fresh constant set.
@@ -7273,6 +7715,32 @@ def mojo_gpu_result_f64(
         return st.res_f64[row * st.res_cols + col]
     except:
         return 0.0
+
+
+# GPU_OP_STATS: per-cell validity readback. Returns 1 if the (row,col) cell is a
+# real value, 0 if it is a SQL NULL (the C++ side then SetNull's the result vector).
+# Defaults to 1 (valid) when there is no validity mask (the int / transcendental
+# paths never populate res_valid), so those readbacks are byte-identical.
+@export("mojo_gpu_result_valid")
+def mojo_gpu_result_valid(
+    handle: UnsafePointer[NoneType, MutAnyOrigin], row: Int, col: Int
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 1
+    try:
+        ref m = _exec_ptr()[]
+        var key = Int(handle)
+        if key not in m:
+            return 1
+        ref st = m[key]
+        if row < 0 or row >= st.res_rows or col < 0 or col >= st.res_cols:
+            return 1
+        var idx = row * st.res_cols + col
+        if idx >= len(st.res_valid):
+            return 1  # no validity mask emitted -> all valid (non-stat paths)
+        return 1 if st.res_valid[idx] else 0
+    except:
+        return 1
 
 
 @export("mojo_gpu_result_str")

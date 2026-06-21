@@ -33,6 +33,26 @@ comptime AGG_COUNT_STAR: Int64 = 2
 comptime AGG_AVG: Int64 = 3
 comptime AGG_MIN: Int64 = 4
 comptime AGG_MAX: Int64 = 5
+# Statistical aggregates (GPU_OP_STATS). DOUBLE result, derived CLOSED-FORM on the
+# host from the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the f64 seg kernels already
+# accumulate. 1-arg: stddev/var (over x). 2-arg: covar/corr/regr_* (regr arg order
+# is (y_dependent, x_independent), matching DuckDB). regr_count returns BIGINT.
+comptime AGG_STDDEV_SAMP: Int64 = 10
+comptime AGG_STDDEV_POP: Int64 = 11
+comptime AGG_VAR_SAMP: Int64 = 12
+comptime AGG_VAR_POP: Int64 = 13
+comptime AGG_COVAR_SAMP: Int64 = 14
+comptime AGG_COVAR_POP: Int64 = 15
+comptime AGG_CORR: Int64 = 16
+comptime AGG_REGR_SLOPE: Int64 = 17
+comptime AGG_REGR_INTERCEPT: Int64 = 18
+comptime AGG_REGR_R2: Int64 = 19
+comptime AGG_REGR_AVGX: Int64 = 20
+comptime AGG_REGR_AVGY: Int64 = 21
+comptime AGG_REGR_SXX: Int64 = 22
+comptime AGG_REGR_SYY: Int64 = 23
+comptime AGG_REGR_SXY: Int64 = 24
+comptime AGG_REGR_COUNT: Int64 = 25
 
 # JoinType
 comptime JOIN_INNER: Int64 = 1
@@ -56,6 +76,11 @@ comptime OP_LN: Int64 = 12
 comptime OP_LOG10: Int64 = 13
 comptime OP_SIN: Int64 = 14
 comptime OP_COS: Int64 = 15
+# Argument separator (GPU_OP_STATS). A 2-arg stat aggregate (covar/corr/regr_*)
+# emits its dependent-arg program, then OP_ARGSEP, then its independent-arg
+# program, into the single Agg.program field. Split out on the Mojo side; never
+# reaches any expr-VM (it lives only in the un-lowered Agg.program tape).
+comptime OP_ARGSEP: Int64 = 16
 
 # Descriptor kind
 comptime KIND_UNKNOWN: Int64 = 0

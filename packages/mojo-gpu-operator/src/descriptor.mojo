@@ -30,6 +30,8 @@ from raw_plan_tags import (
     AGG_AVG,
     AGG_MIN,
     AGG_MAX,
+    AGG_STDDEV_SAMP,
+    AGG_REGR_COUNT,
     OP_LOAD_COL,
     OP_PROMO_PRED,
     OP_SQRT,
@@ -367,6 +369,10 @@ def _agg_kind_supported(k: Int64) -> Bool:
         or k == AGG_COUNT_STAR
         or k == AGG_MIN
         or k == AGG_MAX
+        # GPU_OP_STATS: statistical aggregates [STDDEV_SAMP, REGR_COUNT]. Only ever
+        # emitted by the C++ MapAggKind under the flag; the stats scope guard below
+        # then enforces the supported shape (UNGROUPED/DENSE, no dims, NVIDIA).
+        or (k >= AGG_STDDEV_SAMP and k <= AGG_REGR_COUNT)
     )
 
 
@@ -391,6 +397,23 @@ def _has_transcendental(desc: GpuPlanDescriptor) -> Bool:
         for k in range(len(prog)):
             if _is_transcendental_op(prog[k].op):
                 return True
+    return False
+
+
+# True if an AggKind tag is a statistical aggregate (GPU_OP_STATS). DOUBLE result
+# (BIGINT for regr_count), derived CLOSED-FORM on the host from the shared sums
+# the f64 seg kernels accumulate. The contiguous range [STDDEV_SAMP, REGR_COUNT]
+# is the full stat family (see raw_plan_tags / raw_plan.h).
+def _is_stat_agg_kind(k: Int64) -> Bool:
+    return k >= AGG_STDDEV_SAMP and k <= AGG_REGR_COUNT
+
+
+# True if any aggregate is a statistical aggregate -> the whole offload uses the
+# DOUBLE accumulator + the float64 kernels (same substrate as transcendentals).
+def _has_stats(desc: GpuPlanDescriptor) -> Bool:
+    for ai in range(len(desc.aggregates)):
+        if _is_stat_agg_kind(desc.aggregates[ai].kind):
+            return True
     return False
 
 
@@ -677,6 +700,51 @@ def build_descriptor_impl(
         # or small-DENSE transcendental is HEAVY per-row math the GPU wins (sum(sqrt)
         # ~3-8x warm vs stock) and DuckDB does NOT GPU-accelerate. The shape is
         # validated above (no dims, no HASH, sum/avg/count) and the flag is opt-in.
+        return desc^
+
+    # Statistical-aggregate scope guard (GPU_OP_STATS): stddev/var/covar/corr/
+    # regr_* are CLOSED-FORM over the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the
+    # float64 seg kernels already accumulate (the SAME substrate as the
+    # transcendental path -- f64 VM + seg_ungrouped_kernel_f64 / seg_dense_kernel_f64
+    # + a host closed-form finalize). DuckDB computes these with a serial scalar
+    # Welford accumulator (12-15x slower than sum at sf10), unaccelerated, so this
+    # is a NEW win class. Accepted as UNGROUPED ONLY (see the DENSE note below), with
+    # NO FK-join dims (the stat args are pure fact columns / consts). ANY other shape
+    # DECLINES -> stock CPU. Fail-closed: with the flag off the C++ MapAggKind never
+    # emits a stat AggKind, so this branch is dead -> byte-identical default behavior.
+    if _has_stats(desc):
+        # NVIDIA-ONLY: the float64 kernels need in-kernel f64 (Apple Metal lacks it,
+        # abort-only there; AMD unvalidated). Decline on non-NVIDIA -> stock CPU.
+        if not has_nvidia_gpu_accelerator():
+            return None
+        if n_dims != 0:
+            return None
+        # UNGROUPED-ONLY for stats. The DENSE f64 kernel's per-lane accumulator is a
+        # fixed SEG_MAX_METRICS^2 (=64) array indexed [g*M + m], so it is SAFE only
+        # while G*M <= 64. A stat plan has up to M=6 shared-sum metrics, and the
+        # DENSE classification (n_gkeys<=4) does NOT bound the group COUNT G (a
+        # high-cardinality VARCHAR key still classifies DENSE), so G*M can exceed 64
+        # -> out-of-bounds device write (CUDA_ERROR_ILLEGAL_ADDRESS). G is data-
+        # dependent (unknown at plan time) and a finalize failure throws (no post-
+        # route CPU fallback), so DENSE stats DECLINE to stock CPU here -- the
+        # task-sanctioned fallback. UNGROUPED keeps full GPU + NULL fidelity. (The
+        # plain SUM/AVG int128 DENSE paths are unaffected: this guard is stats-only.)
+        if strategy != STRAT_UNGROUPED:
+            return None
+        # Every aggregate must be a recognized stat agg, OR a plain SUM/AVG/COUNT(*)
+        # (so a mixed `SELECT count(*), corr(x,y) ...` is still offloadable on the
+        # shared f64 kernels). MIN/MAX (no float path here) decline the whole plan.
+        for ai in range(len(desc.aggregates)):
+            var ak = desc.aggregates[ai].kind
+            if not (
+                _is_stat_agg_kind(ak)
+                or ak == AGG_SUM
+                or ak == AGG_AVG
+                or ak == AGG_COUNT_STAR
+            ):
+                return None
+        # ACCEPT directly (bypass _should_decline): heavy per-row math (1-6 divisions
+        # + multi-accumulate) the GPU wins, on a class DuckDB does NOT accelerate.
         return desc^
 
     # Offload-vs-CPU-fallback policy (see `_should_decline`): keeps the

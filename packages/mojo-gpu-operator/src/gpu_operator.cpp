@@ -237,6 +237,9 @@ int64_t mojo_gpu_desc_kind(void *handle);
 // (sqrt/exp/ln/log10/sin/cos in any metric program). Enables routing for an
 // otherwise KIND_UNKNOWN transcendental (e.g. a grouped sum/avg of f(col)).
 int64_t mojo_gpu_desc_is_transcendental(void *handle);
+// GPU_OP_STATS: 1 if the descriptor has a statistical aggregate (stddev/var/
+// covar/corr/regr_*). Enables routing for an otherwise KIND_UNKNOWN stat plan.
+int64_t mojo_gpu_desc_is_stats(void *handle);
 int64_t mojo_gpu_desc_strategy(void *handle);
 int64_t mojo_gpu_desc_n_dims(void *handle);
 int64_t mojo_gpu_desc_n_aggs(void *handle);
@@ -251,7 +254,8 @@ int64_t mojo_gpu_desc_materialize_count(void *handle);
 int64_t mojo_gpu_desc_materialize_sql(void *handle, int64_t i, uint8_t *out, int64_t cap); // full byte len
 int64_t mojo_gpu_pin_begin(void *handle);             // 0=WARM, 1=COLD
 int64_t mojo_gpu_feed_column(void *handle, int64_t req_i, int64_t col_j, void *ptr,
-                             int64_t n_rows, int64_t type_tag);   // 0 ok
+                             int64_t n_rows, int64_t type_tag,
+                             int64_t dec_scale);   // 0 ok (dec_scale: GPU_OP_STATS)
 // SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): set st.n_rows for the FACT request
 // unconditionally (called for request 0 before the feed loop with res->RowCount()).
 // When the narrowed SELECT omits ALL fact columns this is the only n_rows source.
@@ -267,6 +271,10 @@ int64_t mojo_gpu_result_i128(void *handle, int64_t row, int64_t col, int64_t *lo
 int64_t mojo_gpu_result_i64(void *handle, int64_t row, int64_t col);
 double  mojo_gpu_result_f64(void *handle, int64_t row, int64_t col);
 int64_t mojo_gpu_result_str(void *handle, int64_t row, int64_t col, uint8_t *out, int64_t cap);
+// GPU_OP_STATS: 1 if the (row,col) cell is a real value, 0 if it is a SQL NULL.
+// Defaults to 1 (valid) for every non-stat path (no validity mask emitted), so the
+// int128 / transcendental result readback is byte-identical.
+int64_t mojo_gpu_result_valid(void *handle, int64_t row, int64_t col);
 // Phase 1 column pool (GPU_OP_COLPOOL): monotonic count of bytes pushed H2D on
 // pool misses. The dedup proof reads the DELTA across queries (a shared column
 // uploaded once => later queries add nothing). Surfaced to SQL by the
@@ -1621,6 +1629,20 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
         return EmitProgram(*proj->expressions[idx], jt, b, prog, proj);
       }
     }
+    // GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: the float64 expr-VM reconstructs each
+    // column's TRUE double from its SCALED-INT64 storage via col_div (= 10^scale),
+    // which is exactly right for DECIMAL/INTEGER/…/HUGEINT columns. A NATIVE
+    // FLOAT/DOUBLE column is stored as raw IEEE bits (not a scaled int), so
+    // `Float64(raw_int64_bits) / col_div` would read garbage. The VM has no
+    // bit-reinterpret path, so fail-closed on native-float source columns ->
+    // the whole plan declines to stock CPU (correct, just not accelerated).
+    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr ||
+        std::getenv("GPU_OP_STATS") != nullptr) {
+      auto pt = ref.return_type.InternalType();
+      if (pt == PhysicalType::FLOAT || pt == PhysicalType::DOUBLE) {
+        return false;
+      }
+    }
     auto col = ResolveJoinColref(ref, jt.gets);
     int64_t t = b.intern(col.table_name);
     int64_t c = b.intern(col.col_name);
@@ -1696,7 +1718,11 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   // program unchanged is value-correct; the cast becomes a no-op at the VM level.
   // Restricted to numeric source+target (the only thing the VM models) and to the
   // flag, so the int128 path is untouched. Anything else still fails closed.
-  if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+  // GPU_OP_STATS uses the SAME f64 expr-VM (col_div reconstructs the true double
+  // from scaled-int64 storage), so the DECIMAL->DOUBLE cast DuckDB wraps a stat
+  // argument in is likewise a value-level no-op -> pass the child through.
+  if ((std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr ||
+       std::getenv("GPU_OP_STATS") != nullptr) &&
       cls == ExpressionClass::BOUND_CAST) {
     auto &ce = e.Cast<BoundCastExpression>();
     auto tid = e.return_type.id();
@@ -1724,7 +1750,49 @@ int64_t MapAggKind(const std::string &name) {
   if (name == "count_star") { return rp::AGG_COUNT_STAR; }
   if (name == "min") { return rp::AGG_MIN; }
   if (name == "max") { return rp::AGG_MAX; }
+  // Statistical aggregates (flag GPU_OP_STATS only). All DOUBLE-result, derived
+  // closed-form on the host from the shared sums the f64 seg kernels accumulate.
+  // When the flag is off these return 0 -> the agg-emit loop fails closed (the
+  // whole plan declines to stock CPU), so the default build is byte-identical.
+  if (std::getenv("GPU_OP_STATS") != nullptr) {
+    if (name == "stddev_samp" || name == "stddev") { return rp::AGG_STDDEV_SAMP; }
+    if (name == "stddev_pop") { return rp::AGG_STDDEV_POP; }
+    if (name == "var_samp" || name == "variance") { return rp::AGG_VAR_SAMP; }
+    if (name == "var_pop") { return rp::AGG_VAR_POP; }
+    if (name == "covar_samp") { return rp::AGG_COVAR_SAMP; }
+    if (name == "covar_pop") { return rp::AGG_COVAR_POP; }
+    if (name == "corr") { return rp::AGG_CORR; }
+    if (name == "regr_slope") { return rp::AGG_REGR_SLOPE; }
+    if (name == "regr_intercept") { return rp::AGG_REGR_INTERCEPT; }
+    if (name == "regr_r2") { return rp::AGG_REGR_R2; }
+    if (name == "regr_avgx") { return rp::AGG_REGR_AVGX; }
+    if (name == "regr_avgy") { return rp::AGG_REGR_AVGY; }
+    if (name == "regr_sxx") { return rp::AGG_REGR_SXX; }
+    if (name == "regr_syy") { return rp::AGG_REGR_SYY; }
+    if (name == "regr_sxy") { return rp::AGG_REGR_SXY; }
+    if (name == "regr_count") { return rp::AGG_REGR_COUNT; }
+  }
   return 0;
+}
+
+// True if an AggKind tag is a statistical aggregate (GPU_OP_STATS).
+bool IsStatAggKind(int64_t k) {
+  return k >= rp::AGG_STDDEV_SAMP && k <= rp::AGG_REGR_COUNT;
+}
+
+// True if a stat aggregate is 2-arg (covar/corr/regr_*); false for the 1-arg
+// stddev/var family. Used to decide whether to emit the OP_ARGSEP + second-arg
+// program in the agg-emit loop.
+bool IsStat2Arg(int64_t k) {
+  switch (k) {
+  case rp::AGG_STDDEV_SAMP:
+  case rp::AGG_STDDEV_POP:
+  case rp::AGG_VAR_SAMP:
+  case rp::AGG_VAR_POP:
+    return false;
+  default:
+    return true; // covar/corr/regr_*
+  }
 }
 
 // Resolve a (possibly through-projection) group-by colref to (table, col).
@@ -1894,8 +1962,22 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     ae.ret_scale = scale;
     ae.ret_width = width;
     ae.ret_is_int128 = (ag.return_type.InternalType() == PhysicalType::INT128) ? 1 : 0;
-    // Program: empty for COUNT_STAR; else the single argument expression.
-    if (kind != rp::AGG_COUNT_STAR && ag.children.size() == 1) {
+    // Program: empty for COUNT_STAR; a statistical aggregate emits its argument
+    // program(s) into Agg.program -- 1-arg (stddev/var) is just the x program;
+    // 2-arg (covar/corr/regr_*) emits the dependent-y program, OP_ARGSEP, then the
+    // independent-x program. (DuckDB's regr_*(y, x) puts dependent first.) The Mojo
+    // metric lowering splits on OP_ARGSEP and builds the shared-sum metrics.
+    if (IsStatAggKind(kind)) {
+      if (IsStat2Arg(kind)) {
+        if (ag.children.size() != 2) { return false; }
+        if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
+        ae.program.push_back({rp::OP_ARGSEP, 0, 0});
+        if (!EmitProgram(*ag.children[1], jt, out, ae.program, proj)) { return false; }
+      } else {
+        if (ag.children.size() != 1) { return false; }
+        if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
+      }
+    } else if (kind != rp::AGG_COUNT_STAR && ag.children.size() == 1) {
       if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
     }
     out.aggregates.push_back(std::move(ae));
@@ -2255,8 +2337,12 @@ public:
             default: break;
             }
           }
+          // GPU_OP_STATS: pass the source decimal scale (0 for non-DECIMAL) so the
+          // finalize builds col_div from the column's ACTUAL scale, not a hardcode.
+          int64_t dscale =
+              (ct.id() == LogicalTypeId::DECIMAL) ? (int64_t)DecimalType::GetScale(ct) : 0;
           int64_t rc = mojo_gpu_feed_column(h, i, (int64_t)c, ptr,
-                                            (int64_t)total_rows, tag);
+                                            (int64_t)total_rows, tag, dscale);
           if (rc != 0) {
             throw InvalidInputException("GPU_AGG: feed_column failed (rc " +
                                         std::to_string(rc) + ")");
@@ -2292,6 +2378,13 @@ public:
       const LogicalType &ct = chunk.data[c].GetType();
       for (idx_t r = 0; r < this_chunk; r++) {
         int64_t row = (int64_t)(gs.emitted + r);
+        // GPU_OP_STATS: a degenerate stat cell (e.g. var_samp of <2 rows,
+        // regr_intercept with zero independent variance) is a real SQL NULL.
+        // Non-stat paths always report valid=1, so this is a no-op there.
+        if (mojo_gpu_result_valid(h, row, (int64_t)c) == 0) {
+          FlatVector::SetNull(chunk.data[c], r, true);
+          continue;
+        }
         switch (ct.id()) {
         case LogicalTypeId::DECIMAL:
         case LogicalTypeId::HUGEINT: {
@@ -2443,6 +2536,14 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   // transcendental, so route it unless GPU_OP_GENERIC explicitly excludes all.
   if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
       mojo_gpu_desc_is_transcendental(h)) {
+    enabled = true;
+  }
+
+  // GPU_OP_STATS: a statistical aggregate plan (stddev/var/covar/corr/regr_*) has
+  // no TPC-H kind (KIND_UNKNOWN). Enable routing whenever the descriptor carries a
+  // stat aggregate -- the Mojo scope guard already validated the shape (UNGROUPED/
+  // DENSE, no FK dims, NVIDIA-only) and flag-gated the agg-kind emission.
+  if (std::getenv("GPU_OP_STATS") != nullptr && mojo_gpu_desc_is_stats(h)) {
     enabled = true;
   }
 
@@ -2879,8 +2980,11 @@ bool TryGpuDirectFactFeed(ClientContext &context, void *h,
     void *ptr = (decoded[c].type_code == 0)
                     ? static_cast<void *>(decoded[c].v32.data())
                     : static_cast<void *>(decoded[c].v64.data());
+    // Native-decode (skip-materialize) is never used by the stats path (which
+    // declines skip-materialize), so dec_scale is irrelevant here -> pass 0.
     int64_t rc = mojo_gpu_feed_column(h, 0, (int64_t)c, ptr,
-                                      NumericCast<int64_t>(decoded[c].n_rows), decoded[c].tag);
+                                      NumericCast<int64_t>(decoded[c].n_rows),
+                                      decoded[c].tag, 0);
     if (rc != 0) {
       // A feed failure mid-request would leave the request half-fed; the feed
       // path overwrites per (req,col) and finalize would read stale slots. This

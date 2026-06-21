@@ -40,6 +40,26 @@ enum : int64_t {
   AGG_AVG = 3,
   AGG_MIN = 4,
   AGG_MAX = 5,
+  // Statistical aggregates (GPU_OP_STATS). DOUBLE result derived CLOSED-FORM on
+  // the host from the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the f64 seg kernels
+  // accumulate. 1-arg: stddev/var (x). 2-arg: covar/corr/regr_* with arg order
+  // (y_dependent, x_independent) matching DuckDB. regr_count returns BIGINT.
+  AGG_STDDEV_SAMP = 10,
+  AGG_STDDEV_POP = 11,
+  AGG_VAR_SAMP = 12,
+  AGG_VAR_POP = 13,
+  AGG_COVAR_SAMP = 14,
+  AGG_COVAR_POP = 15,
+  AGG_CORR = 16,
+  AGG_REGR_SLOPE = 17,
+  AGG_REGR_INTERCEPT = 18,
+  AGG_REGR_R2 = 19,
+  AGG_REGR_AVGX = 20,
+  AGG_REGR_AVGY = 21,
+  AGG_REGR_SXX = 22,
+  AGG_REGR_SYY = 23,
+  AGG_REGR_SXY = 24,
+  AGG_REGR_COUNT = 25,
 };
 
 // JoinType
@@ -71,6 +91,11 @@ enum : int64_t {
   OP_LOG10 = 13,
   OP_SIN = 14,
   OP_COS = 15,
+  // Argument separator (GPU_OP_STATS). A 2-arg stat aggregate emits its
+  // dependent-arg program, OP_ARGSEP, then its independent-arg program into the
+  // single Agg.program tape; the Mojo side splits on it. Never reaches any
+  // expr-VM (it is stripped during the per-stat metric lowering).
+  OP_ARGSEP = 16,
 };
 
 // Descriptor kind (Stage-1 shadow validation introspection)
