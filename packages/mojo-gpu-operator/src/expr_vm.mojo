@@ -104,6 +104,8 @@ from raw_plan_tags import (
     OP_LOG10,
     OP_SIN,
     OP_COS,
+    OP_POW,
+    OP_LOG2,
 )
 
 comptime EXPR_STACK_MAX = 16
@@ -263,6 +265,32 @@ def _vm_sqrt_f64(x: Float64) -> Float64:
 # 1 / ln(10): log10(x) = log(x) * this. NVIDIA has no f64 log10 (libm, CPU-only),
 # but f64 `log` (natural) works -> derive log10 exactly from it.
 comptime _INV_LN10: Float64 = 0.43429448190325182765112891891660508229439700580367
+# 1 / ln(2): log2(x) = log(x) * this. Same rationale as _INV_LN10 (no f64 log2 on
+# NVIDIA; derive from the working f64 natural log).
+comptime _INV_LN2: Float64 = 1.4426950408889634073599246810018921374266459541530
+
+
+# power(base, exp) for INTEGER-valued exponents via exact binary exponentiation —
+# pure multiplies (and one reciprocal for negative exponents), so it stays bit-faithful
+# for ANY base sign and uses ONLY in-kernel-proven f64 ops (no f64 `pow` intrinsic,
+# which is libm/CPU-only on NVIDIA — same class as the missing f64 sin/cos). The
+# C++ EmitProgram only emits OP_POW when the exponent is an integer-valued constant,
+# so `exp` here is always integral; the fallback path is defensive only.
+@always_inline
+def _vm_pow_f64(base: Float64, exp_v: Float64) -> Float64:
+    var ei = Int(exp_v)
+    if Float64(ei) == exp_v and ei >= -64 and ei <= 64:
+        var n = ei if ei >= 0 else -ei
+        var r: Float64 = 1.0
+        var b = base
+        while n > 0:
+            if (n & 1) == 1:
+                r = r * b
+            b = b * b
+            n = n >> 1
+        return r if ei >= 0 else (1.0 / r)
+    # Non-integer exponent (not emitted by the planner): base>0 domain via exp/ln.
+    return exp(exp_v * log(base))
 
 
 # NVIDIA has no precise f64 sin/cos (only f32 approx PTX; the f64 path is libm /
@@ -352,6 +380,13 @@ def eval_program_f64[
             stack[sp - 1] = _vm_sin_f64(stack[sp - 1])
         elif op == OP_COS:
             stack[sp - 1] = _vm_cos_f64(stack[sp - 1])
+        elif op == OP_POW:
+            var ex = stack[sp - 1]
+            var base = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = _vm_pow_f64(base, ex)
+        elif op == OP_LOG2:
+            stack[sp - 1] = log(stack[sp - 1]) * _INV_LN2
         # unknown op: ignore (defensive)
         k += 1
     return stack[0] if sp > 0 else Float64(0.0)

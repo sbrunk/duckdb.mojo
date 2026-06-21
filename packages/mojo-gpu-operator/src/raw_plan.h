@@ -106,6 +106,14 @@ enum : int64_t {
   // single Agg.program tape; the Mojo side splits on it. Never reaches any
   // expr-VM (it is stripped during the per-stat metric lowering).
   OP_ARGSEP = 16,
+  // Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). BINARY: pop exp, pop base
+  // -> push base**exp. Emitted ONLY for integer-valued constant exponents (the f64
+  // const tape rounds doubles to int, so fractional exponents fail-closed in
+  // EmitProgram); eval_program_f64 computes it via exact binary exponentiation.
+  OP_POW = 17,
+  // log2 (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Unary: pop a -> push
+  // log2(a), derived from the in-kernel f64 natural log (no f64 log2 on NVIDIA).
+  OP_LOG2 = 18,
 };
 
 // Descriptor kind (Stage-1 shadow validation introspection)

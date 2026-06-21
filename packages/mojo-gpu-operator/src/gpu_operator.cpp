@@ -1675,6 +1675,35 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       prog.push_back({binop, 0, 0});
       return true;
     }
+    // Power with an INTEGER-VALUED CONSTANT exponent (flag GPU_OP_TRANSCENDENTAL).
+    // power(x, K) -> <base program>, PUSH_CONST(K), OP_POW; the float64 VM computes
+    // it by exact binary exponentiation (pure multiplies — bit-faithful for any base
+    // sign). ONLY integer-valued constant exponents are emitted: the f64 const tape
+    // rounds doubles to int (AddValueConst/llround), so a fractional exponent would be
+    // silently wrong -> fail-closed (decline) on fractional or non-constant (column)
+    // exponents. Returns DOUBLE -> routed to the f64 accumulator like the unary ops.
+    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+        (nm == "pow" || nm == "power") && fn.children.size() == 2) {
+      const Expression *ec = fn.children[1].get();
+      while (ec->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        ec = ec->Cast<BoundCastExpression>().child.get();
+      }
+      if (ec->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+        const Value &ev = ec->Cast<BoundConstantExpression>().value;
+        if (!ev.IsNull() && ev.type().IsNumeric()) {
+          double d = ev.GetValue<double>();
+          double r = (double)std::llround(d);
+          if (r == d && std::fabs(r) <= 64.0) {
+            if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
+            int64_t cid = AddValueConst(b, ev);
+            prog.push_back({rp::OP_PUSH_CONST, cid, 0});
+            prog.push_back({rp::OP_POW, 0, 0});
+            return true;
+          }
+        }
+      }
+      // fractional / non-constant exponent -> fall through -> fail-closed (decline)
+    }
     // Transcendental unary functions (flag GPU_OP_TRANSCENDENTAL only). Maps a
     // 1-child sqrt/exp/ln(or log)/log10/sin/cos to the matching OP_* opcode, which
     // ONLY the float64 expr-VM handles (sum/avg of f(col) -> DOUBLE). When the flag
@@ -1689,6 +1718,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       else if (nm == "exp") { uop = rp::OP_EXP; }
       else if (nm == "ln") { uop = rp::OP_LN; }
       else if (nm == "log10" || nm == "log") { uop = rp::OP_LOG10; }
+      else if (nm == "log2") { uop = rp::OP_LOG2; }
       else if (nm == "sin") { uop = rp::OP_SIN; }
       else if (nm == "cos") { uop = rp::OP_COS; }
       if (uop) {

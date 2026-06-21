@@ -40,6 +40,8 @@ from raw_plan_tags import (
     OP_LOG10,
     OP_SIN,
     OP_COS,
+    OP_POW,
+    OP_LOG2,
     JOIN_INNER,
     KIND_UNKNOWN,
     KIND_Q6,
@@ -386,6 +388,8 @@ def _is_transcendental_op(op: Int64) -> Bool:
         or op == OP_LOG10
         or op == OP_SIN
         or op == OP_COS
+        or op == OP_POW
+        or op == OP_LOG2
     )
 
 

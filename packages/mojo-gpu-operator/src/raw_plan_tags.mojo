@@ -88,6 +88,14 @@ comptime OP_COS: Int64 = 15
 # program, into the single Agg.program field. Split out on the Mojo side; never
 # reaches any expr-VM (it lives only in the un-lowered Agg.program tape).
 comptime OP_ARGSEP: Int64 = 16
+# Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). BINARY: pop exp, pop base ->
+# push base**exp. Only integer-valued constant exponents are emitted (the f64 const
+# tape rounds doubles to int — fractional exponents fail-closed on the C++ side);
+# eval_program_f64 computes it via exact binary exponentiation (pure multiplies).
+comptime OP_POW: Int64 = 17
+# log2 (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Unary: pop a -> push log2(a),
+# derived from the f64 natural log (NVIDIA has no in-kernel f64 log2). See raw_plan.h.
+comptime OP_LOG2: Int64 = 18
 
 # Descriptor kind
 comptime KIND_UNKNOWN: Int64 = 0
