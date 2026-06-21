@@ -710,6 +710,26 @@ def build_descriptor_impl(
     desc.strategy = strategy
     desc.kind = kind
 
+    # EMPTY-MATERIALIZE GATE (FIX 3): a bare `SELECT count(*) FROM t` (no filter, no
+    # group key, no dim edge, no other aggregate column) has NOTHING to project from
+    # the fact table -> the shuttle emits an empty "SELECT  FROM t", a parser error.
+    # Decline whenever the fact materialize set is empty: no fact group keys AND no
+    # dim edges (which would carry fact join keys/cond cols) AND no fact-projected
+    # columns (filter cols + aggregate LOAD_COLs). A FILTERED count(*) materializes
+    # the filter column (fact_projected_columns non-empty) -> NOT empty -> still
+    # routes. Declining is correct (stock CPU computes count(*) trivially).
+    var has_fact_gkey = False
+    for gk in range(n_gkeys):
+        if desc.group_keys[gk].table == fact_table:
+            has_fact_gkey = True
+            break
+    if (
+        not has_fact_gkey
+        and len(desc.dim_edges) == 0
+        and len(fact_projected_columns(desc)) == 0
+    ):
+        return None
+
     # NR3 (GPU_OP_FILTER_OR) scope guard. A residual OR-of-equalities PASS-PROGRAM
     # is composed into the HOST pass column ONLY on the int128 ungrouped / dense-
     # group path (_pin_finalize_generic resolves + AND-MULs it there). It is NOT
@@ -758,6 +778,18 @@ def build_descriptor_impl(
     # is DECLINED here (kept on CPU); the f64 hash machinery stays dormant behind
     # this guard for a future tighter-cap / fewer-output-rows revisit.
     if _has_transcendental(desc):
+        # FIX 4 (Group F): sin/cos are computed in FLOAT32 on NVIDIA (no precise f64
+        # sin/cos PTX), rel-err ~5e-7 >> the aggregate exactness tolerance -> silent
+        # wrong results. The other transcendentals (sqrt/exp/ln/log10/log2/pow) are
+        # f64-precise and keep routing. Decline any program carrying OP_SIN/OP_COS
+        # to stock CPU. (Defense-in-depth: the C++ EmitProgram already declines to
+        # emit these opcodes, so under the default planner path this is unreachable;
+        # this guards a raw-plan caller that hand-builds an OP_SIN/OP_COS program.)
+        for ai in range(len(desc.aggregates)):
+            ref prog = desc.aggregates[ai].program
+            for k in range(len(prog)):
+                if prog[k].op == OP_SIN or prog[k].op == OP_COS:
+                    return None
         # NVIDIA-ONLY: the float64 transcendental kernels need in-kernel f64, which
         # Apple Metal lacks (abort-only there) and AMD is unvalidated. Decline on
         # non-NVIDIA -> stock CPU (never route into the abort kernel).

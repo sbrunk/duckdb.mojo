@@ -1702,6 +1702,30 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
         return false;
       }
     }
+    // WIDTH GATE (FIX 1, Group A): the aggregate-INPUT materialize/feed path reads
+    // each fed column at a fixed byte stride keyed off its physical type, and the
+    // plain int aggregate kernels only consume INT32 (4B) or INT64 (8B) columns.
+    // A column whose internal type is NOT one of those is read at the wrong stride
+    // -> garbage, OR throws "unsupported materialized column physical type" in the
+    // feed switch (routed-then-error). Fail-closed here so the whole offload
+    // declines to correct stock CPU. (FLOAT/DOUBLE are already declined just above
+    // under the f64 flags; the f64 CAST path independently declines INT128 below.)
+    //   * DECIMAL: require INT64 backing (precision 10..18). This declines
+    //     DECIMAL(1..9) [INT16/INT32-backed] AND DECIMAL(19..38) [INT128-backed].
+    //     TPC-H DECIMAL(15,2) is INT64-backed -> STILL routes.
+    //   * else (integer/other numeric): require INT32 or INT64. This declines
+    //     TINYINT (INT8), SMALLINT (INT16), HUGEINT (INT128). INTEGER (INT32) and
+    //     BIGINT (INT64) -> STILL route.
+    {
+      auto wpt = ref.return_type.InternalType();
+      if (ref.return_type.id() == LogicalTypeId::DECIMAL) {
+        if (wpt != PhysicalType::INT64) { return false; }
+      } else {
+        if (wpt != PhysicalType::INT32 && wpt != PhysicalType::INT64) {
+          return false;
+        }
+      }
+    }
     auto col = ResolveJoinColref(ref, jt.gets);
     int64_t t = b.intern(col.table_name);
     int64_t c = b.intern(col.col_name);
@@ -1772,8 +1796,16 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       else if (nm == "ln") { uop = rp::OP_LN; }
       else if (nm == "log10" || nm == "log") { uop = rp::OP_LOG10; }
       else if (nm == "log2") { uop = rp::OP_LOG2; }
-      else if (nm == "sin") { uop = rp::OP_SIN; }
-      else if (nm == "cos") { uop = rp::OP_COS; }
+      // FIX 4 (Group F): sin/cos are computed in FLOAT32 on NVIDIA (the f64 expr-VM
+      // casts to f32 -- NVIDIA has no precise f64 sin/cos PTX), giving rel-err
+      // ~5e-7, well outside the aggregate's exactness tolerance -> SILENT WRONG
+      // RESULTS for sum(sin(x))/sum(cos(x)). The other transcendentals (sqrt/exp/
+      // ln/log10/log2/pow) ARE f64-precise and keep routing. Do NOT map sin/cos to
+      // an opcode -> they stay UNRECOGNIZED -> EmitProgram fails closed -> the whole
+      // plan declines to stock CPU. (On Apple sin/cos already decline via the
+      // dispatcher, so this is a no-op there; the win we keep is NVIDIA-only.)
+      // else if (nm == "sin") { uop = rp::OP_SIN; }  // declined: f32-only, imprecise
+      // else if (nm == "cos") { uop = rp::OP_COS; }  // declined: f32-only, imprecise
       if (uop) {
         if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
         prog.push_back({uop, 0, 0});
@@ -2087,6 +2119,33 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     // Filters: keyed by table column index into get->names. Map -> name, cmp, const.
     auto add_filter = [&](idx_t col_idx, const ConstantFilter &cf) -> bool {
       if (col_idx >= g->names.size()) { return false; }
+      // TYPE GATE (FIX 2): a pushed-down zone-map filter column is MATERIALIZED and
+      // fed like any other column, so it must be one of the physical types the feed
+      // switch handles (INT32/INT64/INT128/DOUBLE, or logical VARCHAR). Without this
+      // gate, `WHERE bool_col = true` routes then THROWS "unsupported materialized
+      // column physical type for BOOLEAN" in the feed loop (routed-then-error). The
+      // feed switch's `default:` covers BOOLEAN (PhysicalType::BOOL), TINYINT
+      // (INT8) and SMALLINT (INT16) -- decline them here. DATE is PhysicalType::
+      // INT32 and integer/date range filters (TPC-H) still route.
+      if (col_idx < g->returned_types.size()) {
+        const LogicalType &ft = g->returned_types[col_idx];
+        bool feedable = (ft.id() == LogicalTypeId::VARCHAR);
+        if (!feedable) {
+          switch (ft.InternalType()) {
+          case PhysicalType::INT32:
+          case PhysicalType::INT64:
+          case PhysicalType::INT128:
+          case PhysicalType::DOUBLE:
+            feedable = true;
+            break;
+          default:
+            feedable = false;
+          }
+        }
+        if (!feedable) { return false; }  // e.g. BOOLEAN/TINYINT/SMALLINT -> decline
+      } else {
+        return false;  // can't verify the filter column type -> fail-closed
+      }
       int64_t cmp = MapCmp(cf.comparison_type);
       if (cmp == 0) { return false; }
       int64_t cid = AddValueConst(out, cf.constant);
