@@ -1577,6 +1577,20 @@ int64_t MapCmp(ExpressionType cmp) {
   }
 }
 
+// GPU_OP_TRANSCENDENTAL / GPU_OP_STATS are DEFAULT-ON (opt-out), mirroring
+// GPU_OP_GENERIC: unset => enabled; "off"/"0"/"none" => disabled. These f64 win
+// classes are NVIDIA-only (the Mojo descriptor scope guard declines on Metal/AMD and
+// on unsupported shapes) and fail-closed across the correctness envelope hardened in
+// this series (NULL columns, fractional DOUBLE consts, DECIMAL scale!=2, INT128-backed
+// decimals, agg-const residency collisions), so enabling them by default only adds the
+// win where it is safe and declines to stock otherwise.
+static bool GpuOpFlagOn(const char *name) {
+  const char *v = std::getenv(name);
+  if (v == nullptr) { return true; }
+  return !(std::strcmp(v, "off") == 0 || std::strcmp(v, "0") == 0 ||
+           std::strcmp(v, "none") == 0);
+}
+
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
 // not exact constant values, so approximations here are acceptable.
@@ -1654,8 +1668,8 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // `Float64(raw_int64_bits) / col_div` would read garbage. The VM has no
     // bit-reinterpret path, so fail-closed on native-float source columns ->
     // the whole plan declines to stock CPU (correct, just not accelerated).
-    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr ||
-        std::getenv("GPU_OP_STATS") != nullptr) {
+    if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
+        GpuOpFlagOn("GPU_OP_STATS")) {
       auto pt = ref.return_type.InternalType();
       if (pt == PhysicalType::FLOAT || pt == PhysicalType::DOUBLE) {
         return false;
@@ -1693,7 +1707,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // rounds doubles to int (AddValueConst/llround), so a fractional exponent would be
     // silently wrong -> fail-closed (decline) on fractional or non-constant (column)
     // exponents. Returns DOUBLE -> routed to the f64 accumulator like the unary ops.
-    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+    if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") &&
         (nm == "pow" || nm == "power") && fn.children.size() == 2) {
       const Expression *ec = fn.children[1].get();
       while (ec->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -1722,7 +1736,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // is off these stay UNRECOGNIZED -> fail-closed (decline, prior behavior).
     // The scope guard (UNGROUPED-only + DOUBLE accumulator) is enforced on the Mojo
     // side (build_descriptor_impl + finalize); anything else declines -> CPU.
-    if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr && fn.children.size() == 1) {
+    if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") && fn.children.size() == 1) {
       int64_t uop = 0;
       // DuckDB semantics: ln(x)=natural log; log(x)==log10(x)=base-10; log10(x)
       // base-10. (Verified: SELECT ln(10),log(10),log10(10) -> 2.302,1.0,1.0.)
@@ -1771,8 +1785,8 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   // GPU_OP_STATS uses the SAME f64 expr-VM (col_div reconstructs the true double
   // from scaled-int64 storage), so the DECIMAL->DOUBLE cast DuckDB wraps a stat
   // argument in is likewise a value-level no-op -> pass the child through.
-  if ((std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr ||
-       std::getenv("GPU_OP_STATS") != nullptr) &&
+  if ((GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
+       GpuOpFlagOn("GPU_OP_STATS")) &&
       cls == ExpressionClass::BOUND_CAST) {
     auto &ce = e.Cast<BoundCastExpression>();
     auto tid = e.return_type.id();
@@ -1813,7 +1827,7 @@ int64_t MapAggKind(const std::string &name) {
   // closed-form on the host from the shared sums the f64 seg kernels accumulate.
   // When the flag is off these return 0 -> the agg-emit loop fails closed (the
   // whole plan declines to stock CPU), so the default build is byte-identical.
-  if (std::getenv("GPU_OP_STATS") != nullptr) {
+  if (GpuOpFlagOn("GPU_OP_STATS")) {
     if (name == "stddev_samp" || name == "stddev") { return rp::AGG_STDDEV_SAMP; }
     if (name == "stddev_pop") { return rp::AGG_STDDEV_POP; }
     if (name == "var_samp" || name == "variance") { return rp::AGG_VAR_SAMP; }
@@ -2648,7 +2662,7 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   // NVIDIA-only + flag-gated the op emission). Honors GPU_OP_GENERIC restriction
   // only via off/none above; a named restriction (e.g. "q3") does not list a
   // transcendental, so route it unless GPU_OP_GENERIC explicitly excludes all.
-  if (std::getenv("GPU_OP_TRANSCENDENTAL") != nullptr &&
+  if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") &&
       mojo_gpu_desc_is_transcendental(h)) {
     enabled = true;
   }
@@ -2657,7 +2671,7 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   // no TPC-H kind (KIND_UNKNOWN). Enable routing whenever the descriptor carries a
   // stat aggregate -- the Mojo scope guard already validated the shape (UNGROUPED/
   // DENSE, no FK dims, NVIDIA-only) and flag-gated the agg-kind emission.
-  if (std::getenv("GPU_OP_STATS") != nullptr && mojo_gpu_desc_is_stats(h)) {
+  if (GpuOpFlagOn("GPU_OP_STATS") && mojo_gpu_desc_is_stats(h)) {
     enabled = true;
   }
 
