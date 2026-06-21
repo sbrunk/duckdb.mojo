@@ -1595,10 +1595,12 @@ int64_t AddValueConst(RawPlanBuilder &b, const Value &v) {
 }
 
 // Emit a postfix (RPN) program for an aggregate-argument expression into `prog`.
-// Reuses the IsRevenueExpr / IsPromoPredicate grammar. Best-effort: unfamiliar
-// sub-expressions emit a placeholder PUSH_CONST(0) rather than failing — Stage-1
-// only validates structure, not exact program fidelity.
-void EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
+// Reuses the IsRevenueExpr / IsPromoPredicate grammar. Returns false on any
+// unfamiliar sub-expression (e.g. a transcendental function the GPU expr-VM has
+// no opcode for) so the caller declines the whole offload instead of silently
+// emitting a wrong (zero) program. (Previously: emitted PUSH_CONST(0), which made
+// sum(sqrt(col)) compute sum(0)=0 — a silent correctness bug.)
+bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
                  std::vector<RawPlanBuilder::Op> &prog,
                  optional_ptr<LogicalProjection> proj = nullptr) {
   auto cls = e.GetExpressionClass();
@@ -1611,20 +1613,19 @@ void EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     if (proj && ref.binding.table_index == proj->table_index) {
       idx_t idx = ref.binding.column_index;
       if (idx < proj->expressions.size()) {
-        EmitProgram(*proj->expressions[idx], jt, b, prog, proj);
-        return;
+        return EmitProgram(*proj->expressions[idx], jt, b, prog, proj);
       }
     }
     auto col = ResolveJoinColref(ref, jt.gets);
     int64_t t = b.intern(col.table_name);
     int64_t c = b.intern(col.col_name);
     prog.push_back({rp::OP_LOAD_COL, t, c});
-    return;
+    return true;
   }
   if (cls == ExpressionClass::BOUND_CONSTANT) {
     int64_t cid = AddValueConst(b, e.Cast<BoundConstantExpression>().value);
     prog.push_back({rp::OP_PUSH_CONST, cid, 0});
-    return;
+    return true;
   }
   if (cls == ExpressionClass::BOUND_FUNCTION) {
     auto &fn = e.Cast<BoundFunctionExpression>();
@@ -1634,10 +1635,10 @@ void EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     else if (nm == "-" || nm == "subtract") { binop = rp::OP_SUB; }
     else if (nm == "+" || nm == "add") { binop = rp::OP_ADD; }
     if (binop && fn.children.size() == 2) {
-      EmitProgram(*fn.children[0], jt, b, prog, proj);
-      EmitProgram(*fn.children[1], jt, b, prog, proj);
+      if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
+      if (!EmitProgram(*fn.children[1], jt, b, prog, proj)) { return false; }
       prog.push_back({binop, 0, 0});
-      return;
+      return true;
     }
   }
   if (cls == ExpressionClass::BOUND_CASE) {
@@ -1651,18 +1652,18 @@ void EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
         auto col = ResolveJoinColref(pf.children[0]->Cast<BoundColumnRefExpression>(), jt.gets);
         prog.push_back({rp::OP_PROMO_PRED, b.intern(col.table_name), b.intern(col.col_name)});
       } else {
-        EmitProgram(*chk.when_expr, jt, b, prog, proj);
+        if (!EmitProgram(*chk.when_expr, jt, b, prog, proj)) { return false; }
       }
-      EmitProgram(*chk.then_expr, jt, b, prog, proj);
+      if (!EmitProgram(*chk.then_expr, jt, b, prog, proj)) { return false; }
       int64_t zero = b.add_const(rp::TYPE_BIGINT, 0, 0, 0, 0, -1);
       prog.push_back({rp::OP_PUSH_CONST, zero, 0});
       prog.push_back({rp::OP_SELECT, 0, 0});
-      return;
+      return true;
     }
   }
-  // Unfamiliar: best-effort placeholder so the whole serialize doesn't fail.
-  int64_t cid = b.add_const(rp::TYPE_BIGINT, 0, 0, 0, 0, -1);
-  prog.push_back({rp::OP_PUSH_CONST, cid, 0});
+  // Unfamiliar (e.g. sqrt/exp/ln — no GPU expr-VM opcode): fail-closed so the
+  // caller declines the offload to stock/overrides rather than emitting sum(0).
+  return false;
 }
 
 // Map a DuckDB aggregate function name to an AggKind tag (0 if unsupported).
@@ -1844,7 +1845,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     ae.ret_is_int128 = (ag.return_type.InternalType() == PhysicalType::INT128) ? 1 : 0;
     // Program: empty for COUNT_STAR; else the single argument expression.
     if (kind != rp::AGG_COUNT_STAR && ag.children.size() == 1) {
-      EmitProgram(*ag.children[0], jt, out, ae.program, proj);
+      if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
     }
     out.aggregates.push_back(std::move(ae));
   }
