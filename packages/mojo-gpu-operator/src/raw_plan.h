@@ -114,6 +114,18 @@ enum : int64_t {
   // log2 (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Unary: pop a -> push
   // log2(a), derived from the in-kernel f64 natural log (no f64 log2 on NVIDIA).
   OP_LOG2 = 18,
+  // Range/inequality comparison ops (GPU_OP_FILTER_OR widening). FILTER/PREDICATE
+  // ops producing 0/1, handled by the int64 expr-VM (eval_program) exactly like
+  // OP_EQ: pop b, a -> push 1 if (a <op> b) else 0. They let an OR-of-RANGE /
+  // inequality residual LogicalFilter (a<10 OR a>95, BETWEEN, a!=5, ...) over
+  // INTEGER/DATE columns lower like the OR-of-equalities path, chained with OP_ADD
+  // (OR) / OP_MUL (AND). EmitOrEq maps the DuckDB COMPARE_* type -> one of these
+  // (inverting LT<->GT, LE<->GE when the column is on the RHS). See raw_plan_tags.mojo.
+  OP_LT = 19, // pop b, a -> push (a <  b) ? 1 : 0
+  OP_LE = 20, // pop b, a -> push (a <= b) ? 1 : 0
+  OP_GT = 21, // pop b, a -> push (a >  b) ? 1 : 0
+  OP_GE = 22, // pop b, a -> push (a >= b) ? 1 : 0
+  OP_NE = 23, // pop b, a -> push (a != b) ? 1 : 0
 };
 
 // Descriptor kind (Stage-1 shadow validation introspection)

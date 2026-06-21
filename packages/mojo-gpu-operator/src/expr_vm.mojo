@@ -98,6 +98,11 @@ from raw_plan_tags import (
     OP_SELECT,
     OP_LOAD_DIM,
     OP_EQ,
+    OP_LT,
+    OP_LE,
+    OP_GT,
+    OP_GE,
+    OP_NE,
     OP_SQRT,
     OP_EXP,
     OP_LN,
@@ -226,6 +231,31 @@ def eval_program[
             var lhs = stack[sp - 2]
             sp -= 1
             stack[sp - 1] = Int64(1) if lhs == rhs else Int64(0)
+        elif op == OP_LT:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = Int64(1) if lhs < rhs else Int64(0)
+        elif op == OP_LE:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = Int64(1) if lhs <= rhs else Int64(0)
+        elif op == OP_GT:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = Int64(1) if lhs > rhs else Int64(0)
+        elif op == OP_GE:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = Int64(1) if lhs >= rhs else Int64(0)
+        elif op == OP_NE:
+            var rhs = stack[sp - 1]
+            var lhs = stack[sp - 2]
+            sp -= 1
+            stack[sp - 1] = Int64(1) if lhs != rhs else Int64(0)
         # unknown op: ignore (defensive; planner only emits the ops above)
         k += 1
     return stack[0] if sp > 0 else Int64(0)

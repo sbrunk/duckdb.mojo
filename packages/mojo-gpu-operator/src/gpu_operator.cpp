@@ -2206,15 +2206,21 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
 //   - CONJUNCTION_OR  -> children chained with OP_ADD (!=0 iff any branch passes;
 //                        every leaf is 0/1 so the sum is >=0 and !=0 iff some leaf is 1).
 //   - CONJUNCTION_AND -> children chained with OP_MUL (!=0 iff all branches pass).
-//   - COMPARE_EQUAL   -> col=const over THIS GET on an INTEGER/DATE column:
-//                        LOAD_COL slot; PUSH_CONST const_id; OP_EQ (0/1).
+//   - COMPARE_{EQUAL,NOTEQUAL,LESSTHAN,LESSTHANOREQUALTO,GREATERTHAN,
+//     GREATERTHANOREQUALTO} -> col<op>const over THIS GET on an INTEGER/DATE column:
+//                        LOAD_COL slot; PUSH_CONST const_id; OP_{EQ,NE,LT,LE,GT,GE}
+//                        (each pushes 0/1). This lets an OR-of-RANGE / inequality
+//                        residual filter (a<10 OR a>95, BETWEEN as AND-of-ranges,
+//                        a!=5, ...) lower exactly like OR-of-equalities (GPU_OP_FILTER_OR).
 // `gets` is the single-element {this GET}; resolution reuses ResolveJoinColref +
 // AddValueConst exactly as the aggregate EmitProgram does. `op_count` is bumped per
 // emitted op and the whole thing declines if it exceeds 64 (stack stays <=2..3 by
 // construction; the cap bounds the program size). VARCHAR/DECIMAL/BIGINT/BOOLEAN
-// colrefs and any non-EQUAL comparison / non-constant side fail-closed (so a VARCHAR
-// const never reaches AddValueConst -- which would silently intern a str_id and
-// compare vs 0 down the int eval path).
+// colrefs and any non-{EQ,NE,LT,LE,GT,GE} comparison / non-constant side fail-closed
+// (so a VARCHAR const never reaches AddValueConst -- which would silently intern a
+// str_id and compare vs 0 down the int eval path). When the COLUMN is on the RIGHT
+// of an inequality (`5 > a`), the comparator is INVERTED (LT<->GT, LE<->GE; EQ/NE
+// symmetric) so the emitted LOAD_COL;PUSH_CONST;<op> keeps lhs=column, rhs=const.
 bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
               RawPlanBuilder &b, std::vector<RawPlanBuilder::Op> &prog,
               int64_t &op_count) {
@@ -2237,19 +2243,42 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     return true;
   }
   if (cls == ExpressionClass::BOUND_COMPARISON) {
-    if (e.type != ExpressionType::COMPARE_EQUAL) { return false; }  // LT/GT/LE/GE/NE decline
+    // Map the DuckDB comparison type -> the emittable int expr-VM opcode. Only the
+    // six 0/1 range/equality comparisons are supported; anything else (DISTINCT_FROM,
+    // NOT_DISTINCT_FROM, IN-as-comparison, ...) fails-closed below. The mapping is
+    // written for column-on-LEFT (lhs=col, rhs=const); when the column is on the
+    // RIGHT we INVERT it (5 > a == a < 5), so LT<->GT and LE<->GE swap, EQ/NE stay.
     auto &cmp = e.Cast<BoundComparisonExpression>();
     // One side a colref on THIS get, the other a bound constant (either order).
     const Expression *col_side = nullptr;
     const Expression *const_side = nullptr;
+    bool col_on_right = false;
     if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
         cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
       col_side = cmp.left.get(); const_side = cmp.right.get();
     } else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
                cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
       col_side = cmp.right.get(); const_side = cmp.left.get();
+      col_on_right = true;
     } else {
       return false;  // colref-vs-colref / function side / etc. -> decline
+    }
+    // Resolve the opcode for the canonical (col <op> const) orientation, inverting
+    // the comparator when the column was on the RIGHT so lhs=column, rhs=const holds.
+    int64_t cmp_op = 0;
+    switch (e.type) {
+    case ExpressionType::COMPARE_EQUAL:    cmp_op = rp::OP_EQ; break;
+    case ExpressionType::COMPARE_NOTEQUAL: cmp_op = rp::OP_NE; break;
+    case ExpressionType::COMPARE_LESSTHAN:
+      cmp_op = col_on_right ? rp::OP_GT : rp::OP_LT; break;
+    case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+      cmp_op = col_on_right ? rp::OP_GE : rp::OP_LE; break;
+    case ExpressionType::COMPARE_GREATERTHAN:
+      cmp_op = col_on_right ? rp::OP_LT : rp::OP_GT; break;
+    case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+      cmp_op = col_on_right ? rp::OP_LE : rp::OP_GE; break;
+    default:
+      return false;  // unsupported comparison type -> decline
     }
     auto &ref = col_side->Cast<BoundColumnRefExpression>();
     // TYPE GATE: only INTEGER / DATE go down the int eval path. EXCLUDE everything
@@ -2268,7 +2297,7 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     if (cid < 0) { return false; }
     prog.push_back({rp::OP_LOAD_COL, t, c});
     prog.push_back({rp::OP_PUSH_CONST, cid, 0});
-    prog.push_back({rp::OP_EQ, 0, 0});
+    prog.push_back({cmp_op, 0, 0});
     op_count += 3;
     return true;
   }

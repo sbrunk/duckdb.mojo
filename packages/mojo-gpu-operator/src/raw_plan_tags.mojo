@@ -96,6 +96,17 @@ comptime OP_POW: Int64 = 17
 # log2 (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Unary: pop a -> push log2(a),
 # derived from the f64 natural log (NVIDIA has no in-kernel f64 log2). See raw_plan.h.
 comptime OP_LOG2: Int64 = 18
+# Range/inequality comparison ops (GPU_OP_FILTER_OR widening). FILTER/PREDICATE ops
+# producing 0/1, evaluated by the int64 expr-VM (eval_program) exactly like OP_EQ:
+# each pops rhs=stack[sp-1], lhs=stack[sp-2], sp-=1, pushes 1 if (lhs <op> rhs) else 0.
+# Used to lower OR-of-RANGE / inequality residual LogicalFilters (e.g. a<10 OR a>95,
+# BETWEEN, a!=5) over INTEGER/DATE columns, chained with OP_ADD (OR) / OP_MUL (AND)
+# just like the OR-of-equalities path. See raw_plan.h lockstep + RAW_PLAN_CONTRACT.md.
+comptime OP_LT: Int64 = 19  # pop b, a -> push (a <  b) ? 1 : 0
+comptime OP_LE: Int64 = 20  # pop b, a -> push (a <= b) ? 1 : 0
+comptime OP_GT: Int64 = 21  # pop b, a -> push (a >  b) ? 1 : 0
+comptime OP_GE: Int64 = 22  # pop b, a -> push (a >= b) ? 1 : 0
+comptime OP_NE: Int64 = 23  # pop b, a -> push (a != b) ? 1 : 0
 
 # Descriptor kind
 comptime KIND_UNKNOWN: Int64 = 0

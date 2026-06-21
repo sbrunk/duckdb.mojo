@@ -115,6 +115,27 @@ OP_PROMO_PRED = 7   # operand_a = table_strid, operand_b = col_strid (p_type),
                     #   a preceding OP_PUSH_CONST? NO: PROMO_PRED operand_a=col table_strid,
                     #   operand_b = col_strid; the 'PROMO%' pattern is implicit (prefix match).
                     #   -> push bool (p_type LIKE 'PROMO%')
+OP_LOAD_DIM   = 8   # operand_a = dim-array index, operand_b = fact-key col slot (FK gather)
+OP_EQ         = 9   # pop b,a -> push (a==b) ? 1 : 0          (FILTER/PREDICATE 0/1)
+# Transcendental unary/binary ops (FLOAT eval path only; GPU_OP_TRANSCENDENTAL).
+OP_SQRT       = 10  # pop a -> push sqrt(a)
+OP_EXP        = 11  # pop a -> push exp(a)
+OP_LN         = 12  # pop a -> push ln(a)
+OP_LOG10      = 13  # pop a -> push log10(a)
+OP_SIN        = 14  # pop a -> push sin(a)
+OP_COS        = 15  # pop a -> push cos(a)
+OP_ARGSEP     = 16  # 2-arg stat aggregate argument separator (never reaches an expr-VM)
+OP_POW        = 17  # pop exp,base -> push base**exp (integer-valued exponents only)
+OP_LOG2       = 18  # pop a -> push log2(a)
+# Range/inequality comparison ops (GPU_OP_FILTER_OR widening). FILTER/PREDICATE ops
+# producing 0/1, evaluated by the int64 expr-VM exactly like OP_EQ. They lower an
+# OR-of-RANGE / inequality residual LogicalFilter (a<10 OR a>95, BETWEEN, a!=5, ...)
+# over INTEGER/DATE columns, chained with OP_ADD (OR) / OP_MUL (AND) like OR-of-eq.
+OP_LT         = 19  # pop b,a -> push (a< b) ? 1 : 0          (FILTER/PREDICATE 0/1)
+OP_LE         = 20  # pop b,a -> push (a<=b) ? 1 : 0          (FILTER/PREDICATE 0/1)
+OP_GT         = 21  # pop b,a -> push (a> b) ? 1 : 0          (FILTER/PREDICATE 0/1)
+OP_GE         = 22  # pop b,a -> push (a>=b) ? 1 : 0          (FILTER/PREDICATE 0/1)
+OP_NE         = 23  # pop b,a -> push (a!=b) ? 1 : 0          (FILTER/PREDICATE 0/1)
 ```
 
 ### Notes / invariants
@@ -136,9 +157,14 @@ OP_PROMO_PRED = 7   # operand_a = table_strid, operand_b = col_strid (p_type),
 - `PASS_PROGRAMS` (NR3, behind `GPU_OP_FILTER_OR`) is a **trailing additive** section
   after `AGGREGATES`; it does NOT change `MAGIC` or any prior section's layout. It
   carries a single-table residual `LogicalFilter` that is an OR-of-equalities (and
-  small sparse `IN`, which DuckDB lowers to OR-of-equalities) over INTEGER/DATE
-  columns, serialized as a postfix program over the EXISTING opcodes only:
-  equality `col=k` -> `OP_LOAD_COL slot; OP_PUSH_CONST const_id; OP_EQ` (pushes 0/1);
+  small sparse `IN`, which DuckDB lowers to OR-of-equalities) **or an OR-of-RANGE /
+  inequality** predicate (e.g. `a<10 OR a>95`, `a BETWEEN .. OR a BETWEEN ..`,
+  `a!=5 OR ...`) over INTEGER/DATE columns, serialized as a postfix program:
+  a comparison `col <op> k` -> `OP_LOAD_COL slot; OP_PUSH_CONST const_id;
+  OP_{EQ,NE,LT,LE,GT,GE}` (pushes 0/1; ops 19..23 are the GPU_OP_FILTER_OR range/
+  inequality widening, and the comparator is INVERTED when the column is on the RHS,
+  e.g. `5 > a` -> `a < 5`); a `BETWEEN` arrives as a `CONJUNCTION_AND` of two ranges
+  (AND->MUL recursion) and OR-of-BETWEEN as OR of those AND-groups;
   **OR** of N branches -> chain with `OP_ADD` (sum is `!=0` iff any leaf is 1, since
   every leaf is 0/1 -> the sum is `>=0`); **AND** of M sub-results (a
   `CONJUNCTION_AND` and the implicitly-ANDed `LogicalFilter.expressions[]`) -> chain
