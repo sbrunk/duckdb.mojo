@@ -3881,6 +3881,27 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(o.b))
                     + ";"
                 )
+                # Fold the CONST VALUE for PUSH_CONST ops: o.a is a per-descriptor
+                # const_id (index), not the value, so two queries differing ONLY in a
+                # constant (e.g. power(x,2) vs power(x,3) -> same opcodes, same const
+                # slot 0) would otherwise share a fingerprint and a WARM hit would reuse
+                # the WRONG cached result. (Filter constants are folded separately as
+                # "|f="; this covers AGGREGATE-PROGRAM constants like the power exponent.)
+                if (
+                    o.op == OP_PUSH_CONST
+                    and Int(o.a) >= 0
+                    and Int(o.a) < len(d.consts)
+                ):
+                    ref c = d.consts[Int(o.a)]
+                    sig += (
+                        "v"
+                        + String(Int(c.lo))
+                        + ":"
+                        + String(Int(c.hi))
+                        + ":"
+                        + c.str_val
+                        + ";"
+                    )
             for lc in range(len(agg.load_cols)):
                 sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
         return sig
@@ -3928,6 +3949,27 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(o.b))
                     + ";"
                 )
+                # Fold the CONST VALUE for PUSH_CONST ops: o.a is a per-descriptor
+                # const_id (index), not the value, so two queries differing ONLY in a
+                # constant (e.g. power(x,2) vs power(x,3) -> same opcodes, same const
+                # slot 0) would otherwise share a fingerprint and a WARM hit would reuse
+                # the WRONG cached result. (Filter constants are folded separately as
+                # "|f="; this covers AGGREGATE-PROGRAM constants like the power exponent.)
+                if (
+                    o.op == OP_PUSH_CONST
+                    and Int(o.a) >= 0
+                    and Int(o.a) < len(d.consts)
+                ):
+                    ref c = d.consts[Int(o.a)]
+                    sig += (
+                        "v"
+                        + String(Int(c.lo))
+                        + ":"
+                        + String(Int(c.hi))
+                        + ":"
+                        + c.str_val
+                        + ";"
+                    )
             for lc in range(len(agg.load_cols)):
                 sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
     return sig

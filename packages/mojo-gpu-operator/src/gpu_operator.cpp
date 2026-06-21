@@ -1784,6 +1784,15 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
              id == LogicalTypeId::TINYINT || id == LogicalTypeId::HUGEINT;
     };
     if (is_num(tid) && is_num(sid)) {
+      // The float64 VM reconstructs each operand from a SCALED INT64; an INT128-backed
+      // source (DECIMAL precision>18, or HUGEINT) does not fit int64 -> reading it as
+      // int64 truncates/misreads it (e.g. sum(sqrt(DECIMAL(38,4))) came out ~2x wrong).
+      // Fail-closed -> decline to stock. (The int128 aggregate paths read hugeint
+      // correctly; only this f64 expr-VM is int64-limited. A 16-byte-aware f64 feed
+      // that keeps the win on wide decimals is a follow-up.)
+      if (ce.child->return_type.InternalType() == PhysicalType::INT128) {
+        return false;
+      }
       return EmitProgram(*ce.child, jt, b, prog, proj);
     }
   }
