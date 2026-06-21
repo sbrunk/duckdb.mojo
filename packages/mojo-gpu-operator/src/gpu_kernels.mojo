@@ -30,10 +30,12 @@ from std.os import abort, getenv
 from std.sys.info import (
     has_nvidia_gpu_accelerator,
     has_apple_gpu_accelerator,
+    num_logical_cores,
 )
-from std.math import sqrt
+from std.math import sqrt, ceildiv
 from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
+from std.algorithm import parallelize
 
 from tc_knn import run_tc_knn_batch, tc_knn_supported
 from tc_knn_apple import run_tc_knn_apple_batch, tc_knn_apple_supported
@@ -3911,6 +3913,195 @@ def _pred_pass(v: Int64, cmp: Int64, k: Int64) -> Bool:
     return False
 
 
+# ===-------------------------------------------------------------------===#
+# RANK 3: parallelize the finalize host pack/pass loops (flag-gated).
+#
+# The cold finalize packs O(fact_rows) fact columns + a pass column into the
+# host `cols` buffer with serial `for i in range(n)` loops. Those loops are
+# embarrassingly parallel (disjoint writes `cols[slot*n+i]`, pure-read sources),
+# but single-threaded they fight DuckDB's multithreaded scan at scale (the sf10
+# cold loss). When GPU_OP_PARALLEL_FINALIZE is set, the helpers below run the
+# pack/pass loops over `_finalize_workers()` chunks via `algorithm.parallelize`;
+# OFF (default) they run the identical serial loop -> byte-identical output.
+#
+# Capture safety: the work fns capture ONLY raw base addresses (Int), element
+# sizes (Int), the destination UnsafePointer, and small copyable Int/Int64
+# Lists -- never the GpuExecState (non-copyable; would force a ref-capture of a
+# large struct). The source reads mirror `_col_val` exactly; writes are disjoint
+# by row index, so there is no data race.
+# ===-------------------------------------------------------------------===#
+
+def _parallel_finalize_on() -> Bool:
+    return getenv("GPU_OP_PARALLEL_FINALIZE", "") != ""
+
+
+# Worker count for the parallel finalize loops. Match DuckDB's default
+# (hardware threads) so the host pack/pass keeps up with its multithreaded scan.
+def _finalize_workers() -> Int:
+    var w = num_logical_cores()
+    if w < 1:
+        return 1
+    return w
+
+
+# Raw packed-int64 read at row `i` from a resolved column base address + element
+# size. Mirrors `_col_val`: elem_size 4 => widen Int32 (DATE/INTEGER), else Int64.
+# base == 0 (unfilled column) reads as 0 -- identical to `_col_val`.
+@always_inline
+def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
+    if base == 0:
+        return Int64(0)
+    if elem_size == 4:
+        var p = UnsafePointer[Int32, ImmutAnyOrigin](
+            unsafe_from_address=base + i * 4
+        )
+        return Int64(p[])
+    var p = UnsafePointer[Int64, ImmutAnyOrigin](
+        unsafe_from_address=base + i * 8
+    )
+    return p[]
+
+
+# Pack `cols[slot*n + i] = _read_packed(base, elem_size, i)` for i in [0,n),
+# parallelized over `_finalize_workers()` chunks. Used for the numeric fact
+# columns. Equivalent serial loop: `for i in range(n): cols[slot*n+i] = ...`.
+def _pack_col_par(
+    cols: UnsafePointer[Int64, MutAnyOrigin],
+    slot: Int,
+    n: Int,
+    base: Int,
+    elem_size: Int,
+):
+    var nw = _finalize_workers()
+    var chunk = ceildiv(n, nw)
+    var dst = Int(cols) + slot * n * 8
+
+    @parameter
+    @__copy_capture(dst, chunk, n, base, elem_size)
+    def work(t: Int):
+        var start = t * chunk
+        var end = min(start + chunk, n)
+        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
+        for i in range(start, end):
+            out[i] = _read_packed(base, elem_size, i)
+
+    parallelize[work](nw, nw)
+
+
+# Copy `cols[slot*n + i] = src[i]` for i in [0,n), parallelized. Used for the
+# gid column (a precomputed Int64 array) and the host pass column.
+def _pack_copy_par(
+    cols: UnsafePointer[Int64, MutAnyOrigin],
+    slot: Int,
+    n: Int,
+    src: UnsafePointer[Int64, MutAnyOrigin],
+):
+    var nw = _finalize_workers()
+    var chunk = ceildiv(n, nw)
+    var dst = Int(cols) + slot * n * 8
+    var s = Int(src)
+
+    @parameter
+    @__copy_capture(dst, s, chunk, n)
+    def work(t: Int):
+        var start = t * chunk
+        var end = min(start + chunk, n)
+        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
+        var sp = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=s)
+        for i in range(start, end):
+            out[i] = sp[i]
+
+    parallelize[work](nw, nw)
+
+
+# Bake the host pass column `pass_col[i] = AND_f _pred_pass(read(f), cmp_f, k_f)`
+# for i in [0,n), parallelized. `bases`/`esizes` are the per-filter resolved
+# column base addresses + element sizes (in filter order); `cmps`/`ks` the
+# per-filter cmp ops + constants. Equivalent to the serial AND-of-predicates bake.
+def _bake_pass_par(
+    pass_col: UnsafePointer[Int64, MutAnyOrigin],
+    n: Int,
+    bases: List[Int],
+    esizes: List[Int],
+    cmps: List[Int64],
+    ks: List[Int64],
+):
+    var nw = _finalize_workers()
+    var chunk = ceildiv(n, nw)
+    var dst = Int(pass_col)
+    var nf = len(bases)
+    # Flatten the per-filter Lists into a single contiguous Int64 buffer so the
+    # parallel work fn captures only raw pointers + counts (List[Int] is not
+    # ImplicitlyCopyable, so it cannot be @__copy_capture'd). Layout per filter:
+    # [base, esize, cmp, k] x nf.
+    var fb = alloc[Int64](4 * nf if nf > 0 else 1)
+    for fi in range(nf):
+        fb[4 * fi + 0] = Int64(bases[fi])
+        fb[4 * fi + 1] = Int64(esizes[fi])
+        fb[4 * fi + 2] = cmps[fi]
+        fb[4 * fi + 3] = ks[fi]
+    var fbp = Int(fb)
+
+    @parameter
+    @__copy_capture(dst, chunk, n, nf, fbp)
+    def work(t: Int):
+        var start = t * chunk
+        var end = min(start + chunk, n)
+        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
+        var f = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=fbp)
+        for i in range(start, end):
+            var ok = True
+            for fi in range(nf):
+                var v = _read_packed(
+                    Int(f[4 * fi + 0]), Int(f[4 * fi + 1]), i
+                )
+                if not _pred_pass(v, f[4 * fi + 2], f[4 * fi + 3]):
+                    ok = False
+                    break
+            out[i] = Int64(1) if ok else Int64(0)
+
+    parallelize[work](nw, nw)
+    fb.free()
+
+
+# Q5 gid gather: `cols[gid_slot*n + i] = grp[ supp ]` where supp = the row's
+# l_suppkey (read from `sk_base`/`sk_es`) bounded to [0,max_sk]; out-of-range or
+# (when `guard_nonneg`) a negative group value -> 0. Parallel over row chunks;
+# disjoint writes. Equivalent to the serial Q5 gid-gather loop.
+def _q5_gid_gather_par(
+    cols: UnsafePointer[Int64, MutAnyOrigin],
+    gid_slot: Int,
+    n: Int,
+    sk_base: Int,
+    sk_es: Int,
+    grp: UnsafePointer[Int64, MutAnyOrigin],
+    max_sk: Int,
+    guard_nonneg: Bool,
+):
+    var nw = _finalize_workers()
+    var chunk = ceildiv(n, nw)
+    var dst = Int(cols) + gid_slot * n * 8
+    var g = Int(grp)
+
+    @parameter
+    @__copy_capture(dst, chunk, n, sk_base, sk_es, g, max_sk, guard_nonneg)
+    def work(t: Int):
+        var start = t * chunk
+        var end = min(start + chunk, n)
+        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
+        var gp = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=g)
+        for i in range(start, end):
+            var sk = Int(_read_packed(sk_base, sk_es, i))
+            var gv = Int64(0)
+            if sk >= 0 and sk <= max_sk:
+                var sv = gp[sk]
+                if (not guard_nonneg) or sv >= 0:
+                    gv = sv
+            out[i] = gv
+
+    parallelize[work](nw, nw)
+
+
 # ---------------------------------------------------------------------------
 # Phase G Stage 2: Q6 predicate-independent residency spec.
 #
@@ -4497,8 +4688,15 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
+    # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
+    # is set (default off -> serial, byte-identical). PIN_LOG timing brackets the
+    # whole pack/pass stage so its serial->parallel ms + cold fraction is visible.
+    var par_on = _parallel_finalize_on()
+    var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+    var t_packpass0 = perf_counter_ns() if pin_log else 0
     if q6_pred_on or gen_pred_on:
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
+        # Cheap memset; left serial in both modes (the pack loops are the cost).
         for i in range(n):
             pass_col[i] = Int64(0)
     else:
@@ -4514,14 +4712,25 @@ def _pin_finalize_generic(
                 pass_col.free()
                 row_gid.free()
                 return 8
-        for i in range(n):
-            var ok = True
+        if par_on:
+            # Resolve per-filter raw base + elem_size (mirrors _col_val source);
+            # the parallel bake reads disjoint rows, writes disjoint pass_col[i].
+            var f_base: List[Int] = []
+            var f_es: List[Int] = []
             for fi in range(n_filters):
-                var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
-                if not _pred_pass(v, f_cmp[fi], f_k[fi]):
-                    ok = False
-                    break
-            pass_col[i] = Int64(1) if ok else Int64(0)
+                ref c = st.cols[numeric_matcols[f_slot[fi]]]
+                f_base.append(c.addr())
+                f_es.append(c.elem_size)
+            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k)
+        else:
+            for i in range(n):
+                var ok = True
+                for fi in range(n_filters):
+                    var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
+                    if not _pred_pass(v, f_cmp[fi], f_k[fi]):
+                        ok = False
+                        break
+                pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
     var n_slots = pass_slot + 1
@@ -4533,13 +4742,31 @@ def _pin_finalize_generic(
         if slot < len(omit_slot) and omit_slot[slot]:
             continue
         var mj = numeric_matcols[slot]
-        for i in range(n):
-            cols[slot * n + i] = _col_val(st, mj, i)
+        if par_on:
+            _pack_col_par(cols, slot, n, st.cols[mj].addr(), st.cols[mj].elem_size)
+        else:
+            for i in range(n):
+                cols[slot * n + i] = _col_val(st, mj, i)
     if gid_slot >= 0:
+        if par_on:
+            _pack_copy_par(cols, gid_slot, n, row_gid)
+        else:
+            for i in range(n):
+                cols[gid_slot * n + i] = row_gid[i]
+    if par_on:
+        _pack_copy_par(cols, pass_slot, n, pass_col)
+    else:
         for i in range(n):
-            cols[gid_slot * n + i] = row_gid[i]
-    for i in range(n):
-        cols[pass_slot * n + i] = pass_col[i]
+            cols[pass_slot * n + i] = pass_col[i]
+    if pin_log:
+        var dt = (perf_counter_ns() - t_packpass0) // 1000
+        print(
+            "[gpu-op pin] pack/pass stage par=",
+            "1" if par_on else "0",
+            " rows=", n, " numeric_slots=", n_numeric,
+            " filters=", n_filters, " us=", dt,
+            file=FileDescriptor(2),
+        )
 
     # --- metrics: per output aggregate, lower to internal metric program(s) ---
     # AGG_COUNT_STAR -> PUSH_CONST(1); AGG_SUM -> resolved program;
@@ -5178,18 +5405,43 @@ def _pin_finalize_q5(
             var gid_slot = n_numeric
             var n_slots = n_numeric + 1
             var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+            # RANK 3: parallelize the fact-column pack + gid gather (flag-gated).
+            var par_on = _parallel_finalize_on()
+            var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+            var t_pp0 = perf_counter_ns() if pin_log else 0
             for slot in range(n_numeric):
                 var mj = numeric_matcols[slot]
+                if par_on:
+                    _pack_col_par(
+                        cols, slot, n,
+                        st.cols[mj].addr(), st.cols[mj].elem_size,
+                    )
+                else:
+                    for i in range(n):
+                        cols[slot * n + i] = _col_val(st, mj, i)
+            if par_on:
+                ref skc = st.cols[numeric_matcols[lsk_slot]]
+                _q5_gid_gather_par(
+                    cols, gid_slot, n, skc.addr(), skc.elem_size,
+                    supp_nation, max_sk, True,
+                )
+            else:
                 for i in range(n):
-                    cols[slot * n + i] = _col_val(st, mj, i)
-            for i in range(n):
-                var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
-                var gv = Int64(0)
-                if sk >= 0 and sk <= max_sk:
-                    var sn = supp_nation[sk]
-                    if sn >= 0:
-                        gv = sn
-                cols[gid_slot * n + i] = gv
+                    var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
+                    var gv = Int64(0)
+                    if sk >= 0 and sk <= max_sk:
+                        var sn = supp_nation[sk]
+                        if sn >= 0:
+                            gv = sn
+                    cols[gid_slot * n + i] = gv
+            if pin_log:
+                var dt = (perf_counter_ns() - t_pp0) // 1000
+                print(
+                    "[gpu-op pin] q5 pack/gather par=",
+                    "1" if par_on else "0",
+                    " rows=", n, " numeric_slots=", n_numeric, " us=", dt,
+                    file=FileDescriptor(2),
+                )
 
             # --- pass program: NONE (in-kernel predicate gates rows). ---
             var pass_prog: List[Int64] = []
@@ -5525,16 +5777,40 @@ def _pin_finalize_q5(
     var gid_slot = n_numeric
     var n_slots = n_numeric + 1
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    # RANK 3: parallelize the fact-column pack + gid gather (flag-gated).
+    var par_on = _parallel_finalize_on()
+    var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+    var t_pp0 = perf_counter_ns() if pin_log else 0
     for slot in range(n_numeric):
         var mj = numeric_matcols[slot]
+        if par_on:
+            _pack_col_par(
+                cols, slot, n, st.cols[mj].addr(), st.cols[mj].elem_size
+            )
+        else:
+            for i in range(n):
+                cols[slot * n + i] = _col_val(st, mj, i)
+    if par_on:
+        ref skc = st.cols[numeric_matcols[lsk_slot]]
+        _q5_gid_gather_par(
+            cols, gid_slot, n, skc.addr(), skc.elem_size,
+            supp_group, max_sk, False,
+        )
+    else:
         for i in range(n):
-            cols[slot * n + i] = _col_val(st, mj, i)
-    for i in range(n):
-        var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
-        var gv = Int64(0)
-        if sk >= 0 and sk <= max_sk:
-            gv = supp_group[sk]
-        cols[gid_slot * n + i] = gv
+            var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
+            var gv = Int64(0)
+            if sk >= 0 and sk <= max_sk:
+                gv = supp_group[sk]
+            cols[gid_slot * n + i] = gv
+    if pin_log:
+        var dt = (perf_counter_ns() - t_pp0) // 1000
+        print(
+            "[gpu-op pin] q5 pack/gather par=",
+            "1" if par_on else "0",
+            " rows=", n, " numeric_slots=", n_numeric, " us=", dt,
+            file=FileDescriptor(2),
+        )
 
     # --- pass program (single-level gathers + OP_EQ + OP_MUL) ---
     var pass_prog: List[Int64] = [
@@ -6049,6 +6325,11 @@ def _pin_finalize_generic_dims(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
+    # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
+    # is set (default off -> serial, byte-identical).
+    var par_on = _parallel_finalize_on()
+    var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
+    var t_pp0 = perf_counter_ns() if pin_log else 0
     if gen_pred_on:
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         for i in range(n):
@@ -6063,14 +6344,23 @@ def _pin_finalize_generic_dims(
             if fs < len(omit_slot) and omit_slot[fs]:
                 pass_col.free(); dims_host.free(); doff_host.free()
                 return 8
-        for i in range(n):
-            var ok = True
+        if par_on:
+            var f_base: List[Int] = []
+            var f_es: List[Int] = []
             for fi in range(n_filters):
-                var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
-                if not _pred_pass(v, f_cmp[fi], f_k[fi]):
-                    ok = False
-                    break
-            pass_col[i] = Int64(1) if ok else Int64(0)
+                ref c = st.cols[numeric_matcols[f_slot[fi]]]
+                f_base.append(c.addr())
+                f_es.append(c.elem_size)
+            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k)
+        else:
+            for i in range(n):
+                var ok = True
+                for fi in range(n_filters):
+                    var v = _col_val(st, numeric_matcols[f_slot[fi]], i)
+                    if not _pred_pass(v, f_cmp[fi], f_k[fi]):
+                        ok = False
+                        break
+                pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- pack the fact columns + pass column ---
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
@@ -6080,10 +6370,25 @@ def _pin_finalize_generic_dims(
         if slot < len(omit_slot) and omit_slot[slot]:
             continue
         var mj = numeric_matcols[slot]
+        if par_on:
+            _pack_col_par(cols, slot, n, st.cols[mj].addr(), st.cols[mj].elem_size)
+        else:
+            for i in range(n):
+                cols[slot * n + i] = _col_val(st, mj, i)
+    if par_on:
+        _pack_copy_par(cols, pass_slot, n, pass_col)
+    else:
         for i in range(n):
-            cols[slot * n + i] = _col_val(st, mj, i)
-    for i in range(n):
-        cols[pass_slot * n + i] = pass_col[i]
+            cols[pass_slot * n + i] = pass_col[i]
+    if pin_log:
+        var dt = (perf_counter_ns() - t_pp0) // 1000
+        print(
+            "[gpu-op pin] dims pack/pass par=",
+            "1" if par_on else "0",
+            " rows=", n, " numeric_slots=", n_numeric,
+            " filters=", n_filters, " us=", dt,
+            file=FileDescriptor(2),
+        )
 
     # --- pass program: LOAD_COL(pass_slot), then for each dim pass-flag array
     # LOAD_DIM(idx, fk_slot); MUL (the dim-filter-AND-via-MUL mechanism). ---
