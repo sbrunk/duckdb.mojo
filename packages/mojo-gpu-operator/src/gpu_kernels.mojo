@@ -5289,12 +5289,18 @@ def _pin_finalize_generic(
             tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
-        elif _has_stats(d) and not (slot < len(omit_slot) and omit_slot[slot]):
-            # GPU_OP_STATS: use the column's ACTUAL fed decimal scale (the legacy
-            # TPC-H paths hardcode scale 2; a stat argument may be DECIMAL(_, s!=2)).
-            # A non-fed (skip-materialize omitted) slot cannot happen on the stats
-            # path (the scope guard never runs with skip-materialize active), so the
-            # else covers it defensively with the legacy default.
+        elif (
+            (_has_transcendental(d) or _has_stats(d))
+            and not (slot < len(omit_slot) and omit_slot[slot])
+        ):
+            # Use the column's ACTUAL fed decimal scale on the FLOAT64 paths (both
+            # GPU_OP_STATS and GPU_OP_TRANSCENDENTAL). (Previously only the stats branch
+            # threaded the true scale; the transcendental/power path fell to the `else`
+            # and hardcoded scale 2 -> silently 100x-wrong on any DECIMAL(_, s!=2) arg,
+            # e.g. sum(sqrt(DECIMAL(15,4))). Scale-2 columns are unaffected since the fed
+            # scale is then 2.) Restricted to the f64 paths so the int128 AVG rescale
+            # (Q1) keeps its scale-2 default. An omitted (skip-materialize) slot's scale
+            # is not fed -> the else keeps the legacy default.
             col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
@@ -6941,6 +6947,15 @@ def _pin_finalize_generic_dims(
             tt = st.cols[numeric_matcols[slot]].type_tag
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
+        elif (
+            (_has_transcendental(d) or _has_stats(d))
+            and not (slot < len(omit_slot) and omit_slot[slot])
+        ):
+            # Real fed decimal scale on the FLOAT64 grouped paths (DENSE stats +
+            # transcendental). Gated to f64 so the int128 grouped AVG rescale (Q1)
+            # keeps its scale-2 default (the shuttle feeds dec_scale=0). Fixes the
+            # hardcoded-scale-2 100x error on DECIMAL(_, s!=2).
+            col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
     for gi in range(len(d.gets)):
