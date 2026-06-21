@@ -2931,6 +2931,22 @@ public:
     }
 
     int64_t fin_rc = mojo_gpu_pin_finalize(h);
+    // Audit Group G: domain-error rc codes from the transcendental f64 finalize.
+    // A single out-of-domain row (sqrt of a negative / log of a non-positive)
+    // poisons the f64 aggregate to NaN; stock DuckDB RAISES rather than returning
+    // nan, so surface the matching OutOfRangeException here (rc 10=sqrt, 11=log,
+    // 12=unspecified domain). This is NOT a fallback-to-CPU path -- like stock, the
+    // query errors.
+    if (fin_rc == 10) {
+      throw OutOfRangeException("cannot take square root of a negative number");
+    }
+    if (fin_rc == 11) {
+      throw OutOfRangeException("cannot take logarithm of a negative number");
+    }
+    if (fin_rc == 12) {
+      throw OutOfRangeException(
+          "transcendental aggregate argument out of domain");
+    }
     if (fin_rc != 0) {
       throw InvalidInputException("GPU_AGG: pin_finalize failed (rc " +
                                   std::to_string(fin_rc) + ")");

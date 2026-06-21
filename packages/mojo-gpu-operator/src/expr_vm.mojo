@@ -88,7 +88,7 @@ by the planner for the supported TPC-H shapes never exceed this depth.
 """
 
 from std.gpu.memory import AddressSpace
-from std.math import sqrt, exp, log, sin, cos
+from std.math import sqrt, exp, log, sin, cos, nan
 from raw_plan_tags import (
     OP_LOAD_COL,
     OP_PUSH_CONST,
@@ -253,13 +253,35 @@ def eval_program[
 # constrained off for f64 on NVIDIA. We seed from the f32 approx and do ONE
 # Newton step (~1e-14 rel err, validated vs DuckDB). x>=0 by construction for the
 # DECIMAL/price columns these aggregates apply to.
+#
+# DOMAIN (audit Group G): stock DuckDB RAISES "cannot take square root of a
+# negative number" for x<0. The f32 seed of a negative is NaN and the `y > 0.0`
+# Newton guard is then false, so the result is already NaN -- but make the domain
+# violation EXPLICIT/deterministic: x<0 -> NaN sentinel. The host f64 finalize
+# detects this NaN and raises (matching stock), so a single out-of-domain row no
+# longer poisons the aggregate into a silent nan. (sqrt(0)==0 stays exact.)
 # ---------------------------------------------------------------------------
 @always_inline
 def _vm_sqrt_f64(x: Float64) -> Float64:
+    if x < 0.0:
+        return nan[DType.float64]()
     var y = Float64(sqrt(x.cast[DType.float32]()))
     if y > 0.0:
         y = 0.5 * (y + x / y)
     return y
+
+
+# Natural log with DOMAIN normalization (audit Group G): stock DuckDB RAISES
+# "cannot take logarithm of zero" / "of a negative number" for x<=0. The raw
+# in-kernel f64 log gives -inf for x==0 and NaN for x<0 -- NORMALIZE BOTH to a NaN
+# sentinel so the domain violation is an unambiguous signal distinct from a valid
+# Inf (exp overflow). The host f64 finalize detects this NaN and raises (matching
+# stock). Used by OP_LN/OP_LOG10/OP_LOG2 (log10/log2 derive from this natural log).
+@always_inline
+def _vm_ln_f64(x: Float64) -> Float64:
+    if x <= 0.0:
+        return nan[DType.float64]()
+    return log(x)
 
 
 # 1 / ln(10): log10(x) = log(x) * this. NVIDIA has no f64 log10 (libm, CPU-only),
@@ -373,9 +395,9 @@ def eval_program_f64[
         elif op == OP_EXP:
             stack[sp - 1] = exp(stack[sp - 1])
         elif op == OP_LN:
-            stack[sp - 1] = log(stack[sp - 1])
+            stack[sp - 1] = _vm_ln_f64(stack[sp - 1])
         elif op == OP_LOG10:
-            stack[sp - 1] = log(stack[sp - 1]) * _INV_LN10
+            stack[sp - 1] = _vm_ln_f64(stack[sp - 1]) * _INV_LN10
         elif op == OP_SIN:
             stack[sp - 1] = _vm_sin_f64(stack[sp - 1])
         elif op == OP_COS:
@@ -386,7 +408,7 @@ def eval_program_f64[
             sp -= 1
             stack[sp - 1] = _vm_pow_f64(base, ex)
         elif op == OP_LOG2:
-            stack[sp - 1] = log(stack[sp - 1]) * _INV_LN2
+            stack[sp - 1] = _vm_ln_f64(stack[sp - 1]) * _INV_LN2
         # unknown op: ignore (defensive)
         k += 1
     return stack[0] if sp > 0 else Float64(0.0)

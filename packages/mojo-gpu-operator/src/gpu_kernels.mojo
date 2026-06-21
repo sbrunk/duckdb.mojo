@@ -111,6 +111,10 @@ from raw_plan_tags import (
     OP_LOAD_DIM,
     OP_EQ,
     OP_ARGSEP,
+    OP_SQRT,
+    OP_LN,
+    OP_LOG10,
+    OP_LOG2,
 )
 from segreduce import (
     segreduce_upload,
@@ -2083,6 +2087,14 @@ struct GpuExecState(Movable):
     var res_valid: List[Bool]
     var res_rows: Int
     var res_cols: Int
+    # DOMAIN-ERROR signal (audit Group G; TRANSCENDENTAL f64 path only). The f64 VM
+    # normalizes out-of-domain inputs to a NaN sentinel (sqrt(x<0), ln/log10/log2(x<=0));
+    # the f64 assemble detects a NaN aggregate result and records WHICH op so the
+    # finalize can RAISE the matching DuckDB error (instead of emitting a silent nan).
+    #   0 = none, 1 = sqrt domain (negative), 2 = logarithm domain (zero/negative).
+    # A valid Inf (exp overflow) does NOT set this. Only the transcendental path sets
+    # it (stats legitimately emit nan on zero-variance corr/regr -> never flagged).
+    var domain_err: Int
 
     def __init__(out self, n_cols: Int):
         self.mat_cols = []
@@ -2104,6 +2116,7 @@ struct GpuExecState(Movable):
         self.res_valid = []
         self.res_rows = 0
         self.res_cols = 0
+        self.domain_err = 0
 
     # Size the dim-request storage for `n_dims` FK-join dims (request indices
     # 1..n_dims). `dim_col_counts[i]` is the SELECT column count of dim i.
@@ -2947,6 +2960,26 @@ def _stat_value(
     return NAN
 
 
+# Audit Group G: classify the domain-error op of a NaN transcendental result from
+# the metric op tape (flattened (op,a,b) triples). A NaN aggregate result on the
+# transcendental f64 path can only originate from a domain violation the f64 VM
+# normalized to NaN: sqrt(x<0) or ln/log10/log2(x<=0) (exp overflow -> a VALID Inf,
+# never NaN; the other ops -- add/sub/mul/select -- never produce NaN from finite
+# scaled-decimal operands). Returns 1 (sqrt), 2 (logarithm), or 0 (none found ->
+# the finalize falls back to a generic OutOfRange message). Sqrt takes precedence
+# when both are present (rare; a single clear message is acceptable per the audit).
+def _transcendental_domain_op(metric_ops: List[Int64]) -> Int:
+    var n = len(metric_ops) // 3
+    var saw_log = False
+    for k in range(n):
+        var op = metric_ops[3 * k]
+        if op == OP_SQRT:
+            return 1
+        if op == OP_LN or op == OP_LOG10 or op == OP_LOG2:
+            saw_log = True
+    return 2 if saw_log else 0
+
+
 # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: gp.n_cand candidates, group-key
 # cells from gp.gk_str_vals / gp.gk_i64_vals (mirrors _assemble's placement).
 #
@@ -3075,11 +3108,24 @@ def _assemble_f64(
                 res_lo[base + col] = Int64(fsums[gbase + gp.agg_m0[ai]])
             elif gp.agg_kind[ai] == AGG_AVG:
                 var cnt = fsums[gbase + gp.agg_m1[ai]]
-                res_f64[base + col] = (
+                var av = (
                     fsums[gbase + gp.agg_m0[ai]] / cnt
                 ) if cnt != 0.0 else 0.0
+                res_f64[base + col] = av
+                # Audit Group G: a NaN result on the TRANSCENDENTAL path is a domain
+                # violation the f64 VM normalized to NaN (sqrt(neg)/log(<=0)); avg of
+                # a poisoned sum is NaN/n == NaN too. RAISE in the finalize (matching
+                # stock), not a silent nan. Stats legitimately emit nan (zero-variance
+                # corr/regr) -> never flagged here. (x != x is true iff x is NaN.)
+                if not gp.is_stats and av != av:
+                    dst.domain_err = _transcendental_domain_op(gp.metric_ops)
             else:  # AGG_SUM -> DOUBLE sum, already in true-double units
-                res_f64[base + col] = fsums[gbase + gp.agg_m0[ai]]
+                var sm = fsums[gbase + gp.agg_m0[ai]]
+                res_f64[base + col] = sm
+                # Audit Group G: NaN sum on the transcendental path -> domain error.
+                # A valid Inf (exp overflow) is NOT NaN, so it does not raise here.
+                if not gp.is_stats and sm != sm:
+                    dst.domain_err = _transcendental_domain_op(gp.metric_ops)
             # NULL-on-empty: an UNGROUPED result with zero contributing rows is
             # SQL NULL for every aggregate EXCEPT count(*)/count(col)/regr_count
             # (those are 0 over an empty set). Matches stock DuckDB.
@@ -3147,11 +3193,19 @@ def _assemble_hash_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
                 res_lo[base + col] = Int64(hr.fsums[g * gp.M + gp.agg_m0[ai]])
             elif gp.agg_kind[ai] == AGG_AVG:
                 var cnt = hr.fsums[g * gp.M + gp.agg_m1[ai]]
-                res_f64[base + col] = (
+                var av = (
                     hr.fsums[g * gp.M + gp.agg_m0[ai]] / cnt
                 ) if cnt != 0.0 else 0.0
+                res_f64[base + col] = av
+                # Audit Group G: NaN -> domain error (sqrt(neg)/log(<=0)); raise in
+                # the finalize. HASH is the transcendental scope only (never stats).
+                if av != av:
+                    dst.domain_err = _transcendental_domain_op(gp.metric_ops)
             else:  # AGG_SUM
-                res_f64[base + col] = hr.fsums[g * gp.M + gp.agg_m0[ai]]
+                var sm = hr.fsums[g * gp.M + gp.agg_m0[ai]]
+                res_f64[base + col] = sm
+                if sm != sm:
+                    dst.domain_err = _transcendental_domain_op(gp.metric_ops)
         out_rows += 1
     dst.res_rows = out_rows
     dst.res_cols = n_cols
@@ -8103,48 +8157,70 @@ def mojo_gpu_pin_finalize(
         var key = Int(handle)
         if key not in m:
             return 2
-        ref st = m[key]
+        # Audit Group G: clear any stale domain-error flag before this finalize (the
+        # assemble sets it only on a fresh NaN result). Defensive against a reused
+        # handle key whose exec state was not recreated.
+        m[key].domain_err = 0
+        # Route to the finalize for this shape, capturing its rc. The f64
+        # transcendental paths (UNGROUPED/DENSE/HASH via _pin_finalize_generic) may
+        # set m[key].domain_err on an out-of-domain NaN result (audit Group G); we
+        # remap that to a distinct rc AFTER a successful (rc==0) assemble so the C++
+        # side raises the matching OutOfRange error instead of emitting a silent nan.
+        var rc: Int
 
         # The shuttle drives the GENERIC kernels (run_segreduce + eval_program)
         # for every class. No-join (Q6 UNGROUPED / Q1 DENSE_GROUP):
         if len(d.dim_edges) == 0 and (
             d.strategy == STRAT_UNGROUPED or d.strategy == STRAT_DENSE_GROUP
         ):
-            return _pin_finalize_generic(handle)
-
+            rc = _pin_finalize_generic(handle)
         # GPU_OP_TRANSCENDENTAL: a no-FK-join HASH_GROUP (integer fact group key,
         # e.g. GROUP BY l_partkey) is only reachable when the transcendental scope
         # guard accepted it (the high-card decline is bypassed for transcendentals).
         # It has no dim_edges, so the generic no-dim finalize handles it (it routes
         # to the float64 HASH accumulator). Non-transcendental no-dim HASH never
         # routes here (it is declined by _should_decline) -> returns 3 below.
-        if (
+        elif (
             len(d.dim_edges) == 0
             and d.strategy == STRAT_HASH_GROUP
             and _has_transcendental(d)
         ):
-            return _pin_finalize_generic(handle)
-
+            rc = _pin_finalize_generic(handle)
         # Q5 (5 dims, DENSE_GROUP over a dim-carried VARCHAR n_name, with a
         # correlated dim<->dim equality cust_nation==supp_nation on the same fact
         # row): self-contained host-precompute + OP_EQ pass program + DENSE_GROUP
         # segreduce.
-        if d.kind == KIND_Q5 and d.strategy == STRAT_DENSE_GROUP:
-            return _pin_finalize_q5(handle)
-
+        elif d.kind == KIND_Q5 and d.strategy == STRAT_DENSE_GROUP:
+            rc = _pin_finalize_q5(handle)
         # FK-join (Q14 UNGROUPED, Q3 SORT_SEGREDUCE / HASH_GROUP): generic
         # descriptor-driven path with on-GPU dim gather (OP_LOAD_DIM) +
         # transitive dim->dim folds. HASH_GROUP is the NVIDIA/AMD Q3 path (one-
         # pass GPU hash-aggregate instead of sort+segreduce).
-        if len(d.dim_edges) > 0 and (
+        elif len(d.dim_edges) > 0 and (
             d.strategy == STRAT_UNGROUPED
             or d.strategy == STRAT_SORT_SEGREDUCE
             or d.strategy == STRAT_HASH_GROUP
         ):
-            return _pin_finalize_generic_dims(handle)
+            rc = _pin_finalize_generic_dims(handle)
+        else:
+            # Unsupported descriptor shape -> let the C++ side fall back to CPU.
+            rc = 3
 
-        # Unsupported descriptor shape -> let the C++ side fall back to CPU.
-        return 3
+        # Audit Group G: a domain violation (sqrt of a negative / log of a non-
+        # positive) on the transcendental f64 path poisoned the aggregate to NaN.
+        # Surface a DISTINCT rc so the C++ side raises the matching error (10=sqrt,
+        # 11=logarithm, 12=unspecified domain) -- matching stock DuckDB, which errors
+        # rather than returning nan. Only after a successful assemble (rc==0); the
+        # int128 / stats paths never set domain_err.
+        if rc == 0:
+            var de = m[key].domain_err
+            if de == 1:
+                return 10
+            elif de == 2:
+                return 11
+            elif de != 0:
+                return 12
+        return rc
     except:
         return 6
 
