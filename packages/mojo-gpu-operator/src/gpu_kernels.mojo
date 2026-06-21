@@ -2288,6 +2288,13 @@ struct GpuPinned(Movable):
     var agg_msy2: List[Int]  # index of metric Sy2 (sum of y*y)
     var agg_msxy: List[Int]  # index of metric Sxy (sum of x*y)
     var agg_mn: List[Int]  # index of metric n (count of passing rows)
+    # NULL-on-empty fix (UNGROUPED only): metric index of a count-of-passing-rows
+    # metric (PUSH_CONST(1) summed). When `mode == STRAT_UNGROUPED` the assemble
+    # reads sums[ungrouped_count_m]; if it is 0 the single output row had ZERO
+    # contributing rows, so sum/avg/min/max/stats emit SQL NULL (count stays 0).
+    # -1 when not set (grouped paths, which never emit an empty group, are
+    # untouched: a DENSE/HASH group is emitted only when its passing count > 0).
+    var ungrouped_count_m: Int
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2339,6 +2346,7 @@ struct GpuPinned(Movable):
         self.agg_msy2 = []
         self.agg_msxy = []
         self.agg_mn = []
+        self.ungrouped_count_m = -1
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -3010,6 +3018,13 @@ def _assemble_f64(
     # has >=1 passing row -> gate emit on the count. UNGROUPED has no count tail.
     var dense = gp.mode == STRAT_DENSE_GROUP
     var gm = gp.G * gp.M
+    # NULL-on-empty (UNGROUPED only): zero contributing rows => sum/avg/min/max/stats
+    # are SQL NULL (count stays 0). The pass-count metric sums 1.0 per passing row.
+    var ungrouped_empty = (
+        gp.mode == STRAT_UNGROUPED
+        and gp.ungrouped_count_m >= 0
+        and fsums[gp.ungrouped_count_m] == 0.0
+    )
     var res_lo: List[Int64] = []
     var res_hi: List[Int64] = []
     var res_f64: List[Float64] = []
@@ -3065,6 +3080,15 @@ def _assemble_f64(
                 ) if cnt != 0.0 else 0.0
             else:  # AGG_SUM -> DOUBLE sum, already in true-double units
                 res_f64[base + col] = fsums[gbase + gp.agg_m0[ai]]
+            # NULL-on-empty: an UNGROUPED result with zero contributing rows is
+            # SQL NULL for every aggregate EXCEPT count(*)/count(col)/regr_count
+            # (those are 0 over an empty set). Matches stock DuckDB.
+            if (
+                ungrouped_empty
+                and gp.agg_kind[ai] != AGG_COUNT_STAR
+                and gp.agg_kind[ai] != AGG_REGR_COUNT
+            ):
+                res_valid[base + col] = False
         out_rows += 1
     dst.res_rows = out_rows
     dst.res_cols = n_cols
@@ -3231,6 +3255,16 @@ def _assemble(
     var res_hi: List[Int64] = []
     var res_f64: List[Float64] = []
     var res_str: List[String] = []
+    var res_valid: List[Bool] = []  # NULL-on-empty mask (True=valid); see below.
+    # NULL-on-empty (UNGROUPED only): zero contributing rows => sum/avg/min/max are
+    # SQL NULL (count stays 0). The pass-count metric sums 1 per passing row. The
+    # int path previously left res_valid empty (all valid); now it is populated so
+    # the empty-set NULL is emitted. NON-empty -> all cells valid == prior behavior.
+    var ungrouped_empty = (
+        gp.mode == STRAT_UNGROUPED
+        and gp.ungrouped_count_m >= 0
+        and sums[gp.ungrouped_count_m] == Int128(0)
+    )
     var out_rows = 0
     for g in range(gp.n_cand):
         # Emit rule: optionally gate on a SUM aggregate's freshly-computed sum.
@@ -3247,6 +3281,7 @@ def _assemble(
             res_hi.append(0)
             res_f64.append(0.0)
             res_str.append(String(""))
+            res_valid.append(True)
         var base = out_rows * n_cols
         # group-key cells (in group-key order).
         for gk in range(n_keys):
@@ -3269,9 +3304,14 @@ def _assemble(
                 res_f64[base + col] = (
                     sumf / scale_div / Float64(cnt)
                 ) if cnt != 0 else 0.0
-            else:  # AGG_SUM -> i128 limbs at ret_scale
+            else:  # AGG_SUM/MIN/MAX -> i128 limbs at ret_scale
                 res_lo[base + col] = v0.cast[DType.int64]()
                 res_hi[base + col] = (v0 >> 64).cast[DType.int64]()
+            # NULL-on-empty: an UNGROUPED result with zero contributing rows is
+            # SQL NULL for every aggregate EXCEPT count(*)/count(col) (0 over an
+            # empty set). Matches stock DuckDB.
+            if ungrouped_empty and gp.agg_kind[ai] != AGG_COUNT_STAR:
+                res_valid[base + col] = False
         out_rows += 1
 
     dst.res_rows = out_rows
@@ -3280,6 +3320,7 @@ def _assemble(
     dst.res_hi = res_hi^
     dst.res_f64 = res_f64^
     dst.res_str = res_str^
+    dst.res_valid = res_valid^
 
 
 # Re-run the HASH_GROUP kernel + assemble. Used by BOTH cold and warm Q3 paths
@@ -5878,6 +5919,33 @@ def _pin_finalize_generic(
             agg_m0.append(mi)
             agg_m1.append(-1)
 
+    # NULL-on-empty (UNGROUPED only): record the metric index of a count-of-passing-
+    # rows metric so the assemble can detect a zero-contributing-row result and emit
+    # SQL NULL for sum/avg/min/max/stats (count stays 0), matching stock DuckDB.
+    # Reuse an existing count metric when present (COUNT_STAR's m0, AVG's m1, a
+    # stat's mn -- all PUSH_CONST(1) summed); otherwise (a pure SUM/MIN/MAX query)
+    # emit one cheap count metric. GROUPED paths leave this -1 (they never emit an
+    # empty group, so they are untouched). The extra metric (when needed) is summed
+    # over the SAME passing rows -> no kernel/tape-format change.
+    var ungrouped_count_m = -1
+    if mode == STRAT_UNGROUPED:
+        for ai in range(len(d.aggregates)):
+            if agg_kind[ai] == AGG_COUNT_STAR:
+                ungrouped_count_m = agg_m0[ai]
+                break
+            elif agg_kind[ai] == AGG_AVG:
+                ungrouped_count_m = agg_m1[ai]
+                break
+            elif _is_stat_agg_kind(agg_kind[ai]):
+                ungrouped_count_m = agg_mn[ai]
+                break
+        if ungrouped_count_m < 0:
+            ungrouped_count_m = _emit_count(
+                metric_ops, metric_offsets, metric_lens, n_ops_total
+            )
+            if is_float64:
+                const_div.append(Float64(1))
+
     var M = len(metric_offsets)
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
@@ -6097,6 +6165,7 @@ def _pin_finalize_generic(
     gp.agg_msy2 = agg_msy2^
     gp.agg_msxy = agg_msxy^
     gp.agg_mn = agg_mn^
+    gp.ungrouped_count_m = ungrouped_count_m
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
     # WARM path can re-run the in-kernel filter with a fresh constant set.
@@ -7193,6 +7262,26 @@ def _pin_finalize_generic_dims(
             metric_lens.append(Int64(plan.n_ops))
             n_ops_total += plan.n_ops
             agg_m0.append(len(metric_offsets) - 1)
+    # NULL-on-empty (UNGROUPED dims, e.g. Q14): record a count-of-passing-rows
+    # metric index so the assemble emits SQL NULL for sum/avg/min/max over an empty
+    # filtered set (count stays 0). Reuse a COUNT_STAR metric if present; else emit
+    # one cheap count. Computed ONLY for STRAT_UNGROUPED so the grouped Q3 paths
+    # (SORT_SEGREDUCE / HASH_GROUP) keep their exact metric tape (-1 -> untouched;
+    # a grouped result never emits an empty group).
+    var ungrouped_count_m_dims = -1
+    if d.strategy == STRAT_UNGROUPED:
+        for ai in range(len(agg_kind)):
+            if agg_kind[ai] == AGG_COUNT_STAR:
+                ungrouped_count_m_dims = agg_m0[ai]
+                break
+        if ungrouped_count_m_dims < 0:
+            metric_offsets.append(Int64(n_ops_total))
+            metric_ops.append(OP_PUSH_CONST)
+            metric_ops.append(Int64(1))
+            metric_ops.append(Int64(0))
+            metric_lens.append(Int64(1))
+            n_ops_total += 1
+            ungrouped_count_m_dims = len(metric_offsets) - 1
     var M = len(metric_offsets)
 
     # --- dim-carried GROUP-KEY arrays (SORT_SEGREDUCE) -> kind-1 carried ---
@@ -7938,6 +8027,7 @@ def _pin_finalize_generic_dims(
     gp.n_cand = 1
     gp.emit_agg = -1
     gp.emit_gt0 = False
+    gp.ungrouped_count_m = ungrouped_count_m_dims
     gp.kind = d.kind  # routes Q14 (UNGROUPED) to the comptime-specialized kernel
     # Generalized Q14: cache the constant-independent fact-filter slots + cmps (in
     # descriptor order, == f_slot/f_cmp here). The bounds are threaded per run.
