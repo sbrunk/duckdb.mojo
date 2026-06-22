@@ -105,6 +105,9 @@ gpu-op-q6shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu
 # NR3 (GPU_OP_FILTER_OR): ungrouped sum(x) WHERE a=2 OR a=9 OR a=40 over one fact
 # table -> the OR-of-equalities PASS-PROGRAM, AND-composed into the host pass column.
 gpu-op-orfilter-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/or_filter_shuttle_test.mojo"
+# GPU_OP_NULLABLE: live-SQL end-to-end test of the nullable-column SUM slice (set
+# GPU_OP_NULLABLE=1 to exercise the routed path; unset -> nullable declines to stock).
+gpu-op-nullable-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_sql_test.mojo"
 gpu-op-q14shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q14_shuttle_test.mojo"
 gpu-op-q3shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q3_shuttle_test.mojo"
 gpu-op-q5shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q5_shuttle_test.mojo"

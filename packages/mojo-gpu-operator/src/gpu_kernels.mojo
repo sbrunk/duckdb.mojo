@@ -1950,6 +1950,13 @@ struct FedColumn(Movable):
     # rewritten to point into this heap so the column is self-contained after the
     # source DuckDB result (and its string heap) is freed. None for non-VARCHAR.
     var str_heap: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    # GPU_OP_NULLABLE: optional per-row validity (1 byte/row, 1=valid, 0=SQL NULL).
+    # None when the column carries no NULLs (the common case / all NOT-NULL columns)
+    # -> every row is valid. C++ feeds this (via mojo_gpu_feed_validity) ONLY for a
+    # column the materialize scan observed an actual NULL in; the finalize pass-bake
+    # ANDs it into the host pass column so a NULL row is excluded exactly like a
+    # filtered-out row (SQL aggregate NULL semantics). See _pin_finalize_generic.
+    var validity: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
 
     def __init__(out self):
         self.data = None
@@ -1958,6 +1965,7 @@ struct FedColumn(Movable):
         self.type_tag = 0
         self.dec_scale = 0
         self.str_heap = None
+        self.validity = None
 
     def fill(
         mut self,
@@ -1978,8 +1986,29 @@ struct FedColumn(Movable):
         self.elem_size = elem_size
         self.type_tag = type_tag
         self.str_heap = None
+        # A re-fill replaces the data, so any prior validity is stale (validity is
+        # fed AFTER data, so this is normally already None). free_data above also
+        # frees it; reset defensively.
+        self.validity = None
         if type_tag == TYPE_VARCHAR:
             self._deep_copy_strings(n_rows)
+
+    # GPU_OP_NULLABLE: copy a C++-owned per-row validity byte array (1=valid,
+    # 0=NULL, n_rows bytes) into an owned buffer. Called after fill() for a column
+    # the scan saw a NULL in. No-op semantics elsewhere (validity stays None).
+    def set_validity(
+        mut self, src: UnsafePointer[NoneType, MutAnyOrigin], n_rows: Int
+    ):
+        if self.validity:
+            self.validity.value().free()
+            self.validity = None
+        var nb = n_rows if n_rows > 0 else 1
+        var p = alloc[UInt8](nb)
+        var src_b = UnsafePointer[UInt8, ImmutAnyOrigin](
+            unsafe_from_address=Int(src)
+        )
+        memcpy(dest=p, src=src_b, count=n_rows if n_rows > 0 else 0)
+        self.validity = p
 
     # Deep-copy every non-inlined DuckDB string_t (length > 12) into an owned heap
     # and rewrite the copied struct's pointer (bytes 8..15) to point at it. The
@@ -2042,6 +2071,9 @@ struct FedColumn(Movable):
         if self.str_heap:
             self.str_heap.value().free()
             self.str_heap = None
+        if self.validity:
+            self.validity.value().free()
+            self.validity = None
 
 
 # Per-descriptor Stage-2 state.
@@ -4043,15 +4075,20 @@ def _signature(d: GpuPlanDescriptor) -> String:
                 + ":"
                 + c.str_val
             )
-    # FLOAT64 collision guard (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS, NON-pred-
-    # independent fallback -- e.g. DENSE stats, or a filtered f64 query that did not
-    # qualify for the pred-independent branch above). Two f64 queries over the SAME
-    # columns / strat / kind / filters but DIFFERENT functions (stddev(x) vs var(x)
-    # GROUP BY k; sum(sqrt(x)) vs sum(exp(x))) would otherwise share a signature and
-    # a WARM hit would reuse the WRONG metric program. Fold in the same aggregate-
-    # program fingerprint the pred-independent branch uses (kind + op tape + load-col
-    # refs). No-op on the int128 path (it is never f64).
-    if _has_transcendental(d) or _has_stats(d):
+    # AGGREGATE-PROGRAM collision guard (ALL non-pred-independent queries -- int128
+    # AND f64). Two queries over the SAME columns / strat / kind / filters but
+    # DIFFERENT aggregates would otherwise share a signature and a WARM hit would
+    # reuse the WRONG metric program / layout. This bites the INT path too, NOT just
+    # f64: `sum(c)` then `avg(c)` over the same column collide (same cols/strat/kind)
+    # -> avg WARM-reuses sum's resident pin (M=1, no count metric) -> avg = 0.0, a
+    # default-on silent wrong result (the int128 `kind` does NOT fix the aggregate
+    # shape -- sum/avg/count over one column all share a kind). Examples it fixes:
+    # sum(x) vs avg(x); sum(x) vs sum(x*2); f64 stddev(x) vs var(x); sum(sqrt(x)) vs
+    # sum(exp(x)). Folding the agg shape in is monotonic-safe (only MORE distinct
+    # signatures; a missed warm-hit just re-pins cold, still correct). The TPC-H
+    # pred-independent kinds (q6/gen/q5/f64_pred) returned above already key on their
+    # fixed canonical agg shape, so they are unaffected.
+    if len(d.aggregates) > 0:
         for ai in range(len(d.aggregates)):
             ref agg = d.aggregates[ai]
             sig += "|fa=" + String(Int(agg.kind)) + ":"
@@ -4264,6 +4301,50 @@ def mojo_gpu_feed_rowcount(
         return 3
 
 
+# GPU_OP_NULLABLE: feed a per-row validity byte array (1=valid, 0=SQL NULL,
+# `n_rows` bytes) for one fed column. Mirrors mojo_gpu_feed_column's req_i/col_j
+# resolution (req 0 = fact, else dim-edge `req_i-1`); `col_j` is the SAME emitted
+# index feed_column used, translated through fed_pos_to_matcol for the fact. C++
+# calls this ONLY for a column whose materialize scan observed an actual NULL
+# (AllValid() false), so columns with no NULLs keep validity == None (all valid).
+# Must be called AFTER mojo_gpu_feed_column for that column (fill resets validity).
+@export("mojo_gpu_feed_validity")
+def mojo_gpu_feed_validity(
+    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    req_i: Int,
+    col_j: Int,
+    ptr: UnsafePointer[NoneType, MutAnyOrigin],
+    n_rows: Int,
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 1
+    try:
+        ref m = _exec_ptr()[]
+        var key = Int(handle)
+        if key not in m:
+            return 2
+        ref st = m[key]
+        if req_i == 0:
+            var mj = col_j
+            if len(st.fed_pos_to_matcol) > 0:
+                if col_j < 0 or col_j >= len(st.fed_pos_to_matcol):
+                    return 3
+                mj = st.fed_pos_to_matcol[col_j]
+            if mj < 0 or mj >= len(st.cols):
+                return 3
+            st.cols[mj].set_validity(ptr, n_rows)
+            return 0
+        var de = req_i - 1
+        if de < 0 or de >= len(st.dim_cols):
+            return 3
+        if col_j < 0 or col_j >= len(st.dim_cols[de]):
+            return 3
+        st.dim_cols[de][col_j].set_validity(ptr, n_rows)
+        return 0
+    except:
+        return 4
+
+
 # SKIP-MATERIALIZE: is the narrow-SQL skip-materialize path active for THIS query?
 # C++ calls it BEFORE the feed loop to decide whether to (a) bypass the GPU-direct
 # fact feed (it uses the narrowed SQL feed instead) and (b) call feed_rowcount +
@@ -4445,6 +4526,18 @@ def _col_val(st: GpuExecState, j: Int, i: Int) -> Int64:
         unsafe_from_address=base + i * 8
     )
     return p[]
+
+
+# GPU_OP_NULLABLE: True iff row `i` of fed fact column `j` is VALID (non-NULL).
+# A column with no validity mask (the all-NOT-NULL / no-NULL-observed common case)
+# is all-valid. Used by the host pass-bake to AND validity into the pass column so a
+# NULL agg-input / filter row is excluded exactly like a filtered-out row.
+def _col_valid(st: GpuExecState, j: Int, i: Int) -> Bool:
+    ref c = st.cols[j]
+    if not c.validity:
+        return True
+    var vp = c.validity.value()
+    return vp[i] != 0
 
 
 # Read dim-request `de`'s fed numeric column `c` at row `i` as Int64 (widening
@@ -5044,6 +5137,7 @@ def _bake_pass_par(
     esizes: List[Int],
     cmps: List[Int64],
     ks: List[Int64],
+    valid_bases: List[Int],
 ):
     var nw = _finalize_workers()
     var chunk = ceildiv(n, nw)
@@ -5060,14 +5154,24 @@ def _bake_pass_par(
         fb[4 * fi + 2] = cmps[fi]
         fb[4 * fi + 3] = ks[fi]
     var fbp = Int(fb)
+    # GPU_OP_NULLABLE: flatten the per-valid-slot validity base addresses (1 byte/
+    # row) into a contiguous Int64 buffer (same capture constraint as fb). nv == 0
+    # in the common all-valid case -> the inner validity loop is skipped, byte-
+    # identical to the pre-nullable parallel bake. MUST mirror the serial AND.
+    var nv = len(valid_bases)
+    var vb = alloc[Int64](nv if nv > 0 else 1)
+    for vi in range(nv):
+        vb[vi] = Int64(valid_bases[vi])
+    var vbp = Int(vb)
 
     @parameter
-    @__copy_capture(dst, chunk, n, nf, fbp)
+    @__copy_capture(dst, chunk, n, nf, fbp, nv, vbp)
     def work(t: Int):
         var start = t * chunk
         var end = min(start + chunk, n)
         var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
         var f = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=fbp)
+        var vv = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=vbp)
         for i in range(start, end):
             var ok = True
             for fi in range(nf):
@@ -5077,10 +5181,19 @@ def _bake_pass_par(
                 if not _pred_pass(v, f[4 * fi + 2], f[4 * fi + 3]):
                     ok = False
                     break
+            if ok:
+                for vi in range(nv):
+                    var vp = UnsafePointer[UInt8, ImmutAnyOrigin](
+                        unsafe_from_address=Int(vv[vi]) + i
+                    )
+                    if vp[] == 0:
+                        ok = False
+                        break
             out[i] = Int64(1) if ok else Int64(0)
 
     parallelize[work](nw, nw)
     fb.free()
+    vb.free()
 
 
 # Q5 gid gather: `cols[gid_slot*n + i] = grp[ supp ]` where supp = the row's
@@ -5842,6 +5955,19 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
+    # GPU_OP_NULLABLE: numeric slots carrying a per-row validity mask (a column the
+    # materialize scan observed a NULL in). For the C++-gated safe slice (single-
+    # table UNGROUPED SUM/AVG, int path) every fed fact column is an agg-input or a
+    # filter column, so ANDing each row's validity into the host pass column excludes
+    # a NULL row exactly like a filtered-out row -- and since ungrouped_count_m is
+    # summed over the SAME pass-gated rows, sum/avg stay correct (SQL NULL semantics)
+    # with NO GPU kernel change. EMPTY in the common all-valid case (no validity ever
+    # fed -> the fold is a no-op and the bake stays byte-identical to before).
+    var valid_slots: List[Int] = []
+    for slot in range(n_numeric):
+        if st.cols[numeric_matcols[slot]].validity:
+            valid_slots.append(slot)
+    var n_valid = len(valid_slots)
     # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
     # is set (default off -> serial, byte-identical). PIN_LOG timing brackets the
     # whole pack/pass stage so its serial->parallel ms + cold fraction is visible.
@@ -5849,6 +5975,16 @@ def _pin_finalize_generic(
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var t_packpass0 = perf_counter_ns() if pin_log else 0
     if q6_pred_on or gen_pred_on or f64_pred_on:
+        # GPU_OP_NULLABLE defensive guard: these in-kernel-predicate paths SKIP the
+        # host pass bake, so a validity-AND would silently NOT apply -> a NULL row
+        # would be summed as garbage. The C++ safe-slice gate declines nullable
+        # whenever GPU_OP_NATIVE_DECODE is set (which all three pred-on paths
+        # require), so this can never fire for an accepted query; fail closed (loud)
+        # if it somehow does, rather than return a silent wrong result.
+        if n_valid > 0:
+            pass_col.free()
+            row_gid.free()
+            return 8
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         # Cheap memset; left serial in both modes (the pack loops are the cost).
         for i in range(n):
@@ -5866,6 +6002,12 @@ def _pin_finalize_generic(
                 pass_col.free()
                 row_gid.free()
                 return 8
+        # GPU_OP_NULLABLE: per-valid-slot validity base addresses (1 byte/row), in
+        # valid_slots order. Empty when no column carries a validity mask -> both
+        # bake paths below run exactly as before.
+        var v_base: List[Int] = []
+        for vs in range(n_valid):
+            v_base.append(Int(st.cols[numeric_matcols[valid_slots[vs]]].validity.value()))
         if par_on:
             # Resolve per-filter raw base + elem_size (mirrors _col_val source);
             # the parallel bake reads disjoint rows, writes disjoint pass_col[i].
@@ -5875,7 +6017,7 @@ def _pin_finalize_generic(
                 ref c = st.cols[numeric_matcols[f_slot[fi]]]
                 f_base.append(c.addr())
                 f_es.append(c.elem_size)
-            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k)
+            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k, v_base)
         else:
             for i in range(n):
                 var ok = True
@@ -5884,6 +6026,15 @@ def _pin_finalize_generic(
                     if not _pred_pass(v, f_cmp[fi], f_k[fi]):
                         ok = False
                         break
+                # GPU_OP_NULLABLE: AND in each fed column's validity (a NULL row is
+                # excluded exactly like a filtered-out row). No-op when n_valid == 0.
+                if ok:
+                    for vs in range(n_valid):
+                        if not _col_valid(
+                            st, numeric_matcols[valid_slots[vs]], i
+                        ):
+                            ok = False
+                            break
                 pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
@@ -7848,7 +7999,10 @@ def _pin_finalize_generic_dims(
                 ref c = st.cols[numeric_matcols[f_slot[fi]]]
                 f_base.append(c.addr())
                 f_es.append(c.elem_size)
-            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k)
+            # GPU_OP_NULLABLE: this grouped/join finalize path is outside the nullable
+            # safe slice (the C++ gate declines grouped/joins), so no validity fold --
+            # pass an empty list (nv == 0 -> byte-identical to before).
+            _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k, List[Int]())
         else:
             for i in range(n):
                 var ok = True

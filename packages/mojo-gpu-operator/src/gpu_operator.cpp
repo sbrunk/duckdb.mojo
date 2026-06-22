@@ -261,6 +261,11 @@ int64_t mojo_gpu_pin_begin(void *handle);             // 0=WARM, 1=COLD
 int64_t mojo_gpu_feed_column(void *handle, int64_t req_i, int64_t col_j, void *ptr,
                              int64_t n_rows, int64_t type_tag,
                              int64_t dec_scale);   // 0 ok (dec_scale: GPU_OP_STATS)
+// GPU_OP_NULLABLE: feed a per-row validity byte array (1=valid, 0=NULL) for one
+// column, same (req_i, col_j) addressing as feed_column. Called AFTER feed_column
+// only for columns that held a NULL; absent => column is all-valid. 0 ok.
+int64_t mojo_gpu_feed_validity(void *handle, int64_t req_i, int64_t col_j,
+                               void *ptr, int64_t n_rows);
 // SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): set st.n_rows for the FACT request
 // unconditionally (called for request 0 before the feed loop with res->RowCount()).
 // When the narrowed SELECT omits ALL fact columns this is the only n_rows source.
@@ -1866,6 +1871,17 @@ static bool GpuOpFlagOn(const char *name) {
 // so the descent capture below is skipped and behavior is BYTE-IDENTICAL to today.
 static bool GpuOpFilterOrOn() { return std::getenv("GPU_OP_FILTER_OR") != nullptr; }
 
+// GPU_OP_NULLABLE (default-OFF, presence-only, like GPU_OP_FILTER_OR): relax the
+// blanket NULL-safety decline for a narrow PROVABLY-SAFE slice. When OFF (unset)
+// every nullable-column query declines exactly as before (byte-identical), and the
+// feed path captures no validity. When ON, the matcher accepts the safe slice
+// (ungrouped, single-table, single SUM/AVG input column, no count(*), int64/int128
+// path; nullable columns only in agg-input / filter roles) and the feed path
+// captures DuckDB's validity mask so the finalize ANDs it into the host pass column
+// (a NULL row is excluded exactly like a filtered-out row -> SQL aggregate NULL
+// semantics) with NO GPU kernel change.
+static bool GpuOpNullableOn() { return std::getenv("GPU_OP_NULLABLE") != nullptr; }
+
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
 // not exact constant values, so approximations here are acceptable.
@@ -2360,31 +2376,42 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   if (jt.gets.empty()) { return false; }
 
   // NULL-SAFETY GATE. The materialize/feed path copies only the column DATA array
-  // (FedColumn::fill = a raw memcpy) and does NOT carry DuckDB's validity mask, so a
-  // NULL row is read as raw garbage int64 -> SILENT WRONG RESULTS (sum off, avg=0,
-  // filtered-sum=garbage, sqrt=nan). Until the feed path applies validity, DECLINE the
-  // offload whenever any projected column of any GET is nullable (lacks a NOT NULL
-  // constraint). This is provably complete: GetColumnIds() is a SUPERSET of the columns
-  // the GPU reads (aggregate args, group keys, filter columns, join keys, gathered dim
-  // columns). TPC-H tables are created all-NOT-NULL (dbgen) so the accepted classes never
-  // regress; tables with nullable columns fall back to stock DuckDB (which is correct).
-  for (auto *g : jt.gets) {
-    auto te = g->GetTable();
-    if (!te) { return false; }  // non-table GET (table function etc.): can't verify -> decline
-    for (auto &ci : g->GetColumnIds()) {
-      if (ci.IsRowIdColumn() || ci.IsVirtualColumn()) { continue; }
-      idx_t cidx = ci.GetPrimaryIndex();
-      bool is_not_null = false;
-      for (auto &cons : te->GetConstraints()) {
-        if (cons->type == ConstraintType::NOT_NULL &&
-            cons->Cast<NotNullConstraint>().index.index == cidx) {
-          is_not_null = true;
-          break;
+  // (FedColumn::fill = a raw memcpy) and -- unless GPU_OP_NULLABLE captures it --
+  // does NOT carry DuckDB's validity mask, so a NULL row is read as raw garbage
+  // int64 -> SILENT WRONG RESULTS (sum off, avg=0, filtered-sum=garbage). Returns
+  // true iff ANY projected column of ANY GET is nullable (lacks a NOT NULL
+  // constraint). Provably complete: GetColumnIds() is a SUPERSET of the columns the
+  // GPU reads (aggregate args, group keys, filter columns, join keys, gathered dim
+  // columns). TPC-H tables are created all-NOT-NULL (dbgen) so the accepted classes
+  // never trip this.
+  auto any_nullable_projected = [&]() -> bool {
+    for (auto *g : jt.gets) {
+      auto te = g->GetTable();
+      if (!te) { return true; }  // non-table GET: can't verify -> treat as nullable
+      for (auto &ci : g->GetColumnIds()) {
+        if (ci.IsRowIdColumn() || ci.IsVirtualColumn()) { continue; }
+        idx_t cidx = ci.GetPrimaryIndex();
+        bool is_not_null = false;
+        for (auto &cons : te->GetConstraints()) {
+          if (cons->type == ConstraintType::NOT_NULL &&
+              cons->Cast<NotNullConstraint>().index.index == cidx) {
+            is_not_null = true;
+            break;
+          }
         }
+        if (!is_not_null) { return true; }
       }
-      if (!is_not_null) { return false; }  // nullable -> NULL read as garbage -> decline
     }
-  }
+    return false;
+  };
+  // Default (GPU_OP_NULLABLE off): decline ANY nullable column here, byte-identical
+  // to before. When ON: defer the decision to the role-aware SAFE-SLICE gate at the
+  // END of this function (after aggregates/filters/groups are serialized, so every
+  // column ROLE is known). A nullable query that is NOT the safe slice is declined
+  // there exactly as today; the safe slice routes with validity-folding (see
+  // _pin_finalize_generic). Cache the flag for the late gate.
+  const bool nullable_on = GpuOpNullableOn();
+  if (!nullable_on && any_nullable_projected()) { return false; }
 
   // 3. GETS.
   for (auto *g : jt.gets) {
@@ -2585,6 +2612,48 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
     }
     out.aggregates.push_back(std::move(ae));
+  }
+
+  // GPU_OP_NULLABLE SAFE-SLICE GATE (role-aware; runs only when the flag is on).
+  // The early NULL-safety gate was deferred to here so every column ROLE is known.
+  // ACCEPT a nullable query ONLY for the provably-safe slice where folding each
+  // row's validity into the single shared host pass column is BIT-IDENTICAL to SQL
+  // aggregate NULL semantics (a NULL agg-input / filter row is excluded exactly like
+  // a filtered-out row; ungrouped_count_m is summed over the SAME pass-gated rows so
+  // sum/avg stay correct). Conditions (each derived from the adversarial NULL-
+  // semantics analysis -- see PERF_BACKLOG):
+  //   * single_get (no join: no nullable FK / multi-table fan-out)
+  //   * UNGROUPED (agg.groups.empty(): no nullable GROUP KEY, which would form its
+  //     own NULL group rather than be excluded)
+  //   * GPU_OP_NATIVE_DECODE unset: GUARANTEES the host-pass-bake path. All three
+  //     in-kernel-predicate paths (q6_pred / gen_pred / f64_pred) that SKIP the host
+  //     bake require native-decode; without it the host bake (where validity is
+  //     folded) always runs.
+  //   * exactly ONE aggregate, kind SUM with an INT128 result (ret_is_int128):
+  //     - SUM excludes count(*) (counts ALL rows incl. NULL-input -> a shared-pass
+  //       fold would undercount), MIN/MAX (declined anyway), and stat kinds.
+  //     - the INT128-result requirement is load-bearing in TWO ways: (a) it keeps
+  //       this to the int64/int128 assembly path that writes res_lo/res_hi (the f64
+  //       transcendental SUM -- sum(sqrt(x)) etc. -- returns DOUBLE, ret_is_int128=0,
+  //       so it declines: that path is NVIDIA-only and unvalidated for nullable);
+  //       (b) it EXCLUDES AVG: DuckDB rewrites a nullable avg(x) into a `sum`
+  //       aggregate (kind_tag == AGG_SUM!) with a DOUBLE output column + a division
+  //       projection above -- the int128 assembly would write res_lo while the
+  //       DOUBLE extraction reads res_f64 (=> 0.0, a wrong result). Requiring an
+  //       INT128 result fences that out (avg's output is DOUBLE) -> avg declines to
+  //       stock. (A single nullable-input SUM is also, by construction, a single
+  //       distinct agg-input column, so shape-5's per-aggregate-exclusion hazard
+  //       cannot arise.)
+  // IS NULL / IS NOT NULL filters (which would INVERT the fold) already decline in
+  // the filter walk above (unmodeled filter shape -> return false), so no extra check
+  // is needed. Any query failing the slice re-applies the original blanket decline.
+  if (nullable_on) {
+    bool slice_ok = single_get && agg.groups.empty() &&
+                    std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
+                    out.aggregates.size() == 1 &&
+                    out.aggregates[0].kind_tag == rp::AGG_SUM &&
+                    out.aggregates[0].ret_is_int128 == 1;
+    if (!slice_ok && any_nullable_projected()) { return false; }
   }
 
   return true;
@@ -2854,6 +2923,17 @@ public:
         // them, but doing it uniformly is correct for arbitrary-length VARCHAR.)
         std::vector<std::vector<string_t>> buf_str(n_cols);
         std::vector<std::vector<std::string>> buf_strdata(n_cols);
+        // GPU_OP_NULLABLE: per-column per-row validity staging (1=valid, 0=NULL).
+        // Only allocated/walked when the flag is ON (default-off => zero overhead,
+        // byte-identical to today). buf_valid[c] stays row-aligned with the data
+        // (1's appended for AllValid chunks); col_has_null[c] records whether the
+        // column ever held a NULL, so only those columns are fed validity below.
+        const bool nullable_on = GpuOpNullableOn();
+        std::vector<std::vector<uint8_t>> buf_valid(nullable_on ? n_cols : 0);
+        std::vector<char> col_has_null(n_cols, 0);
+        if (nullable_on) {
+          for (idx_t c = 0; c < n_cols; c++) { buf_valid[c].reserve(total_rows); }
+        }
         for (idx_t c = 0; c < n_cols; c++) {
           const LogicalType &ct = res->types[c];
           if (ct.id() == LogicalTypeId::VARCHAR) {
@@ -2880,6 +2960,20 @@ public:
           for (idx_t c = 0; c < n_cols; c++) {
             chunk->data[c].Flatten(n);
             const LogicalType &ct = res->types[c];
+            // GPU_OP_NULLABLE: capture validity for EVERY column (before the VARCHAR
+            // branch's `continue`) so buf_valid[c] stays row-aligned. A NULL row is
+            // read as raw garbage data, so the finalize must know to exclude it.
+            if (nullable_on) {
+              auto &vmask = FlatVector::Validity(chunk->data[c]);
+              if (vmask.AllValid()) {
+                buf_valid[c].insert(buf_valid[c].end(), n, (uint8_t)1);
+              } else {
+                col_has_null[c] = 1;
+                for (idx_t r = 0; r < n; r++) {
+                  buf_valid[c].push_back(vmask.RowIsValid(r) ? (uint8_t)1 : (uint8_t)0);
+                }
+              }
+            }
             if (ct.id() == LogicalTypeId::VARCHAR) {
               // Capture each string's CONTENT now (chunk is alive); the string_t
               // structs are rebuilt after the scan from this stable storage.
@@ -2954,6 +3048,21 @@ public:
           if (rc != 0) {
             throw InvalidInputException("GPU_AGG: feed_column failed (rc " +
                                         std::to_string(rc) + ")");
+          }
+        }
+        // GPU_OP_NULLABLE: feed validity for any column that held a NULL (others
+        // stay all-valid Mojo-side). Same (req_i=i, col_j=c) addressing; the Mojo
+        // side translates col_j through fed_pos_to_matcol exactly as feed_column.
+        if (nullable_on) {
+          for (idx_t c = 0; c < n_cols; c++) {
+            if (!col_has_null[c]) { continue; }
+            int64_t vrc = mojo_gpu_feed_validity(h, i, (int64_t)c,
+                                                 buf_valid[c].data(),
+                                                 (int64_t)total_rows);
+            if (vrc != 0) {
+              throw InvalidInputException("GPU_AGG: feed_validity failed (rc " +
+                                          std::to_string(vrc) + ")");
+            }
           }
         }
       }
