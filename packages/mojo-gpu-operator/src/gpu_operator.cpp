@@ -2644,15 +2644,38 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   //       stock. (A single nullable-input SUM is also, by construction, a single
   //       distinct agg-input column, so shape-5's per-aggregate-exclusion hazard
   //       cannot arise.)
+  //   * OR the f64 path: a single transcendental SUM (sum(sqrt(x))..) or a
+  //     statistical aggregate (stddev/var/covar/corr/regr_*). These are NVIDIA-only
+  //     (the Mojo builder's f64 scope guard declines non-NVIDIA -> stock, so Apple is
+  //     unaffected), is_float64 -> the host-bake pass column gates the f64 metrics
+  //     IDENTICALLY to the int path, so the same validity fold excludes NULL rows. A
+  //     multi-arg stat (corr(x,y)) is NULL-excluded when EITHER arg is NULL -- exactly
+  //     AND-ing both columns' validity into the one pass bit. AVG stays excluded (same
+  //     avg-as-sum-double hazard); a transcendental SUM has a transcendental opcode in
+  //     its program, which is how we tell it from a plain (rewritten-avg) SUM.
   // IS NULL / IS NOT NULL filters (which would INVERT the fold) already decline in
   // the filter walk above (unmodeled filter shape -> return false), so no extra check
   // is needed. Any query failing the slice re-applies the original blanket decline.
   if (nullable_on) {
-    bool slice_ok = single_get && agg.groups.empty() &&
-                    std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
-                    out.aggregates.size() == 1 &&
-                    out.aggregates[0].kind_tag == rp::AGG_SUM &&
-                    out.aggregates[0].ret_is_int128 == 1;
+    bool base = single_get && agg.groups.empty() &&
+                std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
+                out.aggregates.size() == 1;
+    auto &a0 = out.aggregates[0];
+    bool int_sum = base && a0.kind_tag == rp::AGG_SUM && a0.ret_is_int128 == 1;
+    bool f64_agg = false;
+    if (base) {
+      if (IsStatAggKind(a0.kind_tag)) {
+        f64_agg = true;  // stddev/var/covar/corr/regr_* (1- or 2-arg)
+      } else if (a0.kind_tag == rp::AGG_SUM) {
+        for (auto &op : a0.program) {  // sum(sqrt|exp|ln|log10|log2|pow|sin|cos(x))
+          if (op.op_tag >= rp::OP_SQRT && op.op_tag <= rp::OP_LOG2) {
+            f64_agg = true;
+            break;
+          }
+        }
+      }
+    }
+    bool slice_ok = int_sum || f64_agg;
     if (!slice_ok && any_nullable_projected()) { return false; }
   }
 

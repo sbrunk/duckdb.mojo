@@ -4884,13 +4884,38 @@ def _metric_arg_shift(
     if n_rows <= 0:
         return StatShift(Int64(0), Float64(1), Float64(0), False)
     var n_op = len(ops) // 3
+    # GPU_OP_NULLABLE: the shift is read from a representative row's VALUE -- but row 0
+    # may be NULL (its data lane is uninitialized garbage, often ~1e18), which would
+    # make the centered (x-c)^2 sums catastrophically cancel (negative variance / nan).
+    # Pick the FIRST row where every LOAD_COL slot THIS arg reads is VALID; if there is
+    # none (all such rows NULL), fall back to legacy unshifted (ok=False, c=0). The
+    # per-row pass-gate still excludes the NULL rows from the accumulated sums, so the
+    # result stays correct -- the shift only buys numerical stability for huge values.
+    # No-op when no column has a validity mask (_col_valid -> True) -> r0 = 0 as before.
+    var r0 = 0
+    var found = False
+    for i in range(n_rows):
+        var all_valid = True
+        for k in range(n_op):
+            if ops[3 * k] == OP_LOAD_COL:
+                var slot = Int(ops[3 * k + 1])
+                if slot >= 0 and slot < len(numeric_matcols):
+                    if not _col_valid(st, numeric_matcols[slot], i):
+                        all_valid = False
+                        break
+        if all_valid:
+            r0 = i
+            found = True
+            break
+    if not found:
+        return StatShift(Int64(0), Float64(1), Float64(0), False)
     # Fast path: a bare single LOAD_COL -> shift at the column scale (Sterbenz-exact).
     if n_op == 1 and ops[0] == OP_LOAD_COL:
         var slot = Int(ops[1])
         if slot < len(omit_slot) and omit_slot[slot]:
             return StatShift(Int64(0), Float64(1), Float64(0), False)
         var mj = numeric_matcols[slot]
-        var raw = _col_i64(st, mj)[0]  # row 0
+        var raw = _col_i64(st, mj)[r0]  # first VALID row
         var div = Float64(1)
         for _ in range(Int(col_scale_of_slot[slot])):
             div *= 10.0
@@ -4906,7 +4931,7 @@ def _metric_arg_shift(
             if slot < len(omit_slot) and omit_slot[slot]:
                 return StatShift(Int64(0), Float64(1), Float64(0), False)
             var mj = numeric_matcols[slot]
-            var raw = _col_i64(st, mj)[0]  # row 0
+            var raw = _col_i64(st, mj)[r0]  # first VALID row (see above)
             var div = Float64(1)
             for _ in range(Int(col_scale_of_slot[slot])):
                 div *= 10.0
