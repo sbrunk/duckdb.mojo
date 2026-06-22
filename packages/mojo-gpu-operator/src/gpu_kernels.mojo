@@ -2344,9 +2344,17 @@ struct GpuPinned(Movable):
     # metric (PUSH_CONST(1) summed). When `mode == STRAT_UNGROUPED` the assemble
     # reads sums[ungrouped_count_m]; if it is 0 the single output row had ZERO
     # contributing rows, so sum/avg/min/max/stats emit SQL NULL (count stays 0).
-    # -1 when not set (grouped paths, which never emit an empty group, are
-    # untouched: a DENSE/HASH group is emitted only when its passing count > 0).
+    # -1 when not set.
     var ungrouped_count_m: Int
+    # DENSE-existence fix (int128 DENSE_GROUP): metric index of a per-group filter-
+    # passing count (count(*) reused when present). The dense gid is built over ALL
+    # materialized rows (materialize has no WHERE), so a group whose rows ALL fail the
+    # filter still gets a gid; without this gate _assemble would emit a PHANTOM row
+    # for it (count 0, all aggregates 0/NULL) -- SQL forms groups AFTER filtering and
+    # OMITS it. When >=0 and mode==STRAT_DENSE_GROUP, _assemble skips any group whose
+    # count metric is 0. -1 (no count metric available) leaves the legacy behavior.
+    # The f64 dense path has the equivalent gate already (skips fsums[gm+g]==0).
+    var grouped_count_m: Int
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2401,6 +2409,7 @@ struct GpuPinned(Movable):
         self.agg_cx = []
         self.agg_cy = []
         self.ungrouped_count_m = -1
+        self.grouped_count_m = -1
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -3374,6 +3383,18 @@ def _assemble(
     )
     var out_rows = 0
     for g in range(gp.n_cand):
+        # DENSE-existence gate (fix phantom fully-filtered groups): SQL forms groups
+        # AFTER the WHERE filter, so a group with ZERO filter-passing rows is OMITTED.
+        # The dense gid is built over ALL materialized rows (materialize has no WHERE),
+        # so such a group still has a gid here; skip it when its per-group filter-
+        # passing count is 0. Mirrors the f64 dense path. grouped_count_m<0 (no count
+        # metric, or non-dense) -> legacy behavior; emit_gt0 paths (Q5) keep their gate.
+        if (
+            gp.mode == STRAT_DENSE_GROUP
+            and gp.grouped_count_m >= 0
+            and sums[g * gp.M + gp.grouped_count_m] == Int128(0)
+        ):
+            continue
         # Emit rule: optionally gate on a SUM aggregate's freshly-computed sum.
         if gp.emit_agg >= 0:
             var gv = sums[g * gp.M + gp.agg_m0[gp.emit_agg]]
@@ -6369,6 +6390,25 @@ def _pin_finalize_generic(
             if is_float64:
                 const_div.append(Float64(1))
 
+    # DENSE-existence fix: for an int128 DENSE_GROUP, the gid is built over ALL rows
+    # (no WHERE in materialize), so a group whose rows all fail the filter still gets
+    # a gid and -- with emit_agg<0 (e.g. KIND_Q1) -- would emit a PHANTOM row. Gate
+    # emission on a per-group FILTER-passing count. REUSE an existing count metric
+    # (count(*) / AVG's count / a stat's count -- all PUSH_CONST(1) summed per group,
+    # pass-gated) so M is unchanged for the shapes that route today (Q1 has count(*));
+    # -1 when none is present (no routed int128-dense shape lacks one -- Q5 uses the
+    # emit_gt0 revenue gate, untouched). The f64 dense path has its own gcount gate.
+    # A guaranteed emit (for a count-less dense shape) is deferred to grouped-nullable.
+    var grouped_count_m = -1
+    if mode == STRAT_DENSE_GROUP and not is_float64:
+        for ai in range(len(d.aggregates)):
+            if agg_kind[ai] == AGG_COUNT_STAR:
+                grouped_count_m = agg_m0[ai]
+                break
+            elif agg_kind[ai] == AGG_AVG:
+                grouped_count_m = agg_m1[ai]
+                break
+
     var M = len(metric_offsets)
 
     # FIX D (int128 DENSE_GROUP overrun guard): the int128 dense-group kernels
@@ -6608,6 +6648,7 @@ def _pin_finalize_generic(
     gp.agg_cx = agg_cx^
     gp.agg_cy = agg_cy^
     gp.ungrouped_count_m = ungrouped_count_m
+    gp.grouped_count_m = grouped_count_m
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
     # WARM path can re-run the in-kernel filter with a fresh constant set.
