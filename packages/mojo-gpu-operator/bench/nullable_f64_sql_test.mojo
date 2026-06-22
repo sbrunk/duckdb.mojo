@@ -51,13 +51,13 @@ def main() raises:
     var sqls = List[String]()
     sqls.append("SELECT sum(sqrt(x)) FROM t")
     sqls.append("SELECT sum(sqrt(x)) FROM t WHERE f > 50")
+    sqls.append("SELECT avg(sqrt(x)) FROM t")
     sqls.append("SELECT sum(ln(x)) FROM t")
     sqls.append("SELECT stddev_samp(x) FROM t")
     sqls.append("SELECT var_samp(x) FROM t")
     sqls.append("SELECT corr(x, y) FROM t")
     sqls.append("SELECT regr_slope(y, x) FROM t")
 
-    var routed_count = 0
     var allok = True
     for k in range(len(sqls)):
         # stock (operator disabled)

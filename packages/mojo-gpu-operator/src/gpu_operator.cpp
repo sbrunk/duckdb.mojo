@@ -2662,6 +2662,14 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
                 out.aggregates.size() == 1;
     auto &a0 = out.aggregates[0];
     bool int_sum = base && a0.kind_tag == rp::AGG_SUM && a0.ret_is_int128 == 1;
+    // AVG (int or transcendental): a single avg(x) emits TWO internal metrics --
+    // sum (m0) and count (m1) -- BOTH summed over the same pass-gated rows, so the
+    // validity fold excludes NULL-x rows from numerator AND denominator => avg over
+    // the non-NULL rows, exactly SQL avg(x). All-NULL -> count 0 -> ungrouped_count_m
+    // (== avg's m1) marks the cell SQL NULL. (This was thought unsupportable earlier,
+    // but that 0.0 was the now-fixed sum/avg pin-signature collision, not avg itself
+    // -- EXPLAIN confirms nullable avg is a plain avg(#0), not an avg-as-sum rewrite.)
+    bool avg_agg = base && a0.kind_tag == rp::AGG_AVG;
     bool f64_agg = false;
     if (base) {
       if (IsStatAggKind(a0.kind_tag)) {
@@ -2675,7 +2683,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
         }
       }
     }
-    bool slice_ok = int_sum || f64_agg;
+    bool slice_ok = int_sum || avg_agg || f64_agg;
     if (!slice_ok && any_nullable_projected()) { return false; }
   }
 

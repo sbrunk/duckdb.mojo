@@ -109,6 +109,7 @@ def main() raises:
     # answer (it is NOT GPU-folded). See avg_ungrouped_probe.mojo for the separate
     # pre-existing ungrouped-avg-as-sum-double default-on bug this fences out.
     var ref_avg_b_f50 = Float64(ref_sum_b_f50) / Float64(ref_cnt_b_f50)
+    var ref_avg_b = Float64(ref_sum_b) / Float64(ref_cnt_b)  # bare avg, non-NULL b
 
     # ---- the SUM/AVG safe-slice suite (each must equal the CPU reference) ----
     print("N =", N, "  non-null b =", ref_cnt_b)
@@ -141,14 +142,30 @@ def main() raises:
     assert_equal(s3.value(), ref_sum_b_bgt500)
     print("[ok] sum(b) WHERE b>500           =", String(s3.value()))
 
+    # AVG now ROUTES (sum m0 + count m1 both pass-gated -> NULL-x excluded from both).
     var a0 = con.execute("SELECT avg(b) FROM t WHERE f > 50").fetch_chunk().get[
         Optional[Float64]
     ](col=0, row=0)
     assert_true(Bool(a0), "avg(b) WHERE f>50 should be non-NULL")
     var adiff = a0.value() - ref_avg_b_f50
     var aerr = adiff if adiff >= 0 else -adiff
-    assert_true(aerr < 1e-6, "avg(b) WHERE f>50 (declines->stock) correct")
-    print("[ok] avg(b) WHERE f>50 (declines) =", a0.value())
+    assert_true(aerr < 1e-6, "avg(b) WHERE f>50 routes + correct")
+    print("[ok] avg(b) WHERE f>50            =", a0.value())
+
+    var a1 = con.execute("SELECT avg(b) FROM t").fetch_chunk().get[
+        Optional[Float64]
+    ](col=0, row=0)
+    assert_true(Bool(a1), "bare avg(b) should be non-NULL")
+    var a1d = a1.value() - ref_avg_b
+    assert_true((a1d if a1d >= 0 else -a1d) < 1e-6, "bare avg(b) routes + correct")
+    print("[ok] avg(b)                       =", a1.value())
+
+    # avg over an all-NULL column -> SQL NULL (count 0 -> ungrouped_count_m marks NULL)
+    var ag = con.execute("SELECT avg(g) FROM t").fetch_chunk().get[
+        Optional[Float64]
+    ](col=0, row=0)
+    assert_true(not Bool(ag), "avg(all-NULL) must be SQL NULL")
+    print("[ok] avg(g all-NULL)             = NULL")
 
     # ---- SQL NULL edge cases ------------------------------------------------
     # all-NULL column -> sum over zero non-NULL rows -> SQL NULL
