@@ -1912,6 +1912,35 @@ def mojo_gpu_desc_a1_ungrouped_ok(
     return 1
 
 
+# GPU_OP_NULLABLE_GROUPED: 1 iff this descriptor is a DENSE_GROUP, INT-path (NOT
+# transcendental/stats) aggregate whose every aggregate is SUM / AVG / count(*) -- an
+# int grouped aggregate the generic dense int128 kernel executes. The C++ router uses
+# this (when GPU_OP_NULLABLE_GROUPED is on) to enable routing for such a plan whose
+# KIND is UNKNOWN (a generic GROUP BY shape -- KIND_Q1 needs 2 keys + 8 aggs). The A1
+# per-metric validity multiply + per-group validity-count NULL marking (both g*M-indexed,
+# already per-group) handle nullable agg columns; grouped_count_m gives per-group
+# existence; the C++ gate requires NOT-NULL group keys. Restricting to all-int avoids
+# mixing an int128 SUM with an f64 stat on the f64 dense path.
+@export("mojo_gpu_desc_a1_grouped_ok")
+def mojo_gpu_desc_a1_grouped_ok(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 0
+    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    if d.strategy != STRAT_DENSE_GROUP:
+        return 0
+    if _has_transcendental(d) or _has_stats(d):
+        return 0
+    if len(d.aggregates) == 0:
+        return 0
+    for ai in range(len(d.aggregates)):
+        var k = d.aggregates[ai].kind
+        if k != AGG_SUM and k != AGG_AVG and k != AGG_COUNT_STAR:
+            return 0
+    return 1
+
+
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -6707,7 +6736,11 @@ def _pin_finalize_generic(
     # pass-gated) so M is unchanged for the shapes that route today (Q1 has count(*));
     # -1 when none is present (no routed int128-dense shape lacks one -- Q5 uses the
     # emit_gt0 revenue gate, untouched). The f64 dense path has its own gcount gate.
-    # A guaranteed emit (for a count-less dense shape) is deferred to grouped-nullable.
+    # When no count metric is present (a count-less dense shape, e.g. grouped-nullable
+    # `sum(x) GROUP BY k`), EMIT a guaranteed PUSH_CONST(1) filter-passing count so the
+    # existence gate still omits fully-filtered groups. Only int128 DENSE routes through
+    # here (Q1 reuses count(*) -> no emit; Q5 uses a separate finalize), so this extra
+    # metric appears only for the newly-routed grouped shapes.
     var grouped_count_m = -1
     if mode == STRAT_DENSE_GROUP and not is_float64:
         for ai in range(len(d.aggregates)):
@@ -6717,6 +6750,10 @@ def _pin_finalize_generic(
             elif agg_kind[ai] == AGG_AVG:
                 grouped_count_m = agg_m1[ai]
                 break
+        if grouped_count_m < 0:
+            grouped_count_m = _emit_count(
+                metric_ops, metric_offsets, metric_lens, n_ops_total
+            )
 
     var M = len(metric_offsets)
 

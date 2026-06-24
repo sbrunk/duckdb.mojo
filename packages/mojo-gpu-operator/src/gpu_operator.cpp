@@ -248,6 +248,8 @@ int64_t mojo_gpu_desc_is_stats(void *handle);
 // A1 (GPU_OP_NULLABLE): 1 iff UNGROUPED int-path multi/aggregate (all SUM/AVG/count(*),
 // not f64). Enables routing for an int multi-aggregate plan whose KIND is UNKNOWN.
 int64_t mojo_gpu_desc_a1_ungrouped_ok(void *handle);
+// GPU_OP_NULLABLE_GROUPED: 1 iff DENSE_GROUP int-path all-{SUM,AVG,count(*)} aggregate.
+int64_t mojo_gpu_desc_a1_grouped_ok(void *handle);
 int64_t mojo_gpu_desc_strategy(void *handle);
 int64_t mojo_gpu_desc_n_dims(void *handle);
 int64_t mojo_gpu_desc_n_aggs(void *handle);
@@ -1885,6 +1887,15 @@ static bool GpuOpFilterOrOn() { return std::getenv("GPU_OP_FILTER_OR") != nullpt
 // semantics) with NO GPU kernel change.
 static bool GpuOpNullableOn() { return std::getenv("GPU_OP_NULLABLE") != nullptr; }
 
+// GPU_OP_NULLABLE_GROUPED (default-OFF, presence-only): extend the nullable slice to a
+// DENSE GROUP BY with NOT-NULL group key(s) over nullable agg/filter columns (int path:
+// SUM/AVG/count(*)). The A1 per-metric validity multiply + per-group validity-count NULL
+// marking + the dense filter-count existence gate (all per-group) handle it with no new
+// kernel. A nullable GROUP KEY stays declined (it would form its own SQL NULL group).
+static bool GpuOpNullableGroupedOn() {
+  return std::getenv("GPU_OP_NULLABLE_GROUPED") != nullptr;
+}
+
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
 // not exact constant values, so approximations here are acceptable.
@@ -2549,6 +2560,10 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   }
 
   // 5. GROUP_KEYS (resolved (table,col); none when ungrouped).
+  // GPU_OP_NULLABLE_GROUPED: capture the resolved group-key (table,col) so the nullable
+  // gate can require every group key to be NOT NULL (a NULL group key would form its
+  // own SQL NULL group, which the dense gid build does not model).
+  std::vector<std::pair<std::string, std::string>> group_key_cols;
   for (idx_t i = 0; i < agg.groups.size(); i++) {
     std::string table, col;
     if (!ResolveGroupTableCol(*agg.groups[i], jt, proj, table, col)) { return false; }
@@ -2565,6 +2580,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       }
     }
     out.group_keys.push_back({out.intern(table), out.intern(col)});
+    group_key_cols.push_back({table, col});
   }
 
   // 6. OUT_TYPES: group columns first (group-key order), then aggregate columns.
@@ -2707,6 +2723,59 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     // nullable to a SINGLE aggregate (the shipped ce3e7db scope). Int multi-aggregate
     // (count(*) + sum/avg over different nullable columns) is unaffected.
     if (has_f64 && out.aggregates.size() != 1) { all_ok = false; }
+
+    // GPU_OP_NULLABLE_GROUPED: extend to a DENSE GROUP BY with NOT-NULL group key(s)
+    // over nullable agg/filter columns (int path). The A1 per-metric validity multiply
+    // + per-group validity-count NULL marking + the dense filter-count existence gate
+    // are all per-group (g*M-indexed) -> no new kernel. Require: single-table, grouped,
+    // no native-decode, every aggregate int {SUM int128, AVG, count(*)} (the routing
+    // accessor a1_grouped_ok additionally requires DENSE), and EVERY group key NOT NULL
+    // (a nullable group key would form its own SQL NULL group, unmodeled by the dense
+    // gid build -> stays declined).
+    if (!all_ok && GpuOpNullableGroupedOn() && single_get &&
+        !agg.groups.empty() &&
+        std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
+        !out.aggregates.empty()) {
+      bool g_ok = true;
+      for (auto &a : out.aggregates) {
+        if (!(a.kind_tag == rp::AGG_COUNT_STAR ||
+              (a.kind_tag == rp::AGG_SUM && a.ret_is_int128 == 1) ||
+              a.kind_tag == rp::AGG_AVG)) {
+          g_ok = false;
+          break;
+        }
+      }
+      if (g_ok) {
+        // Collect nullable column NAMES (same storage-index + NOT_NULL-constraint basis
+        // as any_nullable_projected; name via the catalog) and decline if any group key
+        // is among them.
+        std::set<std::string> nullable_names;
+        for (auto *g : jt.gets) {
+          auto te = g->GetTable();
+          if (!te) { g_ok = false; break; }
+          for (auto &ci : g->GetColumnIds()) {
+            if (ci.IsRowIdColumn() || ci.IsVirtualColumn()) { continue; }
+            idx_t cidx = ci.GetPrimaryIndex();
+            bool nn = false;
+            for (auto &cons : te->GetConstraints()) {
+              if (cons->type == ConstraintType::NOT_NULL &&
+                  cons->Cast<NotNullConstraint>().index.index == cidx) {
+                nn = true;
+                break;
+              }
+            }
+            if (!nn) { nullable_names.insert(te->GetColumn(LogicalIndex(cidx)).Name()); }
+          }
+        }
+        if (g_ok) {
+          for (auto &gk : group_key_cols) {
+            if (nullable_names.count(gk.second)) { g_ok = false; break; }
+          }
+        }
+      }
+      if (g_ok) { all_ok = true; }
+    }
+
     if (!all_ok && any_nullable_projected()) { return false; }
   }
 
@@ -3367,6 +3436,14 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   // the multi-aggregate case). The SerializeMatchedPlan nullable gate already
   // fail-closed any nullable shape outside the accepted set before we got here.
   if (GpuOpNullableOn() && mojo_gpu_desc_a1_ungrouped_ok(h)) {
+    enabled = true;
+  }
+
+  // GPU_OP_NULLABLE_GROUPED: a DENSE int GROUP BY (count(*) + SUM/AVG over nullable
+  // columns, NOT-NULL group key) classifies KIND_UNKNOWN -- the generic dense int128
+  // kernel + the A1 per-group machinery execute it. The SerializeMatchedPlan grouped
+  // gate above already required NOT-NULL group keys + accepted agg kinds.
+  if (GpuOpNullableGroupedOn() && mojo_gpu_desc_a1_grouped_ok(h)) {
     enabled = true;
   }
 
