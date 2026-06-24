@@ -117,6 +117,8 @@ gpu-op-dense-phantom-test = "mojo run -I packages/mojo-gpu-operator/src packages
 gpu-op-nullable-multiagg-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_multiagg_sql_test.mojo"
 # GPU_OP_NULLABLE_GROUPED: DENSE GROUP BY over nullable agg columns vs stock.
 gpu-op-nullable-grouped-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_grouped_sql_test.mojo"
+# GPU_OP_NULLABLE adversarial correctness sweep (25 varied nullable shapes vs stock).
+gpu-op-nullable-sweep = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_adversarial_sweep.mojo"
 gpu-op-q14shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q14_shuttle_test.mojo"
 gpu-op-q3shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q3_shuttle_test.mojo"
 gpu-op-q5shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q5_shuttle_test.mojo"
