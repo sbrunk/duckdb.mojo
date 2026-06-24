@@ -1876,24 +1876,24 @@ static bool GpuOpFlagOn(const char *name) {
 // so the descent capture below is skipped and behavior is BYTE-IDENTICAL to today.
 static bool GpuOpFilterOrOn() { return std::getenv("GPU_OP_FILTER_OR") != nullptr; }
 
-// GPU_OP_NULLABLE (default-OFF, presence-only, like GPU_OP_FILTER_OR): relax the
-// blanket NULL-safety decline for a narrow PROVABLY-SAFE slice. When OFF (unset)
-// every nullable-column query declines exactly as before (byte-identical), and the
-// feed path captures no validity. When ON, the matcher accepts the safe slice
-// (ungrouped, single-table, single SUM/AVG input column, no count(*), int64/int128
-// path; nullable columns only in agg-input / filter roles) and the feed path
-// captures DuckDB's validity mask so the finalize ANDs it into the host pass column
-// (a NULL row is excluded exactly like a filtered-out row -> SQL aggregate NULL
-// semantics) with NO GPU kernel change.
-static bool GpuOpNullableOn() { return std::getenv("GPU_OP_NULLABLE") != nullptr; }
+// GPU_OP_NULLABLE (default-ON; opt out with off/0/none, like GPU_OP_TRANSCENDENTAL/
+// GPU_OP_STATS): the A1 unified pass model routes the provably-safe nullable slice --
+// UNGROUPED single-table count(*) / SUM / AVG / multi-aggregate over nullable agg/filter
+// columns (int128 SUM/AVG/count(*) via per-metric validity multiply + per-agg
+// validity-count NULL-on-empty; f64 transcendental/stats single-agg via validity-in-pass).
+// Filter-col validity folds into the host pass column; count(*) is unmultiplied. Every
+// other nullable shape fail-closes at the gate -> stock. Validated bit-exact vs stock on
+// Apple + RTX 4090 across an adversarial sweep; flipped default-on after that hardening.
+static bool GpuOpNullableOn() { return GpuOpFlagOn("GPU_OP_NULLABLE"); }
 
-// GPU_OP_NULLABLE_GROUPED (default-OFF, presence-only): extend the nullable slice to a
-// DENSE GROUP BY with NOT-NULL group key(s) over nullable agg/filter columns (int path:
-// SUM/AVG/count(*)). The A1 per-metric validity multiply + per-group validity-count NULL
-// marking + the dense filter-count existence gate (all per-group) handle it with no new
-// kernel. A nullable GROUP KEY stays declined (it would form its own SQL NULL group).
+// GPU_OP_NULLABLE_GROUPED (default-ON; opt out with off/0/none): extend the nullable
+// slice to a DENSE GROUP BY with NOT-NULL group key(s) over nullable agg/filter columns
+// (int path: SUM/AVG/count(*)). The A1 per-metric validity multiply + per-group
+// validity-count NULL marking + the dense filter-count existence gate (all per-group)
+// handle it with no new kernel. A nullable GROUP KEY stays declined (it would form its
+// own SQL NULL group). Same default-on rationale + validation as GPU_OP_NULLABLE.
 static bool GpuOpNullableGroupedOn() {
-  return std::getenv("GPU_OP_NULLABLE_GROUPED") != nullptr;
+  return GpuOpFlagOn("GPU_OP_NULLABLE_GROUPED");
 }
 
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for

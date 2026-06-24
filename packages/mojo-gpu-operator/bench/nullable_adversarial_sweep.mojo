@@ -32,10 +32,9 @@ def main() raises:
         "GPU_OP_EXT",
         "packages/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension",
     )
-    _ = setenv("GPU_OP_NULLABLE", "1", True)
-    _ = setenv("GPU_OP_NULLABLE_GROUPED", "1", True)
-    _ = setenv("GPU_OP_TRANSCENDENTAL", "1", True)
-    _ = setenv("GPU_OP_STATS", "1", True)
+    # Rely on the DEFAULTS (GPU_OP_NULLABLE / _GROUPED / TRANSCENDENTAL / STATS are all
+    # default-ON) -- this also validates the default-on posture. Only GPU_OP_GENERIC is
+    # toggled below for the stock comparison.
     var config = Config({"allow_unsigned_extensions": "true"})
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
