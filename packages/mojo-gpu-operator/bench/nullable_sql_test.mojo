@@ -182,21 +182,21 @@ def main() raises:
     assert_true(not Bool(se), "empty-match sum must be SQL NULL")
     print("[ok] sum(b) WHERE f>1e6 (empty)  = NULL")
 
-    # ---- must-DECLINE shapes still produce correct (stock) answers ----------
-    # count(*) alone (the gate requires SUM/AVG) -> declines -> stock -> correct
+    # ---- count(*) + multi-agg now ROUTE (A1 unified pass model) -- correct -------
+    # count(*) counts ALL rows (incl. NULL-b); routes as KIND_Q6 (single PUSH_CONST(1)).
     var c0 = con.execute("SELECT count(*) FROM t").fetch_chunk().get[Int64](
         col=0, row=0
     )
     assert_equal(Int(c0), ref_cnt_star)
-    print("[ok] count(*) (declines->stock)  =", Int(c0))
+    print("[ok] count(*)                     =", Int(c0))
 
-    # count(*), sum(b) together: count(*) must count ALL rows incl. NULL-b ->
-    # the gate declines (multi-agg + count(*)) -> stock -> both correct.
+    # count(*), sum(b): count(*) counts ALL rows incl. NULL-b (unmultiplied metric),
+    # sum(b) excludes NULL-b (validity-multiplied) -> A1 routes both correctly.
     var chunk = con.execute("SELECT count(*), sum(b) FROM t").fetch_chunk()
     var c1 = chunk.get[Int64](col=0, row=0)
     var s_mix = chunk.get[Optional[Int128]](col=1, row=0)
     assert_equal(Int(c1), ref_cnt_star)
     assert_true(s_mix.__bool__() and s_mix.value() == ref_sum_b, "mixed sum ok")
-    print("[ok] count(*),sum(b) (declines)  =", Int(c1), String(s_mix.value()))
+    print("[ok] count(*),sum(b)              =", Int(c1), String(s_mix.value()))
 
     print("ALL PASS")

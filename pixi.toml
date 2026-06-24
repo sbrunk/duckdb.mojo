@@ -113,6 +113,8 @@ gpu-op-nullable-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo
 gpu-op-nullable-f64-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_f64_sql_test.mojo"
 # DENSE grouped + selective-filter phantom-group regression (operator row count == stock).
 gpu-op-dense-phantom-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q1_dense_filter_phantom_probe.mojo"
+# A1 unified pass model: count(*) + multi-aggregate over nullable columns vs stock.
+gpu-op-nullable-multiagg-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_multiagg_sql_test.mojo"
 gpu-op-q14shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q14_shuttle_test.mojo"
 gpu-op-q3shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q3_shuttle_test.mojo"
 gpu-op-q5shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q5_shuttle_test.mojo"

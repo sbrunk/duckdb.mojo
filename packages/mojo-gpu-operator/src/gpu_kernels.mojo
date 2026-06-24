@@ -1883,6 +1883,35 @@ def mojo_gpu_desc_is_stats(
     return 1 if _has_stats(handle.bitcast[GpuPlanDescriptor]()[]) else 0
 
 
+# A1 unified pass model (GPU_OP_NULLABLE): 1 iff this descriptor is an UNGROUPED,
+# INT-path (NOT transcendental/stats) aggregate whose every aggregate is SUM / AVG /
+# count(*) -- i.e. an int multi-aggregate the generic ungrouped int128 kernel executes
+# (count(*) + sum(x), sum(x)+sum(y), count(*)+sum+avg, ...). The C++ router uses this
+# to enable routing for such a plan whose KIND is UNKNOWN (multi-agg never matches a
+# single TPC-H kind). Restricting to all-int avoids mixing an int128 SUM with an f64
+# stat/transcendental metric on the f64 path (which would sum the int as a lossy
+# double). MIN/MAX -> 0 (they decline). A single-agg ungrouped int already routes via
+# KIND_Q6, so this only ADDS the multi-agg case.
+@export("mojo_gpu_desc_a1_ungrouped_ok")
+def mojo_gpu_desc_a1_ungrouped_ok(
+    handle: UnsafePointer[NoneType, MutAnyOrigin]
+) abi("C") -> Int:
+    if Int(handle) == 0:
+        return 0
+    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    if d.strategy != STRAT_UNGROUPED:
+        return 0
+    if _has_transcendental(d) or _has_stats(d):
+        return 0  # f64 path: routed (if at all) via is_transcendental/is_stats
+    if len(d.aggregates) == 0:
+        return 0
+    for ai in range(len(d.aggregates)):
+        var k = d.aggregates[ai].kind
+        if k != AGG_SUM and k != AGG_AVG and k != AGG_COUNT_STAR:
+            return 0  # MIN/MAX/other -> decline
+    return 1
+
+
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
     handle: UnsafePointer[NoneType, MutAnyOrigin]
@@ -2355,6 +2384,18 @@ struct GpuPinned(Movable):
     # count metric is 0. -1 (no count metric available) leaves the legacy behavior.
     # The f64 dense path has the equivalent gate already (skips fsums[gm+g]==0).
     var grouped_count_m: Int
+    # A1 unified pass model (GPU_OP_NULLABLE): per-output-aggregate VALID-COUNT
+    # metric index (UNGROUPED only). For a SUM/AVG/stat whose program reads one or
+    # more nullable AGG-INPUT columns (columns NOT folded into the host pass), this
+    # is the metric index of the sum of its validity-PRODUCT (Σ valid_a[*valid_b..]),
+    # i.e. the count of filter-passing rows that have ALL of this aggregate's inputs
+    # valid. _assemble marks THIS aggregate's cell SQL NULL iff that count is 0 --
+    # per-aggregate, so a multi-aggregate query over DIFFERENT nullable columns gets
+    # each aggregate's own NULL-on-empty. For AVG this index IS the denominator (m1).
+    # -1 when the aggregate has no nullable agg-input (its NULL-on-empty falls back to
+    # the shared filter-only ungrouped_count_m) or is count(*) (never NULL). Parallel
+    # to agg_kind; EMPTY / all -1 with the flag off -> byte-identical behavior.
+    var agg_valid_count_m: List[Int]
 
     def __init__(out self, var res: SegResident):
         self.res = res^
@@ -2410,6 +2451,7 @@ struct GpuPinned(Movable):
         self.agg_cy = []
         self.ungrouped_count_m = -1
         self.grouped_count_m = -1
+        self.agg_valid_count_m = []
 
 
 def _make_pin2() -> Dict[String, GpuPinned]:
@@ -3197,6 +3239,17 @@ def _assemble_f64(
                 and gp.agg_kind[ai] != AGG_REGR_COUNT
             ):
                 res_valid[base + col] = False
+            # A1 PER-AGGREGATE NULL-on-empty (f64): a transcendental SUM/AVG/stat over
+            # nullable agg-input(s) is SQL NULL when its validity-product count metric
+            # is 0 (zero rows with all inputs valid). -1 / out-of-range -> inert; the
+            # stat path's own _stat_value NULL handling still applies on top.
+            if (
+                gp.agg_kind[ai] != AGG_REGR_COUNT
+                and ai < len(gp.agg_valid_count_m)
+                and gp.agg_valid_count_m[ai] >= 0
+                and fsums[gbase + gp.agg_valid_count_m[ai]] == 0.0
+            ):
+                res_valid[base + col] = False
         out_rows += 1
     dst.res_rows = out_rows
     dst.res_cols = n_cols
@@ -3439,6 +3492,19 @@ def _assemble(
             # SQL NULL for every aggregate EXCEPT count(*)/count(col) (0 over an
             # empty set). Matches stock DuckDB.
             if ungrouped_empty and gp.agg_kind[ai] != AGG_COUNT_STAR:
+                res_valid[base + col] = False
+            # A1 PER-AGGREGATE NULL-on-empty: a SUM/AVG/stat over nullable agg-input(s)
+            # is SQL NULL when ZERO rows have ALL its inputs valid (its validity-product
+            # count metric == 0) -- e.g. sum(x) where x is all-NULL among filter-passing
+            # rows. Distinct from the shared `ungrouped_empty` (zero filter-passing rows
+            # at all). agg_valid_count_m[ai] is -1 (inert) for count(*) / no-nullable-
+            # input aggregates; the list is EMPTY for finalize paths that don't set it
+            # (Q5/dims) -> the length guard keeps those byte-identical.
+            if (
+                ai < len(gp.agg_valid_count_m)
+                and gp.agg_valid_count_m[ai] >= 0
+                and sums[g * gp.M + gp.agg_valid_count_m[ai]] == Int128(0)
+            ):
                 res_valid[base + col] = False
         out_rows += 1
 
@@ -4845,6 +4911,90 @@ def _mul_metric(
 
 
 # ===-------------------------------------------------------------------===#
+# A1 unified pass model (GPU_OP_NULLABLE): per-metric agg-input validity multiply.
+#
+# A nullable AGG-INPUT column (one NOT folded into the host pass column) gets a
+# packed 0/1 validity column at `valid_col_slot_of[data_slot]`. A metric whose
+# resolved op tape reads such a column must be multiplied by that column's validity
+# (DuckDB: any NULL operand => the row is excluded from THAT aggregate). value*1 is
+# identity; value*0 zeroes a NULL row. A multi-column expr like ext*(1-disc) with
+# both ext and disc nullable is multiplied by valid_ext AND valid_disc.
+# ===-------------------------------------------------------------------===#
+
+# Distinct nullable agg-input VALIDITY column slots the op tape reads, in first-
+# appearance order. Scans for OP_LOAD_COL(data_slot) where data_slot is a key of
+# `valid_col_slot_of`; returns the corresponding validity column slots. Empty when
+# the tape reads no nullable agg-input column (the common case) -> no-op multiply.
+def _aggin_valid_cols_in_tape(
+    read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
+) raises -> List[Int]:
+    var out: List[Int] = []
+    var seen = Dict[Int, Bool]()
+    var k = 0
+    var n_ops = len(ops) // 3
+    while k < n_ops:
+        var op = ops[3 * k + 0]
+        var a = Int(ops[3 * k + 1])
+        if op == OP_LOAD_COL and a in valid_col_slot_of and a not in seen:
+            seen[a] = True
+            out.append(valid_col_slot_of[a])
+        k += 1
+    return out^
+
+
+# Append, to a resolved op tape (+ its parallel const_div), one OP_LOAD_COL(vslot)
+# OP_MUL per distinct nullable agg-input the tape reads. const_div gets 1.0 per
+# appended op (validity is 0/1 -> no scale). Returns (ops', divs'); when there is no
+# nullable agg-input the tape is returned unchanged (byte-identical to the flag-off
+# / no-NULL path). `divs` may be empty (int path) -> stays empty (never read).
+def _append_valid_mul(
+    read ops: List[Int64],
+    read divs: List[Float64],
+    valid_col_slot_of: Dict[Int, Int],
+) raises -> Tuple[List[Int64], List[Float64]]:
+    var vcols = _aggin_valid_cols_in_tape(ops, valid_col_slot_of)
+    var out_ops = ops.copy()
+    var out_div = divs.copy()
+    var has_div = len(divs) > 0
+    for vi in range(len(vcols)):
+        out_ops.append(OP_LOAD_COL)
+        out_ops.append(Int64(vcols[vi]))
+        out_ops.append(Int64(0))
+        out_ops.append(OP_MUL)
+        out_ops.append(Int64(0))
+        out_ops.append(Int64(0))
+        if has_div:
+            out_div.append(Float64(1))  # OP_LOAD_COL(validity)
+            out_div.append(Float64(1))  # OP_MUL
+    return (out_ops^, out_div^)
+
+
+# Build the VALIDITY-PRODUCT op tape (+ parallel const_div) for a metric: the sum
+# of this tape == the count of filter-passing rows that have ALL of the metric's
+# nullable agg-inputs valid (the per-agg valid-count / AVG denominator / stat n).
+# Tape: OP_LOAD_COL(v0) [OP_LOAD_COL(v1) OP_MUL ...]. const_div all 1.0. Returns an
+# EMPTY (ops,divs) when the tape reads no nullable agg-input -> the caller falls back
+# to the canonical PUSH_CONST(1) count (count of all filter-passing rows).
+def _valid_product_tape(
+    read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
+) raises -> Tuple[List[Int64], List[Float64]]:
+    var vcols = _aggin_valid_cols_in_tape(ops, valid_col_slot_of)
+    var out_ops: List[Int64] = []
+    var out_div: List[Float64] = []
+    for vi in range(len(vcols)):
+        out_ops.append(OP_LOAD_COL)
+        out_ops.append(Int64(vcols[vi]))
+        out_ops.append(Int64(0))
+        out_div.append(Float64(1))
+        if vi > 0:
+            out_ops.append(OP_MUL)
+            out_ops.append(Int64(0))
+            out_ops.append(Int64(0))
+            out_div.append(Float64(1))
+    return (out_ops^, out_div^)
+
+
+# ===-------------------------------------------------------------------===#
 # GPU_OP_STATS NUMERICAL STABILITY (audit Group H): centered (shifted-data) sums.
 #
 # The closed forms in `_stat_value` derive variance / covariance from RAW second
@@ -6001,19 +6151,53 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    # GPU_OP_NULLABLE: numeric slots carrying a per-row validity mask (a column the
-    # materialize scan observed a NULL in). For the C++-gated safe slice (single-
-    # table UNGROUPED SUM/AVG, int path) every fed fact column is an agg-input or a
-    # filter column, so ANDing each row's validity into the host pass column excludes
-    # a NULL row exactly like a filtered-out row -- and since ungrouped_count_m is
-    # summed over the SAME pass-gated rows, sum/avg stay correct (SQL NULL semantics)
-    # with NO GPU kernel change. EMPTY in the common all-valid case (no validity ever
-    # fed -> the fold is a no-op and the bake stays byte-identical to before).
-    var valid_slots: List[Int] = []
+    # A1 unified pass model (GPU_OP_NULLABLE): separate FILTER-column validity from
+    # AGG-INPUT-column validity. A numeric slot carries a per-row validity mask iff
+    # the materialize scan observed a NULL in it. Roles:
+    #   * FILTER slot (in f_slot): a NULL makes the predicate UNKNOWN -> the row is
+    #     excluded from EXISTENCE (so from count(*) AND every metric). Fold its
+    #     validity into the host pass column, exactly like a failed predicate.
+    #   * AGG-INPUT slot (NOT in f_slot): a NULL excludes the row only from the
+    #     aggregates that READ that column -- NOT from count(*) or from aggregates
+    #     over other columns. So it is handled PER-METRIC (a validity-column multiply
+    #     appended to each metric's op tape), never folded into the shared pass.
+    # A slot that is BOTH a filter and an agg input is in f_slot -> its NULL is
+    # already excluded by the pass, so the per-metric multiply would be redundant;
+    # the simplest correct rule (per A1) is: in f_slot -> pass only.
+    # EMPTY in the common all-valid case (no validity ever fed -> the fold is a no-op,
+    # no validity columns are packed, no multiplies appended -> byte-identical).
+    var is_filter_slot: List[Bool] = []
+    for _ in range(n_numeric):
+        is_filter_slot.append(False)
+    for fi in range(n_filters):
+        if f_slot[fi] >= 0 and f_slot[fi] < n_numeric:
+            is_filter_slot[f_slot[fi]] = True
+    # FILTER-column nullable slots -> folded into the host pass column (below).
+    var filter_valid_slots: List[Int] = []
+    # AGG-INPUT nullable slots (not a filter) -> per-metric validity multiply. Each
+    # gets its OWN packed 0/1 validity column at a slot beyond pass_slot; the map
+    # records data-slot -> validity-column-slot for the metric lowering.
+    var aggin_valid_slots: List[Int] = []
+    var valid_col_slot_of = Dict[Int, Int]()  # data slot -> validity column slot
+    # The f64 (transcendental/stats) path must NOT use the per-metric validity
+    # multiply: a metric tape `LOAD x; SQRT; LOAD valid_x; MUL` EVALUATES sqrt(x) on a
+    # NULL row's garbage BEFORE the multiply zeroes it -> sqrt(negative-garbage) raises
+    # a domain error in the f64 finalize. Instead fold ALL nullable validity (agg-input
+    # too) into the host pass column so a NULL row is EXCLUDED from the kernel entirely
+    # (no transcendental on garbage; correct stat exclusion) -- the shipped ce3e7db
+    # mechanism. So on the f64 path every nullable slot is a "filter_valid_slot" and
+    # aggin_valid_slots stays empty (the metric-multiply / per-agg valid-count become
+    # no-ops). The int path uses A1 (multiply is safe: garbage*0 == 0, no domain eval).
+    # (The C++ gate keeps f64 nullable SINGLE-aggregate, so pass-folding does not
+    # conflate distinct columns' NULL sets across multiple f64 aggregates.)
+    var is_f64_path = _has_transcendental(d) or _has_stats(d)
     for slot in range(n_numeric):
         if st.cols[numeric_matcols[slot]].validity:
-            valid_slots.append(slot)
-    var n_valid = len(valid_slots)
+            if is_f64_path or is_filter_slot[slot]:
+                filter_valid_slots.append(slot)
+            else:
+                aggin_valid_slots.append(slot)
+    var n_valid = len(filter_valid_slots)  # folded-into-pass count
     # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
     # is set (default off -> serial, byte-identical). PIN_LOG timing brackets the
     # whole pack/pass stage so its serial->parallel ms + cold fraction is visible.
@@ -6026,8 +6210,9 @@ def _pin_finalize_generic(
         # would be summed as garbage. The C++ safe-slice gate declines nullable
         # whenever GPU_OP_NATIVE_DECODE is set (which all three pred-on paths
         # require), so this can never fire for an accepted query; fail closed (loud)
-        # if it somehow does, rather than return a silent wrong result.
-        if n_valid > 0:
+        # if it somehow does, rather than return a silent wrong result. (A1: ANY
+        # nullable column -- filter OR agg-input -- is unhandled on these paths.)
+        if n_valid > 0 or len(aggin_valid_slots) > 0:
             pass_col.free()
             row_gid.free()
             return 8
@@ -6048,12 +6233,17 @@ def _pin_finalize_generic(
                 pass_col.free()
                 row_gid.free()
                 return 8
-        # GPU_OP_NULLABLE: per-valid-slot validity base addresses (1 byte/row), in
-        # valid_slots order. Empty when no column carries a validity mask -> both
-        # bake paths below run exactly as before.
+        # A1 unified pass model: fold ONLY FILTER-column validity into the host pass
+        # column (a NULL filter row => predicate UNKNOWN => excluded from existence
+        # + count(*) + all metrics). per-FILTER-valid-slot validity base addresses
+        # (1 byte/row), in filter_valid_slots order. Empty when no FILTER column
+        # carries a validity mask -> both bake paths below run exactly as before.
+        # Agg-input validity is NOT folded here (handled per-metric below).
         var v_base: List[Int] = []
         for vs in range(n_valid):
-            v_base.append(Int(st.cols[numeric_matcols[valid_slots[vs]]].validity.value()))
+            v_base.append(
+                Int(st.cols[numeric_matcols[filter_valid_slots[vs]]].validity.value())
+            )
         if par_on:
             # Resolve per-filter raw base + elem_size (mirrors _col_val source);
             # the parallel bake reads disjoint rows, writes disjoint pass_col[i].
@@ -6072,19 +6262,32 @@ def _pin_finalize_generic(
                     if not _pred_pass(v, f_cmp[fi], f_k[fi]):
                         ok = False
                         break
-                # GPU_OP_NULLABLE: AND in each fed column's validity (a NULL row is
-                # excluded exactly like a filtered-out row). No-op when n_valid == 0.
+                # A1: AND in each FILTER column's validity (a NULL filter row =>
+                # predicate UNKNOWN => excluded exactly like a failed predicate).
+                # MUST mirror _bake_pass_par's validity loop byte-for-byte. No-op when
+                # n_valid == 0. Agg-input validity is applied per-metric, NOT here.
                 if ok:
                     for vs in range(n_valid):
                         if not _col_valid(
-                            st, numeric_matcols[valid_slots[vs]], i
+                            st, numeric_matcols[filter_valid_slots[vs]], i
                         ):
                             ok = False
                             break
                 pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
-    var n_slots = pass_slot + 1
+    # A1 unified pass model: each AGG-INPUT nullable column gets its OWN 0/1 int64
+    # validity column packed at a NEW slot AFTER pass_slot, in aggin_valid_slots
+    # order. A metric that reads such a column appends OP_LOAD_COL(valid_col_slot)
+    # OP_MUL so a NULL input row contributes 0 to THAT metric only (count(*) and
+    # other-column aggregates are untouched). Grow n_slots exactly like gid/pass.
+    # valid_col_slot_of maps the data slot -> its validity column slot. EMPTY in the
+    # all-valid case (no aggin nullable) -> n_slots == pass_slot + 1, byte-identical.
+    var n_valid_cols = len(aggin_valid_slots)
+    var first_valid_slot = pass_slot + 1
+    for vc in range(n_valid_cols):
+        valid_col_slot_of[aggin_valid_slots[vc]] = first_valid_slot + vc
+    var n_slots = pass_slot + 1 + n_valid_cols
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
         # SKIP-MATERIALIZE: an OMITTED slot is sourced from the pool by
@@ -6109,6 +6312,19 @@ def _pin_finalize_generic(
     else:
         for i in range(n):
             cols[pass_slot * n + i] = pass_col[i]
+    # A1: pack each AGG-INPUT validity column as a 0/1 int64 at its validity slot.
+    # Read the C++-fed 1-byte validity mask for the data column (1=valid, 0=NULL);
+    # an aggin slot is in aggin_valid_slots iff st.cols[mj].validity is present, so
+    # the .value() is safe. (n_valid_cols == 0 -> no iterations, byte-identical.)
+    # Left serial in both modes: this is a light copy (1 read + 1 write per row),
+    # dwarfed by the data pack/pass loops; parallelizing it is not worth a new helper.
+    for vc in range(n_valid_cols):
+        var vdslot = aggin_valid_slots[vc]
+        var vslot = valid_col_slot_of[vdslot]
+        var vmj = numeric_matcols[vdslot]
+        var vp = st.cols[vmj].validity.value()
+        for i in range(n):
+            cols[vslot * n + i] = Int64(1) if vp[i] != 0 else Int64(0)
     if pin_log:
         var dt = (perf_counter_ns() - t_packpass0) // 1000
         print(
@@ -6151,6 +6367,10 @@ def _pin_finalize_generic(
     var agg_cx: List[Float64] = []
     var agg_cy: List[Float64] = []
     var stat_metric_key = Dict[String, Int]()  # op-tape key -> metric index
+    # A1 unified pass model: per-output-agg validity-count metric idx (or -1). Set
+    # below for any SUM/AVG/stat that reads a nullable AGG-INPUT column; -1 for
+    # count(*) and for aggregates with no nullable agg-input. Threaded to GpuPinned.
+    var agg_valid_count_m: List[Int] = []
 
     def _emit_count(
         mut metric_ops: List[Int64],
@@ -6267,12 +6487,38 @@ def _pin_finalize_generic(
             )
             var cx = shx.c
             var sxw = _shift_arg(sp.x_ops, sp.x_div, shx)
-            var xw_ops = sxw[0].copy()
-            var xw_div = sxw[1].copy()
+            # A1: multiply the centered x tape by valid_x so (x-cx)*valid contributes
+            # 0 for a NULL x row -> Sx'/Sx2'/Sxy' all exclude it. valid is 0/1, so the
+            # squared/product moments stay correct (valid^2 == valid). No-op (tape
+            # unchanged) when x reads no nullable agg-input column.
+            var xwm = _append_valid_mul(sxw[0], sxw[1], valid_col_slot_of)
+            var xw_ops = xwm[0].copy()
+            var xw_div = xwm[1].copy()
 
-            # n (count): canonical PUSH_CONST(1) (deduped, shared across stats).
+            # n (count): A1 -> the VALIDITY-PRODUCT of the stat's args (count of rows
+            # with ALL of this stat's inputs valid, among filter-passing rows). When
+            # the stat reads no nullable agg-input this is empty -> the canonical
+            # PUSH_CONST(1) (deduped, shared across stats), byte-identical to before.
+            # The validity product over the UNcentered arg tapes (sp.x_ops/sp.y_ops)
+            # is the right set of validity columns (centering does not change which
+            # columns are read). Built below once both args are resolved.
             var cnt_ops: List[Int64] = [OP_PUSH_CONST, Int64(1), Int64(0)]
             var cnt_div: List[Float64] = [Float64(1)]
+            var vpx = _valid_product_tape(sp.x_ops, valid_col_slot_of)
+            if len(vpx[0]) > 0 and not two_arg:
+                cnt_ops = vpx[0].copy()
+                cnt_div = vpx[1].copy()
+            elif two_arg:
+                # 2-arg: n = Σ(valid_x * valid_y). Combine both args' validity columns.
+                var combined: List[Int64] = []
+                for x in range(len(sp.x_ops)):
+                    combined.append(sp.x_ops[x])
+                for x in range(len(sp.y_ops)):
+                    combined.append(sp.y_ops[x])
+                var vpc = _valid_product_tape(combined, valid_col_slot_of)
+                if len(vpc[0]) > 0:
+                    cnt_ops = vpc[0].copy()
+                    cnt_div = vpc[1].copy()
             var mn = _emit_metric_dedup(
                 cnt_ops, cnt_div, metric_ops, metric_offsets, metric_lens,
                 const_div, n_ops_total, stat_metric_key,
@@ -6294,6 +6540,11 @@ def _pin_finalize_generic(
             agg_cx[ai] = cx
             agg_m0.append(msx)  # reuse m0/m1 loosely; stat assemble uses agg_ms*
             agg_m1.append(mn)
+            # A1: NULL-on-empty for a stat is its valid-count `mn` (Σ validity-product
+            # among filter-passing rows). When the stat has no nullable agg-input mn
+            # is the plain PUSH_CONST(1) count; the shared filter-only count then also
+            # equals it -> no behavior change. Always record mn as the per-agg count.
+            agg_valid_count_m.append(mn)
             if two_arg:
                 var shy = _metric_arg_shift(
                     sp.y_ops, sp.y_div, col_scale_of_slot, st,
@@ -6301,8 +6552,11 @@ def _pin_finalize_generic(
                 )
                 var cy = shy.c
                 var syw = _shift_arg(sp.y_ops, sp.y_div, shy)
-                var yw_ops = syw[0].copy()
-                var yw_div = syw[1].copy()
+                # A1: multiply the centered y tape by valid_y (no-op when y reads no
+                # nullable agg-input). Sy'/Sy2'/Sxy' inherit it.
+                var ywm = _append_valid_mul(syw[0], syw[1], valid_col_slot_of)
+                var yw_ops = ywm[0].copy()
+                var yw_div = ywm[1].copy()
                 agg_cy[ai] = cy
                 agg_msy[ai] = _emit_metric_dedup(
                     yw_ops, yw_div, metric_ops, metric_offsets, metric_lens,
@@ -6329,6 +6583,9 @@ def _pin_finalize_generic(
                 const_div.append(Float64(1))
             agg_m0.append(mi)
             agg_m1.append(-1)
+            # A1: count(*) counts ALL filter-passing rows (incl. NULL-agg-input rows);
+            # never multiplied, never SQL NULL over empty -> no per-agg valid-count.
+            agg_valid_count_m.append(-1)
         elif agg.kind == AGG_AVG:
             # AVG's DOUBLE rescale uses the summed value's scale, NOT ret_scale
             # (which is 0 for the DOUBLE output column).
@@ -6336,32 +6593,84 @@ def _pin_finalize_generic(
                 _program_scale(agg, col_scale_of_slot, col_slot, d)
             )
             var plan = _resolve_program(d, agg, col_slot)
+            # A1: multiply the avg-numerator program by the validity of every nullable
+            # agg-input it reads (no-op when none). avg = Σ(x*valid)/Σ(valid): the
+            # numerator excludes NULL-input rows, and the denominator (the count
+            # metric) is the matching validity-PRODUCT so it counts the SAME rows.
+            var avg_mul = _append_valid_mul(
+                plan.ops, _resolve_const_div(d, agg) if is_float64 else [],
+                valid_col_slot_of,
+            )
+            var avg_plan = MetricPlan(avg_mul[0].copy(), len(avg_mul[0]) // 3)
             var mi = _emit_prog(
-                plan, metric_ops, metric_offsets, metric_lens, n_ops_total
+                avg_plan, metric_ops, metric_offsets, metric_lens, n_ops_total
             )
             if is_float64:
-                var cd = _resolve_const_div(d, agg)
-                for x in range(len(cd)):
-                    const_div.append(cd[x])
-            var ci = _emit_count(
-                metric_ops, metric_offsets, metric_lens, n_ops_total
-            )
-            if is_float64:
-                const_div.append(Float64(1))  # the count metric's PUSH_CONST(1)
+                for x in range(len(avg_mul[1])):
+                    const_div.append(avg_mul[1][x])
+            # AVG denominator = Σ(validity-product) of the avg-arg's nullable inputs
+            # (the count of rows with ALL inputs valid). When the arg reads no nullable
+            # agg-input this is empty -> the canonical PUSH_CONST(1) count, == the prior
+            # behavior (count of filter-passing rows).
+            var avg_cnt_vp = _valid_product_tape(plan.ops, valid_col_slot_of)
+            var ci: Int
+            if len(avg_cnt_vp[0]) > 0:
+                ci = _emit_prog(
+                    MetricPlan(avg_cnt_vp[0].copy(), len(avg_cnt_vp[0]) // 3),
+                    metric_ops, metric_offsets, metric_lens, n_ops_total,
+                )
+                if is_float64:
+                    for x in range(len(avg_cnt_vp[1])):
+                        const_div.append(avg_cnt_vp[1][x])
+            else:
+                ci = _emit_count(
+                    metric_ops, metric_offsets, metric_lens, n_ops_total
+                )
+                if is_float64:
+                    const_div.append(Float64(1))  # the count metric's PUSH_CONST(1)
             agg_m0.append(mi)
             agg_m1.append(ci)
+            # A1: when the avg-arg reads a nullable agg-input, ci IS the validity-
+            # product denominator -> this avg's NULL-on-empty is gated on ci (== 0 iff
+            # NO row has all inputs valid). When the arg has no nullable agg-input,
+            # ci == filter-passing count == shared ungrouped_count_m -> fall back to
+            # the shared empty-set NULL (-1), preserving the prior behavior exactly.
+            agg_valid_count_m.append(ci if len(avg_cnt_vp[0]) > 0 else -1)
         else:  # AGG_SUM (MIN/MAX not in the n_dims==0 classes here)
             agg_scale.append(agg.ret_scale)
             var plan = _resolve_program(d, agg, col_slot)
+            # A1: multiply the sum program by the validity of every nullable agg-input
+            # it reads (no-op when none) -> a NULL-input row contributes 0 to THIS sum.
+            var sum_mul = _append_valid_mul(
+                plan.ops, _resolve_const_div(d, agg) if is_float64 else [],
+                valid_col_slot_of,
+            )
+            var sum_plan = MetricPlan(sum_mul[0].copy(), len(sum_mul[0]) // 3)
             var mi = _emit_prog(
-                plan, metric_ops, metric_offsets, metric_lens, n_ops_total
+                sum_plan, metric_ops, metric_offsets, metric_lens, n_ops_total
             )
             if is_float64:
-                var cd = _resolve_const_div(d, agg)
-                for x in range(len(cd)):
-                    const_div.append(cd[x])
+                for x in range(len(sum_mul[1])):
+                    const_div.append(sum_mul[1][x])
             agg_m0.append(mi)
             agg_m1.append(-1)
+            # A1: a SUM over nullable agg-input(s) is SQL NULL iff ZERO filter-passing
+            # rows have ALL its inputs valid. Emit a companion validity-PRODUCT-sum
+            # metric (Σ valid_a[*valid_b..]) and gate this sum's NULL-on-empty on it.
+            # When the sum reads no nullable agg-input -> -1 (the shared filter-only
+            # empty-set NULL handles it, == prior behavior; no extra metric emitted).
+            var sum_vp = _valid_product_tape(plan.ops, valid_col_slot_of)
+            if len(sum_vp[0]) > 0:
+                var vci = _emit_prog(
+                    MetricPlan(sum_vp[0].copy(), len(sum_vp[0]) // 3),
+                    metric_ops, metric_offsets, metric_lens, n_ops_total,
+                )
+                if is_float64:
+                    for x in range(len(sum_vp[1])):
+                        const_div.append(sum_vp[1][x])
+                agg_valid_count_m.append(vci)
+            else:
+                agg_valid_count_m.append(-1)
 
     # NULL-on-empty (UNGROUPED only): record the metric index of a count-of-passing-
     # rows metric so the assemble can detect a zero-contributing-row result and emit
@@ -6430,12 +6739,20 @@ def _pin_finalize_generic(
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
     # the float64 VM. col_scale_of_slot already holds each slot's decimal scale.
+    # A1: when AGG-INPUT validity columns are packed (slots >= pass_slot+1), the f64
+    # metric programs OP_LOAD_COL them, and eval_program_f64 divides by col_div[slot]
+    # -- so col_div must cover those slots with 1.0 (validity is unscaled 0/1). Extend
+    # col_div to the FULL packed slot count (gid/pass gaps also 1.0, never loaded by a
+    # metric). With no validity columns (n_valid_cols==0) col_div stays length
+    # n_numeric and gp.n_slots stays n_numeric -> byte-identical to before.
     var col_div: List[Float64] = []
+    var col_div_n = n_numeric if n_valid_cols == 0 else n_slots
     if is_float64:
-        for slot in range(n_numeric):
+        for slot in range(col_div_n):
             var div = Float64(1)
-            for _ in range(Int(col_scale_of_slot[slot])):
-                div *= 10.0
+            if slot < n_numeric:
+                for _ in range(Int(col_scale_of_slot[slot])):
+                    div *= 10.0
             col_div.append(div)
 
     # --- pass program: 1-op LOAD_COL(pass_slot) ---
@@ -6635,7 +6952,10 @@ def _pin_finalize_generic(
     # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: route this entry to the float64 accumulator.
     gp.is_float64 = is_float64
     gp.col_div = col_div^
-    gp.n_slots = n_numeric
+    # A1: col_div is length n_numeric (no validity cols) OR n_slots (validity cols
+    # packed). gp.n_slots (the f64 kernel's cdiv length) must MATCH col_div's length
+    # so a metric loading a validity slot finds col_div[slot]==1.0 (not an overread).
+    gp.n_slots = col_div_n
     gp.const_div = const_div^
     # GPU_OP_STATS: per-output-agg shared-sum metric indices (closed-form finalize).
     gp.is_stats = is_stats
@@ -6649,6 +6969,7 @@ def _pin_finalize_generic(
     gp.agg_cy = agg_cy^
     gp.ungrouped_count_m = ungrouped_count_m
     gp.grouped_count_m = grouped_count_m
+    gp.agg_valid_count_m = agg_valid_count_m^
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
     # WARM path can re-run the in-kernel filter with a fresh constant set.

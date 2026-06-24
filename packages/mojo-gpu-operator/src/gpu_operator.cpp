@@ -245,6 +245,9 @@ int64_t mojo_gpu_desc_is_transcendental(void *handle);
 // GPU_OP_STATS: 1 if the descriptor has a statistical aggregate (stddev/var/
 // covar/corr/regr_*). Enables routing for an otherwise KIND_UNKNOWN stat plan.
 int64_t mojo_gpu_desc_is_stats(void *handle);
+// A1 (GPU_OP_NULLABLE): 1 iff UNGROUPED int-path multi/aggregate (all SUM/AVG/count(*),
+// not f64). Enables routing for an int multi-aggregate plan whose KIND is UNKNOWN.
+int64_t mojo_gpu_desc_a1_ungrouped_ok(void *handle);
 int64_t mojo_gpu_desc_strategy(void *handle);
 int64_t mojo_gpu_desc_n_dims(void *handle);
 int64_t mojo_gpu_desc_n_aggs(void *handle);
@@ -2657,34 +2660,54 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   // the filter walk above (unmodeled filter shape -> return false), so no extra check
   // is needed. Any query failing the slice re-applies the original blanket decline.
   if (nullable_on) {
+    // A1 unified pass model: accept N aggregates (not just one). The host pass column
+    // folds in only FILTER-column validity; each metric multiplies in its own
+    // agg-input-column validity, and count(*) is unmultiplied -- so count(*) (counts
+    // ALL filter-passing rows) and multiple aggregates over DIFFERENT nullable columns
+    // (each excludes only its own NULLs) are correct. Per-aggregate NULL-on-empty uses
+    // each aggregate's validity-product count. Accept iff single-table, UNGROUPED, no
+    // native-decode, and EVERY aggregate is an int128 SUM / AVG / count(*) / stat /
+    // transcendental SUM (the kinds the Mojo finalize lowers under A1).
     bool base = single_get && agg.groups.empty() &&
                 std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
-                out.aggregates.size() == 1;
-    auto &a0 = out.aggregates[0];
-    bool int_sum = base && a0.kind_tag == rp::AGG_SUM && a0.ret_is_int128 == 1;
-    // AVG (int or transcendental): a single avg(x) emits TWO internal metrics --
-    // sum (m0) and count (m1) -- BOTH summed over the same pass-gated rows, so the
-    // validity fold excludes NULL-x rows from numerator AND denominator => avg over
-    // the non-NULL rows, exactly SQL avg(x). All-NULL -> count 0 -> ungrouped_count_m
-    // (== avg's m1) marks the cell SQL NULL. (This was thought unsupportable earlier,
-    // but that 0.0 was the now-fixed sum/avg pin-signature collision, not avg itself
-    // -- EXPLAIN confirms nullable avg is a plain avg(#0), not an avg-as-sum rewrite.)
-    bool avg_agg = base && a0.kind_tag == rp::AGG_AVG;
-    bool f64_agg = false;
+                !out.aggregates.empty();
+    bool all_ok = base;
+    bool has_f64 = false;  // any stat / transcendental-SUM aggregate
     if (base) {
-      if (IsStatAggKind(a0.kind_tag)) {
-        f64_agg = true;  // stddev/var/covar/corr/regr_* (1- or 2-arg)
-      } else if (a0.kind_tag == rp::AGG_SUM) {
-        for (auto &op : a0.program) {  // sum(sqrt|exp|ln|log10|log2|pow|sin|cos(x))
-          if (op.op_tag >= rp::OP_SQRT && op.op_tag <= rp::OP_LOG2) {
-            f64_agg = true;
-            break;
+      for (auto &a : out.aggregates) {
+        bool ok = false;
+        if (a.kind_tag == rp::AGG_COUNT_STAR) {
+          ok = true;  // counts all filter-passing rows; never validity-multiplied
+        } else if (a.kind_tag == rp::AGG_SUM && a.ret_is_int128 == 1) {
+          ok = true;  // int128 SUM (avg-as-sum-double is DOUBLE -> ret_is_int128==0)
+        } else if (a.kind_tag == rp::AGG_AVG) {
+          ok = true;  // numerator * validity, denominator = validity-product count
+        } else if (IsStatAggKind(a.kind_tag)) {
+          ok = true;  // stddev/var/covar/corr/regr_* (NVIDIA-only; Apple declines f64)
+          has_f64 = true;
+        } else {
+          for (auto &op : a.program) {  // transcendental SUM: sum(sqrt|exp|ln|..(x))
+            if (a.kind_tag == rp::AGG_SUM && op.op_tag >= rp::OP_SQRT &&
+                op.op_tag <= rp::OP_LOG2) {
+              ok = true;
+              has_f64 = true;
+              break;
+            }
           }
         }
+        if (!ok) { all_ok = false; break; }
       }
     }
-    bool slice_ok = int_sum || avg_agg || f64_agg;
-    if (!slice_ok && any_nullable_projected()) { return false; }
+    // The A1 per-metric validity multiply is INT-only. An f64 (transcendental/stats)
+    // aggregate uses the validity-IN-PASS fold instead -- a NULL row is excluded from
+    // the kernel entirely, because a metric tape would otherwise EVALUATE the
+    // transcendental on a NULL row's garbage (e.g. sqrt(negative) -> domain error)
+    // before a multiply could zero it. Pass-folding excludes whole rows, so it cannot
+    // give per-column NULL exclusion across MULTIPLE f64 aggregates -> restrict f64
+    // nullable to a SINGLE aggregate (the shipped ce3e7db scope). Int multi-aggregate
+    // (count(*) + sum/avg over different nullable columns) is unaffected.
+    if (has_f64 && out.aggregates.size() != 1) { all_ok = false; }
+    if (!all_ok && any_nullable_projected()) { return false; }
   }
 
   return true;
@@ -3331,6 +3354,19 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   // stat aggregate -- the Mojo scope guard already validated the shape (UNGROUPED/
   // DENSE, no FK dims, NVIDIA-only) and flag-gated the agg-kind emission.
   if (GpuOpFlagOn("GPU_OP_STATS") && mojo_gpu_desc_is_stats(h)) {
+    enabled = true;
+  }
+
+  // A1 (GPU_OP_NULLABLE): an UNGROUPED int multi-aggregate (count(*) + SUM/AVG over
+  // possibly-NULLABLE columns) classifies KIND_UNKNOWN -- no single TPC-H kind matches
+  // 2+ aggregates -- but the generic ungrouped int128 kernel executes it, and the A1
+  // metric lowering gives count(*) its own (unmultiplied) metric + each SUM/AVG its own
+  // validity multiply. Enable it when GPU_OP_NULLABLE is on; the accessor restricts to
+  // UNGROUPED all-int {SUM,AVG,count(*)} so an f64 stat/transcendental is never mixed
+  // onto the int path (and single-agg int already routes via KIND_Q6, so this only adds
+  // the multi-aggregate case). The SerializeMatchedPlan nullable gate already
+  // fail-closed any nullable shape outside the accepted set before we got here.
+  if (GpuOpNullableOn() && mojo_gpu_desc_a1_ungrouped_ok(h)) {
     enabled = true;
   }
 
