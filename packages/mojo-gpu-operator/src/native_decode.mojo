@@ -15,7 +15,7 @@ Two codecs are implemented here, comptime-specialized per element type T
     CONSTANT, FOR, CONSTANT_DELTA, and DELTA_FOR (the last needs an in-group
     prefix-sum). INVALID / unknown modes route to a deterministic zero-fill.
 
-BITPACKING byte layout per segment (matches DuckDB v1.5.3
+BITPACKING byte layout per segment (matches DuckDB v1.5.4
 common/bitpacking.hpp + storage/compression/bitpacking.hpp and Sirius's
 gpu_decode_bitpacking.cu):
 

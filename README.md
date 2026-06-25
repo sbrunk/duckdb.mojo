@@ -154,8 +154,8 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.3/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.3/src/include/duckdb_extension.h)
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb_extension.h)
 instead of relying on dynamic symbol lookup. The struct is split into a
 **stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
 for the full design):
@@ -212,7 +212,7 @@ the channels to your project's `pixi.toml` and install it:
 ```toml title="pixi.toml"
 [workspace]
 channels = [
-  "https://conda.modular.com/max-nightly",
+  "https://conda.modular.com/max",
   "https://repo.prefix.dev/modular-community",
   "conda-forge",
 ]
@@ -267,14 +267,14 @@ from the working tree instead of a pushed git SHA):
 rattler-build build \
   --recipe conda.recipe/recipe.local.yaml \
   -c conda-forge \
-  -c https://conda.modular.com/max-nightly \
+  -c https://conda.modular.com/max \
   -c https://repo.prefix.dev/modular-community
 ```
 
 A successful build runs the in-package smoke test and writes the `.conda` under
 `output/<platform>/`. `conda.recipe/recipe.yaml` is the file submitted to
 modular-community; bump its `mojo-compiler` pin together with `pixi.toml` on
-every nightly update.
+every compiler update.
 
 ### (Re-)generate the C API bindings
 

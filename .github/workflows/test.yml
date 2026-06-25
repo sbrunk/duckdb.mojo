@@ -16,6 +16,10 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          # check-generated-api regenerates the bindings from the DuckDB source,
+          # which lives in the third_party/duckdb submodule (pinned, shallow).
+          submodules: recursive
 
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
@@ -136,6 +140,6 @@ jobs:
           # libduckdb). Matches the local build command in the README.
           build-args: >-
             -c conda-forge
-            -c https://conda.modular.com/max-nightly
+            -c https://conda.modular.com/max
             -c https://repo.prefix.dev/modular-community
           upload-artifact: false

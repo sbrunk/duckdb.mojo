@@ -2978,7 +2978,7 @@ def _colpool_assemble_col_ptrs(
 # `kind` is the stat AggKind; n/sx/sx2/sy/sy2/sxy are the accumulated f64 metric
 # sums for this (group's) passing rows (sy/sy2/sxy are 0 for 1-arg stats). Returns
 # (value, is_valid): is_valid=False means the cell is a SQL NULL (the caller marks
-# the result-vector validity invalid). EVERY degenerate case matches DuckDB 1.5.3
+# the result-vector validity invalid). EVERY degenerate case matches DuckDB 1.5.4
 # EXACTLY -- verified in the CLI across 0-row / 1-row / zero-variance / normal:
 #
 #   var_pop / stddev_pop / covar_pop : NULL iff n==0;  n>=1 -> value (n==1 -> 0).

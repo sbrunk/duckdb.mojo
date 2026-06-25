@@ -1,6 +1,6 @@
 -- Bounded-LRU pin-cache eviction test for the mojo-gpu-operator kNN pin cache.
 --
--- Invoked by `pixi run gpu-op-pin-evict-test`, which builds the extension, sets a
+-- Invoked by `bench/pin_evict_test.sh`, which builds the extension, sets a
 -- SMALL budget (GPU_OP_PIN_BUDGET_MB=256), substitutes __EXT__ (extension path)
 -- and __QV__ (a 128-element FLOAT query-vector literal), then runs this script.
 -- It greps for `FAIL` to determine pass/fail.

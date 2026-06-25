@@ -27,8 +27,8 @@ again asserting GPU == CPU int128 reference (COLD + WARM) with the SAME predicat
 Run from the repo root:
     GPU_OP_FILTER_OR=1 pixi run mojo run -I packages/mojo-gpu-operator/src \
         packages/mojo-gpu-operator/bench/or_filter_shuttle_test.mojo
-(or: pixi run gpu-op-orfilter-test -- the flag is read C++-side at serialize time,
- but this test hand-builds the tape, so it does not depend on the env flag.)
+(The flag is read C++-side at serialize time, but this test hand-builds the tape,
+ so it does not depend on the env flag.)
 """
 
 from gpu_kernels import (

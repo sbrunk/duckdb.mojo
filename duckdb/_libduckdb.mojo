@@ -5767,6 +5767,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_value:
         """
         Creates a DECIMAL value from a duckdb_decimal.
+
+        The width must be between 1 and 38, and the scale must not exceed the width.
         """
         return self._duckdb_create_decimal(input_)
 

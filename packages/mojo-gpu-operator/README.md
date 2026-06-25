@@ -17,7 +17,7 @@ DuckDB's, the warm/cold pin model, and performance.
 
 > **Scope / caveats.** CPP-ABI extension linking DuckDB's internal C++ headers —
 > **locked to the exact DuckDB build** it was compiled against (currently
-> `v1.5.3`); not part of the conda package. **Validated on Apple (Metal) and
+> `v1.5.4`); not part of the conda package. **Validated on Apple (Metal) and
 > NVIDIA (RTX 4090, Linux)** — see [DESIGN.md](DESIGN.md#hardware-portability) for
 > the Linux/NixOS build notes. Unsigned — load with `-unsigned` /
 > `allow_unsigned_extensions`.
@@ -122,17 +122,31 @@ to match stock DuckDB exactly, including under repeated (warm) execution.
   constants + the RawPlan tag constants (C++/Mojo in lockstep).
 - `build.sh` — `mojo --emit shared-lib` + `clang++` link with rpaths (`.dylib`/macOS,
   `.so`/Linux).
-- `bench/` — standalone correctness/de-risk tests and micro-probes (each has a
-  `pixi run gpu-op-*` task).
+- `bench/` — standalone correctness/de-risk tests and micro-probes, run directly
+  with `mojo run` (see Tasks below).
 
 ## Tasks
 
+Only build/clean are wrapped as pixi tasks:
+
 ```
 gpu-op-build / gpu-op-clean        build / clean the extension
-gpu-op-q6shuttle / q14shuttle / q3shuttle / q5shuttle   end-to-end shuttle tests (exact vs CPU int128)
-gpu-op-q6test / q1test / q3groupby / q5test / q14test   standalone kernel-algorithm oracles
-gpu-op-bench                       pin-resident vs CPU micro-benchmark (cosine, K sweep)
-gpu-op-probe-alloc / probe-route   the unified-memory allocator probes
+```
+
+The `bench/` de-risk tests (end-to-end shuttle tests, kernel-algorithm oracles,
+nullable/native-decode tests), the unified-memory allocator probes, and the
+pin-resident micro-benchmark are run directly with `mojo run` (the former
+`pixi run gpu-op-*` wrappers were removed). The kernel oracles run as-is; the
+descriptor C-ABI "shuttle" tests and anything importing the operator's Mojo
+modules need the package `src/` on the import path:
+
+```bash
+# kernel-algorithm oracles (q1/q3/q5/q6/q14, q3groupby) + the pin-resident bench:
+pixi run mojo run packages/mojo-gpu-operator/bench/q6_kernel_test.mojo
+
+# shuttle / nullable / native-decode tests (need -I src):
+pixi run mojo run -I packages/mojo-gpu-operator/src \
+  packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo
 ```
 
 TPC-H stock-vs-GPU benchmarking reuses the `mojo-kernel-overrides` runner — point

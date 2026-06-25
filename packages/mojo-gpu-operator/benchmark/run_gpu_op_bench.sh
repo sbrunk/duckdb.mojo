@@ -13,8 +13,8 @@
 # The benchmark files self-generate a DECIMAL dataset via a `cache` directive (no tpch / external
 # db dependency) — DECIMAL because the f64 aggregate paths decline on raw DOUBLE columns.
 #
-#   pixi run gpu-op-bench               # all gpuop win-class benchmarks
-#   pixi run gpu-op-bench 'gpuop/pow.*' # a subset (regex matches the benchmark/ name)
+#   bash packages/mojo-gpu-operator/benchmark/run_gpu_op_bench.sh                # all win-class benchmarks
+#   bash packages/mojo-gpu-operator/benchmark/run_gpu_op_bench.sh 'gpuop/pow.*'  # a subset (regex matches the benchmark/ name)
 #
 # These f64 paths are NVIDIA-only: on Apple/AMD they decline cleanly -> ~1.0x (no win, no error).
 # Run on an NVIDIA box (the warm wins are 2.5-8.6x at this scale on an RTX 4090).
@@ -22,7 +22,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/.duckdb-src}"
+DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/third_party/duckdb}"
 EXT="${DUCKDB_BENCH_EXTENSION:-$ROOT/packages/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension}"
 SUB="${1:-gpuop/.*}"   # benchmark-name regex (relative to benchmark/)
 

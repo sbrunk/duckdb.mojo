@@ -2,7 +2,7 @@
 # Build DuckDB's own benchmark_runner with the one-line "LOAD an extension at init" hook,
 # so the mojo_overrides extension can be loaded into every benchmark via DUCKDB_BENCH_EXTENSION.
 #
-# Reuses the existing .duckdb-src checkout + build/release dir (no second DuckDB clone or build):
+# Reuses the existing third_party/duckdb checkout + build/release dir (no second DuckDB clone or build):
 #   1. apply runner_load_extension.patch if the hook isn't already present (idempotent),
 #   2. copy our committed micro/mojo_simd/*.benchmark files into the source tree,
 #   3. (re)configure + build the benchmark_runner target (tpch extension included, for TPC-H).
@@ -10,14 +10,14 @@
 # Run via `pixi run overrides-bench-runner-build` (so cmake + the conda toolchain are on PATH).
 #
 # Overridable env:
-#   DUCKDB_SRC   DuckDB source checkout         (default: <repo>/.duckdb-src)
+#   DUCKDB_SRC   DuckDB source checkout         (default: <repo>/third_party/duckdb)
 #   BUILD_DIR    cmake build dir                (default: $DUCKDB_SRC/build/release)
 #   JOBS         parallel build jobs            (default: number of CPUs)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/.duckdb-src}"
+DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/third_party/duckdb}"
 BUILD_DIR="${BUILD_DIR:-$DUCKDB_SRC/build/release}"
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )}"
 

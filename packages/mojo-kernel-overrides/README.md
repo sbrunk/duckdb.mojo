@@ -123,7 +123,7 @@ catalog holds function pointers into it.
 ## Caveats
 
 - **Version/ABI locked**: a CPP-ABI extension only loads into the exact DuckDB version it was
-  built against (footer is `--duckdb-version`, default `v1.5.3`). Rebuild per version.
+  built against (footer is `--duckdb-version`, default `v1.5.4`). Rebuild per version.
 - Needs the C++ internal headers + an ABI-matched libduckdb, not the stable C extension API.
 - **State-layout coupling**: the mirrored aggregate state structs must match DuckDB's; the
   `state_size` runtime check guards gross mismatches but not silent field-order changes.

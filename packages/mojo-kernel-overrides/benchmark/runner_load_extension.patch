@@ -8,7 +8,7 @@
 # so the extension's catalog overrides apply to every benchmark.
 #
 # It is generic (loads any extension by path) and independent of the SIMD source patch.
-# Apply against a v1.5.3 DuckDB checkout:  git apply runner_load_extension.patch
+# Apply against a v1.5.4 DuckDB checkout:  git apply runner_load_extension.patch
 diff --git a/benchmark/interpreted_benchmark.cpp b/benchmark/interpreted_benchmark.cpp
 index 2e4a902..0e36f72 100644
 --- a/benchmark/interpreted_benchmark.cpp

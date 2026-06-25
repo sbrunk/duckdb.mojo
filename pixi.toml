@@ -1,6 +1,6 @@
 [workspace]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max-nightly/"]
+channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026061203"
+mojo-compiler = "==1.0.0b2"
 
 [package.build-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026061203"
+mojo-compiler = "==1.0.0b2"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -33,7 +33,7 @@ path = "duckdb"
 build = "pixi run mojo precompile duckdb -o duckdb.mojoc"
 test-library = { cmd = "bash scripts/run_tests.sh" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
-generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckdb-src --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
+generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
 # Fails if duckdb/_libduckdb.mojo is out of sync with the DuckDB version
 # (regenerates first via generate-api, then checks for an unexpected diff).
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
@@ -61,7 +61,7 @@ overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
 overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
 # Run the overrides through DuckDB's own benchmark suite (https://duckdb.org/docs/current/dev/benchmark).
 # `overrides-bench-runner-build` builds the extension + a stock benchmark_runner with a one-line
-# "LOAD an extension at init" hook (reuses .duckdb-src); `overrides-bench-runner` runs the suite
+# "LOAD an extension at init" hook (reuses third_party/duckdb); `overrides-bench-runner` runs the suite
 # stock-vs-overrides and prints a speedup table. Pass a benchmark regex + runner args, e.g.:
 #   pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*' --threads=1
 #   pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'   # TPC-H Q1-Q22
@@ -72,62 +72,6 @@ overrides-bench-runner = "bash packages/mojo-kernel-overrides/benchmark/run_runn
 # via an optimizer extension, with Mojo GPU kernels. See packages/mojo-gpu-operator/README.md.
 gpu-op-build = "bash packages/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf packages/mojo-gpu-operator/build"
-# Phase-0 de-risking probes: 0a (does a scanned column flow through DBConfig.allocator?),
-# 0b (is a DB-wide unified allocator viable, or must we pin?).
-gpu-op-probe-alloc = "clang++ -std=c++17 -O2 packages/mojo-gpu-operator/bench/alloc_probe.cpp -I $CONDA_PREFIX/include -L $CONDA_PREFIX/lib -lduckdb -Wl,-rpath,$CONDA_PREFIX/lib -o packages/mojo-gpu-operator/build/alloc_probe && packages/mojo-gpu-operator/build/alloc_probe"
-gpu-op-probe-route = "mojo run packages/mojo-gpu-operator/bench/apple_alloc_route_probe.mojo"
-# Phase 2: quantify the pin-resident win (GPU pinned vs re-upload vs CPU SIMD, K sweep).
-gpu-op-bench = "mojo run packages/mojo-gpu-operator/bench/pin_resident_bench.mojo"
-# TPC-H Q6: de-risk the exact-decimal filter+sum GPU kernel (bit-exact vs CPU int128).
-gpu-op-q6test = "mojo run packages/mojo-gpu-operator/bench/q6_kernel_test.mojo"
-# TPC-H Q1: de-risk the exact-decimal grouped-aggregation GPU kernel (bit-exact vs CPU int128).
-gpu-op-q1test = "mojo run packages/mojo-gpu-operator/bench/q1_kernel_test.mojo"
-# TPC-H Q14: de-risk the GPU hash-probe join kernel (bit-exact vs CPU int128, zero misses).
-gpu-op-q14test = "mojo run packages/mojo-gpu-operator/bench/q14_kernel_test.mojo"
-# TPC-H Q3: de-risk the GPU multi-way-join + per-order atomic accumulation (bit-exact vs CPU).
-gpu-op-q3test = "mojo run packages/mojo-gpu-operator/bench/q3_kernel_test.mojo"
-# TPC-H Q3: de-risk the GPU segmented-reduction group-by (one warp per order segment, bit-exact vs CPU int128).
-gpu-op-q3groupby = "mojo run packages/mojo-gpu-operator/bench/q3_groupby_test.mojo"
-# TPC-H Q5: de-risk the GPU 6-table-join grouped aggregation (correlated condition, per-block-partials, bit-exact vs CPU).
-gpu-op-q5test = "mojo run packages/mojo-gpu-operator/bench/q5_kernel_test.mojo"
-# GPU-direct native-storage decode (Phase B): bit-exact synthetic test of the portable
-# Mojo BITPACKING (CONSTANT/FOR) + UNCOMPRESSED decoders vs the original host arrays.
-gpu-op-native-decode-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/native_decode_test.mojo"
-# Bounded-LRU pin-cache eviction test (feature #4): pin > budget, assert eviction
-# via gpu_pin_status, then assert an evicted kNN query cold-rebuilds correctly.
-gpu-op-pin-evict-test = "bash packages/mojo-gpu-operator/bench/pin_evict_test.sh"
-# Phase 2 cost-aware placement A/B: drives one pool state through both eviction
-# pickers (keep-benefit vs LRU pick opposite victims) + promotion. Needs a GPU.
-gpu-op-costaware-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/colpool_costaware_test.mojo"
-# Stage-2 shuttle tests: drive the FULL descriptor C-ABI (build->materialize->feed
-# ->finalize) bit-exact vs a CPU int128 reference. Q14 adds the FK-join dim path.
-gpu-op-q6shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo"
-# NR3 (GPU_OP_FILTER_OR): ungrouped sum(x) WHERE a=2 OR a=9 OR a=40 over one fact
-# table -> the OR-of-equalities PASS-PROGRAM, AND-composed into the host pass column.
-gpu-op-orfilter-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/or_filter_shuttle_test.mojo"
-# GPU_OP_NULLABLE: live-SQL end-to-end test of the nullable-column SUM slice (set
-# GPU_OP_NULLABLE=1 to exercise the routed path; unset -> nullable declines to stock).
-gpu-op-nullable-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_sql_test.mojo"
-# GPU_OP_NULLABLE on the f64 path: transcendental SUM + statistical aggregates over
-# nullable DECIMAL columns vs stock (NVIDIA-only win; declines->stock on Apple/AMD).
-gpu-op-nullable-f64-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_f64_sql_test.mojo"
-# DENSE grouped + selective-filter phantom-group regression (operator row count == stock).
-gpu-op-dense-phantom-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q1_dense_filter_phantom_probe.mojo"
-# A1 unified pass model: count(*) + multi-aggregate over nullable columns vs stock.
-gpu-op-nullable-multiagg-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_multiagg_sql_test.mojo"
-# GPU_OP_NULLABLE_GROUPED: DENSE GROUP BY over nullable agg columns vs stock.
-gpu-op-nullable-grouped-test = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_grouped_sql_test.mojo"
-# GPU_OP_NULLABLE adversarial correctness sweep (25 varied nullable shapes vs stock).
-gpu-op-nullable-sweep = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/nullable_adversarial_sweep.mojo"
-gpu-op-q14shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q14_shuttle_test.mojo"
-gpu-op-q3shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q3_shuttle_test.mojo"
-gpu-op-q5shuttle = "mojo run -I packages/mojo-gpu-operator/src packages/mojo-gpu-operator/bench/q5_shuttle_test.mojo"
-# Warm A/B (stock vs operator) of the GPU f64 win classes DuckDB does not accelerate:
-# transcendental (sum/avg of sqrt/exp/ln/log10/log2/power) + statistical (stddev/var/covar/
-# corr/regr_*) aggregates, ungrouped + dense-grouped. Self-generating DECIMAL data (no tpch
-# dep). Prereq: `gpu-op-build` + `overrides-bench-runner-build` (reuses that runner). NVIDIA-only
-# wins (declines ~1.0x on Apple/AMD). See packages/mojo-gpu-operator/benchmark/run_gpu_op_bench.sh.
-gpu-op-bench-runner = "bash packages/mojo-gpu-operator/benchmark/run_gpu_op_bench.sh"
 
 # Compile-check (no run) the benchmarks so they can't silently rot when the
 # stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
@@ -136,9 +80,9 @@ compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.5.3"
-duckdb-cli = "=1.5.3"
-mojo = "=1.0.0b2.dev2026061203"
+libduckdb-devel = "=1.5.4"
+duckdb-cli = "=1.5.4"
+mojo = "==1.0.0b2"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
@@ -156,7 +100,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
-mojo = "=1.0.0b2.dev2026061203"
+mojo = "==1.0.0b2"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so

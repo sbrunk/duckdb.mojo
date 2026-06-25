@@ -227,7 +227,7 @@ exposed as table functions consistent with the `gpu_cosine*` family:
 `gpu_pin_status()` (resident pins + bytes + last-use age + in-use + budget),
 `gpu_unpin(key)` / `gpu_unpin_all()` (free now), and
 `gpu_pin_table(table, column [, precision])` (pre-pin a column so the first query
-is warm). Covered by `bench/pin_evict_test.sql` (`pixi run gpu-op-pin-evict-test`):
+is warm). Covered by `bench/pin_evict_test.sh` (run directly: `bash packages/mojo-gpu-operator/bench/pin_evict_test.sh`):
 pins past a small budget, asserts eviction via `gpu_pin_status`, then re-runs an
 evicted kNN query and asserts the cold rebuild's distance distribution is identical
 to stock `array_cosine_distance`.
@@ -410,7 +410,7 @@ Linux build notes:
 - **Cold path** dominates a first-touch query (CPU materialize + upload). Heavier on
   a discrete GPU (full PCIe upload) than on Apple's unified memory; the warm win
   needs a repeated workload to amortize it. **A GPU-direct decoder now exists**
-  ([src/native_decode.mojo](src/native_decode.mojo)): it reads DuckDB v1.5.3 native
+  ([src/native_decode.mojo](src/native_decode.mojo)): it reads DuckDB v1.5.4 native
   column segments straight from the live buffer manager (in-process pin — no file
   re-read) and decodes them **on the GPU in Mojo** (portable; the reference, Sirius,
   is CUDA-only). Validated bit-exact end-to-end on both platforms: every one of the

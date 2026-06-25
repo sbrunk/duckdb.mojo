@@ -1,11 +1,17 @@
 package:
   name: duckdb-from-source
-  version: 1.5.3
+  version: 1.5.4
 
 source:
-  - git: https://github.com/duckdb/duckdb.git
-    tag: v1.5.3
+  # Build from the in-repo DuckDB source submodule (third_party/duckdb), pinned
+  # to the release tag in .gitmodules — the single source of truth shared with
+  # code generation and the benchmark_runner. Initialize it first with
+  # `git submodule update --init third_party/duckdb` (or `pixi run clone-duckdb`).
+  # use_gitignore honors the submodule's .gitignore so a local build/ dir from a
+  # prior benchmark_runner build isn't copied into the package source.
+  - path: ../../third_party/duckdb
     target_directory: duckdb-src
+    use_gitignore: true
 
 build:
   number: 0

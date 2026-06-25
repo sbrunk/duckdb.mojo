@@ -11,7 +11,8 @@
 //   in-allocator rows ~ 0            -> column comes from BufferManager blocks that
 //                                       bypass DBConfig.allocator   -> use pin-resident route
 //
-// Build/run: see bench/README or `pixi run gpu-op-probe`.
+// Build/run: compile with clang++ against $CONDA_PREFIX (-I include -L lib -lduckdb);
+// see bench/README.
 
 #include "duckdb.hpp"
 #include "duckdb/common/allocator.hpp"

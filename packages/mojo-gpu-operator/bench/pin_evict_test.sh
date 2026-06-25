@@ -4,7 +4,7 @@
 # Substitutes the extension path + a deterministic 128-element FLOAT query-vector
 # literal into pin_evict_test.sql, runs it with a SMALL pin budget against the
 # unsigned-extension DuckDB CLI, and FAILs (nonzero exit) if any assertion prints
-# FAIL or the run errors. Run via `pixi run gpu-op-pin-evict-test`.
+# FAIL or the run errors. Run directly: `bash packages/mojo-gpu-operator/bench/pin_evict_test.sh`.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

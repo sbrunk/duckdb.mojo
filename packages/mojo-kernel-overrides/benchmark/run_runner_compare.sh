@@ -20,7 +20,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/.duckdb-src}"
+DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/third_party/duckdb}"
 RUNNER="${RUNNER:-$DUCKDB_SRC/build/release/benchmark/benchmark_runner}"
 EXT="${DUCKDB_BENCH_EXTENSION:-$ROOT/packages/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension}"
 
