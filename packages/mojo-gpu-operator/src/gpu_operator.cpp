@@ -310,6 +310,16 @@ int64_t mojo_gpu_colpool_costaware();
 
 namespace duckdb {
 
+// NR1 (decline -> SIMD overrides): defined in
+// packages/mojo-kernel-overrides/src/mojo_overrides.cpp, compiled + linked into
+// this .so by build.sh. It mutates the built-in catalog so the Mojo SIMD kernels
+// (sqrt/sin/cos/ln/exp/log10 + sum/avg/min/max, with stock fallback) replace the
+// built-ins in place. Because that is catalog-level and orthogonal to our
+// optimizer pass, any query this operator DECLINES then runs through the override
+// kernels before stock -- turning "decline = parity" into "decline = still beat
+// DuckDB" on the shapes the SIMD kernels win (min/max, transcendental, INT128 sum).
+void RegisterMojoOverrides(DatabaseInstance &db);
+
 namespace {
 
 constexpr const char *COSINE_FN = "array_cosine_distance";
@@ -1895,6 +1905,15 @@ static bool GpuOpNullableOn() { return GpuOpFlagOn("GPU_OP_NULLABLE"); }
 static bool GpuOpNullableGroupedOn() {
   return GpuOpFlagOn("GPU_OP_NULLABLE_GROUPED");
 }
+
+// NR1 (GPU_OP_OVERRIDES): co-install the Mojo SIMD catalog overrides at LOAD so
+// queries this operator declines use the Mojo kernels before stock. DEFAULT-OFF
+// (presence-only, like GPU_OP_FILTER_OR): unset => the catalog is untouched and
+// behavior is BYTE-IDENTICAL to today (GPU-accept paths are unaffected either way
+// -- they're rewritten to GPU before the catalog scalar/agg functions run). Set
+// GPU_OP_OVERRIDES=1 to enable. Flip default-on only after the both-platform
+// composition gate (accepted=GPU, declined=override-kernel, all == stock).
+static bool GpuOpOverridesOn() { return std::getenv("GPU_OP_OVERRIDES") != nullptr; }
 
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
@@ -4401,6 +4420,9 @@ void LoadInternal(ExtensionLoader &loader) {
   RegisterGpuColPoolStatusTableFunction(loader);      // column-pool uploaded-bytes (dedup proof)
   RegisterGpuUnpinTableFunctions(loader);             // explicit unpin (key / all)
   RegisterGpuPinTableTableFunction(loader);           // pre-pin a kNN embedding column warm
+  if (GpuOpOverridesOn()) {                            // NR1: declined queries -> Mojo SIMD kernels before stock
+    RegisterMojoOverrides(loader.GetDatabaseInstance());
+  }
 }
 
 }  // namespace
@@ -4422,5 +4444,8 @@ __attribute__((visibility("default"))) void register_mojo_gpu_operator(
     duckdb_connection connection) {
   auto con = reinterpret_cast<duckdb::Connection *>(connection);
   duckdb::RegisterGpuOperator(*con->context->db);
+  if (duckdb::GpuOpOverridesOn()) {  // NR1: parity with the LOAD path
+    duckdb::RegisterMojoOverrides(*con->context->db);
+  }
 }
 }

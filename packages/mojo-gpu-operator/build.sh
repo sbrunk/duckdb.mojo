@@ -42,9 +42,20 @@ mojo build --emit shared-lib "$HERE/src/gpu_kernels.mojo" -o "$BUILD/libmojo_gpu
 # SAME compilation unit as the GPU kernels -- required for the Stage-2 shuttle,
 # whose pin_finalize must read the descriptor AND run kernels.
 
-echo "==> mojo_gpu_operator extension (links the kernel companion dylib)"
+# NR1 (decline -> SIMD overrides): compile the mojo-kernel-overrides SIMD kernels
+# + their catalog-mutation glue and link them straight into this extension, so a
+# single LOAD of the GPU operator can also install the built-in overrides (gated at
+# runtime by GPU_OP_OVERRIDES; see gpu_operator.cpp). The override kernels are a
+# plain object with no Mojo-runtime deps (CPU SIMD only), exactly as in
+# packages/mojo-kernel-overrides/build.sh -- so no extra rpath is needed for them.
+OVR="$ROOT/packages/mojo-kernel-overrides/src"
+echo "==> Mojo SIMD override kernels -> build/overrides_capi.o (NR1 decline->overrides)"
+mojo build --emit object "$OVR/capi_shim.mojo" -o "$BUILD/overrides_capi.o"
+
+echo "==> mojo_gpu_operator extension (links the kernel companion dylib + SIMD overrides)"
 "$CXX" -std=c++17 -O2 -fPIC -shared "${SOFLAGS[@]}" \
-	"$HERE/src/gpu_operator.cpp" -I "$DUCKDB_INCLUDE" -lm \
+	"$HERE/src/gpu_operator.cpp" "$OVR/mojo_overrides.cpp" "$BUILD/overrides_capi.o" \
+	-I "$DUCKDB_INCLUDE" -lm \
 	-L "$BUILD" -lmojo_gpu_kernels \
 	-Wl,-rpath,"$ORIGIN" -Wl,-rpath,"$MOJO_LIB" \
 	-o "$BUILD/mojo_gpu_operator.duckdb_extension"
