@@ -48,6 +48,14 @@ float mojo_array_l2dist_f32(const float *, const float *, int64_t);
 double mojo_array_l2dist_f64(const double *, const double *, int64_t);
 float mojo_array_cosine_sim_f32(const float *, const float *, int64_t);
 double mojo_array_cosine_sim_f64(const double *, const double *, int64_t);
+// nullable (validity-masked) reductions: reduce only valid lanes, return valid count.
+void mojo_sum_f64_masked(const double *, const uint64_t *valid, int64_t, double *out_sum, int64_t *out_count);
+void mojo_min_f64_masked(const double *, const uint64_t *valid, int64_t, double *out_val, int64_t *out_count);
+void mojo_max_f64_masked(const double *, const uint64_t *valid, int64_t, double *out_val, int64_t *out_count);
+void mojo_min_f32_masked(const float *, const uint64_t *valid, int64_t, float *out_val, int64_t *out_count);
+void mojo_max_f32_masked(const float *, const uint64_t *valid, int64_t, float *out_val, int64_t *out_count);
+void mojo_sum_i128_masked(const void *, const uint64_t *valid, int64_t, void *out_val, int64_t *out_count,
+                          int32_t *overflow);
 }
 
 namespace duckdb {
@@ -113,9 +121,13 @@ static inline bool CheckedAdd128(hugeint_t &state, const hugeint_t &partial) {
 	static mojo_un64_t g_k_##NAME = nullptr;                                                                           \
 	static void Mojo_##NAME(DataChunk &args, ExpressionState &state, Vector &result) {                                 \
 		auto &in = args.data[0];                                                                                       \
-		if (g_k_##NAME && in.GetVectorType() == VectorType::FLAT_VECTOR && FlatVector::Validity(in).AllValid()) {      \
+		if (g_k_##NAME && in.GetVectorType() == VectorType::FLAT_VECTOR) {                                             \
 			result.SetVectorType(VectorType::FLAT_VECTOR);                                                             \
 			g_k_##NAME(FlatVector::GetData<double>(in), FlatVector::GetData<double>(result), (int64_t)args.size());    \
+			/* NULL slots computed f(garbage) above are masked out by copying the input validity. */                  \
+			if (!FlatVector::Validity(in).AllValid()) {                                                                \
+				FlatVector::Validity(result).Copy(FlatVector::Validity(in), args.size());                              \
+			}                                                                                                          \
 			return;                                                                                                    \
 		}                                                                                                              \
 		g_orig_##NAME(args, state, result);                                                                            \
@@ -137,57 +149,115 @@ static mojo_red32_t g_k_min32 = nullptr, g_k_max32 = nullptr;
 static bool FlatValid(Vector &v) {
 	return v.GetVectorType() == VectorType::FLAT_VECTOR && FlatVector::Validity(v).AllValid();
 }
+static inline bool IsFlat(Vector &v) {
+	return v.GetVectorType() == VectorType::FLAT_VECTOR;
+}
+// Validity bitmask words (uint64, bit set = valid). Only valid to call when
+// !AllValid() (otherwise GetData() may be null — but we always gate on that).
+static inline const uint64_t *ValidWords(Vector &v) {
+	return reinterpret_cast<const uint64_t *>(FlatVector::Validity(v).GetData());
+}
 
 static void MojoSum(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_sum && FlatValid(in[0])) {
+	if (g_k_sum && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<SumStateM *>(sp);
-		st.value += g_k_sum(FlatVector::GetData<double>(in[0]), (int64_t)n);
-		st.isset = true;
+		auto data = FlatVector::GetData<double>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			st.value += g_k_sum(data, (int64_t)n);
+			st.isset = true;
+			return;
+		}
+		double partial;
+		int64_t cnt;
+		mojo_sum_f64_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt);
+		st.value += partial;
+		if (cnt > 0) { st.isset = true; }
 		return;
 	}
 	g_orig_sum(in, aid, ic, sp, n);
 }
 static void MojoAvg(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_sum && FlatValid(in[0])) {
+	if (g_k_sum && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<AvgStateM *>(sp);
-		st.value += g_k_sum(FlatVector::GetData<double>(in[0]), (int64_t)n);
-		st.count += n;
+		auto data = FlatVector::GetData<double>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			st.value += g_k_sum(data, (int64_t)n);
+			st.count += n;
+			return;
+		}
+		double partial;
+		int64_t cnt;
+		mojo_sum_f64_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt);
+		st.value += partial;
+		st.count += (uint64_t)cnt;
 		return;
 	}
 	g_orig_avg(in, aid, ic, sp, n);
 }
 static void MojoMin64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_min64 && n > 0 && FlatValid(in[0])) {
+	if (g_k_min64 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxD *>(sp);
-		double c = g_k_min64(FlatVector::GetData<double>(in[0]), (int64_t)n);
-		if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
+		auto data = FlatVector::GetData<double>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			double c = g_k_min64(data, (int64_t)n);
+			if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
+			return;
+		}
+		double c;
+		int64_t cnt;
+		mojo_min_f64_masked(data, ValidWords(in[0]), (int64_t)n, &c, &cnt);
+		if (cnt > 0 && (!st.isset || c < st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
 	g_orig_min64(in, aid, ic, sp, n);
 }
 static void MojoMax64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_max64 && n > 0 && FlatValid(in[0])) {
+	if (g_k_max64 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxD *>(sp);
-		double c = g_k_max64(FlatVector::GetData<double>(in[0]), (int64_t)n);
-		if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
+		auto data = FlatVector::GetData<double>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			double c = g_k_max64(data, (int64_t)n);
+			if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
+			return;
+		}
+		double c;
+		int64_t cnt;
+		mojo_max_f64_masked(data, ValidWords(in[0]), (int64_t)n, &c, &cnt);
+		if (cnt > 0 && (!st.isset || c > st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
 	g_orig_max64(in, aid, ic, sp, n);
 }
 static void MojoMin32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_min32 && n > 0 && FlatValid(in[0])) {
+	if (g_k_min32 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxF *>(sp);
-		float c = g_k_min32(FlatVector::GetData<float>(in[0]), (int64_t)n);
-		if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
+		auto data = FlatVector::GetData<float>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			float c = g_k_min32(data, (int64_t)n);
+			if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
+			return;
+		}
+		float c;
+		int64_t cnt;
+		mojo_min_f32_masked(data, ValidWords(in[0]), (int64_t)n, &c, &cnt);
+		if (cnt > 0 && (!st.isset || c < st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
 	g_orig_min32(in, aid, ic, sp, n);
 }
 static void MojoMax32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_max32 && n > 0 && FlatValid(in[0])) {
+	if (g_k_max32 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxF *>(sp);
-		float c = g_k_max32(FlatVector::GetData<float>(in[0]), (int64_t)n);
-		if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
+		auto data = FlatVector::GetData<float>(in[0]);
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			float c = g_k_max32(data, (int64_t)n);
+			if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
+			return;
+		}
+		float c;
+		int64_t cnt;
+		mojo_max_f32_masked(data, ValidWords(in[0]), (int64_t)n, &c, &cnt);
+		if (cnt > 0 && (!st.isset || c > st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
 	g_orig_max32(in, aid, ic, sp, n);
@@ -205,16 +275,22 @@ static bool IsI128(const LogicalType &t) {
 }
 
 static void MojoSumHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (n > 0 && FlatValid(in[0])) {
+	if (n > 0 && IsFlat(in[0])) {
+		auto data = FlatVector::GetData<hugeint_t>(in[0]);
 		hugeint_t partial;
 		int32_t of = 0;
-		mojo_sum_i128(FlatVector::GetData<hugeint_t>(in[0]), (int64_t)n, &partial, &of);
+		int64_t cnt = (int64_t)n;
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			mojo_sum_i128(data, (int64_t)n, &partial, &of);
+		} else {
+			mojo_sum_i128_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt, &of);
+		}
 		if (!of) {
 			auto &st = *reinterpret_cast<SumStateHugeint *>(sp);
 			hugeint_t cur = st.value;
 			if (!CheckedAdd128(cur, partial)) {
 				st.value = cur;
-				st.isset = true;
+				if (cnt > 0) { st.isset = true; }
 				return;
 			}
 		}
@@ -222,16 +298,22 @@ static void MojoSumHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_
 	g_orig_sum_i128(in, aid, ic, sp, n);
 }
 static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (n > 0 && FlatValid(in[0])) {
+	if (n > 0 && IsFlat(in[0])) {
+		auto data = FlatVector::GetData<hugeint_t>(in[0]);
 		hugeint_t partial;
 		int32_t of = 0;
-		mojo_sum_i128(FlatVector::GetData<hugeint_t>(in[0]), (int64_t)n, &partial, &of);
+		int64_t cnt = (int64_t)n;
+		if (FlatVector::Validity(in[0]).AllValid()) {
+			mojo_sum_i128(data, (int64_t)n, &partial, &of);
+		} else {
+			mojo_sum_i128_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt, &of);
+		}
 		if (!of) {
 			auto &st = *reinterpret_cast<AvgStateHugeint *>(sp);
 			hugeint_t cur = st.value;
 			if (!CheckedAdd128(cur, partial)) {
 				st.value = cur;
-				st.count += n;
+				st.count += (uint64_t)cnt;
 				return;
 			}
 		}

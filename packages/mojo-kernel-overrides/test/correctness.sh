@@ -81,4 +81,45 @@ chk "distance([0,3,4],0)=5"   "5.0"    "SELECT array_distance([0,3,4]::FLOAT[3],
 chk "cos_sim([1,0],[1,0])=1"  "1.0"    "SELECT array_cosine_similarity([1,0]::FLOAT[2],[1,0]::FLOAT[2]);"
 chk "dot([1,2,3],[4,5,6])=32" "32.0"   "SELECT array_inner_product([1,2,3]::DOUBLE[3],[4,5,6]::DOUBLE[3]);"
 
-[ "$fail" -eq 0 ] && echo "PASS: all array-distance override checks" || { echo "FAILED"; exit 1; }
+[ "$fail" -eq 0 ] && echo "PASS: array-distance override checks" || { echo "FAILED"; exit 1; }
+
+# ---- nullable aggregates (A1 mask-multiply): sum/avg/min/max over NULL-containing columns ----
+echo "==> nullable aggregates (stock vs override)"
+read -r -d '' NBODY <<'SQL' || true
+SELECT setseed(0.77);
+CREATE TABLE t AS
+SELECT
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*1000 - 500) END::DOUBLE AS d,
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*1000 - 500) END::REAL   AS f,
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*1e9)::HUGEINT END        AS h,
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*1e6)::DECIMAL(38,4) END  AS dec,
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*100) END::DOUBLE AS pos,
+  NULL::DOUBLE AS alln
+FROM range(500000) r(i);
+.mode csv
+.headers off
+.output OUTFILE
+SELECT sum(d), avg(d), min(d), max(d) FROM t;
+SELECT min(f), max(f) FROM t;
+SELECT sum(h), avg(h) FROM t;
+SELECT sum(dec), avg(dec) FROM t;
+SELECT sum(sqrt(pos)) FROM t;
+SELECT sum(alln), avg(alln), min(alln), max(alln) FROM t;
+SQL
+echo "${NBODY/OUTFILE/$TMP/n_stock.csv}" | "$DUCKDB" -unsigned >/dev/null
+{ echo "LOAD '$EXT';"; echo "${NBODY/OUTFILE/$TMP/n_over.csv}"; } | "$DUCKDB" -unsigned >/dev/null
+python3 - "$TMP/n_stock.csv" "$TMP/n_over.csv" <<'PY'
+import sys, csv
+a = list(csv.reader(open(sys.argv[1]))); b = list(csv.reader(open(sys.argv[2])))
+assert len(a) == len(b) and a, (len(a), len(b))
+mx = 0.0
+for ra, rb in zip(a, b):
+    for x, y in zip(ra, rb):
+        if x == y: continue          # exact (incl. NULL/NULL, hugeint, decimal)
+        try: fx, fy = float(x), float(y)
+        except ValueError: print("FAIL str mismatch", x, y); sys.exit(1)
+        ad = abs(fx - fy); rd = ad / max(abs(fx), abs(fy), 1e-30); mx = max(mx, rd)
+        if ad > 1e-3 and rd > 1e-6: print("FAIL", x, y, "rel", rd); sys.exit(1)
+print(f"   nullable max rel diff = {mx:.3e}")
+print("   PASS")
+PY

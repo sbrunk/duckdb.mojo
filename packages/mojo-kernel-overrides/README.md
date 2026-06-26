@@ -32,8 +32,16 @@ the add and uses multiple accumulators (~7.5× single-threaded on 50M rows). The
 int64-backed `DECIMAL` / `BIGINT` sum is **not** overridden — it already runs at
 ~1 cycle/elem (memory-bound), so there is nothing to win.
 
-Everything else, and any non-FLAT / null-containing / grouped input, falls back to the
+Everything else, and any non-FLAT / grouped input, falls back to the
 original built-in (the original pointer is captured at load), so results are unchanged.
+
+**Nullable columns** (FLAT with NULLs) are handled in place rather than falling
+back: the aggregate kernels reduce only the valid lanes via a SIMD validity mask
+(`select(mask, x, identity)`) and track the valid count (the A1 mask-multiply
+model — `min/max` leave the state unset on an all-NULL chunk, `avg` divides by the
+count); scalar functions compute over all rows and copy the input validity to the
+result. Nullable `sum`/`avg` run ~1.75× over stock and are now covered instead of
+declined. Grouped aggregates still fall back to stock.
 
 ## How it works
 

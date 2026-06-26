@@ -9,7 +9,8 @@ Two shapes from the same math:
 """
 
 from std.collections import InlineArray
-from std.math import sqrt, sin, cos, log, exp, min, max
+from std.math import sqrt, sin, cos, log, exp, min, max, iota
+from std.bit import pop_count
 
 comptime INV_LN10 = 0.4342944819032518
 comptime W64 = 8
@@ -224,6 +225,119 @@ def array_cosine_sim[
         i += 1
     var sim = sdot / sqrt(sna * snb)
     return max(Scalar[dt](-1), min(sim, Scalar[dt](1)))
+
+
+# ===--------------------------------------------------------------------===#
+# Nullable (validity-masked) reductions — the A1 mask-multiply model.
+#
+# DuckDB stores per-row validity as a bitmask (uint64 words, bit set = valid).
+# The non-masked kernels above require AllValid and otherwise fall back to stock.
+# These variants reduce only the valid lanes branchlessly via SIMD select, so the
+# overrides apply to nullable columns instead of bailing. They also return the
+# valid count (for AVG, and so MIN/MAX/SUM can leave the state unset on an
+# all-NULL chunk). Width `w` divides 64, and the loop index is a multiple of `w`,
+# so each `w`-lane block lies within a single validity word.
+# ===--------------------------------------------------------------------===#
+
+
+def reduce_sum_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin],
+    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    n: Int,
+    out_sum: UnsafePointer[Float64, MutAnyOrigin],
+    out_count: UnsafePointer[Int64, MutAnyOrigin],
+):
+    comptime LOWMASK = (UInt64(1) << UInt64(W64)) - 1
+    var lane = iota[DType.uint64, W64]()
+    var acc = SIMD[DType.float64, W64](0)
+    var cnt = Int64(0)
+    var i = 0
+    while i + W64 <= n:
+        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
+        var m = mbits.gt(SIMD[DType.uint64, W64](0))
+        acc += m.select((a + i).load[width=W64](), SIMD[DType.float64, W64](0))
+        cnt += Int64(pop_count(Int(bits & LOWMASK)))
+        i += W64
+    var s = acc.reduce_add()
+    while i < n:
+        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
+            s += a[i]
+            cnt += 1
+        i += 1
+    out_sum[0] = s
+    out_count[0] = cnt
+
+
+def reduce_minmax_masked[
+    dt: DType, w: Int, is_min: Bool
+](
+    a: UnsafePointer[Scalar[dt], ImmutAnyOrigin],
+    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    n: Int,
+    out_val: UnsafePointer[Scalar[dt], MutAnyOrigin],
+    out_count: UnsafePointer[Int64, MutAnyOrigin],
+):
+    comptime LOWMASK = (UInt64(1) << UInt64(w)) - 1
+    comptime ident = Scalar[dt].MAX_FINITE if is_min else -Scalar[dt].MAX_FINITE
+    var identv = SIMD[dt, w](ident)
+    var lane = iota[DType.uint64, w]()
+    var acc = identv
+    var cnt = Int64(0)
+    var i = 0
+    while i + w <= n:
+        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var mbits = (SIMD[DType.uint64, w](bits) >> lane) & SIMD[DType.uint64, w](1)
+        var m = mbits.gt(SIMD[DType.uint64, w](0))
+        var x = m.select((a + i).load[width=w](), identv)
+        comptime if is_min:
+            acc = min(acc, x)
+        else:
+            acc = max(acc, x)
+        cnt += Int64(pop_count(Int(bits & LOWMASK)))
+        i += w
+    var s: Scalar[dt]
+    comptime if is_min:
+        s = acc.reduce_min()
+    else:
+        s = acc.reduce_max()
+    while i < n:
+        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
+            comptime if is_min:
+                s = min(s, a[i])
+            else:
+                s = max(s, a[i])
+            cnt += 1
+        i += 1
+    out_val[0] = s
+    out_count[0] = cnt
+
+
+def reduce_sum_i128_masked(
+    a: UnsafePointer[Int128, ImmutAnyOrigin],
+    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    n: Int,
+    out_val: UnsafePointer[Int128, MutAnyOrigin],
+    out_count: UnsafePointer[Int64, MutAnyOrigin],
+    out_overflow: UnsafePointer[Int32, MutAnyOrigin],
+):
+    """Validity-masked int128 sum. Scalar (int128 has no register SIMD path) with
+    the same branchless overflow detection as `reduce_sum_i128`."""
+    var total = Int128(0)
+    var ovf = Int128(0)
+    var cnt = Int64(0)
+    var i = 0
+    while i < n:
+        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
+            var x = a[i]
+            var s = total + x
+            ovf |= (total ^ s) & (x ^ s)
+            total = s
+            cnt += 1
+        i += 1
+    out_val[0] = total
+    out_count[0] = cnt
+    out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
 
 
 def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
