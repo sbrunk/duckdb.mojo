@@ -116,7 +116,6 @@ from raw_plan_tags import (
     OP_LOG10,
     OP_LOG2,
 )
-from expr_vm import eval_program  # NR1 part B: host metric eval for the cold INT128 hybrid
 from segreduce import (
     segreduce_upload,
     segreduce_upload_from_packed,
@@ -3366,15 +3365,7 @@ def _assemble(
     q6_bounds: Q6PredSpec = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0),
     gen_bounds: List[Int64] = [],
     q5_bounds: List[Int64] = [],
-    cpu_sums: List[Int128] = [],
 ) raises:
-    # NR1 part B (cold INT128 hybrid): when `cpu_sums` is non-empty the caller has
-    # already computed the per-metric int128 sums on the CPU (UNGROUPED int128,
-    # host-baked filter; see _pin_finalize_generic). They are bit-identical to what
-    # segreduce_run would return -- the SAME eval_program over the SAME packed cols
-    # and pass program -- so we use them and SKIP the GPU kernel run. Everything
-    # downstream (res_lo/res_hi unpack + ungrouped_count_m NULL-on-empty) is reused
-    # verbatim. Empty (the default, incl. every WARM call) -> run the kernel.
     # GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate (UNGROUPED / DENSE /
     # HASH). Route to the float64 accumulator and assemble straight into res_f64.
     # The int128 path below is bypassed entirely (the descriptor scope guard forbade
@@ -3424,11 +3415,7 @@ def _assemble(
     var q5_o_lo = q5_bounds[0] if q5_active else Int64(0)
     var q5_o_hi = q5_bounds[1] if q5_active else Int64(0)
     var q5_asia = q5_bounds[2] if q5_active else Int64(0)
-    var sums: List[Int128]
-    if len(cpu_sums) > 0:
-        sums = cpu_sums.copy()
-    else:
-        sums = segreduce_run(
+    var sums = segreduce_run(
         gp.res,
         gp.mode,
         gp.pass_prog.unsafe_ptr(),
@@ -6959,52 +6946,6 @@ def _pin_finalize_generic(
         resident = segreduce_upload(
             ctx, cols, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
         )
-
-    # NR1 part B (GPU_OP_COLD_HYBRID, default-off): cold INT128 hybrid. For an
-    # UNGROUPED int128 aggregate with a HOST-BAKED filter (no in-kernel predicate
-    # residency) on the plain upload path (no col-pool / skip-materialize, so the
-    # host `cols` are fully packed; this generic finalize never has FK dims),
-    # compute the per-metric int128 sums on the CPU with the SAME eval_program the
-    # kernel runs -- int64 per-row metric values summed into int128, over the SAME
-    # packed cols + pass program -> bit-identical to segreduce_run. The cold answer
-    # then skips the GPU kernel->readback latency; the resident buffers were
-    # uploaded just above, so the next (WARM) query runs on GPU. Off / ineligible ->
-    # cpu_sums stays empty -> _assemble runs the kernel (byte-identical to today).
-    var cpu_sums = List[Int128]()
-    if (
-        getenv("GPU_OP_COLD_HYBRID", "") != ""
-        and mode == STRAT_UNGROUPED
-        and not is_float64
-        and not q6_pred_on
-        and not gen_pred_on
-        and not f64_pred_on
-        and not _colpool_on()
-        and M > 0
-    ):
-        for _i in range(M):
-            cpu_sums.append(Int128(0))
-        var pass_p = pass_prog.unsafe_ptr()
-        var metric_p = metric_ops.unsafe_ptr()
-        if getenv("GPU_OP_PIN_LOG", "") != "":
-            print(
-                "[gpu-cold-hybrid] ungrouped int sum on CPU (M=", M,
-                " rows=", n, ", skipping cold GPU run)",
-            )
-        for i in range(n):
-            if (
-                eval_program(
-                    pass_p, pass_len_eff, cols, n, i, dims_dummy, doff_dummy
-                )
-                != 0
-            ):
-                for m in range(M):
-                    var prog = metric_p + 3 * Int(metric_offsets[m])
-                    cpu_sums[m] += Int128(
-                        eval_program(
-                            prog, Int(metric_lens[m]), cols, n, i,
-                            dims_dummy, doff_dummy,
-                        )
-                    )
     seg_off_dummy.free()
     dims_dummy.free()
     doff_dummy.free()
@@ -7098,9 +7039,7 @@ def _pin_finalize_generic(
     # pred-independent path the bounds come from _f64_pred_bounds (kind-agnostic);
     # the int128 path uses _gen_pred_bounds (Q1/Q14 only). Both are descriptor-order.
     var gen_b0 = _f64_pred_bounds(d) if f64_pred_on else _gen_pred_bounds(d)
-    # NR1 part B: cpu_sums is non-empty only when the cold INT128 hybrid above ran;
-    # then _assemble uses it and skips the GPU kernel. Empty -> kernel runs as before.
-    _assemble(dst, p2[sig], q6_spec, gen_b0^, cpu_sums=cpu_sums)
+    _assemble(dst, p2[sig], q6_spec, gen_b0^)
     return 0
 
 
