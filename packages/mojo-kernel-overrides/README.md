@@ -12,6 +12,18 @@ it into a normal libduckdb and the rewrites apply for the rest of the session.
 | `sum` `avg` | aggregate `DOUBLE` | swap `simple_update` (ungrouped) |
 | `sum` `avg` | aggregate `HUGEINT` + `DECIMAL(19..38)` (INT128-backed) | direct swap (`HUGEINT`) / wrap `bind` (`DECIMAL`), swap `simple_update` (ungrouped) |
 | `min` `max` | aggregate `DOUBLE` + `FLOAT` | wrap the `bind` callback, swap resolved `simple_update` |
+| `array_distance` `array_inner_product` `array_negative_inner_product` `array_cosine_similarity` `array_cosine_distance` | scalar `FLOAT[]`/`DOUBLE[]` fold | swap `function` |
+
+The array distance/similarity folds are stock serial single-accumulator loops
+(`result += x*y`) that can't auto-vectorize (FP reduction). The Mojo kernels use
+`W`-wide SIMD accumulators with a 2× unroll to break the dependency chain:
+**~7–12× on the raw fold** (768-dim f32: stock ~4.8 GB/s latency-bound → kernel
+~52 GB/s memory-bandwidth-bound). End-to-end a `ORDER BY array_cosine_distance …
+LIMIT k` brute-force scan is ~1.5–1.7× (the array scan + top-k sort dominate; the
+distance is no longer the bottleneck). The three kernels `array_dot` /
+`array_l2dist` / `array_cosine_sim` back all five functions — the caller derives
+`negative_inner_product` (−x) and `cosine_distance` (1−x). See
+[`CPU_SIMD_BACKLOG.md`](CPU_SIMD_BACKLOG.md).
 
 The INT128 sum/avg is the one *decimal* aggregate with real headroom: DuckDB's
 `HugeintSumOperation` adds each element via the overflow-checked, non-inlined

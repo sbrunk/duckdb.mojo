@@ -1,0 +1,14 @@
+# name: benchmark/micro/mojo_simd/array_cosine_distance_topk.benchmark
+# description: brute-force kNN scan — ORDER BY array_cosine_distance LIMIT 10 (200k x 768 f32)
+# group: [mojo_simd]
+
+name array_cosine_distance topk
+group micro
+subgroup mojo_simd
+
+load
+SET lambda_syntax='ENABLE_SINGLE_ARROW';
+CREATE TABLE emb AS SELECT id, apply(range(0,768), x -> (random()-0.5)::FLOAT)::FLOAT[768] AS v FROM range(200000) tbl(id);
+
+run
+SELECT id FROM emb ORDER BY array_cosine_distance(v, (SELECT v FROM emb WHERE id=42)) LIMIT 10;

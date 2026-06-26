@@ -137,6 +137,95 @@ def reduce_sum_i128(
     out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
 
 
+# ===--------------------------------------------------------------------===#
+# Vector-distance folds over two FLAT array buffers (dot / L2 / cosine).
+#
+# DuckDB's array_distance / array_inner_product / array_cosine_* are serial
+# single-accumulator scalar loops (`result += x*y`) — latency-bound, since an FP
+# reduction can't auto-vectorize without -ffast-math. These use `W`-wide SIMD
+# accumulators with a 2× unroll to break the dependency chain (the same
+# multi-accumulator trick as reduce_sum_i128). `array_dot` covers inner-product
+# (and, negated by the caller, negative_inner_product); `array_l2dist` covers
+# array_distance; `array_cosine_sim` covers cosine_similarity (and, as 1 - x by
+# the caller, cosine_distance). Results match stock within ~1 ULP (different
+# summation order).
+# ===--------------------------------------------------------------------===#
+
+
+def array_dot[
+    dt: DType, w: Int
+](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+    var acc0 = SIMD[dt, w](0)
+    var acc1 = SIMD[dt, w](0)
+    var i = 0
+    while i + 2 * w <= n:
+        acc0 += (a + i).load[width=w]() * (b + i).load[width=w]()
+        acc1 += (a + i + w).load[width=w]() * (b + i + w).load[width=w]()
+        i += 2 * w
+    var acc = acc0 + acc1
+    while i + w <= n:
+        acc += (a + i).load[width=w]() * (b + i).load[width=w]()
+        i += w
+    var s = acc.reduce_add()
+    while i < n:
+        s += a[i] * b[i]
+        i += 1
+    return s
+
+
+def array_l2dist[
+    dt: DType, w: Int
+](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+    var acc0 = SIMD[dt, w](0)
+    var acc1 = SIMD[dt, w](0)
+    var i = 0
+    while i + 2 * w <= n:
+        var d0 = (a + i).load[width=w]() - (b + i).load[width=w]()
+        var d1 = (a + i + w).load[width=w]() - (b + i + w).load[width=w]()
+        acc0 += d0 * d0
+        acc1 += d1 * d1
+        i += 2 * w
+    var acc = acc0 + acc1
+    while i + w <= n:
+        var d = (a + i).load[width=w]() - (b + i).load[width=w]()
+        acc += d * d
+        i += w
+    var s = acc.reduce_add()
+    while i < n:
+        var d = a[i] - b[i]
+        s += d * d
+        i += 1
+    return sqrt(s)
+
+
+def array_cosine_sim[
+    dt: DType, w: Int
+](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+    var dot = SIMD[dt, w](0)
+    var na = SIMD[dt, w](0)
+    var nb = SIMD[dt, w](0)
+    var i = 0
+    while i + w <= n:
+        var x = (a + i).load[width=w]()
+        var y = (b + i).load[width=w]()
+        dot += x * y
+        na += x * x
+        nb += y * y
+        i += w
+    var sdot = dot.reduce_add()
+    var sna = na.reduce_add()
+    var snb = nb.reduce_add()
+    while i < n:
+        var x = a[i]
+        var y = b[i]
+        sdot += x * y
+        sna += x * x
+        snb += y * y
+        i += 1
+    var sim = sdot / sqrt(sna * snb)
+    return max(Scalar[dt](-1), min(sim, Scalar[dt](1)))
+
+
 def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
     var acc = SIMD[DType.float32, W32](a[0])
     var i = 0

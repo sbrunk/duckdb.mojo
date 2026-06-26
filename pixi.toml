@@ -55,6 +55,8 @@ test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 # rewrites built-in scalar/aggregate functions to Mojo SIMD kernels at load time,
 # with NO patch to DuckDB. Builds against the default env's libduckdb headers/lib.
 overrides-build = "bash packages/mojo-kernel-overrides/build.sh"
+# Correctness regression: stock-vs-override array-distance results (+ NULL/known-value checks).
+overrides-test = { cmd = "bash packages/mojo-kernel-overrides/test/correctness.sh", depends-on = ["overrides-build"] }
 # Build + load the extension and print a stock-vs-Mojo benchmark table.
 # Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
 overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"

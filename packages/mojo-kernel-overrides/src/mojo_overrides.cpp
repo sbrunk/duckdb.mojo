@@ -19,6 +19,8 @@
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/execution/expression_executor_state.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +41,13 @@ float mojo_max_f32(const float *, int64_t);
 // int128 reduce: writes the chunk sum to *out, sets *overflow!=0 if any add
 // overflowed int128 (caller then falls back to stock for exact throw semantics).
 void mojo_sum_i128(const void *, int64_t, void *out, int32_t *overflow);
+// per-row vector-distance folds over two contiguous array buffers of length n.
+float mojo_array_dot_f32(const float *, const float *, int64_t);
+double mojo_array_dot_f64(const double *, const double *, int64_t);
+float mojo_array_l2dist_f32(const float *, const float *, int64_t);
+double mojo_array_l2dist_f64(const double *, const double *, int64_t);
+float mojo_array_cosine_sim_f32(const float *, const float *, int64_t);
+double mojo_array_cosine_sim_f64(const double *, const double *, int64_t);
 }
 
 namespace duckdb {
@@ -328,6 +337,92 @@ static void OverrideScalar(Catalog &cat, ClientContext &ctx, const char *name, s
 	}
 }
 
+// ---------------- array distance / similarity folds ----------------
+// array_distance / array_inner_product / array_cosine_* fold two arrays to a
+// scalar per row via a serial single-accumulator scalar loop in stock DuckDB.
+// We swap the per-overload `function` pointer for a wrapper that mirrors
+// ArrayGenericFold exactly (NULL-row -> NULL, NULL child element -> throw,
+// constant-vector result when count==1) and only swaps the inner reduction for a
+// SIMD kernel. The caller-side POST transform derives negative_inner_product
+// (-x) and cosine_distance (1 - x) from the dot / cosine_sim kernels.
+enum class FoldPost { IDENTITY, ONE_MINUS, NEGATE };
+
+template <class T, T (*KERNEL)(const T *, const T *, int64_t), FoldPost POST>
+static void MojoArrayFold(DataChunk &args, ExpressionState &state, Vector &result) {
+	const auto &lstate = state.Cast<ExecuteFunctionState>();
+	const auto &expr = lstate.expr.Cast<BoundFunctionExpression>();
+	const auto &func_name = expr.function.name;
+
+	const auto count = args.size();
+	auto &lhs_child = ArrayVector::GetEntry(args.data[0]);
+	auto &rhs_child = ArrayVector::GetEntry(args.data[1]);
+
+	const auto &lhs_child_validity = FlatVector::Validity(lhs_child);
+	const auto &rhs_child_validity = FlatVector::Validity(rhs_child);
+
+	UnifiedVectorFormat lhs_format;
+	UnifiedVectorFormat rhs_format;
+	args.data[0].ToUnifiedFormat(count, lhs_format);
+	args.data[1].ToUnifiedFormat(count, rhs_format);
+
+	auto lhs_data = FlatVector::GetData<T>(lhs_child);
+	auto rhs_data = FlatVector::GetData<T>(rhs_child);
+	auto res_data = FlatVector::GetData<T>(result);
+
+	const auto array_size = ArrayType::GetSize(args.data[0].GetType());
+	D_ASSERT(array_size == ArrayType::GetSize(args.data[1].GetType()));
+
+	for (idx_t i = 0; i < count; i++) {
+		const auto lhs_idx = lhs_format.sel->get_index(i);
+		const auto rhs_idx = rhs_format.sel->get_index(i);
+
+		if (!lhs_format.validity.RowIsValid(lhs_idx) || !rhs_format.validity.RowIsValid(rhs_idx)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		const auto left_offset = lhs_idx * array_size;
+		if (!lhs_child_validity.CheckAllValid(left_offset + array_size, left_offset)) {
+			throw InvalidInputException(StringUtil::Format("%s: left argument can not contain NULL values", func_name));
+		}
+		const auto right_offset = rhs_idx * array_size;
+		if (!rhs_child_validity.CheckAllValid(right_offset + array_size, right_offset)) {
+			throw InvalidInputException(StringUtil::Format("%s: right argument can not contain NULL values", func_name));
+		}
+
+		T v = KERNEL(lhs_data + left_offset, rhs_data + right_offset, (int64_t)array_size);
+		if (POST == FoldPost::ONE_MINUS) {
+			v = static_cast<T>(1.0) - v;
+		} else if (POST == FoldPost::NEGATE) {
+			v = -v;
+		}
+		res_data[i] = v;
+	}
+
+	if (count == 1) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+}
+
+// Swap the FLOAT / DOUBLE array-array overloads' function pointer. The array
+// child type is set at catalog-registration time (the array *size* is not, but
+// we don't need it here); the bind (ArrayGenericBinaryBind) is left untouched.
+static void OverrideArrayFold(Catalog &cat, ClientContext &ctx, const char *name, scalar_function_t f32_wrap,
+                              scalar_function_t f64_wrap) {
+	auto &e = cat.GetEntry<ScalarFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
+	for (auto &f : e.functions.functions) {
+		if (f.arguments.size() == 2 && f.arguments[0].id() == LogicalTypeId::ARRAY &&
+		    f.arguments[1].id() == LogicalTypeId::ARRAY) {
+			const auto child = ArrayType::GetChildType(f.arguments[0]).id();
+			if (child == LogicalTypeId::FLOAT) {
+				f.function = f32_wrap;
+			} else if (child == LogicalTypeId::DOUBLE) {
+				f.function = f64_wrap;
+			}
+		}
+	}
+}
+
 void RegisterMojoOverrides(DatabaseInstance &db) {
 	// Kernels are linked into this shared object; bind them directly.
 	g_k_sqrt = mojo_sqrt_f64;
@@ -391,6 +486,23 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		// min/max are bind-dispatched (ANY->ANY) → wrap the bind to swap f64/f32 simple_update.
 		WrapMinMaxBind(cat, ctx, "min", MojoMinBind, g_orig_min_bind);
 		WrapMinMaxBind(cat, ctx, "max", MojoMaxBind, g_orig_max_bind);
+
+		// array distance / similarity folds: swap the per-overload function pointer.
+		OverrideArrayFold(cat, ctx, "array_inner_product",
+		                  MojoArrayFold<float, mojo_array_dot_f32, FoldPost::IDENTITY>,
+		                  MojoArrayFold<double, mojo_array_dot_f64, FoldPost::IDENTITY>);
+		OverrideArrayFold(cat, ctx, "array_negative_inner_product",
+		                  MojoArrayFold<float, mojo_array_dot_f32, FoldPost::NEGATE>,
+		                  MojoArrayFold<double, mojo_array_dot_f64, FoldPost::NEGATE>);
+		OverrideArrayFold(cat, ctx, "array_distance",
+		                  MojoArrayFold<float, mojo_array_l2dist_f32, FoldPost::IDENTITY>,
+		                  MojoArrayFold<double, mojo_array_l2dist_f64, FoldPost::IDENTITY>);
+		OverrideArrayFold(cat, ctx, "array_cosine_similarity",
+		                  MojoArrayFold<float, mojo_array_cosine_sim_f32, FoldPost::IDENTITY>,
+		                  MojoArrayFold<double, mojo_array_cosine_sim_f64, FoldPost::IDENTITY>);
+		OverrideArrayFold(cat, ctx, "array_cosine_distance",
+		                  MojoArrayFold<float, mojo_array_cosine_sim_f32, FoldPost::ONE_MINUS>,
+		                  MojoArrayFold<double, mojo_array_cosine_sim_f64, FoldPost::ONE_MINUS>);
 	});
 	fprintf(stderr, "[mojo_overrides] installed (kernels linked in)\n");
 }

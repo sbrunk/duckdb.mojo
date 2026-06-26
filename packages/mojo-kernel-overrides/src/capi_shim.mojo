@@ -19,6 +19,11 @@ from duckdb.kernels.simd import (
     reduce_max_f64,
     reduce_min_f32,
     reduce_max_f32,
+    array_dot,
+    array_l2dist,
+    array_cosine_sim,
+    W32,
+    W64,
 )
 
 
@@ -85,3 +90,48 @@ def mojo_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) abi("C") -> 
 @export("mojo_max_f32")
 def mojo_max_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) abi("C") -> Float32:
     return reduce_max_f32(a, n)
+
+
+# ---- vector-distance folds over two FLAT array buffers (per row) ----
+
+
+@export("mojo_array_dot_f32")
+def mojo_array_dot_f32(
+    a: UnsafePointer[Float32, ImmutAnyOrigin], b: UnsafePointer[Float32, ImmutAnyOrigin], n: Int
+) abi("C") -> Float32:
+    return array_dot[DType.float32, W32](a, b, n)
+
+
+@export("mojo_array_dot_f64")
+def mojo_array_dot_f64(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], b: UnsafePointer[Float64, ImmutAnyOrigin], n: Int
+) abi("C") -> Float64:
+    return array_dot[DType.float64, W64](a, b, n)
+
+
+@export("mojo_array_l2dist_f32")
+def mojo_array_l2dist_f32(
+    a: UnsafePointer[Float32, ImmutAnyOrigin], b: UnsafePointer[Float32, ImmutAnyOrigin], n: Int
+) abi("C") -> Float32:
+    return array_l2dist[DType.float32, W32](a, b, n)
+
+
+@export("mojo_array_l2dist_f64")
+def mojo_array_l2dist_f64(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], b: UnsafePointer[Float64, ImmutAnyOrigin], n: Int
+) abi("C") -> Float64:
+    return array_l2dist[DType.float64, W64](a, b, n)
+
+
+@export("mojo_array_cosine_sim_f32")
+def mojo_array_cosine_sim_f32(
+    a: UnsafePointer[Float32, ImmutAnyOrigin], b: UnsafePointer[Float32, ImmutAnyOrigin], n: Int
+) abi("C") -> Float32:
+    return array_cosine_sim[DType.float32, W32](a, b, n)
+
+
+@export("mojo_array_cosine_sim_f64")
+def mojo_array_cosine_sim_f64(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], b: UnsafePointer[Float64, ImmutAnyOrigin], n: Int
+) abi("C") -> Float64:
+    return array_cosine_sim[DType.float64, W64](a, b, n)
