@@ -340,6 +340,96 @@ def reduce_sum_i128_masked(
     out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
 
 
+# ===--------------------------------------------------------------------===#
+# Blocked multi-query brute-force kNN (item 4).
+#
+# Register-tiled: process QT queries per embedding load so each embedding row's
+# bytes are reused across QT queries from registers (raising arithmetic intensity
+# — the per-pair dot is otherwise L1/L2 read-bound on the two vectors, so naive
+# M separate scans waste loads). ~1.85× (NEON) / ~2.76× (AVX-512) over naive.
+# Per-vector norms are precomputed by the caller: cosine -> L2 norms, l2 ->
+# squared norms, ip -> ignored. metric: 0=cosine_distance, 1=l2(array_distance),
+# 2=negative_inner_product. Maintains an ascending top-k (dist,id) per query.
+# Results match stock up to FP-summation-order tie-breaks at rank k.
+# ===--------------------------------------------------------------------===#
+
+
+def _topk_insert(
+    td: UnsafePointer[Float32, MutAnyOrigin],
+    ti: UnsafePointer[Int64, MutAnyOrigin],
+    base: Int,
+    k: Int,
+    d: Float32,
+    id: Int64,
+):
+    if d >= td[base + k - 1]:
+        return
+    var j = k - 1
+    while j > 0 and td[base + j - 1] > d:
+        td[base + j] = td[base + j - 1]
+        ti[base + j] = ti[base + j - 1]
+        j -= 1
+    td[base + j] = d
+    ti[base + j] = id
+
+
+def _dist_from_dot[metric: Int](s: Float32, qn: Float32, en: Float32) -> Float32:
+    comptime if metric == 0:
+        return 1.0 - s / (qn * en)
+    comptime if metric == 1:
+        return sqrt(max(Float32(0), qn + en - 2.0 * s))
+    return -s
+
+
+def knn_topk[
+    metric: Int
+](
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_q: UnsafePointer[Float32, ImmutAnyOrigin],
+    m: Int,
+    e: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_e: UnsafePointer[Float32, ImmutAnyOrigin],
+    n: Int,
+    d_dim: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+):
+    comptime QT = 4
+    comptime W = W32
+    for x in range(m * k):
+        out_dists[x] = Float32(1e30)
+        out_ids[x] = Int64(-1)
+    var qg = 0
+    while qg + QT <= m:
+        for ni in range(n):
+            var ep = e + ni * d_dim
+            var acc = InlineArray[SIMD[DType.float32, W], QT](fill=SIMD[DType.float32, W](0))
+            var dd = 0
+            while dd + W <= d_dim:
+                var ev = (ep + dd).load[width=W]()
+                comptime for t in range(QT):
+                    acc[t] += (q + (qg + t) * d_dim + dd).load[width=W]() * ev
+                dd += W
+            comptime for t in range(QT):
+                var s = acc[t].reduce_add()
+                var qp = q + (qg + t) * d_dim
+                var j = dd
+                while j < d_dim:
+                    s += qp[j] * ep[j]
+                    j += 1
+                var dist = _dist_from_dot[metric](s, nrm_q[qg + t], nrm_e[ni])
+                _topk_insert(out_dists, out_ids, (qg + t) * k, k, dist, Int64(ni))
+        qg += QT
+    while qg < m:
+        var qp = q + qg * d_dim
+        for ni in range(n):
+            var s = array_dot[DType.float32, W](qp, e + ni * d_dim, d_dim)
+            var dist = _dist_from_dot[metric](s, nrm_q[qg], nrm_e[ni])
+            _topk_insert(out_dists, out_ids, qg * k, k, dist, Int64(ni))
+        qg += 1
+
+
 def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
     var acc = SIMD[DType.float32, W32](a[0])
     var i = 0

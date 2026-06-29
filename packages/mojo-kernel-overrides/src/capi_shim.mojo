@@ -25,6 +25,7 @@ from duckdb.kernels.simd import (
     reduce_sum_f64_masked,
     reduce_minmax_masked,
     reduce_sum_i128_masked,
+    knn_topk,
     W32,
     W64,
 )
@@ -208,3 +209,54 @@ def mojo_sum_i128_masked(
     out_overflow: UnsafePointer[Int32, MutAnyOrigin],
 ) abi("C"):
     reduce_sum_i128_masked(a, valid, n, out_val, out_count, out_overflow)
+
+
+# ---- blocked multi-query kNN (item 4): metric 0=cosine, 1=l2, 2=ip ----
+
+
+@export("mojo_knn_cosine_f32")
+def mojo_knn_cosine_f32(
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_q: UnsafePointer[Float32, ImmutAnyOrigin],
+    m: Int,
+    e: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_e: UnsafePointer[Float32, ImmutAnyOrigin],
+    n: Int,
+    d_dim: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C"):
+    knn_topk[0](q, nrm_q, m, e, nrm_e, n, d_dim, k, out_ids, out_dists)
+
+
+@export("mojo_knn_l2_f32")
+def mojo_knn_l2_f32(
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_q: UnsafePointer[Float32, ImmutAnyOrigin],
+    m: Int,
+    e: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_e: UnsafePointer[Float32, ImmutAnyOrigin],
+    n: Int,
+    d_dim: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C"):
+    knn_topk[1](q, nrm_q, m, e, nrm_e, n, d_dim, k, out_ids, out_dists)
+
+
+@export("mojo_knn_ip_f32")
+def mojo_knn_ip_f32(
+    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_q: UnsafePointer[Float32, ImmutAnyOrigin],
+    m: Int,
+    e: UnsafePointer[Float32, ImmutAnyOrigin],
+    nrm_e: UnsafePointer[Float32, ImmutAnyOrigin],
+    n: Int,
+    d_dim: Int,
+    k: Int,
+    out_ids: UnsafePointer[Int64, MutAnyOrigin],
+    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+) abi("C"):
+    knn_topk[2](q, nrm_q, m, e, nrm_e, n, d_dim, k, out_ids, out_dists)

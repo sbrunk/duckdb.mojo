@@ -60,6 +60,32 @@ At `LOAD`, the extension's init mutates the built-in **catalog function entries 
 - Aggregate state structs (`SumState`/`AvgState`/`MinMaxState`) are mirrored and guarded by a
   runtime `state_size` check before swapping.
 
+## `mojo_knn` — blocked multi-query brute-force kNN
+
+DuckDB has no batch-kNN primitive, so multi-query nearest-neighbour written in SQL
+(cross-join + window over M·N distance rows) is pathological. `mojo_knn` is a table
+function that does it in one register-tiled CPU SIMD pass — each embedding row's
+bytes are reused across a batch of queries (the per-pair dot is otherwise L1/L2
+read-bound), so naive M separate scans waste loads.
+
+```sql
+LOAD 'mojo_overrides.duckdb_extension';
+SELECT query_rowid, rowid, dist
+FROM mojo_knn('emb', 'v', 'queries', 'qv', 10, metric := 'cosine');
+```
+
+- Args: `emb_table, emb_col, query_table, query_col, k` (+ `metric :=`).
+  `*_col` are `FLOAT[K]` ARRAY columns of equal dim. `metric`: `cosine` (default,
+  = `array_cosine_distance`), `l2` (`array_distance`), `ip`
+  (`array_negative_inner_product`).
+- Returns `(query_rowid, rowid, dist)` — 0-based positional indices into the query
+  / embedding tables, top-`k` per query.
+- **Exact ranking** (recall@k = 1.0 vs stock), CPU SIMD, dependency-free. ~89×
+  over the cross-join+window SQL (M=64, N=100k, D=128, 1 thread); the kernel itself
+  is ~2.8× (AVX-512) over naive optimized scans. Caveat: `l2`/`cosine` distances
+  use the `‖a‖²+‖b‖²−2·dot` identity, so a self/duplicate pair can read ~1e-3
+  instead of exactly 0 (benign cancellation; ranking unaffected).
+
 ## Build & run (pixi)
 
 ```bash

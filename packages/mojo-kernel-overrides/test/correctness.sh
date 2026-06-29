@@ -123,3 +123,34 @@ for ra, rb in zip(a, b):
 print(f"   nullable max rel diff = {mx:.3e}")
 print("   PASS")
 PY
+
+# ---- mojo_knn table function (item 4): recall@k + self-match vs exact stock ----
+echo "==> mojo_knn batch kNN (recall vs exact stock)"
+KDB="$TMP/knn.db"; K=10; KN=3000; KM=24; KD=128
+"$DUCKDB" "$KDB" -c "SET lambda_syntax='ENABLE_SINGLE_ARROW'; SELECT setseed(0.33);
+CREATE TABLE emb AS SELECT i AS id, apply(range(0,$KD), x->(random()-0.5)::FLOAT)::FLOAT[$KD] AS v FROM range($KN) t(i);
+CREATE TABLE queries AS SELECT id AS qid, v AS qv FROM emb WHERE id<$KM;" >/dev/null 2>&1
+for METRIC in cosine l2 ip; do
+  case $METRIC in
+    cosine) DF="array_cosine_distance(e.v,q.qv)";; l2) DF="array_distance(e.v,q.qv)";;
+    ip) DF="array_negative_inner_product(e.v,q.qv)";;
+  esac
+  "$DUCKDB" "$KDB" -readonly -csv -noheader -c "SELECT q.qid, e.id FROM queries q, emb e
+    QUALIFY row_number() OVER (PARTITION BY q.qid ORDER BY $DF, e.id) <= $K ORDER BY q.qid;" > "$TMP/kref_$METRIC.csv" 2>/dev/null
+  "$DUCKDB" "$KDB" -unsigned -readonly -csv -noheader -c "LOAD '$EXT';
+    SELECT query_rowid, rowid FROM mojo_knn('emb','v','queries','qv',$K, metric:='$METRIC');" 2>/dev/null \
+    | grep -v installed > "$TMP/kmojo_$METRIC.csv"
+done
+python3 - "$TMP" "$KM" <<'PY'
+import sys, csv
+tmp, M = sys.argv[1], int(sys.argv[2]); ok = True
+for metric in ("cosine","l2","ip"):
+    ref={}; mojo={}
+    for q,i in csv.reader(open(f"{tmp}/kref_{metric}.csv")): ref.setdefault(int(q),set()).add(int(i))
+    for q,i in csv.reader(open(f"{tmp}/kmojo_{metric}.csv")): mojo.setdefault(int(q),set()).add(int(i))
+    rec=sum(len(ref[q]&mojo.get(q,set()))/len(ref[q]) for q in ref)/len(ref)
+    self_ok = 0 in mojo.get(0,set())
+    print(f"   {metric:7s} recall@10={rec:.4f}  self-match={self_ok}")
+    if rec < 0.99 or not self_ok: ok=False
+print("   PASS" if ok else "   FAIL"); sys.exit(0 if ok else 1)
+PY

@@ -21,9 +21,14 @@
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/execution/expression_executor_state.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
+#include <string>
+#include <vector>
 
 // SIMD kernels, linked into this same shared object from capi_shim.mojo.
 extern "C" {
@@ -56,6 +61,15 @@ void mojo_min_f32_masked(const float *, const uint64_t *valid, int64_t, float *o
 void mojo_max_f32_masked(const float *, const uint64_t *valid, int64_t, float *out_val, int64_t *out_count);
 void mojo_sum_i128_masked(const void *, const uint64_t *valid, int64_t, void *out_val, int64_t *out_count,
                           int32_t *overflow);
+// blocked multi-query kNN: M queries x N embeddings, top-k each. Norms are
+// per-vector (cosine: L2 norm; l2: squared norm; ip: ignored). Outputs row-major
+// [query*k + slot]: out_ids (rowid or -1 for padding) and out_dists.
+void mojo_knn_cosine_f32(const float *q, const float *nrm_q, int64_t m, const float *e, const float *nrm_e,
+                         int64_t n, int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
+void mojo_knn_l2_f32(const float *q, const float *nrm_q, int64_t m, const float *e, const float *nrm_e, int64_t n,
+                     int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
+void mojo_knn_ip_f32(const float *q, const float *nrm_q, int64_t m, const float *e, const float *nrm_e, int64_t n,
+                     int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
 }
 
 namespace duckdb {
@@ -505,6 +519,159 @@ static void OverrideArrayFold(Catalog &cat, ClientContext &ctx, const char *name
 	}
 }
 
+// ============================ mojo_knn table function ============================
+// Blocked multi-query brute-force kNN over two FLOAT[K] ARRAY columns:
+//   SELECT * FROM mojo_knn('emb','v','queries','qv', 10, metric:='cosine');
+// -> (query_rowid BIGINT, rowid BIGINT, dist FLOAT). query_rowid / rowid are the
+// 0-based positional row indices in the query / embedding tables. CPU SIMD,
+// dependency-free; the batch (multi-query) case the single-row array overrides
+// can't accelerate. Exact up to FP tie-breaks at rank k.
+
+static const int64_t MOJO_KNN_KMAX = 4096;
+
+static void MaterializeFloatArrayColumn(ClientContext &context, const std::string &table, const std::string &column,
+                                        const char *who, std::vector<float> &host, idx_t &K, idx_t &n_rows) {
+	Connection con(*context.db);
+	auto res = con.Query("SELECT " + column + " FROM " + table);
+	if (res->HasError()) { throw InvalidInputException(std::string(who) + ": " + res->GetError()); }
+	if (res->types[0].id() != LogicalTypeId::ARRAY) {
+		throw InvalidInputException(std::string(who) + ": column must be FLOAT[K] (ARRAY), got " +
+		                            res->types[0].ToString());
+	}
+	if (ArrayType::GetChildType(res->types[0]).id() != LogicalTypeId::FLOAT) {
+		throw InvalidInputException(std::string(who) + ": array element type must be FLOAT");
+	}
+	K = ArrayType::GetSize(res->types[0]);
+	n_rows = 0;
+	while (true) {
+		auto chunk = res->Fetch();
+		if (!chunk || chunk->size() == 0) { break; }
+		auto n = chunk->size();
+		chunk->data[0].Flatten(n);
+		if (!FlatVector::Validity(chunk->data[0]).AllValid()) {
+			throw InvalidInputException(std::string(who) + ": NULL vectors are not supported");
+		}
+		auto &child = ArrayVector::GetEntry(chunk->data[0]);
+		const float *cd = FlatVector::GetData<float>(child);
+		host.insert(host.end(), cd, cd + n * K);
+		n_rows += n;
+	}
+}
+
+struct MojoKnnBindData : public TableFunctionData {
+	std::vector<int64_t> query_rowids;
+	std::vector<int64_t> ids;
+	std::vector<float> dists;
+	idx_t n_emitted = 0;
+};
+struct MojoKnnState : public GlobalTableFunctionState {
+	idx_t offset = 0;
+};
+
+static unique_ptr<FunctionData> MojoKnnBind(ClientContext &context, TableFunctionBindInput &input,
+                                            vector<LogicalType> &return_types, vector<string> &names) {
+	auto emb_table = input.inputs[0].GetValue<string>();
+	auto emb_col = input.inputs[1].GetValue<string>();
+	auto q_table = input.inputs[2].GetValue<string>();
+	auto q_col = input.inputs[3].GetValue<string>();
+	auto k = input.inputs[4].GetValue<int64_t>();
+	if (k < 1 || k > MOJO_KNN_KMAX) {
+		throw InvalidInputException("mojo_knn: k must be in [1, %lld], got %lld", (long long)MOJO_KNN_KMAX,
+		                            (long long)k);
+	}
+
+	int metric = 0;  // 0=cosine 1=l2 2=ip
+	auto mp = input.named_parameters.find("metric");
+	if (mp != input.named_parameters.end() && !mp->second.IsNull()) {
+		auto m = StringUtil::Lower(mp->second.GetValue<string>());
+		if (m == "cosine" || m == "array_cosine_distance") {
+			metric = 0;
+		} else if (m == "l2" || m == "euclidean" || m == "array_distance") {
+			metric = 1;
+		} else if (m == "ip" || m == "inner_product" || m == "dot" || m == "array_negative_inner_product") {
+			metric = 2;
+		} else {
+			throw InvalidInputException("mojo_knn: unknown metric '%s' (expected 'cosine', 'l2', or 'ip')", m);
+		}
+	}
+
+	std::vector<float> emb, qry;
+	idx_t eK = 0, N = 0, qK = 0, M = 0;
+	MaterializeFloatArrayColumn(context, emb_table, emb_col, "mojo_knn(emb)", emb, eK, N);
+	MaterializeFloatArrayColumn(context, q_table, q_col, "mojo_knn(query)", qry, qK, M);
+	if (eK != qK) {
+		throw InvalidInputException("mojo_knn: query dim %lld != emb dim %lld", (long long)qK, (long long)eK);
+	}
+
+	return_types = {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::FLOAT};
+	names = {"query_rowid", "rowid", "dist"};
+	auto bd = make_uniq<MojoKnnBindData>();
+	if (N == 0 || M == 0 || eK == 0) { return std::move(bd); }
+
+	// Per-vector norms: cosine -> L2 norm, l2 -> squared norm, ip -> unused (0).
+	std::vector<float> enrm(N, 0.0f), qnrm(M, 0.0f);
+	if (metric != 2) {
+		for (idx_t i = 0; i < N; i++) {
+			float ss = mojo_array_dot_f32(emb.data() + i * eK, emb.data() + i * eK, (int64_t)eK);
+			enrm[i] = metric == 0 ? std::sqrt(ss) : ss;
+		}
+		for (idx_t i = 0; i < M; i++) {
+			float ss = mojo_array_dot_f32(qry.data() + i * qK, qry.data() + i * qK, (int64_t)qK);
+			qnrm[i] = metric == 0 ? std::sqrt(ss) : ss;
+		}
+	}
+
+	std::vector<int64_t> out_ids((size_t)M * (size_t)k);
+	std::vector<float> out_dists((size_t)M * (size_t)k);
+	auto run = metric == 0 ? mojo_knn_cosine_f32 : (metric == 1 ? mojo_knn_l2_f32 : mojo_knn_ip_f32);
+	run(qry.data(), qnrm.data(), (int64_t)M, emb.data(), enrm.data(), (int64_t)N, (int64_t)eK, k, out_ids.data(),
+	    out_dists.data());
+
+	for (idx_t mi = 0; mi < M; mi++) {
+		for (idx_t j = 0; j < (idx_t)k; j++) {
+			idx_t pos = mi * (idx_t)k + j;
+			if (out_ids[pos] < 0) { continue; }  // padding when N < k
+			bd->query_rowids.push_back((int64_t)mi);
+			bd->ids.push_back(out_ids[pos]);
+			bd->dists.push_back(out_dists[pos]);
+		}
+	}
+	bd->n_emitted = bd->ids.size();
+	return std::move(bd);
+}
+
+static unique_ptr<GlobalTableFunctionState> MojoKnnInit(ClientContext &, TableFunctionInitInput &) {
+	return make_uniq<MojoKnnState>();
+}
+
+static void MojoKnnFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) {
+	auto &bd = data.bind_data->Cast<MojoKnnBindData>();
+	auto &gs = data.global_state->Cast<MojoKnnState>();
+	idx_t n = MinValue<idx_t>(bd.n_emitted - gs.offset, STANDARD_VECTOR_SIZE);
+	if (n == 0) { output.SetCardinality(0); return; }
+	auto qrow = FlatVector::GetData<int64_t>(output.data[0]);
+	auto rowid = FlatVector::GetData<int64_t>(output.data[1]);
+	auto dist = FlatVector::GetData<float>(output.data[2]);
+	for (idx_t i = 0; i < n; i++) {
+		qrow[i] = bd.query_rowids[gs.offset + i];
+		rowid[i] = bd.ids[gs.offset + i];
+		dist[i] = bd.dists[gs.offset + i];
+	}
+	output.SetCardinality(n);
+	gs.offset += n;
+}
+
+static void RegisterMojoKnn(Catalog &cat, ClientContext &ctx) {
+	TableFunction tf("mojo_knn",
+	                 {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+	                  LogicalType::BIGINT},
+	                 MojoKnnFunc, MojoKnnBind, MojoKnnInit);
+	tf.named_parameters["metric"] = LogicalType::VARCHAR;
+	CreateTableFunctionInfo info(tf);
+	info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
+	cat.CreateTableFunction(ctx, info);
+}
+
 void RegisterMojoOverrides(DatabaseInstance &db) {
 	// Kernels are linked into this shared object; bind them directly.
 	g_k_sqrt = mojo_sqrt_f64;
@@ -585,6 +752,9 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		OverrideArrayFold(cat, ctx, "array_cosine_distance",
 		                  MojoArrayFold<float, mojo_array_cosine_sim_f32, FoldPost::ONE_MINUS>,
 		                  MojoArrayFold<double, mojo_array_cosine_sim_f64, FoldPost::ONE_MINUS>);
+
+		// blocked multi-query kNN table function (item 4).
+		RegisterMojoKnn(cat, ctx);
 	});
 	fprintf(stderr, "[mojo_overrides] installed (kernels linked in)\n");
 }
