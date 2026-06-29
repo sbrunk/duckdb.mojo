@@ -154,3 +154,33 @@ for metric in ("cosine","l2","ip"):
     if rec < 0.99 or not self_ok: ok=False
 print("   PASS" if ok else "   FAIL"); sys.exit(0 if ok else 1)
 PY
+
+# ---- fused sum/avg(transcendental) (item 2): optimizer rewrite vs stock ----
+echo "==> fused sum/avg(transcendental) (stock vs override)"
+read -r -d '' FBODY <<'SQL' || true
+SELECT setseed(0.9);
+CREATE TABLE ft AS SELECT (random()*100+0.01)::DOUBLE AS x,
+  CASE WHEN random()<0.3 THEN NULL ELSE (random()*100+0.01) END::DOUBLE AS xn FROM range(500000) r(i);
+.mode csv
+.headers off
+.output OUTFILE
+SELECT sum(sqrt(x)),avg(sqrt(x)),sum(sin(x)),avg(cos(x)),sum(ln(x)),avg(exp(x*0.01)),sum(log10(x)) FROM ft;
+SELECT sum(sqrt(xn)),avg(sqrt(xn)),sum(ln(xn)),avg(exp(xn*0.01)),sum(log10(xn)),sum(sin(xn)) FROM ft;
+SELECT sum(sqrt(x)) FROM ft WHERE x < 0;  -- empty -> NULL
+SQL
+echo "${FBODY/OUTFILE/$TMP/f_stock.csv}" | "$DUCKDB" -unsigned >/dev/null
+{ echo "LOAD '$EXT';"; echo "${FBODY/OUTFILE/$TMP/f_over.csv}"; } | "$DUCKDB" -unsigned >/dev/null
+# confirm the rewrite actually fires
+fired=$("$DUCKDB" -unsigned -noheader -list -cmd "LOAD '$EXT'" -c "EXPLAIN SELECT sum(sqrt(i::DOUBLE)) FROM range(10) t(i);" 2>/dev/null | grep -oE '__mojo_fsum_sqrt' | head -1)
+[ "$fired" = "__mojo_fsum_sqrt" ] && echo "   ok: optimizer rewrite fires" || { echo "   FAIL: rewrite did not fire"; exit 1; }
+python3 - "$TMP/f_stock.csv" "$TMP/f_over.csv" <<'PY'
+import sys, csv
+a=list(csv.reader(open(sys.argv[1]))); b=list(csv.reader(open(sys.argv[2])))
+assert len(a)==len(b) and a; mx=0.0
+for ra,rb in zip(a,b):
+  for x,y in zip(ra,rb):
+    if x==y: continue
+    fx,fy=float(x),float(y); ad=abs(fx-fy); rd=ad/max(abs(fx),abs(fy),1e-30); mx=max(mx,rd)
+    if ad>1e-2 and rd>1e-7: print("   FAIL",x,y,"rel",rd); sys.exit(1)
+print(f"   fused max rel diff = {mx:.3e}"); print("   PASS")
+PY

@@ -341,6 +341,59 @@ def reduce_sum_i128_masked(
 
 
 # ===--------------------------------------------------------------------===#
+# Fused sum-of-transcendental (item 2): one pass computing f(x) and accumulating,
+# no intermediate vector. Driven by an optimizer rewrite of sum/avg(f(col)). The
+# masked variant reduces only valid lanes (A1 model) and returns the valid count.
+# ===--------------------------------------------------------------------===#
+
+
+def reduce_fsum_map[
+    f: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
+](a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+    var acc = SIMD[DType.float64, W64](0)
+    var i = 0
+    while i + W64 <= n:
+        acc += f[W64]((a + i).load[width=W64]())
+        i += W64
+    var s = acc.reduce_add()
+    while i < n:
+        s += f[1]((a + i).load[width=1]())[0]
+        i += 1
+    return s
+
+
+def reduce_fsum_map_masked[
+    f: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
+](
+    a: UnsafePointer[Float64, ImmutAnyOrigin],
+    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    n: Int,
+    out_sum: UnsafePointer[Float64, MutAnyOrigin],
+    out_count: UnsafePointer[Int64, MutAnyOrigin],
+):
+    comptime LOWMASK = (UInt64(1) << UInt64(W64)) - 1
+    var lane = iota[DType.uint64, W64]()
+    var acc = SIMD[DType.float64, W64](0)
+    var cnt = Int64(0)
+    var i = 0
+    while i + W64 <= n:
+        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
+        var m = mbits.gt(SIMD[DType.uint64, W64](0))
+        acc += m.select(f[W64]((a + i).load[width=W64]()), SIMD[DType.float64, W64](0))
+        cnt += Int64(pop_count(Int(bits & LOWMASK)))
+        i += W64
+    var s = acc.reduce_add()
+    while i < n:
+        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
+            s += f[1]((a + i).load[width=1]())[0]
+            cnt += 1
+        i += 1
+    out_sum[0] = s
+    out_count[0] = cnt
+
+
+# ===--------------------------------------------------------------------===#
 # Blocked multi-query brute-force kNN (item 4).
 #
 # Register-tiled: process QT queries per embedding load so each embedding row's

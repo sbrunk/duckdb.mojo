@@ -60,6 +60,18 @@ At `LOAD`, the extension's init mutates the built-in **catalog function entries 
 - Aggregate state structs (`SumState`/`AvgState`/`MinMaxState`) are mirrored and guarded by a
   runtime `state_size` check before swapping.
 
+## Fused `sum`/`avg` of transcendentals
+
+An OptimizerExtension transparently rewrites ungrouped `sum(f(col))` / `avg(f(col))`
+(for `f` in `sqrt sin cos ln exp log10`, `DOUBLE`) into a custom aggregate that
+applies `f` and reduces in **one pass** — no intermediate vector. The win is
+modest (~1.13× over the already-SIMD two-pass `f` + `sum`; ~2.25× over stock
+scalar), since on CPU the intermediate stays L1-resident and the transcendental
+compute dominates — fusion is mostly a GPU advantage. Nullable columns are handled
+(masked); domain errors follow the scalar fast-path caveat (NaN, not a throw).
+Disable with `MOJO_OVERRIDES_NO_FUSE=1`. The rewrite infra is the foundation for a
+cost-based CPU/GPU backend router (see the GPU operator).
+
 ## `mojo_knn` — blocked multi-query brute-force kNN
 
 DuckDB has no batch-kNN primitive, so multi-query nearest-neighbour written in SQL

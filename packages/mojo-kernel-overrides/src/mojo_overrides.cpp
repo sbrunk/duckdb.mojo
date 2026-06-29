@@ -22,7 +22,12 @@
 #include "duckdb/execution/expression_executor_state.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/optimizer/optimizer_extension.hpp"
+#include "duckdb/main/config.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -70,6 +75,19 @@ void mojo_knn_l2_f32(const float *q, const float *nrm_q, int64_t m, const float 
                      int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
 void mojo_knn_ip_f32(const float *q, const float *nrm_q, int64_t m, const float *e, const float *nrm_e, int64_t n,
                      int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
+// fused sum-of-transcendental (item 2): plain returns sum; masked returns sum + valid count.
+double mojo_fsum_sqrt_f64(const double *, int64_t);
+double mojo_fsum_sin_f64(const double *, int64_t);
+double mojo_fsum_cos_f64(const double *, int64_t);
+double mojo_fsum_ln_f64(const double *, int64_t);
+double mojo_fsum_exp_f64(const double *, int64_t);
+double mojo_fsum_log10_f64(const double *, int64_t);
+void mojo_fsum_sqrt_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
+void mojo_fsum_sin_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
+void mojo_fsum_cos_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
+void mojo_fsum_ln_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
+void mojo_fsum_exp_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
+void mojo_fsum_log10_f64_masked(const double *, const uint64_t *, int64_t, double *, int64_t *);
 }
 
 namespace duckdb {
@@ -519,6 +537,188 @@ static void OverrideArrayFold(Catalog &cat, ClientContext &ctx, const char *name
 	}
 }
 
+// ===================== item 2: fused sum/avg(transcendental) =====================
+// An OptimizerExtension rewrites ungrouped sum(f(col)) / avg(f(col)) for the
+// transcendental f's into a custom aggregate that applies f and reduces in ONE
+// pass (no intermediate vector). Modest CPU win (~1.1-1.3x; fusion mostly helps
+// the GPU), but it builds the optimizer-rewrite infra (the foundation item 5
+// reuses to route shapes to CPU/GPU backends). Disable with MOJO_OVERRIDES_NO_FUSE.
+
+struct FusedState {
+	double value;
+	uint64_t count;
+	bool isset;
+};
+
+typedef double (*plain_k_t)(const double *, int64_t);
+typedef void (*masked_k_t)(const double *, const uint64_t *, int64_t, double *, int64_t *);
+typedef double (*scalar_f_t)(double);
+
+static double sf_sqrt(double x) { return std::sqrt(x); }
+static double sf_sin(double x) { return std::sin(x); }
+static double sf_cos(double x) { return std::cos(x); }
+static double sf_ln(double x) { return std::log(x); }
+static double sf_exp(double x) { return std::exp(x); }
+static double sf_log10(double x) { return std::log10(x); }
+
+template <plain_k_t PLAIN, masked_k_t MASKED, scalar_f_t SF, bool IS_AVG>
+struct FusedAgg {
+	static idx_t Size(const AggregateFunction &) { return sizeof(FusedState); }
+	static void Init(const AggregateFunction &, data_ptr_t s) {
+		auto &st = *reinterpret_cast<FusedState *>(s);
+		st.value = 0;
+		st.count = 0;
+		st.isset = false;
+	}
+	static void SimpleUpdate(Vector in[], AggregateInputData &, idx_t, data_ptr_t sp, idx_t n) {
+		auto &st = *reinterpret_cast<FusedState *>(sp);
+		if (n > 0 && in[0].GetVectorType() == VectorType::FLAT_VECTOR) {
+			auto d = FlatVector::GetData<double>(in[0]);
+			if (FlatVector::Validity(in[0]).AllValid()) {
+				st.value += PLAIN(d, (int64_t)n);
+				st.count += n;
+				st.isset = true;
+				return;
+			}
+			double s;
+			int64_t c;
+			MASKED(d, ValidWords(in[0]), (int64_t)n, &s, &c);
+			st.value += s;
+			st.count += (uint64_t)c;
+			if (c > 0) { st.isset = true; }
+			return;
+		}
+		UnifiedVectorFormat id;
+		in[0].ToUnifiedFormat(n, id);
+		auto d = UnifiedVectorFormat::GetData<double>(id);
+		for (idx_t i = 0; i < n; i++) {
+			auto ix = id.sel->get_index(i);
+			if (!id.validity.RowIsValid(ix)) { continue; }
+			st.value += SF(d[ix]);
+			st.count++;
+			st.isset = true;
+		}
+	}
+	static void Update(Vector in[], AggregateInputData &, idx_t, Vector &states, idx_t count) {
+		UnifiedVectorFormat id, sd;
+		in[0].ToUnifiedFormat(count, id);
+		states.ToUnifiedFormat(count, sd);
+		auto d = UnifiedVectorFormat::GetData<double>(id);
+		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
+		for (idx_t i = 0; i < count; i++) {
+			auto ix = id.sel->get_index(i);
+			if (!id.validity.RowIsValid(ix)) { continue; }
+			auto &st = *reinterpret_cast<FusedState *>(sp[sd.sel->get_index(i)]);
+			st.value += SF(d[ix]);
+			st.count++;
+			st.isset = true;
+		}
+	}
+	static void Combine(Vector &state, Vector &combined, AggregateInputData &, idx_t count) {
+		UnifiedVectorFormat sd;
+		state.ToUnifiedFormat(count, sd);
+		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
+		auto cp = FlatVector::GetData<data_ptr_t>(combined);
+		for (idx_t i = 0; i < count; i++) {
+			auto &s = *reinterpret_cast<FusedState *>(sp[sd.sel->get_index(i)]);
+			auto &c = *reinterpret_cast<FusedState *>(cp[i]);
+			c.value += s.value;
+			c.count += s.count;
+			c.isset = c.isset || s.isset;
+		}
+	}
+	static void Finalize(Vector &state, AggregateInputData &, Vector &result, idx_t count, idx_t offset) {
+		UnifiedVectorFormat sd;
+		state.ToUnifiedFormat(count, sd);
+		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
+		auto r = FlatVector::GetData<double>(result);
+		auto &rm = FlatVector::Validity(result);
+		for (idx_t i = 0; i < count; i++) {
+			auto &st = *reinterpret_cast<FusedState *>(sp[sd.sel->get_index(i)]);
+			idx_t ri = i + offset;
+			if (IS_AVG) {
+				if (st.count == 0) {
+					rm.SetInvalid(ri);
+				} else {
+					r[ri] = st.value / (double)st.count;
+				}
+			} else {
+				if (!st.isset) {
+					rm.SetInvalid(ri);
+				} else {
+					r[ri] = st.value;
+				}
+			}
+		}
+	}
+	static AggregateFunction Get() {
+		return AggregateFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE, Size, Init, Update, Combine, Finalize,
+		                         FunctionNullHandling::DEFAULT_NULL_HANDLING, SimpleUpdate);
+	}
+};
+
+static bool IsFusableTranscendental(const std::string &f) {
+	return f == "sqrt" || f == "sin" || f == "cos" || f == "ln" || f == "exp" || f == "log10";
+}
+
+// Build the fused aggregate, taking ownership of `inner` (the transcendental's
+// argument). Only called when IsFusableTranscendental(fname) — always returns.
+static unique_ptr<Expression> BuildFusedAgg(const std::string &fname, bool is_avg, unique_ptr<Expression> inner,
+                                            const std::string &alias) {
+#define MOJO_FUSE_CASE(NM, PLAIN, MASKED, SF)                                                                          \
+	if (fname == NM) {                                                                                                 \
+		auto fused = is_avg ? FusedAgg<PLAIN, MASKED, SF, true>::Get() : FusedAgg<PLAIN, MASKED, SF, false>::Get();    \
+		fused.name = std::string(is_avg ? "__mojo_favg_" : "__mojo_fsum_") + NM;                                       \
+		vector<unique_ptr<Expression>> nch;                                                                            \
+		nch.push_back(std::move(inner));                                                                               \
+		auto repl = make_uniq<BoundAggregateExpression>(std::move(fused), std::move(nch), nullptr, nullptr,           \
+		                                                AggregateType::NON_DISTINCT);                                  \
+		repl->alias = alias;                                                                                          \
+		return repl;                                                                                                  \
+	}
+	MOJO_FUSE_CASE("sqrt", mojo_fsum_sqrt_f64, mojo_fsum_sqrt_f64_masked, sf_sqrt)
+	MOJO_FUSE_CASE("sin", mojo_fsum_sin_f64, mojo_fsum_sin_f64_masked, sf_sin)
+	MOJO_FUSE_CASE("cos", mojo_fsum_cos_f64, mojo_fsum_cos_f64_masked, sf_cos)
+	MOJO_FUSE_CASE("ln", mojo_fsum_ln_f64, mojo_fsum_ln_f64_masked, sf_ln)
+	MOJO_FUSE_CASE("exp", mojo_fsum_exp_f64, mojo_fsum_exp_f64_masked, sf_exp)
+	MOJO_FUSE_CASE("log10", mojo_fsum_log10_f64, mojo_fsum_log10_f64_masked, sf_log10)
+#undef MOJO_FUSE_CASE
+	return nullptr;
+}
+
+static void TryRewriteFusedAgg(unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) { return; }
+	auto &agg = expr->Cast<BoundAggregateExpression>();
+	if (agg.IsDistinct() || agg.filter || agg.order_bys) { return; }
+	if (agg.children.size() != 1) { return; }
+	bool is_avg = agg.function.name == "avg";
+	if (agg.function.name != "sum" && !is_avg) { return; }
+	if (agg.return_type.id() != LogicalTypeId::DOUBLE) { return; }
+	auto &child = *agg.children[0];
+	if (child.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return; }
+	auto &fn = child.Cast<BoundFunctionExpression>();
+	if (fn.children.size() != 1) { return; }
+	if (fn.return_type.id() != LogicalTypeId::DOUBLE) { return; }
+	if (fn.children[0]->return_type.id() != LogicalTypeId::DOUBLE) { return; }
+	if (!IsFusableTranscendental(fn.function.name)) { return; }
+	auto repl = BuildFusedAgg(fn.function.name, is_avg, std::move(fn.children[0]), agg.alias);
+	if (repl) { expr = std::move(repl); }
+}
+
+static void FuseWalk(LogicalOperator &op) {
+	if (op.type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+		auto &agg = op.Cast<LogicalAggregate>();
+		if (agg.groups.empty()) {  // ungrouped only (the simple_update fast path)
+			for (auto &e : agg.expressions) { TryRewriteFusedAgg(e); }
+		}
+	}
+	for (auto &c : op.children) { FuseWalk(*c); }
+}
+
+static void MojoFuseOptimize(OptimizerExtensionInput &, unique_ptr<LogicalOperator> &plan) {
+	if (plan) { FuseWalk(*plan); }
+}
+
 // ============================ mojo_knn table function ============================
 // Blocked multi-query brute-force kNN over two FLOAT[K] ARRAY columns:
 //   SELECT * FROM mojo_knn('emb','v','queries','qv', 10, metric:='cosine');
@@ -685,6 +885,13 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 	g_k_max64 = mojo_max_f64;
 	g_k_min32 = mojo_min_f32;
 	g_k_max32 = mojo_max_f32;
+
+	// item 2: register the fused sum/avg(transcendental) optimizer rewrite (opt-out).
+	if (!std::getenv("MOJO_OVERRIDES_NO_FUSE")) {
+		OptimizerExtension ext;
+		ext.optimize_function = MojoFuseOptimize;
+		OptimizerExtension::Register(DBConfig::GetConfig(db), std::move(ext));
+	}
 
 	Connection con(db);
 	con.context->RunFunctionInTransaction([&]() {

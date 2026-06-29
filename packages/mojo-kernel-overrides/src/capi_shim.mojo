@@ -25,6 +25,8 @@ from duckdb.kernels.simd import (
     reduce_sum_f64_masked,
     reduce_minmax_masked,
     reduce_sum_i128_masked,
+    reduce_fsum_map,
+    reduce_fsum_map_masked,
     knn_topk,
     W32,
     W64,
@@ -260,3 +262,84 @@ def mojo_knn_ip_f32(
     out_dists: UnsafePointer[Float32, MutAnyOrigin],
 ) abi("C"):
     knn_topk[2](q, nrm_q, m, e, nrm_e, n, d_dim, k, out_ids, out_dists)
+
+
+# ---- fused sum-of-transcendental (item 2): plain + masked, per function ----
+
+
+@export("mojo_fsum_sqrt_f64")
+def mojo_fsum_sqrt_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[ksqrt](a, n)
+
+
+@export("mojo_fsum_sin_f64")
+def mojo_fsum_sin_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[ksin](a, n)
+
+
+@export("mojo_fsum_cos_f64")
+def mojo_fsum_cos_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[kcos](a, n)
+
+
+@export("mojo_fsum_ln_f64")
+def mojo_fsum_ln_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[kln](a, n)
+
+
+@export("mojo_fsum_exp_f64")
+def mojo_fsum_exp_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[kexp](a, n)
+
+
+@export("mojo_fsum_log10_f64")
+def mojo_fsum_log10_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) abi("C") -> Float64:
+    return reduce_fsum_map[klog10](a, n)
+
+
+@export("mojo_fsum_sqrt_f64_masked")
+def mojo_fsum_sqrt_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[ksqrt](a, v, n, os, oc)
+
+
+@export("mojo_fsum_sin_f64_masked")
+def mojo_fsum_sin_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[ksin](a, v, n, os, oc)
+
+
+@export("mojo_fsum_cos_f64_masked")
+def mojo_fsum_cos_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[kcos](a, v, n, os, oc)
+
+
+@export("mojo_fsum_ln_f64_masked")
+def mojo_fsum_ln_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[kln](a, v, n, os, oc)
+
+
+@export("mojo_fsum_exp_f64_masked")
+def mojo_fsum_exp_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[kexp](a, v, n, os, oc)
+
+
+@export("mojo_fsum_log10_f64_masked")
+def mojo_fsum_log10_f64_masked(
+    a: UnsafePointer[Float64, ImmutAnyOrigin], v: UnsafePointer[UInt64, ImmutAnyOrigin], n: Int,
+    os: UnsafePointer[Float64, MutAnyOrigin], oc: UnsafePointer[Int64, MutAnyOrigin]
+) abi("C"):
+    reduce_fsum_map_masked[klog10](a, v, n, os, oc)
