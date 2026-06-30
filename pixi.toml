@@ -76,7 +76,7 @@ bench-build = { cmd = "bash benchmark/drivers/build_runner.sh", depends-on = ["c
 #   pixi run bench-sql gpu_xover --engines=stock,cpu,gpu
 #   pixi run bench-sql gpu_knn   --by-suffix
 #   pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu,gpu
-bench-sql = "bash benchmark/drivers/bench_runner.sh"
+bench-sql = "python3 benchmark/drivers/bench_runner.py"
 # Mojo vector-search harness (via the duckdb.mojo client): single + batch cosine
 # top-k across stock / cpu-simd / vss-HNSW / GPU, with latency + recall. Build the
 # extensions first (overrides-build / gpu-op-build); GPU/vss rows self-skip if absent.

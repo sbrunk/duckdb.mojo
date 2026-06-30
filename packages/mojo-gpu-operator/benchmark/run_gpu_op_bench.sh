@@ -9,7 +9,7 @@
 # Reuses the consolidated harness (benchmark/README.md): the SAME stock benchmark_runner
 # (built by `pixi run bench-build`) and the unified driver. This wrapper just stages its
 # own self-generating `gpuop/` benchmark group + exports the GPU_OP_* flags, then delegates
-# the stock-vs-gpu compare to benchmark/drivers/bench_runner.sh.
+# the stock-vs-gpu compare to benchmark/drivers/bench_runner.py.
 #
 # The benchmark files self-generate a DECIMAL dataset via a `cache` directive (no tpch / external
 # db dependency) — DECIMAL because the f64 aggregate paths decline on raw DOUBLE columns.
@@ -45,4 +45,4 @@ export GPU_OP_COLPOOL="${GPU_OP_COLPOOL:-2}"
 # Delegate to the unified driver (toggle mode, stock vs gpu). SUB carries a '/', so
 # bench_runner treats it as a runner-tree path (benchmark/$SUB.*); the exported GPU_OP_*
 # flags are inherited by the runner subprocess.
-exec bash "$ROOT/benchmark/drivers/bench_runner.sh" "$SUB" --engines=stock,gpu
+exec python3 "$ROOT/benchmark/drivers/bench_runner.py" "$SUB" --engines=stock,gpu

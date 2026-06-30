@@ -17,7 +17,7 @@ pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu,gpu   # TPC-H (built-in)
 ```
 
 - `sql/<group>/*.benchmark` — source of truth (staged into the runner tree by the driver).
-- `drivers/bench_runner.sh` — the unified compare driver (`--engines` toggle mode, or
+- `drivers/bench_runner.py` — the unified compare driver (`--engines` toggle mode, or
   `--by-suffix` when each `<regime>_<engine>.benchmark` is engine-specific).
 - `drivers/build_runner.sh` — builds `benchmark_runner` + applies the load-extension
   hook (`runner_load_extension.patch`). NixOS: run the cmake step under
