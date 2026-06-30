@@ -1,0 +1,17 @@
+# name: benchmark/gpuop/tr_sqrt.benchmark
+# description: GPU transcendental sum(sqrt) [f64 class DuckDB does not accelerate]
+# group: [gpuop]
+
+cache gpuop_decimal.duckdb
+
+load
+CREATE TABLE gpuop_t(price DECIMAL(15,2) NOT NULL, qty DECIMAL(15,2) NOT NULL, disc DECIMAL(15,4) NOT NULL, grp VARCHAR NOT NULL);
+INSERT INTO gpuop_t SELECT
+  ((i % 1000000) + 1)::DECIMAL(15,2),
+  ((i % 50) + 1)::DECIMAL(15,2),
+  ((i % 100) * 0.01)::DECIMAL(15,4),
+  chr((65 + (i % 4))::INTEGER)
+FROM range(50000000) tbl(i);
+
+run
+SELECT sum(sqrt(price)) FROM gpuop_t;

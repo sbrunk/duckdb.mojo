@@ -2,7 +2,7 @@
 """Append DuckDB extension metadata footer to a shared library.
 
 This is a Python port of DuckDB's CMake metadata append script:
-https://github.com/duckdb/duckdb/blob/v1.5.3/scripts/append_metadata.cmake
+https://github.com/duckdb/duckdb/blob/v1.5.4/scripts/append_metadata.cmake
 
 This script appends the required 534-byte footer to a Mojo-compiled shared
 library so that DuckDB recognizes it as a valid extension.
@@ -15,11 +15,14 @@ Options:
     --capi-version VERSION    C API version for stable ABI (default: v1.2.0)
     --duckdb-version VERSION  DuckDB version for unstable ABI (default: auto-detect)
     --extension-version VER   Extension version string (default: "")
-    --abi-type ABI            ABI type: C_STRUCT or C_STRUCT_UNSTABLE (default: C_STRUCT)
+    --abi-type ABI            ABI type: C_STRUCT, C_STRUCT_UNSTABLE, or CPP (default: C_STRUCT)
 
 The version field in the metadata footer depends on the ABI type:
   - C_STRUCT (stable):   uses --capi-version (the C API version, e.g. v1.2.0)
-  - C_STRUCT_UNSTABLE:   uses --duckdb-version (the DuckDB version, e.g. v1.5.3)
+  - C_STRUCT_UNSTABLE:   uses --duckdb-version (the DuckDB version, e.g. v1.5.4)
+  - CPP:                 uses --duckdb-version. Links DuckDB's internal C++ API, so
+                         the extension is locked to that exact DuckDB version. Used by
+                         the mojo-kernel-overrides / mojo-gpu-operator packages.
 
 Example:
     python3 scripts/append_extension_metadata.py demo_mojo.duckdb_extension
@@ -70,7 +73,7 @@ def detect_duckdb_version() -> str | None:
             text=True,
             timeout=5,
         )
-        # Output is like "v1.5.3 abc1234567"
+        # Output is like "v1.5.4 abc1234567"
         version = result.stdout.strip().split()[0]
         if version.startswith("v"):
             return version
@@ -87,12 +90,12 @@ def resolve_version_field(
     """Resolve the version field based on ABI type.
 
     For C_STRUCT (stable), the version field is the C API version.
-    For C_STRUCT_UNSTABLE, the version field is the DuckDB version.
-    See: https://github.com/duckdb/duckdb/blob/v1.5.3/CMakeLists.txt#L975-L983
+    For C_STRUCT_UNSTABLE and CPP, the version field is the DuckDB version.
+    See: https://github.com/duckdb/duckdb/blob/v1.5.4/CMakeLists.txt#L975-L983
     """
     if abi_type == "C_STRUCT":
         version = capi_version or "v1.2.0"
-    else:  # C_STRUCT_UNSTABLE
+    else:  # C_STRUCT_UNSTABLE or CPP
         version = duckdb_version
         if version is None:
             version = detect_duckdb_version()
@@ -129,9 +132,9 @@ def create_metadata_footer(
         platform_str: Platform string (e.g. "osx_arm64").
         version: Version field. For C_STRUCT this is the C API version
             (e.g. "v1.2.0"). For C_STRUCT_UNSTABLE this is the DuckDB
-            version (e.g. "v1.5.3").
+            version (e.g. "v1.5.4").
         extension_version: Extension's own version string.
-        abi_type: "C_STRUCT" or "C_STRUCT_UNSTABLE".
+        abi_type: "C_STRUCT", "C_STRUCT_UNSTABLE", or "CPP".
     """
     # WebAssembly custom section header (22 bytes)
     wasm_header = (
@@ -233,7 +236,7 @@ def main():
     parser.add_argument(
         "--abi-type",
         default="C_STRUCT",
-        choices=["C_STRUCT", "C_STRUCT_UNSTABLE"],
+        choices=["C_STRUCT", "C_STRUCT_UNSTABLE", "CPP"],
         help="ABI type (default: C_STRUCT)",
     )
 

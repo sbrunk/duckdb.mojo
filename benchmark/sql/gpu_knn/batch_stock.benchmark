@@ -1,0 +1,14 @@
+# name: benchmark/micro/gpu_knn/batch_stock.benchmark
+# group: [gpu_knn]
+
+name batch_stock
+group micro
+subgroup gpu_knn
+
+load
+SET lambda_syntax='ENABLE_SINGLE_ARROW';
+CREATE TABLE emb AS SELECT i id, apply(range(0,128),x->random()::FLOAT)::FLOAT[128] v FROM range(200000) u(i);
+CREATE TABLE queries AS SELECT i qid, apply(range(0,128),x->random()::FLOAT)::FLOAT[128] qv FROM range(500) u(i);
+
+run
+SELECT count(*) FROM (SELECT q.qid FROM queries q, emb e QUALIFY row_number() OVER (PARTITION BY q.qid ORDER BY array_cosine_distance(e.v,q.qv))<=10);

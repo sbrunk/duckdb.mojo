@@ -1,0 +1,12 @@
+# name: benchmark/micro/mojo_simd/sum_hugeint.benchmark
+# group: [mojo_simd]
+
+name SUM(hugeint)
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT (((i % 1000) + 1))::HUGEINT AS x FROM range(50000000) tbl(i);
+
+run
+SELECT SUM(x) FROM t;

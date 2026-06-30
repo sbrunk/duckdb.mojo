@@ -350,7 +350,7 @@ struct DuckDBValue(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         var bit_val = duckdb_bit(
-            UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=Int(data.unsafe_ptr())),
+            UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(data.unsafe_ptr())),
             idx_t(len(data))
         )
         return Self(libduckdb.duckdb_create_bit(bit_val))

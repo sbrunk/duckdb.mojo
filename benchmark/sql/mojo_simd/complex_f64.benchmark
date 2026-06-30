@@ -1,0 +1,13 @@
+# name: benchmark/micro/mojo_simd/complex_f64.benchmark
+# description: Mojo SIMD patch target — x*y+x-y (f64)
+# group: [mojo_simd]
+
+name x*y+x-y (f64)
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT ((i % 1000) + 1)::DOUBLE AS x, (((i*7) % 1000) + 1)::DOUBLE AS y FROM range(50000000) tbl(i);
+
+run
+SELECT SUM(x*y+x-y) FROM t;

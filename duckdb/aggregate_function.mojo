@@ -124,10 +124,10 @@ struct AggregateStateArray(Sized):
     ```
     """
 
-    var _states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin]
+    var _states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]
     var _count: Int
 
-    def __init__(out self, states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin], count: Int = 0):
+    def __init__(out self, states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], count: Int = 0):
         """Creates an AggregateStateArray wrapper.
 
         Args:
@@ -395,7 +395,7 @@ struct AggregateFunction(Movable):
         def raw_update(
             raw_info: duckdb_function_info,
             raw_input: duckdb_data_chunk,
-            raw_states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin],
+            raw_states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin],
         ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var input_chunk = Chunk[is_owned=False](raw_input)
@@ -405,10 +405,10 @@ struct AggregateFunction(Movable):
         def raw_combine(
             raw_info: duckdb_function_info,
             raw_source: UnsafePointer[
-                duckdb_aggregate_state, MutExternalOrigin
+                duckdb_aggregate_state, MutUntrackedOrigin
             ],
             raw_target: UnsafePointer[
-                duckdb_aggregate_state, MutExternalOrigin
+                duckdb_aggregate_state, MutUntrackedOrigin
             ],
             count: idx_t,
         ) abi("C"):
@@ -420,7 +420,7 @@ struct AggregateFunction(Movable):
         def raw_finalize(
             raw_info: duckdb_function_info,
             raw_source: UnsafePointer[
-                duckdb_aggregate_state, MutExternalOrigin
+                duckdb_aggregate_state, MutUntrackedOrigin
             ],
             raw_result: duckdb_vector,
             count: idx_t,
@@ -428,7 +428,7 @@ struct AggregateFunction(Movable):
         ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var source = AggregateStateArray(raw_source, Int(count))
-            var result = Vector[False, MutExternalOrigin](raw_result)
+            var result = Vector[False, MutUntrackedOrigin](raw_result)
             finalize_fn(info, source, result, Int(count), Int(offset))
 
         ref libduckdb = DuckDB().libduckdb()
@@ -467,7 +467,7 @@ struct AggregateFunction(Movable):
         """
 
         def raw_destroy(
-            raw_states: UnsafePointer[duckdb_aggregate_state, MutExternalOrigin],
+            raw_states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin],
             count: idx_t,
         ) abi("C"):
             var states = AggregateStateArray(raw_states, Int(count))

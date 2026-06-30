@@ -1,0 +1,13 @@
+# name: benchmark/micro/mojo_simd/mixed_heavy.benchmark
+# description: Mojo SIMD patch target — mixed heavy
+# group: [mojo_simd]
+
+name mixed heavy
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT ((i % 1000) + 1)::DOUBLE AS x, (((i*7) % 1000) + 1)::DOUBLE AS y FROM range(50000000) tbl(i);
+
+run
+SELECT SUM(sin(x)*cos(x) + ln(x)*exp(x*0.01)) FROM t;

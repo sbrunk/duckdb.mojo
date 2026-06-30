@@ -106,7 +106,7 @@ fn init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
     ...
 
 @export("my_ext_init_c_api")
-fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]) abi("C") -> Bool:
+fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin]) abi("C") -> Bool:
     return Extension.run_unstable[init](info, access)
 ```
 
@@ -138,7 +138,7 @@ The entry point function must be named `{extension_name}_init_c_api` and have th
 @export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     ...
 ```
@@ -169,7 +169,7 @@ fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
 @export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     return Extension.run[init](info, access)
 ```
@@ -196,7 +196,7 @@ create an `Extension` manually:
 @export("my_extension_init_c_api")
 fn my_extension_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     var ext = Extension(info, access)
     try:

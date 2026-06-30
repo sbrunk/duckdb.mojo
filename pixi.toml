@@ -1,6 +1,6 @@
 [workspace]
 authors = ["Sören Brunk <soeren@brunk.io>"]
-channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max-nightly/"]
+channels = ["https://prefix.dev/conda-forge", "https://conda.modular.com/max/"]
 description = "DuckDB bindings for Mojo"
 name = "duckdb.mojo"
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026060206"
+mojo-compiler = "==1.0.0b2"
 
 [package.build-dependencies]
-mojo-compiler = "=1.0.0b2.dev2026060206"
+mojo-compiler = "==1.0.0b2"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -33,7 +33,7 @@ path = "duckdb"
 build = "pixi run mojo precompile duckdb -o duckdb.mojoc"
 test-library = { cmd = "bash scripts/run_tests.sh" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
-generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir .duckdb-src --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
+generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
 # Fails if duckdb/_libduckdb.mojo is out of sync with the DuckDB version
 # (regenerates first via generate-api, then checks for an unexpected diff).
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
@@ -51,6 +51,37 @@ test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS test-extension/te
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
+# Mojo kernel overrides (packages/mojo-kernel-overrides): a DuckDB extension that
+# rewrites built-in scalar/aggregate functions to Mojo SIMD kernels at load time,
+# with NO patch to DuckDB. Builds against the default env's libduckdb headers/lib.
+overrides-build = "bash packages/mojo-kernel-overrides/build.sh"
+# Correctness regression: stock-vs-override array-distance results (+ NULL/known-value checks).
+overrides-test = { cmd = "bash packages/mojo-kernel-overrides/test/correctness.sh", depends-on = ["overrides-build"] }
+# Build + load the extension and print a stock-vs-Mojo benchmark table.
+# Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
+overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
+overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
+
+# mojo-gpu-operator: transparent GPU offload (array_cosine_distance + TPC-H Q1/Q3/Q5/Q6/Q14)
+# via an optimizer extension, with Mojo GPU kernels. See packages/mojo-gpu-operator/README.md.
+gpu-op-build = "bash packages/mojo-gpu-operator/build.sh"
+gpu-op-clean = "rm -rf packages/mojo-gpu-operator/build"
+
+# ── Benchmarks (consolidated) ── see benchmark/README.md for the full map.
+# One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).
+bench-build = { cmd = "bash benchmark/drivers/build_runner.sh", depends-on = ["clone-duckdb"] }
+# Unified warm compare via benchmark_runner. <group> = a benchmark/sql/ dir or a
+# built-in path; engines toggle which extension loads. Examples:
+#   pixi run bench-sql mojo_simd --engines=stock,cpu --threads=1
+#   pixi run bench-sql gpu_xover --engines=stock,cpu,gpu
+#   pixi run bench-sql gpu_knn   --by-suffix
+#   pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu,gpu
+bench-sql = "python3 benchmark/drivers/bench_runner.py"
+# Mojo vector-search harness (via the duckdb.mojo client): single + batch cosine
+# top-k across stock / cpu-simd / vss-HNSW / GPU, with latency + recall. Build the
+# extensions first (overrides-build / gpu-op-build); GPU/vss rows self-skip if absent.
+bench-knn = "mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo"
+
 # Compile-check (no run) the benchmarks so they can't silently rot when the
 # stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
 # environment and is excluded here (see scripts/compile_check.sh).
@@ -58,29 +89,36 @@ compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.5.3"
-duckdb-cli = "=1.5.3"
-mojo = "=1.0.0b2.dev2026060206"
+libduckdb-devel = "=1.5.4"
+duckdb-cli = "=1.5.4"
+mojo = "==1.0.0b2"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
 # The source directory is named `duckdb/` so mojo resolves `from duckdb import ...` directly.
 # MODULAR_MOJO_MAX_IMPORT_PATH overrides the default, so we include the stdlib path too.
+# The stdlib path is listed first: mojo takes the first import-path entry that yields
+# `std`, so leading with $CONDA_PREFIX/lib/mojo guarantees this env's own stdlib wins.
+# (Listing the project root first lets mojo's recursive scan pick up a foreign
+# std.mojoc from another env under .pixi/, e.g. the `full` env's older compiler,
+# which then fails to load. See the operator-replacement block below.)
 [activation.env]
-MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
+MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "packages/duckdb-from-source" }
 duckdb-operator-replacement = { path = "packages/operator-replacement" }
-mojo = "=1.0.0b2.dev2026060206"
+mojo = "==1.0.0b2"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
 # `mojo` finds both the `duckdb` package (project root) and the installed
 # packages — stdlib + operator_replacement — under $CONDA_PREFIX/lib/mojo.
+# Stdlib path first (see note above): keeps each env's own std.mojoc from being
+# shadowed by the other env's copy when both are materialized under .pixi/.
 [feature.operator-replacement.activation.env]
-MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
+MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Environments
 # 
@@ -97,3 +135,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$PIXI_PROJECT_ROOT,$CONDA_PREFIX/lib/mojo"
 #          duckdb-from-source is used (avoiding binary incompatibility issues).
 [environments]
 full = { features = ["operator-replacement"], solve-group = "full", no-default-feature = true }
+
+[target.linux-64.dependencies]
+c-compiler = ">=1.11.0,<2"
+cxx-compiler = ">=1.11.0,<2"

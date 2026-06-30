@@ -176,6 +176,7 @@ cython_debug/
 *.mojopkg
 *.mojoc
 
-# DuckDB source checkout for code generation
+# Legacy DuckDB source checkout (superseded by the third_party/duckdb submodule).
 .duckdb-src/
 
+experiments/

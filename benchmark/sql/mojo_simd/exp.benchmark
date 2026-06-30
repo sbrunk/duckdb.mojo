@@ -1,0 +1,13 @@
+# name: benchmark/micro/mojo_simd/exp.benchmark
+# description: Mojo SIMD patch target — exp(x*0.01)
+# group: [mojo_simd]
+
+name exp(x*0.01)
+group micro
+subgroup mojo_simd
+
+load
+CREATE TABLE t AS SELECT ((i % 1000) + 1)::DOUBLE AS x, (((i*7) % 1000) + 1)::DOUBLE AS y FROM range(50000000) tbl(i);
+
+run
+SELECT SUM(exp(x*0.01)) FROM t;

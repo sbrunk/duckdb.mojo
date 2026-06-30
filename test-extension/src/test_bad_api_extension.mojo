@@ -32,7 +32,7 @@ def get_error_message() -> String:
 @export("bad_api_init_c_api")
 def bad_api_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     """Entry point that deliberately requests an unsupported API version."""
     var ext = Extension(info, access)

@@ -1,6 +1,6 @@
-[package] 
+[package]
 name = "duckdb-from-source"
-version = "1.5.3"
+version = "1.5.4"
 
 [package.build]
 backend = { name = "pixi-build-rattler-build", version = "0.3.*" }

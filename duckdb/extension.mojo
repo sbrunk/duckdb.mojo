@@ -94,10 +94,10 @@ struct duckdb_extension_access(ImplicitlyCopyable, Movable):
     ) thin abi("C") -> NoneType
     var get_database: def(
         duckdb_extension_info,
-    ) thin abi("C") -> UnsafePointer[duckdb_database, MutExternalOrigin]
+    ) thin abi("C") -> UnsafePointer[duckdb_database, MutUntrackedOrigin]
     var get_api: def(
         duckdb_extension_info, UnsafePointer[c_char, ImmutAnyOrigin]
-    ) thin abi("C") -> UnsafePointer[NoneType, ImmutExternalOrigin]
+    ) thin abi("C") -> UnsafePointer[NoneType, ImmutUntrackedOrigin]
 
 
 # ===--------------------------------------------------------------------===#
@@ -129,12 +129,12 @@ struct Extension(Movable):
     """
 
     var _info: duckdb_extension_info
-    var _access: UnsafePointer[duckdb_extension_access, MutExternalOrigin]
+    var _access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin]
 
     def __init__(
         out self,
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
     ):
         """Create an Extension from the DuckDB-provided info and access.
 
@@ -169,7 +169,7 @@ struct Extension(Movable):
 
     def get_api(
         self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[UnsafePointer[NoneType, ImmutExternalOrigin]]:
+    ) -> Optional[UnsafePointer[NoneType, ImmutUntrackedOrigin]]:
         """Request the DuckDB C API function pointer struct (untyped).
 
         Returns an opaque pointer that can be bitcast to the appropriate
@@ -191,7 +191,7 @@ struct Extension(Movable):
         ApiStruct: AnyType = ExtApi
     ](
         self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[UnsafePointer[ApiStruct, ImmutExternalOrigin]]:
+    ) -> Optional[UnsafePointer[ApiStruct, ImmutUntrackedOrigin]]:
         """Request the DuckDB C API as a typed struct pointer.
 
         Returns a pointer to the API struct with the expected struct layout.
@@ -227,7 +227,7 @@ struct Extension(Movable):
         init_fn: def(conn: Connection[ApiLevel.EXT_STABLE]) raises thin -> None,
     ](
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
     ) -> Bool:
         """Run an extension init function (stable API) with automatic error handling.
 
@@ -289,7 +289,7 @@ struct Extension(Movable):
         init_fn: def(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises thin -> None,
     ](
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
     ) -> Bool:
         """Run an extension init function (unstable API) with automatic error handling.
 
