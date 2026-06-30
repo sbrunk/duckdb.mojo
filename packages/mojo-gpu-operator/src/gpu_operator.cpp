@@ -484,6 +484,7 @@ void ShadowValidateAggregate(LogicalAggregate &agg);
 // descriptor kind is buildable. GPU_OP_GENERIC=off disables all GPU aggregate
 // offload -> the node is left untouched and runs on stock DuckDB CPU.
 bool TryRouteGeneric(unique_ptr<LogicalOperator> &node);
+static bool BelowGpuCrossover(const LogicalOperator &node);  // item 5 crossover
 
 void OptimizeNode(unique_ptr<LogicalOperator> &node) {
   if (!node) { return; }
@@ -516,7 +517,8 @@ void OptimizeNode(unique_ptr<LogicalOperator> &node) {
 
   if (node->type == LogicalOperatorType::LOGICAL_PROJECTION) {
     auto &proj = node->Cast<LogicalProjection>();
-    if (MatchCosineProjection(proj)) {
+    // item 5: small-N cosine loses to the CPU array_cosine_distance override -> decline.
+    if (MatchCosineProjection(proj) && !BelowGpuCrossover(proj)) {
       auto cosine_expr = std::move(proj.expressions[0]);
       auto repl = make_uniq<LogicalGpuCosine>(proj.table_index, std::move(cosine_expr));
       repl->children.push_back(std::move(proj.children[0]));
@@ -1914,6 +1916,30 @@ static bool GpuOpNullableGroupedOn() {
 // GPU_OP_OVERRIDES=1 to enable. Flip default-on only after the both-platform
 // composition gate (accepted=GPU, declined=override-kernel, all == stock).
 static bool GpuOpOverridesOn() { return std::getenv("GPU_OP_OVERRIDES") != nullptr; }
+
+// item 5 (GPU<->CPU crossover): below GPU_OP_MIN_ROWS input rows, the GPU
+// pin/transfer overhead loses to the co-installed CPU SIMD kernels
+// (GPU_OP_OVERRIDES) -- so DECLINE the offload and let the CPU tier (or stock)
+// run it. Default 50000 input rows; GPU_OP_MIN_ROWS=0 disables the crossover
+// (GPU takes every matched shape, the prior behavior).
+static int64_t GpuOpMinRows() {
+  const char *s = std::getenv("GPU_OP_MIN_ROWS");
+  if (!s || !*s) { return 50000; }
+  char *end = nullptr;
+  long long v = std::strtoll(s, &end, 10);
+  if (end == s || v < 0) { return 50000; }
+  return (int64_t)v;
+}
+// Estimated rows feeding `node` (max child cardinality == fact-scan estimate for
+// an aggregate/projection over a scan). The node's own estimated_cardinality is
+// the OUTPUT (e.g. 1 for an ungrouped aggregate), so we look at the input.
+static bool BelowGpuCrossover(const LogicalOperator &node) {
+  int64_t min_rows = GpuOpMinRows();
+  if (min_rows <= 0) { return false; }
+  int64_t rows = 0;
+  for (auto &c : node.children) { rows = MaxValue<int64_t>(rows, (int64_t)c->estimated_cardinality); }
+  return rows < min_rows;
+}
 
 // Best-effort: add a const for a DuckDB Value, emitting raw integer + scale for
 // decimals, days for dates, str_id for varchar. Stage-1 only checks structure,
@@ -3467,6 +3493,10 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
   }
 
   if (!enabled) { mojo_gpu_desc_free(h); return false; }
+
+  // item 5: below the crossover, the co-installed CPU SIMD kernels (or stock) win
+  // -- decline so the descriptor isn't routed to the GPU.
+  if (BelowGpuCrossover(*node)) { mojo_gpu_desc_free(h); return false; }
 
   // LogicalGpuAgg takes ownership of the handle (NOT freed on the success path).
   auto repl = make_uniq<LogicalGpuAgg>(h);
