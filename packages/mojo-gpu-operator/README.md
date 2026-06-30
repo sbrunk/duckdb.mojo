@@ -1,26 +1,26 @@
 # mojo-gpu-operator
 
-A DuckDB extension that **transparently offloads supported SQL to the GPU**, with
-the compute kernels written in **Mojo**. An `OptimizerExtension` recognizes a class
+A DuckDB extension that transparently offloads supported SQL to the GPU, with
+the compute kernels written in Mojo. An `OptimizerExtension` recognizes a class
 of plan subtrees (aggregate over filter / FK-join / scan) and rewrites them to a
-single generic GPU operator; anything it can't translate, or any runtime GPU
-error, runs on stock DuckDB CPU. Results are **decimal-exact** vs stock.
+single generic GPU operator. Anything it can't translate, or any runtime GPU
+error, runs on stock DuckDB CPU. Results are decimal-exact vs stock.
 
 A query flows: DuckDB plans it as usual → we recognize a matching subtree → a flat
 `RawPlan` is handed to a Mojo planner that makes the GPU-specific decisions →
 a generic source operator runs Mojo kernels on resident GPU buffers. C++ is just
 DuckDB-ABI glue; the planner and execution logic live in Mojo.
 
-📖 **[DESIGN.md](DESIGN.md)** — how it works, why GPU planning differs from
+📖 **[DESIGN.md](DESIGN.md)**: How it works, why GPU planning differs from
 DuckDB's, the warm/cold pin model, and performance.
-🔌 **[src/RAW_PLAN_CONTRACT.md](src/RAW_PLAN_CONTRACT.md)** — the C++↔Mojo wire format.
+🔌 **[src/RAW_PLAN_CONTRACT.md](src/RAW_PLAN_CONTRACT.md)**: the C++↔Mojo wire format.
 
 > **Scope / caveats.** CPP-ABI extension linking DuckDB's internal C++ headers —
 > **locked to the exact DuckDB build** it was compiled against (currently
 > `v1.5.4`); not part of the conda package. **Validated on Apple (Metal) and
 > NVIDIA (RTX 4090, Linux)** — see [DESIGN.md](DESIGN.md#hardware-portability) for
-> the Linux/NixOS build notes. Unsigned — load with `-unsigned` /
-> `allow_unsigned_extensions`.
+> the Linux/NixOS build notes.
+You need to load the exstion with `-unsigned` / `allow_unsigned_extensions`.
 
 ## Build
 
@@ -31,12 +31,12 @@ pixi run gpu-op-clean      # remove build artifacts
 
 The Mojo kernels are built as a shared library (`mojo build --emit shared-lib`) so
 the Mojo GPU/AsyncRT runtime is linked in, and the C++ extension links that
-companion dylib with rpaths — so unlike the SIMD-only `mojo-kernel-overrides`, GPU
+companion dylib with rpaths, meaning unlike the SIMD-only `mojo-kernel-overrides`, GPU
 support isn't a single self-contained `.so`.
 
 ## Use
 
-Load the extension and run **ordinary SQL** — matching queries are auto-routed to
+Load the extension and run ordinary SQL. Matching queries are auto-routed to
 the GPU with no syntax change. `EXPLAIN` shows `GPU_AGG` (or `GPU_COSINE`)
 replacing the matched subtree; non-matching queries run on CPU unchanged.
 
@@ -57,6 +57,14 @@ SELECT sum(l_extendedprice * l_discount) FROM lineitem            -- TPC-H Q6
 - `GPU_OP_GENERIC="q3 q5"` — restrict offload to the named query kinds.
 - `GPU_OP_SHADOW=1` — log the descriptor classification per aggregate without
   changing execution.
+
+**Tiering (GPU → CPU SIMD → stock).** `GPU_OP_OVERRIDES=1` co-installs the
+dependency-free `mojo-kernel-overrides` CPU SIMD kernels (array distance, nullable
+sum/avg/min/max, fused `sum/avg(transcendental)`, `mojo_knn`) so a *declined* shape
+beats stock. `GPU_OP_MIN_ROWS=N` (default 50000; `0` disables) is the GPU↔CPU
+crossover: matched shapes with fewer than `N` input rows decline to the CPU tier,
+where GPU pin/transfer overhead would otherwise lose. Pair the two flags for the
+full three-tier dispatch.
 
 ### What's accelerated
 
@@ -104,26 +112,22 @@ on the GPU once (cached process-wide, fp16 by default) and reused across queries
 | TPC-H Q6 (filter + scalar aggregate) | `GPU_AGG` |
 | TPC-H Q14 (FK join + aggregate, promo CASE) | `GPU_AGG` |
 
-Acceptance is **strict**: any plan outside the supported class falls back to CPU,
+Acceptance is strict: any plan outside the supported class falls back to CPU,
 so a mismatch can never produce a wrong result. The supported queries are validated
 to match stock DuckDB exactly, including under repeated (warm) execution.
 
 ## Layout
 
-- `src/gpu_operator.cpp` — the `OptimizerExtension`, the plan serializer
+- `src/gpu_operator.cpp`: the `OptimizerExtension`, the plan serializer
   (`SerializeMatchedPlan`), the generic `LogicalGpuAgg`/`PhysicalGpuAgg` source
   operator + execution shuttle, the cosine operator/table-function, and the
   extension entry points (DuckDB-ABI glue only).
-- `src/descriptor.mojo` — the Mojo planner (`build_descriptor`): fact/dim, strategy,
+- `src/descriptor.mojo`: the Mojo planner (`build_descriptor`): fact/dim, strategy,
   expression-program lowering.
-- `src/expr_vm.mojo` / `src/segreduce.mojo` — the generic GPU kernels (postfix
+- `src/expr_vm.mojo` / `src/segreduce.mojo`: the generic GPU kernels (postfix
   integer VM + segmented N-metric reduction with FK-gather), int128 host reduction.
 - `src/gpu_platform.mojo`, `src/raw_plan.h`, `src/raw_plan_tags.mojo` — portability
   constants + the RawPlan tag constants (C++/Mojo in lockstep).
-- `build.sh` — `mojo --emit shared-lib` + `clang++` link with rpaths (`.dylib`/macOS,
-  `.so`/Linux).
-- `bench/` — standalone correctness/de-risk tests and micro-probes, run directly
-  with `mojo run` (see Tasks below).
 
 ## Tasks
 
@@ -149,12 +153,15 @@ pixi run mojo run -I packages/mojo-gpu-operator/src \
   packages/mojo-gpu-operator/bench/q6_shuttle_test.mojo
 ```
 
-TPC-H stock-vs-GPU benchmarking reuses the `mojo-kernel-overrides` runner — point
-it at this extension:
+TPC-H stock-vs-GPU benchmarking uses the consolidated harness
+([`benchmark/README.md`](../../benchmark/README.md)) — the `gpu` engine loads this
+extension:
 
 ```bash
-DUCKDB_BENCH_EXTENSION=$PWD/packages/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension \
-  pixi run overrides-bench-runner 'benchmark/tpch/sf1/q(01|03|05|06|14)\.benchmark'
+pixi run bench-build                                       # once
+pixi run bench-sql tpch/sf1/q0[13456] --engines=stock,cpu,gpu
+pixi run bench-sql gpu_knn --by-suffix                     # vector-search top-k
+pixi run bench-knn                                         # Mojo latency+recall harness
 ```
 
 ## Status

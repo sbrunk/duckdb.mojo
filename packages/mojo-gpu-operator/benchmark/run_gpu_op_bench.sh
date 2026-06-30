@@ -3,12 +3,13 @@
 # that DuckDB does NOT accelerate: f64 transcendental aggregates (sum/avg of
 # sqrt/exp/ln/log10/log2/power/...), statistical aggregates (stddev/var/covar/corr/regr_*),
 # both ungrouped and dense-grouped. The INT128 TPC-H classes (Q1/Q5/Q6/Q14) are covered by
-# DuckDB's own benchmark/tpch/sf1/* — run those with `overrides-bench-runner 'benchmark/tpch/sf1/.*'`
-# and DUCKDB_BENCH_EXTENSION pointed here.
+# DuckDB's own benchmark/tpch/sf1/* — run those with
+# `pixi run bench-sql tpch/sf1/q0[13456] --engines=stock,gpu`.
 #
-# Mirrors mojo-kernel-overrides/benchmark: reuses the SAME stock benchmark_runner (built by
-# `pixi run overrides-bench-runner-build`, which applies the load-extension hook) and the SAME
-# DUCKDB_BENCH_EXTENSION toggle — only the extension path + the GPU_OP_* flags differ.
+# Reuses the consolidated harness (benchmark/README.md): the SAME stock benchmark_runner
+# (built by `pixi run bench-build`) and the unified driver. This wrapper just stages its
+# own self-generating `gpuop/` benchmark group + exports the GPU_OP_* flags, then delegates
+# the stock-vs-gpu compare to benchmark/drivers/bench_runner.sh.
 #
 # The benchmark files self-generate a DECIMAL dataset via a `cache` directive (no tpch / external
 # db dependency) — DECIMAL because the f64 aggregate paths decline on raw DOUBLE columns.
@@ -41,4 +42,7 @@ export GPU_OP_TRANSCENDENTAL="${GPU_OP_TRANSCENDENTAL:-1}"
 export GPU_OP_STATS="${GPU_OP_STATS:-1}"
 export GPU_OP_COLPOOL="${GPU_OP_COLPOOL:-2}"
 
-exec bash "$ROOT/packages/mojo-kernel-overrides/benchmark/run_runner_compare.sh" "benchmark/$SUB"
+# Delegate to the unified driver (toggle mode, stock vs gpu). SUB carries a '/', so
+# bench_runner treats it as a runner-tree path (benchmark/$SUB.*); the exported GPU_OP_*
+# flags are inherited by the runner subprocess.
+exec bash "$ROOT/benchmark/drivers/bench_runner.sh" "$SUB" --engines=stock,gpu

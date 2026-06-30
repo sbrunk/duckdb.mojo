@@ -120,23 +120,22 @@ with `DUCKDB_INCLUDE` / `DUCKDB_LIB` / `DUCKDB_VERSION` to target another DuckDB
 ## Run DuckDB's own benchmark suite
 
 You can run the extension through [DuckDB's benchmark suite](https://duckdb.org/docs/current/dev/benchmark)
-(`benchmark_runner`) — TPC-H plus a committed `mojo_simd` micro group in
-[`benchmark/micro/mojo_simd/`](benchmark/micro/mojo_simd/) that targets the exact overridden ops.
+(`benchmark_runner`) via the consolidated harness in [`benchmark/`](../../benchmark/) —
+the committed `mojo_simd` micro group in
+[`benchmark/sql/mojo_simd/`](../../benchmark/sql/mojo_simd/) targets the exact overridden ops.
 
 ```bash
-pixi run overrides-bench-runner-build                           # build ext + benchmark_runner (once)
-pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*'  --threads=1   # mojo micro group
-pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'         # official TPC-H queries Q1-Q22
+pixi run bench-build                            # build benchmark_runner (once)
+pixi run bench-sql mojo_simd --engines=stock,cpu --threads=1   # the mojo micro group
+pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu          # official TPC-H
 ```
 
-`overrides-bench-runner` runs the runner twice (stock vs. with the extension loaded) and prints
-a `stock / mojo / speedup` table.
-
-Because the override is a DuckDB extension, `overrides-bench-runner-build` currently needs to
-apply a small patch to add a hook
-[`benchmark/runner_load_extension.patch`](benchmark/runner_load_extension.patch),
+The unified driver runs the runner once per engine (stock = no extension, `cpu` =
+this extension via `DUCKDB_BENCH_EXTENSION`) and prints a per-benchmark comparison.
+The runner build applies a small hook
+([`benchmark/drivers/runner_load_extension.patch`](../../benchmark/drivers/runner_load_extension.patch))
 to `interpreted_benchmark.cpp` that allows unsigned extensions and `LOAD`s
-`$DUCKDB_BENCH_EXTENSION` at init.
+`$DUCKDB_BENCH_EXTENSION` at init. See [`benchmark/README.md`](../../benchmark/README.md).
 
 ## Use from the DuckDB CLI / any libduckdb
 

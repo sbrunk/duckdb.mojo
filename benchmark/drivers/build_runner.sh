@@ -7,7 +7,10 @@
 #   2. copy our committed micro/mojo_simd/*.benchmark files into the source tree,
 #   3. (re)configure + build the benchmark_runner target (tpch extension included, for TPC-H).
 #
-# Run via `pixi run overrides-bench-runner-build` (so cmake + the conda toolchain are on PATH).
+# Run via `pixi run bench-build` (so cmake + the conda toolchain are on PATH). On
+# NixOS (no cmake on the env PATH), run the cmake step under
+# `nix-shell -p cmake ninja gcc gnumake` (add -DCMAKE_EXE_LINKER_FLAGS=-rdynamic so
+# the runner re-exports DuckDB RTTI for the dlopen'd CPP-ABI extensions).
 #
 # Overridable env:
 #   DUCKDB_SRC   DuckDB source checkout         (default: <repo>/third_party/duckdb)
@@ -16,7 +19,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../../.." && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
 DUCKDB_SRC="${DUCKDB_SRC:-$ROOT/third_party/duckdb}"
 BUILD_DIR="${BUILD_DIR:-$DUCKDB_SRC/build/release}"
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )}"
@@ -31,13 +34,14 @@ else
 	git -C "$DUCKDB_SRC" apply "$HERE/runner_load_extension.patch"
 fi
 
-echo "==> copying micro/mojo_simd benchmarks into the source tree"
-mkdir -p "$DUCKDB_SRC/benchmark/micro/mojo_simd"
-cp "$HERE/micro/mojo_simd/"*.benchmark "$DUCKDB_SRC/benchmark/micro/mojo_simd/"
+echo "==> staging benchmark/sql/* groups into the source tree"
+for g in "$ROOT"/benchmark/sql/*/; do
+	n="$(basename "$g")"; mkdir -p "$DUCKDB_SRC/benchmark/micro/$n"; cp "$g"*.benchmark "$DUCKDB_SRC/benchmark/micro/$n/"
+done
 
 echo "==> configuring + building benchmark_runner ($JOBS jobs)"
 cmake -S "$DUCKDB_SRC" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
-	-DBUILD_BENCHMARKS=1 -DBUILD_EXTENSIONS=tpch >/dev/null
+	-DBUILD_BENCHMARKS=1 -DBUILD_EXTENSIONS=tpch -DCMAKE_EXE_LINKER_FLAGS=-rdynamic >/dev/null
 cmake --build "$BUILD_DIR" --target benchmark_runner -j "$JOBS"
 
 echo "==> done: $BUILD_DIR/benchmark/benchmark_runner"

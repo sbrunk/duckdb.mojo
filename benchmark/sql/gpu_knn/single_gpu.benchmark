@@ -1,0 +1,14 @@
+# name: benchmark/micro/gpu_knn/single_gpu.benchmark
+# group: [gpu_knn]
+
+name single_gpu
+group micro
+subgroup gpu_knn
+
+load
+SET lambda_syntax='ENABLE_SINGLE_ARROW';
+CREATE TABLE emb AS SELECT i id, apply(range(0,128),x->random()::FLOAT)::FLOAT[128] v FROM range(200000) u(i);
+CREATE TABLE queries AS SELECT i qid, apply(range(0,128),x->random()::FLOAT)::FLOAT[128] qv FROM range(1) u(i);
+
+run
+SELECT count(*) FROM gpu_cosine_topk('emb','v',[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]::FLOAT[128],10);

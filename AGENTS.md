@@ -44,8 +44,10 @@ pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with Duck
 pixi build                    # Build conda package
 pixi run overrides-build      # Build the mojo-kernel-overrides extension
 pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
-pixi run overrides-bench-runner-build     # Build ext + DuckDB benchmark_runner (w/ load-ext hook)
-pixi run overrides-bench-runner '<regex>' # Run DuckDB's benchmark suite stock-vs-overrides
+# Consolidated benchmarks (see benchmark/README.md):
+pixi run bench-build          # Build DuckDB's benchmark_runner (w/ load-ext hook), once
+pixi run bench-sql <group> --engines=stock,cpu,gpu   # warm compare (mojo_simd|gpu_xover|gpu_knn|tpch/...)
+pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-HNSW/GPU, latency+recall
 ```
 
 ## Testing
@@ -80,11 +82,12 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
   `pixi run overrides-build`; activate via `LOAD` (it is unsigned, so allow unsigned extensions)
   or the exported `register_mojo_overrides(duckdb_connection)`. It is **not** part of the conda
   package and is **version-locked** to the exact DuckDB it was built against (CPP ABI + internal
-  headers). It can be driven through DuckDB's own benchmark suite
-  (`pixi run overrides-bench-runner-build` then `overrides-bench-runner '<regex>'`): a stock
-  `benchmark_runner` built from the `third_party/duckdb` submodule with a ~13-line `interpreted_benchmark.cpp` hook
-  (`packages/mojo-kernel-overrides/benchmark/runner_load_extension.patch`) that `LOAD`s the
-  extension via the `DUCKDB_BENCH_EXTENSION` env-var toggle — no libduckdb fork.
+  headers). It can be driven through DuckDB's own benchmark suite via the consolidated
+  harness (`pixi run bench-build` then `pixi run bench-sql mojo_simd --engines=stock,cpu`;
+  see `benchmark/README.md`): a stock `benchmark_runner` built from the `third_party/duckdb`
+  submodule with a ~13-line `interpreted_benchmark.cpp` hook
+  (`benchmark/drivers/runner_load_extension.patch`) that `LOAD`s the extension via the
+  `DUCKDB_BENCH_EXTENSION` env-var toggle — no libduckdb fork.
 
 ## FFI Struct ABI Workaround
 

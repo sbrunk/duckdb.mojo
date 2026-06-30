@@ -61,19 +61,26 @@ overrides-test = { cmd = "bash packages/mojo-kernel-overrides/test/correctness.s
 # Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
 overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
 overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
-# Run the overrides through DuckDB's own benchmark suite (https://duckdb.org/docs/current/dev/benchmark).
-# `overrides-bench-runner-build` builds the extension + a stock benchmark_runner with a one-line
-# "LOAD an extension at init" hook (reuses third_party/duckdb); `overrides-bench-runner` runs the suite
-# stock-vs-overrides and prints a speedup table. Pass a benchmark regex + runner args, e.g.:
-#   pixi run overrides-bench-runner 'benchmark/micro/mojo_simd/.*' --threads=1
-#   pixi run overrides-bench-runner 'benchmark/tpch/sf1/.*'   # TPC-H Q1-Q22
-overrides-bench-runner-build = { cmd = "bash packages/mojo-kernel-overrides/benchmark/build_runner.sh", depends-on = ["overrides-build", "clone-duckdb"] }
-overrides-bench-runner = "bash packages/mojo-kernel-overrides/benchmark/run_runner_compare.sh"
 
 # mojo-gpu-operator: transparent GPU offload (array_cosine_distance + TPC-H Q1/Q3/Q5/Q6/Q14)
 # via an optimizer extension, with Mojo GPU kernels. See packages/mojo-gpu-operator/README.md.
 gpu-op-build = "bash packages/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf packages/mojo-gpu-operator/build"
+
+# ── Benchmarks (consolidated) ── see benchmark/README.md for the full map.
+# One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).
+bench-build = { cmd = "bash benchmark/drivers/build_runner.sh", depends-on = ["clone-duckdb"] }
+# Unified warm compare via benchmark_runner. <group> = a benchmark/sql/ dir or a
+# built-in path; engines toggle which extension loads. Examples:
+#   pixi run bench-sql mojo_simd --engines=stock,cpu --threads=1
+#   pixi run bench-sql gpu_xover --engines=stock,cpu,gpu
+#   pixi run bench-sql gpu_knn   --by-suffix
+#   pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu,gpu
+bench-sql = "bash benchmark/drivers/bench_runner.sh"
+# Mojo vector-search harness (via the duckdb.mojo client): single + batch cosine
+# top-k across stock / cpu-simd / vss-HNSW / GPU, with latency + recall. Build the
+# extensions first (overrides-build / gpu-op-build); GPU/vss rows self-skip if absent.
+bench-knn = "mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo"
 
 # Compile-check (no run) the benchmarks so they can't silently rot when the
 # stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
