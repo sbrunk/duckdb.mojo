@@ -26,6 +26,11 @@ TESTS=(
     test/test_table_function.mojo
     test/test_appender.mojo
     test/test_module_api.mojo
+    test/test_relation.mojo
+    test/test_lifecycle.mojo
+    test/test_readers.mojo
+    test/test_typed_access.mojo
+    test/test_errors.mojo
 )
 
 # Generic tests require expensive monomorphization. The lightest ones

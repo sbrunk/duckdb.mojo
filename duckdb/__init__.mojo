@@ -5,6 +5,7 @@ from duckdb.config import Config
 from duckdb.duckdb_type import *
 from duckdb.typed_api import mojo_type_to_duckdb_type, mojo_logical_type, deserialize_from_vector, deserialize_list_column, MojoType
 from duckdb.connection import Connection
+from duckdb.relation import Relation
 from duckdb.prepared_statement import PreparedStatement, Bindable
 from duckdb.chunk import Chunk, Row
 from duckdb.result import Column, Result, MaterializedResult, ResultType, ErrorType, StatementType, ResultError, ChunkIter, RowIter
@@ -15,7 +16,15 @@ from duckdb.value import DuckDBValue
 from duckdb.extension import Extension, duckdb_extension_access, EXTENSION_API_VERSION, ExtApi, ExtApiUnstable
 from duckdb.database import Database
 
-from duckdb.logical_type import LogicalType, decimal_type, enum_type, struct_type
+from duckdb.logical_type import (
+    LogicalType,
+    decimal_type,
+    enum_type,
+    struct_type,
+    list_type,
+    map_type,
+    array_type,
+)
 from duckdb.functions import (
     connect,
     sql,
@@ -24,3 +33,4 @@ from duckdb.functions import (
     read_parquet,
     read_json,
 )
+from duckdb.expr import col, lit, fn_, star, sql_null

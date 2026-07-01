@@ -41,4 +41,3 @@ Mojo `perf_counter_ns` microbenches that drive kernels directly:
 - top-level `benchmark/*.mojo` — SIMD/GPU math + reduction POCs.
 - `packages/mojo-kernel-overrides/bench/benchmark.cpp` — standalone stock-vs-Mojo C++ timer
   (`pixi run overrides-bench`).
-</content>

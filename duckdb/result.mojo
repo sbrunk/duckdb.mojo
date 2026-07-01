@@ -1,7 +1,32 @@
 from duckdb._libduckdb import *
 from duckdb.chunk import Chunk, Row
-from duckdb.duckdb_type import DuckDBType
-from duckdb.typed_api import mojo_type_to_duckdb_type, deserialize_from_vector
+from duckdb.duckdb_type import (
+    DuckDBType,
+    Decimal,
+    Date,
+    Time,
+    TimeNS,
+    TimeTZ,
+    Timestamp,
+    TimestampS,
+    TimestampMS,
+    TimestampNS,
+    TimestampTZ,
+    UUID,
+    Interval,
+    Bit,
+    _zpad,
+    _frac_str,
+)
+from duckdb.vector import Vector
+from duckdb.typed_api import (
+    mojo_type_to_duckdb_type,
+    deserialize_from_vector,
+    _deserialize_scalar,
+    _deserialize_blob,
+    _deserialize_bit,
+    _deserialize_enum_value,
+)
 from std.collections import Optional
 from std.builtin.error import StackTrace
 from std.iter import Iterator, Iterable, StopIteration
@@ -238,6 +263,70 @@ struct ErrorType(
     
     comptime INVALID_CONFIGURATION = Self(DUCKDB_INVALID_CONFIGURATION)
     """Invalid configuration error."""
+
+    # ── Coarse error classification ───────────────────────────────
+    # Group the fine-grained DuckDB error ids into a few broad categories so
+    # callers can branch on the kind of failure (e.g. retry on an operational
+    # error, surface a programming error) without matching every id.
+
+    def is_programming_error(self) -> Bool:
+        """Bad SQL: catalog/parser/binder/syntax/planner/invalid-input errors."""
+        return (
+            self == Self.CATALOG
+            or self == Self.PARSER
+            or self == Self.PLANNER
+            or self == Self.BINDER
+            or self == Self.SYNTAX
+            or self == Self.OPTIMIZER
+            or self == Self.EXPRESSION
+            or self == Self.INVALID_INPUT
+            or self == Self.INVALID_TYPE
+            or self == Self.UNKNOWN_TYPE
+            or self == Self.NOT_IMPLEMENTED
+            or self == Self.SETTINGS
+            or self == Self.INVALID_CONFIGURATION
+            or self == Self.DEPENDENCY
+            or self == Self.PARAMETER_NOT_RESOLVED
+            or self == Self.PARAMETER_NOT_ALLOWED
+            or self == Self.SEQUENCE
+        )
+
+    def is_data_error(self) -> Bool:
+        """Bad values: conversion/range/decimal/type-mismatch/divide-by-zero."""
+        return (
+            self == Self.CONVERSION
+            or self == Self.OUT_OF_RANGE
+            or self == Self.DECIMAL
+            or self == Self.MISMATCH_TYPE
+            or self == Self.DIVIDE_BY_ZERO
+            or self == Self.OBJECT_SIZE
+        )
+
+    def is_integrity_error(self) -> Bool:
+        """Constraint/index violations."""
+        return self == Self.CONSTRAINT or self == Self.INDEX
+
+    def is_operational_error(self) -> Bool:
+        """Environmental/runtime failures: IO/OOM/connection/transaction/...."""
+        return (
+            self == Self.IO
+            or self == Self.OUT_OF_MEMORY
+            or self == Self.CONNECTION
+            or self == Self.TRANSACTION
+            or self == Self.INTERRUPT
+            or self == Self.FATAL
+            or self == Self.INTERNAL
+            or self == Self.NETWORK
+            or self == Self.HTTP
+            or self == Self.PERMISSION
+            or self == Self.SERIALIZATION
+            or self == Self.MISSING_EXTENSION
+            or self == Self.AUTOLOAD
+            or self == Self.EXECUTOR
+            or self == Self.SCHEDULER
+            or self == Self.STAT
+            or self == Self.NULL_POINTER
+        )
 
     @always_inline
     def __eq__(self, other: Self) -> Bool:
@@ -584,7 +673,7 @@ struct Result(Writable, Iterable, Movable):
 
     var _result: duckdb_result
     var _columns: List[Column]
-    # Streaming cursor for fetchone/fetchmany (shared, DBAPI-style).
+    # Streaming cursor shared by fetchone/fetchmany.
     var _cur_chunk: Optional[Chunk[is_owned=True]]
     var _cur_row: Int
 
@@ -647,6 +736,14 @@ struct Result(Writable, Iterable, Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         return Int(libduckdb.duckdb_rows_changed(UnsafePointer(to=self._result)))
+
+    def rowcount(self) -> Int:
+        """Rows affected by the last DML statement.
+
+        Alias for `rows_changed`; ``0`` for ``SELECT`` (use `fetchall` then
+        ``len`` for a SELECT's row count).
+        """
+        return self.rows_changed()
 
     def write_to[W: Writer](self, mut writer: W):
         for col in self._columns:
@@ -997,6 +1094,10 @@ struct MaterializedResult(Sized, Movable):
     def __len__(self) -> Int:
         return self.size
 
+    def shape(self) -> Tuple[Int, Int]:
+        """``(row_count, column_count)`` (Python ``rel.shape``)."""
+        return (self.size, self.column_count())
+
     def get[
         T: Copyable & Movable & ImplicitlyDestructible
     ](self, *, col: Int) raises -> List[T]:
@@ -1028,6 +1129,34 @@ struct MaterializedResult(Sized, Movable):
         for chunk_ptr in self.chunks:
             result.extend(chunk_ptr[].get[T](col=col))
         return result^
+
+    def column_index(self, name: String) raises -> Int:
+        """Resolve a column name to its index, raising if there is no match.
+
+        Matching is case-insensitive (like DuckDB's identifier resolution and
+        the Python client). When several columns share a name, the first is
+        returned; use the ``col=`` overloads to reach the others by index.
+        """
+        var target = name.lower()
+        for i in range(self.column_count()):
+            if self.column_name(i).lower() == target:
+                return i
+        raise Error(String("No column named '", name, "'"))
+
+    def get[
+        T: Copyable & Movable & ImplicitlyDestructible
+    ](self, name: String) raises -> List[T]:
+        """Get all typed values from the named column.
+
+        ```mojo
+        var prices = result.get[Float64]("price")
+        ```
+        """
+        return self.get[T](col=self.column_index(name))
+
+    def get[T: Copyable & Movable](self, name: String, *, row: Int) raises -> T:
+        """Get a single typed value from the named column and ``row``."""
+        return self.get[T](col=self.column_index(name), row=row)
 
     def _locate(self, row: Int) raises -> Tuple[Int, Int]:
         """Map a global row index to a ``(chunk_index, offset_in_chunk)`` pair.
@@ -1123,60 +1252,16 @@ struct MaterializedResult(Sized, Movable):
     # ── Pretty printing ───────────────────────────────────────────
 
     def _cell_str(self, col: Int, row: Int) raises -> String:
-        """Stringify a single cell, dispatching on the column's runtime type.
+        """Stringify a single cell for display.
 
-        Best-effort: common scalar types are rendered exactly, NULL as the
-        literal ``NULL``, and unsupported/nested types as a ``<type>``
-        placeholder (Mojo's typed ``get`` can't render arbitrary runtime types
-        generically).
+        Delegates to the recursive `_render_value` formatter, which renders
+        every DuckDB type: Scalars, temporal, decimal, uuid, interval, bit,
+        blob, enum, and nested list/array/struct/map/union as well as ``NULL`` for
+        null cells.
         """
-        var tid = self.result._columns[col].type.get_type_id()
-        if tid == DuckDBType.boolean:
-            var v = self.get[Optional[Bool]](col=col, row=row)
-            if not v:
-                return String("NULL")
-            return String("true") if v.value() else String("false")
-        elif tid == DuckDBType.tinyint:
-            var v = self.get[Optional[Int8]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.smallint:
-            var v = self.get[Optional[Int16]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.integer:
-            var v = self.get[Optional[Int32]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.bigint:
-            var v = self.get[Optional[Int64]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.utinyint:
-            var v = self.get[Optional[UInt8]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.usmallint:
-            var v = self.get[Optional[UInt16]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.uinteger:
-            var v = self.get[Optional[UInt32]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.ubigint:
-            var v = self.get[Optional[UInt64]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.hugeint:
-            var v = self.get[Optional[Int128]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.uhugeint:
-            var v = self.get[Optional[UInt128]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.float:
-            var v = self.get[Optional[Float32]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.double:
-            var v = self.get[Optional[Float64]](col=col, row=row)
-            return String(v.value()) if v else String("NULL")
-        elif tid == DuckDBType.varchar:
-            var v = self.get[Optional[String]](col=col, row=row)
-            return v.value().copy() if v else String("NULL")
-        else:
-            return String("<", Self._type_name(tid), ">")
+        var loc = self._locate(row)
+        ref chunk = self.chunks[loc[0]][]
+        return _render_value(chunk.get_vector(col), loc[1])
 
     @staticmethod
     def _type_name(tid: DuckDBType) -> String:
@@ -1290,7 +1375,10 @@ struct MaterializedResult(Sized, Movable):
         var type_names = List[String](capacity=ncols)
         var right = List[Bool](capacity=ncols)
         for c in range(ncols):
-            var tid = self.result._columns[c].type.get_type_id()
+            # Read the type id from the live result's logical type — the stored
+            # `_columns[c].type` is rebuilt from a type id alone and reads back
+            # as `invalid` for parameterized/nested types (decimal/list/...).
+            var tid = self.result.column_type(c).get_type_id()
             type_names.append(Self._type_name(tid))
             right.append(Self._is_right_aligned(tid))
 
@@ -1515,3 +1603,247 @@ struct RowIter[
         )
         self._chunk_row += 1
         return row^
+
+
+# ===--------------------------------------------------------------------===#
+# Generic value rendering for show() / display
+#
+# Functions to stringify any cell of any DuckDB type by dispatching on
+# the vector's runtime type id and recursing through nested vectors. They are
+# display-oriented (best-effort, human-readable), distinct from the typed
+# `get[T]` decode path.
+# ===--------------------------------------------------------------------===#
+
+
+def _render_value(vector: Vector, row: Int) raises -> String:
+    """Render the value at ``row`` of ``vector`` as a display string.
+
+    Returns ``NULL`` for null cells; recurses for list/array/struct/map/union.
+    """
+    var validity = vector.get_validity()
+    if validity:
+        var entry_idx = row // 64
+        var idx_in_entry = row % 64
+        var valid = validity.value()[entry_idx] & UInt64(1 << idx_in_entry)
+        if not valid:
+            return String("NULL")
+
+    var tid = vector.get_column_type().get_type_id()
+    if tid == DuckDBType.boolean:
+        return (
+            String("true") if _deserialize_scalar[Bool](vector, row) else String(
+                "false"
+            )
+        )
+    elif tid == DuckDBType.tinyint:
+        return String(_deserialize_scalar[Int8](vector, row))
+    elif tid == DuckDBType.smallint:
+        return String(_deserialize_scalar[Int16](vector, row))
+    elif tid == DuckDBType.integer:
+        return String(_deserialize_scalar[Int32](vector, row))
+    elif tid == DuckDBType.bigint:
+        return String(_deserialize_scalar[Int64](vector, row))
+    elif tid == DuckDBType.utinyint:
+        return String(_deserialize_scalar[UInt8](vector, row))
+    elif tid == DuckDBType.usmallint:
+        return String(_deserialize_scalar[UInt16](vector, row))
+    elif tid == DuckDBType.uinteger:
+        return String(_deserialize_scalar[UInt32](vector, row))
+    elif tid == DuckDBType.ubigint:
+        return String(_deserialize_scalar[UInt64](vector, row))
+    elif tid == DuckDBType.hugeint:
+        return String(_deserialize_scalar[Int128](vector, row))
+    elif tid == DuckDBType.uhugeint:
+        return String(_deserialize_scalar[UInt128](vector, row))
+    elif tid == DuckDBType.float:
+        return String(_deserialize_scalar[Float32](vector, row))
+    elif tid == DuckDBType.double:
+        return String(_deserialize_scalar[Float64](vector, row))
+    elif tid == DuckDBType.varchar:
+        return _deserialize_scalar[String](vector, row)
+    elif tid == DuckDBType.enum:
+        return _deserialize_enum_value(vector, row)
+    elif tid == DuckDBType.decimal:
+        return _render_decimal(_deserialize_scalar[Decimal](vector, row))
+    elif tid == DuckDBType.date:
+        return String(_deserialize_scalar[Date](vector, row))
+    elif tid == DuckDBType.time:
+        return String(_deserialize_scalar[Time](vector, row))
+    elif tid == DuckDBType.time_ns:
+        return String(_deserialize_scalar[TimeNS](vector, row))
+    elif tid == DuckDBType.time_tz:
+        return String(_deserialize_scalar[TimeTZ](vector, row))
+    elif tid == DuckDBType.timestamp:
+        return String(_deserialize_scalar[Timestamp](vector, row))
+    elif tid == DuckDBType.timestamp_s:
+        return String(_deserialize_scalar[TimestampS](vector, row))
+    elif tid == DuckDBType.timestamp_ms:
+        return String(_deserialize_scalar[TimestampMS](vector, row))
+    elif tid == DuckDBType.timestamp_ns:
+        return String(_deserialize_scalar[TimestampNS](vector, row))
+    elif tid == DuckDBType.timestamp_tz:
+        return String(_deserialize_scalar[TimestampTZ](vector, row))
+    elif tid == DuckDBType.uuid:
+        return String(_deserialize_scalar[UUID](vector, row))
+    elif tid == DuckDBType.interval:
+        return _render_interval(_deserialize_scalar[Interval](vector, row))
+    elif tid == DuckDBType.bit:
+        return String(_deserialize_bit(vector, row))
+    elif tid == DuckDBType.blob:
+        return _render_blob(_deserialize_blob(vector, row))
+    elif tid == DuckDBType.list:
+        var entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entry = entries[row]
+        return _render_list(
+            vector.list_get_child(), Int(entry.offset), Int(entry.length)
+        )
+    elif tid == DuckDBType.array:
+        var size = Int(vector.get_column_type().array_type_array_size())
+        return _render_list(vector.array_get_child(), row * size, size)
+    elif tid == DuckDBType.map:
+        var entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entry = entries[row]
+        return _render_map(
+            vector.list_get_child(), Int(entry.offset), Int(entry.length)
+        )
+    elif tid == DuckDBType.struct_t:
+        return _render_struct(vector, row)
+    elif tid == DuckDBType.union:
+        return _render_union(vector, row)
+    else:
+        return String("<", String(tid), ">")
+
+
+def _render_list(child: Vector, offset: Int, length: Int) raises -> String:
+    """Render a list/array slice ``[v0, v1, ...]`` from a child vector."""
+    var out = String("[")
+    for i in range(length):
+        if i > 0:
+            out += ", "
+        out += _render_value(child, offset + i)
+    out += "]"
+    return out^
+
+
+def _render_struct(vector: Vector, row: Int) raises -> String:
+    """Render a struct value ``{'name': value, ...}``."""
+    var ty = vector.get_column_type()
+    var n = Int(ty.struct_type_child_count())
+    var out = String("{")
+    for i in range(n):
+        if i > 0:
+            out += ", "
+        out += String("'", ty.struct_type_child_name(idx_t(i)), "': ")
+        out += _render_value(vector.struct_get_child(idx_t(i)), row)
+    out += "}"
+    return out^
+
+
+def _render_map(child: Vector, offset: Int, length: Int) raises -> String:
+    """Render a map value ``{key=value, ...}``.
+
+    A MAP is stored as a LIST of STRUCT(key, value); ``child`` is that struct
+    vector.
+    """
+    var key_vec = child.struct_get_child(0)
+    var val_vec = child.struct_get_child(1)
+    var out = String("{")
+    for i in range(length):
+        if i > 0:
+            out += ", "
+        out += _render_value(key_vec, offset + i)
+        out += "="
+        out += _render_value(val_vec, offset + i)
+    out += "}"
+    return out^
+
+
+def _render_union(vector: Vector, row: Int) raises -> String:
+    """Render a union value as its active member.
+
+    A UNION is stored as a STRUCT whose child 0 is the tag (UTINYINT) and
+    children 1..n are the members; the tag selects the active member.
+    """
+    var tag = _deserialize_scalar[UInt8](vector.struct_get_child(0), row)
+    return _render_value(vector.struct_get_child(idx_t(Int(tag) + 1)), row)
+
+
+def _render_interval(iv: Interval) raises -> String:
+    """Render an Interval the DuckDB way (``1 year 2 months 3 days HH:MM:SS``)."""
+    var out = String("")
+    var months = Int(iv.months)
+    # DuckDB splits months into years/months with truncation toward zero;
+    # Mojo's // / % floor, so split on the magnitude and re-apply the sign.
+    var neg_m = months < 0
+    var mag_m = -months if neg_m else months
+    var years = mag_m // 12
+    var mon = mag_m % 12
+    if neg_m:
+        years = -years
+        mon = -mon
+    if years != 0:
+        out += String(years) + (
+            " year" if years == 1 or years == -1 else " years"
+        )
+    if mon != 0:
+        if out.byte_length() != 0:
+            out += " "
+        out += String(mon) + (" month" if mon == 1 or mon == -1 else " months")
+    if iv.days != 0:
+        if out.byte_length() != 0:
+            out += " "
+        var d = Int(iv.days)
+        out += String(d) + (" day" if d == 1 or d == -1 else " days")
+    var micros = Int64(iv.micros)
+    if micros != 0 or out.byte_length() == 0:
+        if out.byte_length() != 0:
+            out += " "
+        var neg = micros < 0
+        var m = -micros if neg else micros
+        var total_secs = m // 1_000_000
+        var frac = m % 1_000_000
+        var hours = total_secs // 3600
+        var mins = (total_secs % 3600) // 60
+        var secs = total_secs % 60
+        if neg:
+            out += "-"
+        out += _zpad(Int(hours), 2) + ":" + _zpad(Int(mins), 2) + ":" + _zpad(
+            Int(secs), 2
+        )
+        out += _frac_str(frac)
+    return out^
+
+
+def _render_decimal(dec: Decimal) raises -> String:
+    """Render a Decimal with its decimal point inserted per its scale."""
+    var v = dec.value()
+    var scale = Int(dec.scale)
+    var neg = v < 0
+    var mag = -v if neg else v
+    if scale == 0:
+        var s = String(mag)
+        return String("-", s) if neg else s
+    var divisor = Int128(1)
+    for _ in range(scale):
+        divisor *= 10
+    var int_part = mag // divisor
+    var frac_part = mag % divisor
+    var frac_str = String(frac_part)
+    var padded = String("")
+    for _ in range(scale - frac_str.byte_length()):
+        padded += "0"
+    padded += frac_str
+    var sign = String("-") if neg else String("")
+    return String(sign, int_part, ".", padded)
+
+
+def _render_blob(data: List[UInt8]) -> String:
+    """Render a BLOB as ``\\xHH`` escapes (DuckDB-style hex)."""
+    comptime HEX: StaticString = "0123456789ABCDEF"
+    var out = String("")
+    for i in range(len(data)):
+        var b = Int(data[i])
+        out += "\\x"
+        out += String(HEX[byte = b >> 4])
+        out += String(HEX[byte = b & 0xF])
+    return out^

@@ -66,6 +66,74 @@ def main():
         print(stations[i])
 ```
 
+`Result.show()` renders every DuckDB type, including `DECIMAL`, the date/time
+family, `UUID`, `INTERVAL`, `BIT`, `BLOB`, `ENUM`, and nested
+`LIST`/`STRUCT`/`MAP`.
+
+### Relation API (lazy, composable)
+
+`con.sql(...)`, `con.table(...)`/`con.view(...)`, and the `read_*` readers return
+a lazy `Relation`: a query you build with chainable transforms that runs only at
+a terminal (`show`/`fetchall`/`get[T]`/`to_table`/...). It mirrors DuckDB's
+Python relational API and reuses the typed decoding shown above.
+
+```mojo
+from duckdb import *
+
+var con = DuckDB.connect(":memory:")
+_ = con.execute("CREATE TABLE trips AS SELECT * FROM 'trips.parquet'")
+
+# Build lazily, execute at a terminal.
+con.sql("FROM trips") \
+   .filter("fare > 0") \
+   .aggregate("payment, sum(fare) AS total", group="payment") \
+   .order("total DESC") \
+   .limit(10) \
+   .show()
+
+# Readers are relations, so they chain directly.
+con.read_csv("more_trips.csv").filter("fare > 0").count().show()
+
+# Terminals reuse typed decoding. Print renders the table.
+var payments = con.table("trips").select("payment").distinct().get[String]()
+print(con.sql("SELECT 1 AS a, 'hi' AS b"))
+
+# lit() quotes values, col() quotes identifiers (injection-safe by default).
+con.table("people").filter(col("name") + " = " + lit("O'Brien")).show()
+
+# Set operations, joins, and persistence.
+var ab = con.sql("SELECT 1 AS x").union(con.sql("SELECT 2 AS x"))
+con.table("orders").set_alias("o") \
+   .join(con.table("items").set_alias("i"), on="o.id = i.order_id") \
+   .to_table("orders_items")
+```
+
+### Connection lifecycle, transactions, and errors
+
+```mojo
+from duckdb import *
+
+with DuckDB.connect("my.db") as con:          # disconnects at block exit
+    con.begin()
+    _ = con.execute("INSERT INTO t VALUES (1)")
+    con.commit()                              # or con.rollback()
+
+    con.install_extension("httpfs")
+    con.load_extension("httpfs")
+
+    var cur = con.cursor()                    # second connection, same database
+
+    try:
+        _ = con.execute("SELECT * FROM missing")
+    except e:
+        # Coarse error categories for branching on the kind of failure.
+        if e.type.is_programming_error():
+            print("bad SQL:", e)              # CATALOG/PARSER/BINDER/...
+```
+
+Build nested types with `list_type`, `map_type`, `array_type`, `struct_type`,
+`decimal_type`, and `enum_type`.
+
 ### Parameterized queries
 
 Bind parameters positionally (`?` / `$1`) or by name (`$name`). Plain Mojo
@@ -116,7 +184,7 @@ var con = duckdb.connect("my.db", read_only=True)
 # Read files directly
 var csv = con.read_csv("data.csv").fetchall()
 
-# DB-API-style fetching (column types given as parameters)
+# Typed fetching (column types given as parameters)
 var result = con.execute("SELECT i FROM t")
 var first = result.fetchone[Int64]()        # Optional[Tuple[Int64]]
 var batch = result.fetchmany[Int64](size=2)

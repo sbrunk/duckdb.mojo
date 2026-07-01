@@ -190,13 +190,27 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return self.get_vector(col).get_column_type().get_type_id()
 
     def is_null(self, *, col: Int) -> Bool:
-        """Check if all values at the given and column are NULL."""
+        """Check whether every value in the column is NULL.
+
+        Returns ``True`` only if the column is entirely NULL over the chunk's
+        current row count; ``False`` if any value is valid.
+        """
         var validity_mask = self.get_vector(col).get_validity()
-        # validity mask is None if there are no NULL values
+        # validity mask is None if there are no NULL values at all.
         if validity_mask is None:
             return False
-        # TODO check validity mask doesn't contain any 0 bits
-        return False
+        var n = len(self)
+        if n == 0:
+            return False
+        for row in range(n):
+            var entry_idx = row // 64
+            var idx_in_entry = row % 64
+            var is_valid = validity_mask.value()[entry_idx] & UInt64(
+                1 << idx_in_entry
+            )
+            if is_valid:
+                return False
+        return True
 
     def is_null(self, *, col: Int, row: Int) -> Bool:
         """Check if the value at the given row and column is NULL."""

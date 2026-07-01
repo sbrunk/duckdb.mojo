@@ -479,10 +479,12 @@ def test_date_epoch() raises:
 
 
 def test_date_write_to() raises:
-    """Date write_to produces year-month-day string."""
+    """Date write_to produces a zero-padded ISO year-month-day string."""
     var d = Date(Int32(2025), Int8(3), Int8(29))
-    var s = String.write(d)
-    assert_equal(s, "2025-3-29")
+    assert_equal(String.write(d), "2025-03-29")
+    # Single-digit month and day are zero-padded.
+    var d2 = Date(Int32(7), Int8(1), Int8(5))
+    assert_equal(String.write(d2), "0007-01-05")
 
 
 def test_time_from_components() raises:
@@ -504,10 +506,17 @@ def test_time_midnight() raises:
 
 
 def test_time_write_to() raises:
-    """Time write_to produces hour:minute:second string."""
-    var t = Time(Int8(14), Int8(30), Int8(45), Int32(0))
-    var s = String.write(t)
-    assert_equal(s, "14:30:45")
+    """Time write_to is zero-padded HH:MM:SS with a trimmed fractional part."""
+    assert_equal(String.write(Time(Int8(14), Int8(30), Int8(45), Int32(0))), "14:30:45")
+    assert_equal(String.write(Time(Int8(9), Int8(5), Int8(3), Int32(0))), "09:05:03")
+    assert_equal(
+        String.write(Time(Int8(14), Int8(30), Int8(45), Int32(123456))),
+        "14:30:45.123456",
+    )
+    # Trailing zeros in the fraction are stripped (.5, not .500000).
+    assert_equal(
+        String.write(Time(Int8(0), Int8(0), Int8(0), Int32(500000))), "00:00:00.5"
+    )
 
 
 def test_timestamp_from_date_time() raises:
@@ -571,6 +580,32 @@ def test_geometry_type_distinct() raises:
 
 
 # ─── run_suite ────────────────────────────────────────────────────
+
+
+def test_date_negative_year() raises:
+    """BC / proleptic (negative) years keep the sign and zero-padding."""
+    var d = Date(Int32(-43), Int8(3), Int8(15))
+    assert_equal(String(d), "-0043-03-15")
+
+
+def test_timestamp_s_ms_ns_format() raises:
+    """The second/milli/nano timestamp wrappers render as formatted timestamps."""
+    var base = Timestamp(Date(Int32(2024), Int8(1), Int8(2)), Time(Int8(3), Int8(4), Int8(5), Int32(0)))
+    assert_equal(String(base.to_timestamp_s()), "2024-01-02 03:04:05")
+    assert_equal(String(base.to_timestamp_ms()), "2024-01-02 03:04:05")
+    assert_equal(String(base.to_timestamp_ns()), "2024-01-02 03:04:05")
+
+
+def test_uuid_canonical_string() raises:
+    """UUID renders in canonical 8-4-4-4-12 lowercase hex."""
+    assert_equal(
+        String(UUID(value=UInt128(0))),
+        "00000000-0000-0000-0000-000000000000",
+    )
+    assert_equal(
+        String(UUID(value=UInt128(0x123456789ABCDEF0))),
+        "00000000-0000-0000-1234-56789abcdef0",
+    )
 
 
 def main() raises:
