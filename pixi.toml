@@ -42,30 +42,30 @@ check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on 
 # The mojo build/run calls are wrapped in `bash -c` so $MOJO_TARGET_FLAGS (set
 # ONLY in CI, see .github/workflows/test.yml) is applied as a codegen target
 # override on the affected runners. Unset locally → expands to nothing → native.
-build-demo-extension = { cmd = "bash -c 'mkdir -p demo-extension/build && mojo build $MOJO_TARGET_FLAGS demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
-test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
+build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
+test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
 # Test extension
-build-test-extension = { cmd = "bash -c 'mkdir -p test-extension/build && mojo build $MOJO_TARGET_FLAGS test-extension/src/test_mojo_extension.mojo --emit shared-lib -o test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/bad_api.duckdb_extension && mojo build $MOJO_TARGET_FLAGS test-extension/src/test_mojo_unstable_extension.mojo --emit shared-lib -o test-extension/build/mojo_unstable.duckdb_extension && python3 scripts/append_extension_metadata.py test-extension/build/mojo_unstable.duckdb_extension --abi-type C_STRUCT_UNSTABLE'", depends-on = ["build"] }
-test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS test-extension/test_extension.mojo'", depends-on = ["build-test-extension"] }
+build-test-extension = { cmd = "bash -c 'mkdir -p extensions/test-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o extensions/test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/bad_api.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_unstable_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo_unstable.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo_unstable.duckdb_extension --abi-type C_STRUCT_UNSTABLE'", depends-on = ["build"] }
+test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS extensions/test-extension/test_extension.mojo'", depends-on = ["build-test-extension"] }
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
-# Mojo kernel overrides (packages/mojo-kernel-overrides): a DuckDB extension that
+# Mojo kernel overrides (extensions/mojo-kernel-overrides): a DuckDB extension that
 # rewrites built-in scalar/aggregate functions to Mojo SIMD kernels at load time,
 # with NO patch to DuckDB. Builds against the default env's libduckdb headers/lib.
-overrides-build = "bash packages/mojo-kernel-overrides/build.sh"
+overrides-build = "bash extensions/mojo-kernel-overrides/build.sh"
 # Correctness regression: stock-vs-override array-distance results (+ NULL/known-value checks).
-overrides-test = { cmd = "bash packages/mojo-kernel-overrides/test/correctness.sh", depends-on = ["overrides-build"] }
+overrides-test = { cmd = "bash extensions/mojo-kernel-overrides/test/correctness.sh", depends-on = ["overrides-build"] }
 # Build + load the extension and print a stock-vs-Mojo benchmark table.
 # Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
-overrides-bench = "bash packages/mojo-kernel-overrides/run-benchmark.sh"
-overrides-clean = "rm -rf packages/mojo-kernel-overrides/build"
+overrides-bench = "bash extensions/mojo-kernel-overrides/run-benchmark.sh"
+overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
 
 # mojo-gpu-operator: transparent GPU offload (array_cosine_distance + TPC-H Q1/Q3/Q5/Q6/Q14)
-# via an optimizer extension, with Mojo GPU kernels. See packages/mojo-gpu-operator/README.md.
-gpu-op-build = "bash packages/mojo-gpu-operator/build.sh"
-gpu-op-clean = "rm -rf packages/mojo-gpu-operator/build"
+# via an optimizer extension, with Mojo GPU kernels. See extensions/mojo-gpu-operator/README.md.
+gpu-op-build = "bash extensions/mojo-gpu-operator/build.sh"
+gpu-op-clean = "rm -rf extensions/mojo-gpu-operator/build"
 
 # ── Benchmarks (consolidated) ── see benchmark/README.md for the full map.
 # One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).
@@ -107,8 +107,8 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Feature: operator-replacement (requires building DuckDB from source)
 [feature.operator-replacement.dependencies]
-duckdb-from-source = { path = "packages/duckdb-from-source" }
-duckdb-operator-replacement = { path = "packages/operator-replacement" }
+duckdb-from-source = { path = "duckdb-from-source" }
+duckdb-operator-replacement = { path = "extensions/operator-replacement" }
 mojo = "==1.0.0b2"
 
 # The `full` environment sets no-default-feature = true, so the top-level

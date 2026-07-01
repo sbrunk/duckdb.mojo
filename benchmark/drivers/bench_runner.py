@@ -36,8 +36,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 SRC = Path(os.environ.get("DUCKDB_SRC", ROOT / "third_party" / "duckdb"))
 RUNNER = Path(os.environ.get("RUNNER", SRC / "build/release/benchmark/benchmark_runner"))
-OVR_EXT = os.environ.get("OVR_EXT", str(ROOT / "packages/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension"))
-GPU_EXT = os.environ.get("GPU_EXT", str(ROOT / "packages/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension"))
+OVR_EXT = os.environ.get("OVR_EXT", str(ROOT / "extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension"))
+GPU_EXT = os.environ.get("GPU_EXT", str(ROOT / "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension"))
 
 # Per-engine environment overlaid on the inherited env (so caller-exported flags
 # like GPU_OP_TRANSCENDENTAL still reach the runner).
