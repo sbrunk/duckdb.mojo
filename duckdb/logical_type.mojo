@@ -348,3 +348,31 @@ def struct_type(
         )
     )
 
+
+def list_type(child: LogicalType) -> LogicalType[True, MutUntrackedOrigin]:
+    """Create a LIST type with the given element type (Python ``list_type``)."""
+    ref libduckdb = DuckDB().libduckdb()
+    return LogicalType[True, MutUntrackedOrigin](
+        libduckdb.duckdb_create_list_type(child.internal_ptr())
+    )
+
+
+def array_type(
+    child: LogicalType, size: Int
+) -> LogicalType[True, MutUntrackedOrigin]:
+    """Create a fixed-size ARRAY type (Python ``array_type``)."""
+    ref libduckdb = DuckDB().libduckdb()
+    return LogicalType[True, MutUntrackedOrigin](
+        libduckdb.duckdb_create_array_type(child.internal_ptr(), idx_t(size))
+    )
+
+
+def map_type(
+    key: LogicalType, value: LogicalType
+) -> LogicalType[True, MutUntrackedOrigin]:
+    """Create a MAP type from key and value types (Python ``map_type``)."""
+    ref libduckdb = DuckDB().libduckdb()
+    return LogicalType[True, MutUntrackedOrigin](
+        libduckdb.duckdb_create_map_type(key.internal_ptr(), value.internal_ptr())
+    )
+

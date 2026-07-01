@@ -17,7 +17,8 @@ from std.collections import Dict
 from duckdb.api import _get_default_connection
 from duckdb.api_level import ApiLevel
 from duckdb.config import Config
-from duckdb.connection import Connection
+from duckdb.connection import Connection, _reader_call
+from duckdb.relation import Relation
 from duckdb.result import Result, ResultError
 
 
@@ -54,9 +55,21 @@ def connect(
     return Connection(database, cfg)
 
 
-def sql(query: String) raises ResultError -> Result:
-    """Run ``query`` against the default connection and return a `Result`."""
-    return _get_default_connection()[].execute(query)
+def sql(query: String) raises -> Relation[StaticConstantOrigin]:
+    """Build a lazy `Relation` from ``query`` on the default connection.
+
+    Mirrors Python's top-level ``duckdb.sql(...)``: composable and executed
+    only at a terminal (`show`/`fetchall`/`get`/...).
+    """
+    var conn_ptr = _get_default_connection()
+    # The default connection lives until process exit, so a static-origin
+    # borrow of its handle is safe (same pattern as the LibDuckDB global).
+    var handle = (
+        UnsafePointer(to=conn_ptr[]._conn)
+        .as_immutable()
+        .unsafe_origin_cast[StaticConstantOrigin]()
+    )
+    return Relation[StaticConstantOrigin](Pointer(to=handle[]), query)
 
 
 def execute(query: String) raises ResultError -> Result:
@@ -64,16 +77,22 @@ def execute(query: String) raises ResultError -> Result:
     return _get_default_connection()[].execute(query)
 
 
-def read_csv(path: String) raises ResultError -> Result:
-    """Read a CSV file via the default connection."""
-    return _get_default_connection()[].read_csv(path)
+def read_csv(path: String) raises -> Relation[StaticConstantOrigin]:
+    """Read a CSV file as a lazy `Relation` via the default connection."""
+    return sql(
+        String("SELECT * FROM ", _reader_call("read_csv", path, Dict[String, String]()))
+    )
 
 
-def read_parquet(path: String) raises ResultError -> Result:
-    """Read a Parquet file via the default connection."""
-    return _get_default_connection()[].read_parquet(path)
+def read_parquet(path: String) raises -> Relation[StaticConstantOrigin]:
+    """Read a Parquet file as a lazy `Relation` via the default connection."""
+    return sql(
+        String("SELECT * FROM ", _reader_call("read_parquet", path, Dict[String, String]()))
+    )
 
 
-def read_json(path: String) raises ResultError -> Result:
-    """Read a JSON file via the default connection."""
-    return _get_default_connection()[].read_json(path)
+def read_json(path: String) raises -> Relation[StaticConstantOrigin]:
+    """Read a JSON file as a lazy `Relation` via the default connection."""
+    return sql(
+        String("SELECT * FROM ", _reader_call("read_json", path, Dict[String, String]()))
+    )

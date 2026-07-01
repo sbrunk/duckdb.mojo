@@ -7,7 +7,22 @@ from duckdb.database import Database
 from duckdb.result import Result, ResultError, ResultType, ErrorType
 from duckdb.prepared_statement import PreparedStatement
 from duckdb.value import DuckDBValue
-from duckdb._sql_util import _sql_quote
+from duckdb.relation import Relation
+from duckdb._sql_util import _sql_quote, _quote_ident, _quote_literal, _quote_qualified
+
+
+def _reader_call(
+    fn_name: String, path: String, options: Dict[String, String]
+) -> String:
+    """Build a ``read_*('path', key=value, ...)`` table-function call.
+
+    The path is quoted as a literal. Option values are inserted verbatim.
+    """
+    var out = String(fn_name, "(", _quote_literal(path))
+    for entry in options.items():
+        out += String(", ", entry.key, "=", entry.value)
+    out += ")"
+    return out^
 
 
 struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
@@ -129,14 +144,127 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             raise ResultError(error_msg, ErrorType(error_type_value))
         return Result(result)
 
-    def sql(self, query: String) raises ResultError -> Result:
-        """Run ``query`` and return a `Result`.
+    def sql(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Build a lazy `Relation` from ``query``.
 
-        Alias for `execute`.  DuckDB's Python client distinguishes ``sql``
-        (lazy relation) from ``execute``; duckdb.mojo has no Relation API, so
-        the two are equivalent here.
+        Unlike `execute` (which runs immediately and returns a `Result`), `sql`
+        returns a composable relation that executes only at a terminal
+        (`fetchall`/`show`/`get`/...):
+
+        ```mojo
+        con.sql("FROM t").filter("x > 0").order("x").show()
+        ```
+
+        The relation borrows this connection so we need to keep the connection alive while
+        the relation is in use.
         """
-        return self.execute(query)
+        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+
+    def query(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Alias for `sql` (Python ``con.query``)."""
+        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+
+    def from_query(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Alias for `sql` (Python ``con.from_query``)."""
+        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+
+    def table(ref self, name: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """A relation over an existing table (Python ``con.table``)."""
+        return Relation[ImmutOrigin(origin_of(self._conn))](
+            Pointer(to=self._conn), String("SELECT * FROM ", _quote_qualified(name))
+        )
+
+    def view(ref self, name: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """A relation over an existing view (Python ``con.view``)."""
+        return Relation[ImmutOrigin(origin_of(self._conn))](
+            Pointer(to=self._conn), String("SELECT * FROM ", _quote_qualified(name))
+        )
+
+    # ── Transactions ──────────────────────────────────────────────
+
+    def begin(self) raises:
+        """Begin a transaction (Python ``con.begin``)."""
+        _ = self.execute("BEGIN TRANSACTION")
+
+    def commit(self) raises:
+        """Commit the current transaction (Python ``con.commit``)."""
+        _ = self.execute("COMMIT")
+
+    def rollback(self) raises:
+        """Roll back the current transaction (Python ``con.rollback``)."""
+        _ = self.execute("ROLLBACK")
+
+    def checkpoint(self) raises:
+        """Flush the WAL to disk (Python ``con.checkpoint``)."""
+        _ = self.execute("CHECKPOINT")
+
+    # ── Lifecycle ─────────────────────────────────────────────────
+
+    def close(mut self):
+        """Disconnect now instead of waiting for destruction.
+
+        Idempotent: ``duckdb_disconnect`` nulls the handle, so the destructor's
+        later disconnect is a safe no-op. Using the connection after `close` is
+        an error (queries will fail).
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
+
+    def cursor(self) raises -> Connection[Self.api_level]:
+        """Open a second connection to the same database.
+
+        The returned connection shares this connection's database and must not
+        outlive it.
+        """
+        return Connection[Self.api_level](self._db)
+
+    def duplicate(self) raises -> Connection[Self.api_level]:
+        """Alias for `cursor` (Python ``duplicate``)."""
+        return Connection[Self.api_level](self._db)
+
+    def __enter__(var self) -> Self:
+        """Enter a ``with`` block; the connection is destroyed (disconnected)
+        when the block exits."""
+        return self^
+
+    # ── Extensions ────────────────────────────────────────────────
+
+    def install_extension(self, name: String, *, force: Bool = False) raises:
+        """Install an extension by name (or path/URL) (Python ``install_extension``).
+
+        DuckDB exposes no C API for this, so it runs ``INSTALL`` / ``FORCE
+        INSTALL``. The name is passed as a quoted literal.
+        """
+        var verb = String("FORCE INSTALL ") if force else String("INSTALL ")
+        _ = self.execute(String(verb, _quote_literal(name)))
+
+    def load_extension(self, name: String) raises:
+        """Load an installed extension (Python ``load_extension``)."""
+        _ = self.execute(String("LOAD ", _quote_literal(name)))
+
+    def remove_function(self, name: String) raises:
+        """Drop a user-defined function by name (Python ``remove_function``).
+
+        Register scalar/aggregate/table functions with
+        ``ScalarFunction.from_function[...]().register(con)`` and friends.
+        """
+        _ = self.execute(String("DROP FUNCTION IF EXISTS ", _quote_ident(name)))
+
+    # ── Introspection / control ───────────────────────────────────
+
+    def interrupt(self):
+        """Interrupt the currently running query (Python ``interrupt``)."""
+        ref libduckdb = DuckDB().libduckdb()
+        libduckdb.duckdb_interrupt(self._conn)
+
+    def query_progress(self) -> Float64:
+        """Progress of the running query as a percentage in ``[0, 100]``.
+
+        Returns a negative value when no query is running or progress is
+        unavailable.
+        """
+        ref libduckdb = DuckDB().libduckdb()
+        return libduckdb.duckdb_query_progress(self._conn).percentage
 
     # ── Prepared statements / parameter binding ───────────────────
 
@@ -228,31 +356,40 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     # ── File readers ──────────────────────────────────────────────
 
-    def read_csv(self, path: String) raises ResultError -> Result:
-        """Read a CSV file and return the rows as a `Result`.
+    def read_csv(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a CSV file as a lazy `Relation`.
 
-        Equivalent to ``SELECT * FROM read_csv('path')``.  Only the path is
-        configurable for now; reader options (``header``, ``delim``, ...) would
-        be added as keyword arguments appended inside ``read_csv(...)``.
+        ``con.read_csv('f.csv').filter(...).show()`` composes like any relation
+        and executes only at a terminal.
         """
-        return self.execute(
-            String("SELECT * FROM read_csv(", _sql_quote(path), ")")
-        )
+        return self.sql(String("SELECT * FROM ", _reader_call("read_csv", path, Dict[String, String]())))
 
-    def read_parquet(self, path: String) raises ResultError -> Result:
-        """Read a Parquet file and return the rows as a `Result`.
+    def read_csv(
+        ref self, path: String, options: Dict[String, String]
+    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a CSV file with reader options appended as ``key=value``.
 
-        Equivalent to ``SELECT * FROM read_parquet('path')``.
+        Option *values* are inserted verbatim, so quote string values with
+        `lit` (e.g. ``{"header": "true", "delim": lit(",")}``).
         """
-        return self.execute(
-            String("SELECT * FROM read_parquet(", _sql_quote(path), ")")
-        )
+        return self.sql(String("SELECT * FROM ", _reader_call("read_csv", path, options)))
 
-    def read_json(self, path: String) raises ResultError -> Result:
-        """Read a JSON file and return the rows as a `Result`.
+    def read_parquet(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a Parquet file as a lazy `Relation` (Python ``con.read_parquet``)."""
+        return self.sql(String("SELECT * FROM ", _reader_call("read_parquet", path, Dict[String, String]())))
 
-        Equivalent to ``SELECT * FROM read_json('path')``.
-        """
-        return self.execute(
-            String("SELECT * FROM read_json(", _sql_quote(path), ")")
-        )
+    def read_parquet(
+        ref self, path: String, options: Dict[String, String]
+    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a Parquet file with reader options appended as ``key=value``."""
+        return self.sql(String("SELECT * FROM ", _reader_call("read_parquet", path, options)))
+
+    def read_json(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a JSON file as a lazy `Relation` (Python ``con.read_json``)."""
+        return self.sql(String("SELECT * FROM ", _reader_call("read_json", path, Dict[String, String]())))
+
+    def read_json(
+        ref self, path: String, options: Dict[String, String]
+    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+        """Read a JSON file with reader options appended as ``key=value``."""
+        return self.sql(String("SELECT * FROM ", _reader_call("read_json", path, options)))

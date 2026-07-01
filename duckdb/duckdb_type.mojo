@@ -302,6 +302,39 @@ struct DuckDBType(
         return DType.invalid
 
 
+def _zpad(value: Int, width: Int) -> String:
+    """Left-pad ``value``'s decimal digits with zeros to at least ``width``.
+
+    Intended for non-negative date/time components.
+    """
+    var s = String(value)
+    if s.byte_length() >= width:
+        return s^
+    var out = String("")
+    for _ in range(width - s.byte_length()):
+        out += "0"
+    out += s
+    return out^
+
+
+def _frac_str(micros_in: Int64) -> String:
+    """Fractional-second suffix for ``micros`` (0–999999): ``""`` or ``.ddd``.
+
+    Trailing zeros are stripped, matching DuckDB's display (``.5`` not
+    ``.500000``).
+    """
+    var micros = micros_in % 1_000_000
+    if micros < 0:
+        micros += 1_000_000
+    if micros == 0:
+        return String("")
+    var digits = 6
+    while micros % 10 == 0:
+        micros //= 10
+        digits -= 1
+    return String(".") + _zpad(Int(micros), digits)
+
+
 @fieldwise_init
 struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
     """Days are stored as days since 1970-01-01."""
@@ -313,7 +346,15 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         self = DuckDB().libduckdb().duckdb_to_date(duckdb_date_struct(year, month, day))
 
     def write_to[W: Writer](self, mut writer: W):
-        return writer.write(self.year(), "-", self.month(), "-", self.day())
+        # ISO-8601 with zero-padded components (e.g. 2024-01-05). Negative
+        # (BC / proleptic) years keep the sign before the zero-padded digits.
+        var p = self._parts()
+        var y = Int(p.year)
+        if y < 0:
+            writer.write("-", _zpad(-y, 4))
+        else:
+            writer.write(_zpad(y, 4))
+        writer.write("-", _zpad(Int(p.month), 2), "-", _zpad(Int(p.day), 2))
 
     def __str__(self) -> String:
         return String.write(self)
@@ -356,7 +397,16 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        return writer.write(self.hour(), ":", self.minute(), ":", self.second())
+        # HH:MM:SS with zero-padding and a fractional suffix when present.
+        var p = self._parts()
+        writer.write(
+            _zpad(Int(p.hour), 2),
+            ":",
+            _zpad(Int(p.min), 2),
+            ":",
+            _zpad(Int(p.sec), 2),
+        )
+        writer.write(_frac_str(Int64(p.micros)))
 
     def __repr__(self) -> String:
         return "Time(" + String(self.micros) + ")"
@@ -458,10 +508,11 @@ struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyab
     var seconds: Int64
 
     def __str__(self) -> String:
-        return String(self.seconds)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.seconds)
+        # Render as a formatted timestamp, not the raw second count.
+        writer.write(self.to_timestamp())
 
     def __eq__(self, other: TimestampS) -> Bool:
         return self.seconds == other.seconds
@@ -484,10 +535,11 @@ struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var millis: Int64
 
     def __str__(self) -> String:
-        return String(self.millis)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.millis)
+        # Render as a formatted timestamp, not the raw millisecond count.
+        writer.write(self.to_timestamp())
 
     def __eq__(self, other: TimestampMS) -> Bool:
         return self.millis == other.millis
@@ -510,10 +562,11 @@ struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var nanos: Int64
 
     def __str__(self) -> String:
-        return String(self.nanos)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.nanos)
+        # Render as a formatted timestamp (microsecond precision).
+        writer.write(self.to_timestamp())
 
     def __eq__(self, other: TimestampNS) -> Bool:
         return self.nanos == other.nanos
@@ -536,10 +589,11 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
     var nanos: Int64
 
     def __str__(self) -> String:
-        return String(self.nanos)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.nanos)
+        # Render as a formatted time (microsecond precision).
+        writer.write(self.to_time())
 
     def __eq__(self, other: TimeNS) -> Bool:
         return self.nanos == other.nanos
@@ -751,10 +805,11 @@ struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var micros: Int64
 
     def __str__(self) -> String:
-        return String(self.micros)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.micros)
+        # Render as a formatted timestamp (UTC); timezone offset is not shown.
+        writer.write(self.to_timestamp())
 
     def __eq__(self, other: TimestampTZ) -> Bool:
         return self.micros == other.micros
@@ -819,10 +874,19 @@ struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Mo
     var value: UInt128
 
     def __str__(self) -> String:
-        return String(self.value)
+        return String.write(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.value)
+        # Canonical 8-4-4-4-12 lowercase hex form (e.g. 4f6e...-...-...).
+        comptime HEX: StaticString = "0123456789abcdef"
+        var v = self.value
+        var out = String("")
+        for i in range(32):
+            if i == 8 or i == 12 or i == 16 or i == 20:
+                out += "-"
+            var nibble = Int((v >> UInt128(((31 - i) * 4))) & 0xF)
+            out += String(HEX[byte=nibble])
+        writer.write(out)
 
     def __eq__(self, other: UUID) -> Bool:
         return self.value == other.value
