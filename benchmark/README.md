@@ -37,7 +37,7 @@ in its own connection, reports warm median latency and recall@k vs exact. Tune
 ## Raw-kernel microbenchmarks (no DuckDB)
 
 Mojo `perf_counter_ns` microbenches that drive kernels directly:
-- `packages/mojo-gpu-operator/bench/*.mojo` — GPU C-ABI latency/oracle tests/probes.
+- `extensions/mojo-gpu-operator/bench/*.mojo` — GPU C-ABI latency/oracle tests/probes.
 - top-level `benchmark/*.mojo` — SIMD/GPU math + reduction POCs.
-- `packages/mojo-kernel-overrides/bench/benchmark.cpp` — standalone stock-vs-Mojo C++ timer
+- `extensions/mojo-kernel-overrides/bench/benchmark.cpp` — standalone stock-vs-Mojo C++ timer
   (`pixi run overrides-bench`).

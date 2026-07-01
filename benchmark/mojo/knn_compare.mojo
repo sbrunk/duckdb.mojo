@@ -25,8 +25,8 @@ comptime KK = 10          # top-k
 comptime WARMUP = 3
 comptime ITERS = 7
 comptime DB_PATH = "/tmp/knn_compare.db"
-comptime OVR_EXT = "packages/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension"
-comptime GPU_EXT = "packages/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension"
+comptime OVR_EXT = "extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension"
+comptime GPU_EXT = "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension"
 
 
 def vec_literal() raises -> String:

@@ -7,8 +7,8 @@
 duckdb.mojo can be used in two ways:
 
 1. **Client API**: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. **Extension development** *(experimental)*: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](demo-extension/README.md) for a working example.
-3. **Accelerate DuckDB**: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](packages/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](packages/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
+2. **Extension development**: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
+3. **Accelerate DuckDB**: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
@@ -267,15 +267,15 @@ LOAD 'my_ext.duckdb_extension';
 SELECT mojo_add_numbers(40, 2);  -- 42
 ```
 
-See the [demo extension](demo-extension/) for a full working example.
+See the [demo extension](extensions/demo-extension/) for a full working example.
 
 ### CPP-ABI extensions (advanced)
 
 The C API above is enough for scalar/aggregate/table UDFs, but it cannot reach
 DuckDB internals such as mutating catalog entries, adding an `OptimizerExtension`,
 or registering a custom logical operator. For those you need DuckDB's **CPP ABI**.
-This is how the [mojo-kernel-overrides](packages/mojo-kernel-overrides/README.md)
-and [mojo-gpu-operator](packages/mojo-gpu-operator/README.md) extensions are built.
+This is how the [mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md)
+and [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extensions are built.
 
 A CPP-ABI extension here is really a **C++ extension that calls Mojo-compiled
 kernels over a C ABI**. No DuckDB C++ type crosses into Mojo:
@@ -328,7 +328,7 @@ object and append the `CPP` metadata footer.
 # 1. Mojo kernels. --emit object gives a plain .o with NO Mojo runtime deps (CPU/SIMD
 #    only), so the final .so is self-contained (links only libm). If the kernels need
 #    the Mojo GPU/AsyncRT runtime, use --emit shared-lib instead and link + rpath the
-#    resulting companion dylib (see packages/mojo-gpu-operator/build.sh).
+#    resulting companion dylib (see extensions/mojo-gpu-operator/build.sh).
 mojo build --emit object kernels.mojo -o kernels.o
 
 # 2. C++ extension. DuckDB symbols are left unresolved and bound at load time against
@@ -533,7 +533,7 @@ You can also use the kernels (`duckdb.kernels.simd`) directly in your own UDFs.
 
 **2. Built-in overrides (CPU/SIMD, a separate dependency-free extension).** To
 speed up existing queries without renaming functions, the
-[mojo-kernel-overrides](packages/mojo-kernel-overrides/README.md) extension rewrites
+[mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md) extension rewrites
 selected built-ins in place, without forking DuckDB:
 
 - scalar `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10`;
@@ -553,11 +553,11 @@ from duckdb.config import Config
 var config = Config()
 config.set("allow_unsigned_extensions", "true")
 var conn = DuckDB.connect(":memory:", config)
-_ = conn.execute("LOAD 'packages/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
+_ = conn.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
 ```
 
 **3. GPU offload (a separate extension).** The
-[mojo-gpu-operator](packages/mojo-gpu-operator/README.md) extension transparently
+[mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extension transparently
 offloads supported query plans to the GPU via an `OptimizerExtension`, with the
 compute kernels written in Mojo. It is general-purpose: it handles a class of
 aggregation-over-filter/join plans, plus vector-search top-k (`gpu_cosine_topk` and

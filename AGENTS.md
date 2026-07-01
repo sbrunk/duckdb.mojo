@@ -23,11 +23,11 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
   - `chunk.mojo`, `vector.mojo`, `value.mojo`, `logical_type.mojo` - Data types
   - `kernels/` - reusable Mojo SIMD kernels (`simd.mojo`) + `register_simd_math` scalar UDF helpers
 - `test/` - Test files (one per module, named `test_*.mojo`)
-- `demo-extension/` - Working example DuckDB extension in Mojo
-- `test-extension/` - Extension used for testing
+- `extensions/demo-extension/` - Working example DuckDB extension in Mojo
+- `extensions/test-extension/` - Extension used for testing
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
-- `packages/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
+- `extensions/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
 - `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.4`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
 
 ## Development Commands
@@ -70,7 +70,7 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
 - **Named UDFs (part of the package):** `duckdb.kernels.register_simd_math(conn)` registers
   `mojo_sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` as scalar functions. The kernels ship inside the
   precompiled `duckdb-mojo` package, so there is nothing extra to build or `LOAD`.
-- **Built-in overrides (`packages/mojo-kernel-overrides`):** a self-contained CPP-ABI DuckDB
+- **Built-in overrides (`extensions/mojo-kernel-overrides`):** a self-contained CPP-ABI DuckDB
   extension that rewrites the built-in `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` and
   `sum`/`avg`/`min`/`max` in place via catalog mutation, with stock fallback for non-FLAT /
   null / grouped input. `sum`/`avg` cover `DOUBLE` plus the INT128-backed `HUGEINT` /
@@ -121,8 +121,8 @@ warns when they drift. To bump (e.g. `1.5.4` → `1.5.5`):
    Optionally bump `branch = v1.5.5` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
    the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
-   `version`/`tag` in `packages/duckdb-from-source/{pixi.toml,recipe.yaml}` +
-   the `duckdb-from-source ==…` pins in `packages/operator-replacement/recipe.yaml`.
+   `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +
+   the `duckdb-from-source ==…` pins in `extensions/operator-replacement/recipe.yaml`.
 3. `pixi install` to refresh the lockfile.
 4. `pixi run generate-api` to regenerate `duckdb/_libduckdb.mojo` from the new
    source, then commit it (CI `check-generated-api` fails otherwise).
@@ -137,9 +137,9 @@ Two independent paths build a conda package of the bindings, and they must be ke
 - **`pixi build`** — the `[package]` block + `pixi-build-mojo` backend in `pixi.toml`. The backend infers the build steps (no recipe). Used for local builds and for consuming duckdb.mojo as a source dependency from other Pixi workspaces.
 - **`conda.recipe/recipe.yaml`** (rattler-build) — an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. Key points: the `run` dependency pins `mojo-compiler` **exactly** (a precompiled `.mojoc` only loads under the exact compiler it was built with — `pin_compatible` would let a newer nightly fail at import); `libduckdb` is a `run` dependency (the bindings `dlopen` it). Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
 
-The sub-packages in `packages/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`) — unrelated to publishing the `duckdb-mojo` package.
+The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`) — unrelated to publishing the `duckdb-mojo` package.
 
 ## Environments
 
 - **default** - Standard dev environment with precompiled libduckdb from conda-forge
-- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now a **reference implementation** — superseded by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload) — but is kept wired here. See `packages/operator-replacement/README.md`.
+- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now a **reference implementation** — superseded by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload) — but is kept wired here. See `extensions/operator-replacement/README.md`.

@@ -2,7 +2,7 @@ name: "CodeQL"
 
 # Required by the modular-community channel for any package whose source repo
 # contains a language other than Mojo. CodeQL has no Mojo analyzer, so we scan
-# the Python (scripts/) and C/C++ (packages/operator-replacement) sources.
+# the Python (scripts/) and C/C++ (extensions/operator-replacement) sources.
 # Both use build-mode: none (buildless scanning) as the C++ here needs a
 # source-built DuckDB to compile, which is too heavy for an autobuild step.
 
