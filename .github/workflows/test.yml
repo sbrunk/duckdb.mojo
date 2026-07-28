@@ -24,7 +24,7 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.69.0
+          pixi-version: v0.74.0
           cache: true
           environments: default
 
@@ -73,7 +73,7 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.69.0
+          pixi-version: v0.74.0
           cache: true
           environments: default
 
