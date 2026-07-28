@@ -19,7 +19,7 @@ mojo-compiler = "==1.0.0b2"
 
 [package.build.backend]
 name = "pixi-build-mojo"
-version = "0.1.*"
+version = "0.2.*"
 channels = [
     "https://prefix.dev/pixi-build-backends",
     "https://prefix.dev/conda-forge",
