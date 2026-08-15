@@ -35,12 +35,12 @@ from std.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
-    barrier,
     warp_id as get_warp_id,
 )
+from max.gpu.sync import barrier
 from std.gpu.primitives import warp
-from std.gpu.memory import AddressSpace, async_copy_wait_all
-from std.gpu.host import DeviceContext
+from max.gpu.memory import AddressSpace, async_copy_wait_all
+from max.gpu.host import DeviceContext
 from layout import Layout, LayoutTensor
 from layout._utils import ManagedLayoutTensor
 from layout.layout_tensor import copy_dram_to_sram_async

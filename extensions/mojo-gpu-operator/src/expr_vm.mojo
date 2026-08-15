@@ -87,7 +87,7 @@ A fixed-size int64 register stack (EXPR_STACK_MAX = 16 slots). Programs produced
 by the planner for the supported TPC-H shapes never exceed this depth.
 """
 
-from std.gpu.memory import AddressSpace
+from max.gpu.memory import AddressSpace
 from std.math import sqrt, exp, log, sin, cos, nan
 from raw_plan_tags import (
     OP_LOAD_COL,
@@ -140,7 +140,7 @@ comptime EXPR_STACK_MAX = 16
 def _col_at[
     USE_COLPTR: Bool
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     slot: Int,
     row: Int,
@@ -150,7 +150,7 @@ def _col_at[
         var addr = Int(cols[slot])
         var p = UnsafePointer[
             Scalar[DType.int64],
-            MutAnyOrigin,
+            MutUntrackedOrigin,
             address_space = AddressSpace.GLOBAL,
         ](unsafe_from_address=addr)
         return p[row]
@@ -162,13 +162,13 @@ def _col_at[
 def eval_program[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Int64:
     """Evaluate one postfix program for a single row, returning its int64 value.
 
@@ -365,15 +365,15 @@ def _vm_cos_f64(x: Float64) -> Float64:
 def eval_program_f64[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Float64:
     """Evaluate one postfix program for a single row on a float64 stack.
 

@@ -41,7 +41,7 @@ from duckdb.logical_type import LogicalType
 from duckdb._sql_util import _quote_ident, _quote_literal, _quote_qualified
 
 
-struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
+struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
     """A lazy, composable SQL relation. See module docstring.
 
     Parameters:
@@ -82,7 +82,7 @@ struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
     def _run(self, query: String) raises ResultError -> Result:
         """Execute ``query`` on this relation's connection (mirrors `Connection.execute`)."""
         var result = duckdb_result()
-        var result_ptr = UnsafePointer(to=result)
+        var result_ptr = Pointer(to=result)
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_query(
@@ -185,7 +185,7 @@ struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
     # ── Joins / set operations ─────────────────────────────────────
 
     def join[
-        o2: ImmutOrigin
+        o2: ImmOrigin
     ](self, other: Relation[o2], on: String, how: String = "inner") -> Self:
         """Join with ``other`` on ``on`` (Python ``join``).
 
@@ -205,7 +205,7 @@ struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
             )
         )
 
-    def cross[o2: ImmutOrigin](self, other: Relation[o2]) -> Self:
+    def cross[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         """Cartesian product with ``other`` (Python ``cross``)."""
         return self._wrap(
             String(
@@ -213,26 +213,26 @@ struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
             )
         )
 
-    def union[o2: ImmutOrigin](self, other: Relation[o2]) -> Self:
+    def union[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         """``UNION`` (deduplicated) with ``other`` (Python ``union``)."""
         return Self(
             self._conn_ptr, String("(", self._sql, ") UNION (", other._sql, ")")
         )
 
-    def union_all[o2: ImmutOrigin](self, other: Relation[o2]) -> Self:
+    def union_all[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         """``UNION ALL`` (keeps duplicates) with ``other``."""
         return Self(
             self._conn_ptr,
             String("(", self._sql, ") UNION ALL (", other._sql, ")"),
         )
 
-    def except_[o2: ImmutOrigin](self, other: Relation[o2]) -> Self:
+    def except_[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         """Rows in this relation but not ``other`` (Python ``except_``)."""
         return Self(
             self._conn_ptr, String("(", self._sql, ") EXCEPT (", other._sql, ")")
         )
 
-    def intersect[o2: ImmutOrigin](self, other: Relation[o2]) -> Self:
+    def intersect[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         """Rows in both this relation and ``other`` (Python ``intersect``)."""
         return Self(
             self._conn_ptr,
@@ -313,21 +313,21 @@ struct Relation[origin: ImmutOrigin](Copyable, Movable, Writable):
         return self._run(self._sql).fetchall()
 
     def fetchone[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](self) raises -> Optional[Tuple[*Ts]]:
         """Execute and fetch the first row as a typed tuple, or ``None``."""
         var r = self._run(self._sql)
         return r.fetchone[*Ts]()
 
     def fetchmany[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](self, size: Int = 1) raises -> List[Tuple[*Ts]]:
         """Execute and fetch up to ``size`` rows as typed tuples."""
         var r = self._run(self._sql)
         return r.fetchmany[*Ts](size)
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self) raises -> List[T]:
         """Execute and decode all rows into ``List[T]`` (struct/scalar)."""
         return self._run(self._sql).fetchall().get[T]()

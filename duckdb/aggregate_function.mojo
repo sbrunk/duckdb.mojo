@@ -35,7 +35,7 @@ struct AggregateFunctionInfo:
         """
         self._info = info
 
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `AggregateFunction.set_extra_info()`.
 
         Returns:
@@ -87,7 +87,7 @@ struct AggregateState:
         """
         self._state = state
 
-    def get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Returns a pointer to the state's internal data.
 
         The `duckdb_aggregate_state` pointer directly points to user state data.
@@ -102,7 +102,7 @@ struct AggregateState:
         # at self._state[].internal_ptr.  DuckDB reinterpret_casts the raw
         # allocation to duckdb_aggregate_state, so the user struct IS the
         # memory at that address.
-        return self._state.bitcast[NoneType]()
+        return self._state.unsafe_bitcast[NoneType]()
 
 
 struct AggregateStateArray(Sized):
@@ -124,10 +124,10 @@ struct AggregateStateArray(Sized):
     ```
     """
 
-    var _states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]
+    var _states: Pointer[duckdb_aggregate_state, MutUntrackedOrigin]
     var _count: Int
 
-    def __init__(out self, states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], count: Int = 0):
+    def __init__(out self, states: Pointer[duckdb_aggregate_state, MutUntrackedOrigin], count: Int = 0):
         """Creates an AggregateStateArray wrapper.
 
         Args:
@@ -242,7 +242,7 @@ struct AggregateFunction(Movable):
     def __init__(out self):
         """Creates a new aggregate function.
 
-        The function must be destroyed with `__del__` or by letting it go out of scope.
+        The function must be destroyed with `__deinit__` or by letting it go out of scope.
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_aggregate_function()
@@ -251,11 +251,11 @@ struct AggregateFunction(Movable):
         """Move constructor that transfers ownership."""
         self._function = take._function
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the aggregate function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_aggregate_function(
-            UnsafePointer(to=self._function)
+            Pointer(to=self._function)
         )
 
     def set_name(self, name: String):
@@ -302,9 +302,9 @@ struct AggregateFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_aggregate_function_set_special_handling(self._function)
 
-    def set_extra_info(
+    def set_extra_info[extra_info_origin: MutOrigin](
         self,
-        extra_info: UnsafePointer[NoneType, MutAnyOrigin],
+        extra_info: Pointer[NoneType, extra_info_origin],
         destroy: duckdb_delete_callback_t,
     ):
         """Assigns extra information to the aggregate function.
@@ -395,7 +395,7 @@ struct AggregateFunction(Movable):
         def raw_update(
             raw_info: duckdb_function_info,
             raw_input: duckdb_data_chunk,
-            raw_states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin],
+            raw_states: Pointer[duckdb_aggregate_state, MutUntrackedOrigin],
         ) abi("C"):
             var info = AggregateFunctionInfo(raw_info)
             var input_chunk = Chunk[is_owned=False](raw_input)
@@ -404,10 +404,10 @@ struct AggregateFunction(Movable):
 
         def raw_combine(
             raw_info: duckdb_function_info,
-            raw_source: UnsafePointer[
+            raw_source: Pointer[
                 duckdb_aggregate_state, MutUntrackedOrigin
             ],
-            raw_target: UnsafePointer[
+            raw_target: Pointer[
                 duckdb_aggregate_state, MutUntrackedOrigin
             ],
             count: idx_t,
@@ -419,7 +419,7 @@ struct AggregateFunction(Movable):
 
         def raw_finalize(
             raw_info: duckdb_function_info,
-            raw_source: UnsafePointer[
+            raw_source: Pointer[
                 duckdb_aggregate_state, MutUntrackedOrigin
             ],
             raw_result: duckdb_vector,
@@ -467,7 +467,7 @@ struct AggregateFunction(Movable):
         """
 
         def raw_destroy(
-            raw_states: UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin],
+            raw_states: Pointer[duckdb_aggregate_state, MutUntrackedOrigin],
             count: idx_t,
         ) abi("C"):
             var states = AggregateStateArray(raw_states, Int(count))
@@ -509,7 +509,7 @@ struct AggregateFunction(Movable):
     def from_reduce[
         name: StringLiteral,
         D: DType,
-        reduce_fn: def[width: Int] (
+        reduce_fn: def[width: SIMDLength] (
             SIMD[D, width], SIMD[D, width]
         ) thin -> SIMD[D, width],
         init_fn: def() thin -> Scalar[D],
@@ -533,7 +533,7 @@ struct AggregateFunction(Movable):
 
         Example:
         ```mojo
-        fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
         fn zero() -> Scalar[DType.float64]: return 0.0
 
@@ -545,7 +545,7 @@ struct AggregateFunction(Movable):
             return idx_t(size_of[_ReduceState[D]]())
 
         def _state_init(info: AggregateFunctionInfo, state: AggregateState):
-            state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
+            state.get_data().unsafe_bitcast[_ReduceState[D]]().unsafe_write(
                 _ReduceState[D](value=init_fn(), count=0)
             )
 
@@ -555,9 +555,9 @@ struct AggregateFunction(Movable):
             states: AggregateStateArray,
         ):
             var n = len(input)
-            var data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
+            var data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
             for i in range(n):
-                var s = states.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = states.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 s[].value = reduce_fn[1](s[].value, data[i])
                 s[].count += 1
 
@@ -568,8 +568,8 @@ struct AggregateFunction(Movable):
             count: Int,
         ):
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
-                var t = target.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
+                var t = target.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 t[].value = reduce_fn[1](t[].value, s[].value)
                 t[].count += s[].count
 
@@ -580,12 +580,12 @@ struct AggregateFunction(Movable):
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
             var validity = result.get_validity().value()
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
                     out[offset + i] = s[].value
                 else:
@@ -596,9 +596,9 @@ struct AggregateFunction(Movable):
 
         def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
-                states.get_state(i).get_data().bitcast[
+                states.get_state(i).get_data().unsafe_bitcast[
                     _ReduceState[D]
-                ]().destroy_pointee()
+                ]().unsafe_deinit_pointee()
 
         var func = AggregateFunction()
         func.set_name(name)
@@ -615,7 +615,7 @@ struct AggregateFunction(Movable):
         name: StringLiteral,
         In: DType,
         Out: DType,
-        reduce_fn: def[width: Int] (
+        reduce_fn: def[width: SIMDLength] (
             SIMD[Out, width], SIMD[Out, width]
         ) thin -> SIMD[Out, width],
         init_fn: def() thin -> Scalar[Out],
@@ -634,7 +634,7 @@ struct AggregateFunction(Movable):
 
         Example:
         ```mojo
-        fn add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        fn add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return a + b
         fn zero() -> Scalar[DType.int64]: return 0
 
@@ -647,7 +647,7 @@ struct AggregateFunction(Movable):
             return idx_t(size_of[_ReduceState[Out]]())
 
         def _state_init(info: AggregateFunctionInfo, state: AggregateState):
-            state.get_data().bitcast[_ReduceState[Out]]().init_pointee_move(
+            state.get_data().unsafe_bitcast[_ReduceState[Out]]().unsafe_write(
                 _ReduceState[Out](value=init_fn(), count=0)
             )
 
@@ -657,9 +657,9 @@ struct AggregateFunction(Movable):
             states: AggregateStateArray,
         ):
             var n = len(input)
-            var data = input.get_vector(0).get_data().bitcast[Scalar[In]]()
+            var data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In]]()
             for i in range(n):
-                var s = states.get_state(i).get_data().bitcast[_ReduceState[Out]]()
+                var s = states.get_state(i).get_data().unsafe_bitcast[_ReduceState[Out]]()
                 s[].value = reduce_fn[1](s[].value, data[i].cast[Out]())
                 s[].count += 1
 
@@ -670,8 +670,8 @@ struct AggregateFunction(Movable):
             count: Int,
         ):
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[Out]]()
-                var t = target.get_state(i).get_data().bitcast[_ReduceState[Out]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[Out]]()
+                var t = target.get_state(i).get_data().unsafe_bitcast[_ReduceState[Out]]()
                 t[].value = reduce_fn[1](t[].value, s[].value)
                 t[].count += s[].count
 
@@ -682,12 +682,12 @@ struct AggregateFunction(Movable):
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().bitcast[Scalar[Out]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[Out]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
             var validity = result.get_validity().value()
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[Out]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[Out]]()
                 if s[].count > 0:
                     out[offset + i] = s[].value
                 else:
@@ -698,9 +698,9 @@ struct AggregateFunction(Movable):
 
         def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
-                states.get_state(i).get_data().bitcast[
+                states.get_state(i).get_data().unsafe_bitcast[
                     _ReduceState[Out]
-                ]().destroy_pointee()
+                ]().unsafe_deinit_pointee()
 
         var func = AggregateFunction()
         func.set_name(name)
@@ -716,7 +716,7 @@ struct AggregateFunction(Movable):
     def from_reduce[
         name: StringLiteral,
         D: DType,
-        reduce_fn: def[dtype: DType, width: Int] (
+        reduce_fn: def[dtype: DType, width: SIMDLength] (
             SIMD[dtype, width], SIMD[dtype, width]
         ) thin -> SIMD[dtype, width],
         init_fn: def() thin -> Scalar[D],
@@ -724,7 +724,7 @@ struct AggregateFunction(Movable):
         """Create and register a unary aggregate from a stdlib-compatible function.
 
         Accepts functions with the standard library signature
-        ``fn[dtype: DType, width: Int](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]``
+        ``fn[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]``
         so you can pass stdlib math helpers directly.
 
         Parameters:
@@ -745,7 +745,7 @@ struct AggregateFunction(Movable):
             return idx_t(size_of[_ReduceState[D]]())
 
         def _state_init(info: AggregateFunctionInfo, state: AggregateState):
-            state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
+            state.get_data().unsafe_bitcast[_ReduceState[D]]().unsafe_write(
                 _ReduceState[D](value=init_fn(), count=0)
             )
 
@@ -755,9 +755,9 @@ struct AggregateFunction(Movable):
             states: AggregateStateArray,
         ):
             var n = len(input)
-            var data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
+            var data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
             for i in range(n):
-                var s = states.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = states.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 s[].value = reduce_fn[D, 1](s[].value, data[i])
                 s[].count += 1
 
@@ -768,8 +768,8 @@ struct AggregateFunction(Movable):
             count: Int,
         ):
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
-                var t = target.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
+                var t = target.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 t[].value = reduce_fn[D, 1](t[].value, s[].value)
                 t[].count += s[].count
 
@@ -780,12 +780,12 @@ struct AggregateFunction(Movable):
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
             var validity = result.get_validity().value()
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
                     out[offset + i] = s[].value
                 else:
@@ -796,9 +796,9 @@ struct AggregateFunction(Movable):
 
         def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
-                states.get_state(i).get_data().bitcast[
+                states.get_state(i).get_data().unsafe_bitcast[
                     _ReduceState[D]
-                ]().destroy_pointee()
+                ]().unsafe_deinit_pointee()
 
         var func = AggregateFunction()
         func.set_name(name)
@@ -832,7 +832,7 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        def _add[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _add[w: SIMDLength](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return a + b
 
         def _zero() -> Scalar[D]:
@@ -857,7 +857,7 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        def _mul[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _mul[w: SIMDLength](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return a * b
 
         def _one() -> Scalar[D]:
@@ -881,7 +881,7 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        def _max[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _max[w: SIMDLength](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return max(a, b)
 
         def _init() -> Scalar[D]:
@@ -905,7 +905,7 @@ struct AggregateFunction(Movable):
         ```
         """
 
-        def _min[w: Int](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
+        def _min[w: SIMDLength](a: SIMD[D, w], b: SIMD[D, w]) -> SIMD[D, w]:
             return min(a, b)
 
         def _init() -> Scalar[D]:
@@ -934,7 +934,7 @@ struct AggregateFunction(Movable):
             return idx_t(size_of[_ReduceState[D]]())
 
         def _state_init(info: AggregateFunctionInfo, state: AggregateState):
-            state.get_data().bitcast[_ReduceState[D]]().init_pointee_move(
+            state.get_data().unsafe_bitcast[_ReduceState[D]]().unsafe_write(
                 _ReduceState[D](value=Scalar[D](0), count=0)
             )
 
@@ -944,9 +944,9 @@ struct AggregateFunction(Movable):
             states: AggregateStateArray,
         ):
             var n = len(input)
-            var data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
+            var data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
             for i in range(n):
-                var s = states.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = states.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 s[].value += data[i]
                 s[].count += 1
 
@@ -957,8 +957,8 @@ struct AggregateFunction(Movable):
             count: Int,
         ):
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
-                var t = target.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
+                var t = target.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 t[].value += s[].value
                 t[].count += s[].count
 
@@ -969,12 +969,12 @@ struct AggregateFunction(Movable):
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
             var validity = result.get_validity().value()
             for i in range(count):
-                var s = source.get_state(i).get_data().bitcast[_ReduceState[D]]()
+                var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
                     out[offset + i] = s[].value / Scalar[D](s[].count)
                 else:
@@ -985,9 +985,9 @@ struct AggregateFunction(Movable):
 
         def _destroy(states: AggregateStateArray):
             for i in range(len(states)):
-                states.get_state(i).get_data().bitcast[
+                states.get_state(i).get_data().unsafe_bitcast[
                     _ReduceState[D]
-                ]().destroy_pointee()
+                ]().unsafe_deinit_pointee()
 
         var func = AggregateFunction()
         func.set_name(name)
@@ -1046,11 +1046,11 @@ struct AggregateFunctionSet(Movable):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the aggregate function set and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_aggregate_function_set(
-            UnsafePointer(to=self._function_set)
+            Pointer(to=self._function_set)
         )
 
     def add_function(self, function: AggregateFunction) raises:

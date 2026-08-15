@@ -37,9 +37,10 @@ Tile shape (one simdgroup per block, kept simple for correctness-first):
 
 from std.sys import llvm_intrinsic
 from std.sys.info import is_apple_gpu, has_apple_gpu_accelerator
-from std.gpu import lane_id, block_idx, thread_idx, barrier
-from std.gpu.memory import AddressSpace
-from std.gpu.host import DeviceContext, DeviceBuffer
+from std.gpu import lane_id, block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc, stack_allocation
 from std.collections import InlineArray
 from std.math import sqrt
@@ -118,17 +119,21 @@ def _mma8x8[
 # Apple-only via the in-kernel `is_apple_gpu()` gate.
 # ===-------------------------------------------------------------------===#
 def tc_apple_fused_knn_kernel(
-    q: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    e: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
-    k: Int,
-    nblocks: Int,
+    q: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    e: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
+    k_dp: Int64,
+    nblocks_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
+    var k = Int(k_dp)
+    var nblocks = Int(nblocks_dp)
     comptime if is_apple_gpu():
         var lane = Int(lane_id())
         var fl = _frag8_layout(lane)
@@ -277,14 +282,17 @@ def tc_apple_fused_knn_kernel(
 # candidate count nblocks*k is small, so a single-lane merge is fine).
 # ===-------------------------------------------------------------------===#
 def tc_apple_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    Mq: Int,
-    nblocks: Int,
-    k: Int,
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    Mq_dp: Int64,
+    nblocks_dp: Int64,
+    k_dp: Int64,
 ):
+    var Mq = Int(Mq_dp)
+    var nblocks = Int(nblocks_dp)
+    var k = Int(k_dp)
     comptime if is_apple_gpu():
         var sd = stack_allocation[
             AP_K_CAP, Scalar[DType.float32],
@@ -348,11 +356,13 @@ def tc_apple_merge_kernel(
 # (fp16-cast-to-fp32)^2) -- the SAME cosine denom as the scalar f16 path.
 # Apple-only via the in-kernel gate.
 def _tc_apple_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
+    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
     comptime if is_apple_gpu():
         var row = Int(block_idx.x)
         if row >= n_rows:
@@ -390,11 +400,11 @@ def run_tc_knn_apple_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
     comptime if has_apple_gpu_accelerator():
         # Host: fp16 query tile (padded to a multiple of MM rows so the kernel's
@@ -422,26 +432,25 @@ def run_tc_knn_apple_batch(
         ctx.synchronize()
         ctx.enqueue_copy(
             qs_dev,
-            UnsafePointer[Float16, ImmutAnyOrigin](
+            UnsafePointer[Float16, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qh16)
             ),
         )
         ctx.enqueue_copy(
             qnorm_dev,
-            UnsafePointer[Float32, ImmutAnyOrigin](
+            UnsafePointer[Float32, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qnorm_h)
             ),
         )
 
         # Emb L2 norms (cosine denom). One simdgroup per row.
         ctx.enqueue_function[_tc_apple_enorm_kernel](
-            emb16.unsafe_ptr(),
-            enorm_dev.unsafe_ptr(),
-            n_rows,
-            K,
+            emb16.unsafe_ptr().unsafe_mut_cast[True](),
+            enorm_dev.unsafe_ptr().unsafe_mut_cast[True](),
+            Int64(n_rows),
+            Int64(K),
             grid_dim=n_rows,
-            block_dim=AP_THREADS,
-        )
+            block_dim=AP_THREADS)
         ctx.synchronize()
 
         var nblocks = AP_NBLOCKS
@@ -466,30 +475,28 @@ def run_tc_knn_apple_batch(
             var qnorm_ptr = qnorm_dev.unsafe_ptr() + q0
 
             ctx.enqueue_function[tc_apple_fused_knn_kernel](
-                q_ptr,
-                emb16.unsafe_ptr(),
-                qnorm_ptr,
-                enorm_dev.unsafe_ptr(),
-                cand_dist_dev.unsafe_ptr(),
-                cand_id_dev.unsafe_ptr(),
-                n_rows,
-                K,
-                k,
-                nblocks,
+                q_ptr.unsafe_mut_cast[True](),
+                emb16.unsafe_ptr().unsafe_mut_cast[True](),
+                qnorm_ptr.unsafe_mut_cast[True](),
+                enorm_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                cand_dist_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                cand_id_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                Int64(n_rows),
+                Int64(K),
+                Int64(k),
+                Int64(nblocks),
                 grid_dim=nblocks,
-                block_dim=AP_THREADS,
-            )
+                block_dim=AP_THREADS)
             ctx.enqueue_function[tc_apple_merge_kernel](
-                cand_dist_dev.unsafe_ptr(),
-                cand_id_dev.unsafe_ptr(),
-                merged_dist_dev.unsafe_ptr(),
-                merged_id_dev.unsafe_ptr(),
-                AP_MM,
-                nblocks,
-                k,
+                cand_dist_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                cand_id_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                merged_dist_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                merged_id_dev.unsafe_ptr().unsafe_mut_cast[True](),
+                Int64(AP_MM),
+                Int64(nblocks),
+                Int64(k),
                 grid_dim=AP_MM,
-                block_dim=AP_THREADS,
-            )
+                block_dim=AP_THREADS)
             ctx.enqueue_copy(merged_dist_h, merged_dist_dev)
             ctx.enqueue_copy(merged_id_h, merged_id_dev)
             ctx.synchronize()

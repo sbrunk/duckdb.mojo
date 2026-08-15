@@ -12,7 +12,7 @@ from duckdb.typed_api import (
 )
 from std.collections import Optional
 from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory.alloc import alloc
 from std.builtin.rebind import downcast, rebind_var
 from std.iter import Iterator, Iterable, StopIteration
 from std.reflection import Reflected
@@ -35,7 +35,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
     comptime IteratorType[
         iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
-    ]: Iterator = _ChunkRowIter[Self.is_owned, ImmutOrigin(iterable_origin)]
+    ]: Iterator = _ChunkRowIter[Self.is_owned, ImmOrigin(iterable_origin)]
 
     var _chunk: duckdb_data_chunk
 
@@ -80,18 +80,18 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             type_ptrs[i] = types[i]._logical_type
         
         var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, UInt64(len(types)))
-        type_ptrs.free()
+        type_ptrs.unsafe_free()
         
         self._chunk = chunk
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the chunk if owned.
         
         This uses compile-time conditional logic to only destroy owned chunks.
         """
         comptime if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=self._chunk))
+            libduckdb.duckdb_destroy_data_chunk(Pointer(to=self._chunk))
 
     def __init__(out self, *, deinit take: Self):
         self._chunk = take._chunk
@@ -224,7 +224,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return not is_valid
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & Deinitable
     ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value from the chunk.
 
@@ -341,7 +341,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return _deserialize_table_field[T](self.get_vector(col), row)
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -461,7 +461,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return result^
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & Deinitable
     ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
 
@@ -509,7 +509,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate column types match field types
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable]
+            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
             var actual_type = self.type(idx)
 
             comptime if conforms_to(FT, _NullableColumn):
@@ -607,7 +607,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Check non-Optional fields for NULL before allocating
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable]
+            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
 
             comptime if not conforms_to(FT, _NullableColumn):
                 if self.is_null(col=idx, row=row):
@@ -625,9 +625,9 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable]
+            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
             var vector = self.get_vector(idx)
-            var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
+            var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
 
             comptime if conforms_to(FT, _NullableColumn):
                 var val = downcast[
@@ -635,17 +635,17 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 ]._deserialize_single_nullable(
                     vector, row, self.is_null(col=idx, row=row)
                 )
-                dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
+                dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
                 var val = _deserialize_table_field[FT](vector, row)
-                dst.bitcast[FT]().init_pointee_move(val^)
+                dst.unsafe_bitcast[FT]().unsafe_write(val^)
 
-        var result = ptr.take_pointee()
-        ptr.free()
+        var result = ptr.unsafe_take_pointee()
+        ptr.unsafe_free()
         return result^
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self) raises -> List[T]:
         """Deserialize all table rows into Mojo structs.
 
@@ -673,7 +673,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return result^
 
     def get_tuple[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](self, *, row: Int) raises -> Tuple[*Ts]:
         """Deserialize a table row into a Mojo Tuple.
 
@@ -713,7 +713,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate types and NULL constraints
         comptime for idx in range(n):
             comptime ET = T.element_types[idx]
-            comptime ETC = downcast[ET, Copyable & Movable]
+            comptime ETC = downcast[ET, Copyable & Movable & Deinitable]
             var actual_type = self.type(idx)
 
             comptime if conforms_to(ETC, _NullableColumn):
@@ -816,7 +816,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         comptime for idx in range(n):
             comptime ET = T.element_types[idx]
-            comptime ETC = downcast[ET, Copyable & Movable]
+            comptime ETC = downcast[ET, Copyable & Movable & Deinitable]
             var vector = self.get_vector(idx)
 
             comptime if conforms_to(ETC, _NullableColumn):
@@ -825,22 +825,22 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 ]._deserialize_single_nullable(
                     vector, row, self.is_null(col=idx, row=row)
                 )
-                UnsafePointer(to=ptr[][idx]).init_pointee_move(
+                Pointer(to=ptr[][idx]).unsafe_write(
                     rebind_var[ET](val^)
                 )
             else:
                 var val = _deserialize_table_field[ETC](vector, row)
-                UnsafePointer(to=ptr[][idx]).init_pointee_move(
+                Pointer(to=ptr[][idx]).unsafe_write(
                     rebind_var[ET](val^)
                 )
 
-        var result = ptr.take_pointee()
-        ptr.free()
+        var result = ptr.unsafe_take_pointee()
+        ptr.unsafe_free()
         return result^
 
     def get_tuple[
-        *Ts: Copyable & Movable
-    ](self) raises -> List[downcast[Tuple[*Ts], Copyable]]:
+        *Ts: Copyable & Movable & Deinitable
+    ](self) raises -> List[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]]:
         """Deserialize all rows into Mojo Tuples.
 
         Parameters:
@@ -856,9 +856,9 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 print(rows[i][0], rows[i][1])
             ```
         """
-        var result = List[downcast[Tuple[*Ts], Copyable]](capacity=len(self))
+        var result = List[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]](capacity=len(self))
         for row in range(len(self)):
-            result.append(rebind_var[downcast[Tuple[*Ts], Copyable]](self.get_tuple[*Ts](row=row)))
+            result.append(rebind_var[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]](self.get_tuple[*Ts](row=row)))
         return result^
 
 
@@ -884,7 +884,7 @@ struct Row(Movable, Copyable):
         self._row = row
         self._num_cols = num_cols
 
-    def get[T: Copyable & Movable](self, *, col: Int) raises -> T:
+    def get[T: Copyable & Movable & Deinitable](self, *, col: Int) raises -> T:
         """Get a typed value from this row.
 
         Parameters:
@@ -924,7 +924,7 @@ struct Row(Movable, Copyable):
         return self._row
 
     def get_tuple[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](self) raises -> Tuple[*Ts]:
         """Deserialize this row into a Mojo Tuple.
 
@@ -952,7 +952,7 @@ struct Row(Movable, Copyable):
 
 @fieldwise_init
 struct _ChunkRowIter[
-    is_owned: Bool, origin: ImmutOrigin
+    is_owned: Bool, origin: ImmOrigin
 ](ImplicitlyCopyable, Iterable, Iterator):
     """Iterates over rows within a single Chunk, yielding Row proxies."""
 

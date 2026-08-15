@@ -8,20 +8,20 @@ comptime _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
 # ===--------------------------------------------------------------------===#
 
 
-def _kgen_insert_global(name: StringSlice, ptr: UnsafePointer):
+def _kgen_insert_global(name: StringSlice, ptr: Pointer):
     external_call["KGEN_CompilerRT_InsertGlobal", NoneType](
-        name, ptr.bitcast[NoneType](),
+        name, ptr.unsafe_bitcast[NoneType](),
     )
 
 
-def _kgen_get_global(name: StringSlice) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
+def _kgen_get_global(name: StringSlice) -> Pointer[NoneType, MutUntrackedOrigin]:
     return external_call[
         "KGEN_CompilerRT_GetGlobalOrNull",
-        UnsafePointer[NoneType, MutUntrackedOrigin],
+        Pointer[NoneType, MutUntrackedOrigin],
     ](name.unsafe_ptr(), name.byte_length())
 
 
-def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]):
+def _set_ext_api_ptr(ptr: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]):
     """Store the stable extension API pointer for later use by
     _init_duckdb_global.
 
@@ -32,20 +32,20 @@ def _set_ext_api_ptr(ptr: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]
 
 
 def _get_ext_api_ptr() -> Optional[
-    UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]
+    Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]
 ]:
     """Retrieve the previously stored stable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiPtr")
     var addr = Int(raw)
     if addr == 0:
         return None
-    return UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin](
+    return Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin](
         unsafe_from_address=addr
     )
 
 
 def _set_ext_api_unstable_ptr(
-    ptr: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin],
+    ptr: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin],
 ):
     """Store the unstable extension API pointer for later use by
     _init_duckdb_global.
@@ -57,14 +57,14 @@ def _set_ext_api_unstable_ptr(
 
 
 def _get_ext_api_unstable_ptr() -> Optional[
-    UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin]
+    Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin]
 ]:
     """Retrieve the previously stored unstable extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiUnstablePtr")
     var addr = Int(raw)
     if addr == 0:
         return None
-    return UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin](
+    return Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin](
         unsafe_from_address=addr
     )
 
@@ -92,20 +92,20 @@ struct _DuckDBGlobal(Defaultable, Movable):
         self.libduckdb = LibDuckDB()
 
     def __init__(
-        out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]
+        out self, api: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]
     ):
         """Extension mode (stable): construct LibDuckDB from the stable API struct."""
         self.libduckdb = LibDuckDB(api)
 
     def __init__(
         out self,
-        api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin],
+        api: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin],
     ):
         """Extension mode (unstable): construct LibDuckDB from the unstable API struct."""
         self.libduckdb = LibDuckDB(api)
 
 
-def _get_duckdb_interface() raises -> Pointer[LibDuckDB, StaticConstantOrigin]:
+def _get_duckdb_interface() raises -> Pointer[LibDuckDB, ImmStaticOrigin]:
     """Returns an immutable static pointer to the LibDuckDB global.
 
     The returned pointer is immutable to prevent invalid shared mutation of
@@ -113,13 +113,13 @@ def _get_duckdb_interface() raises -> Pointer[LibDuckDB, StaticConstantOrigin]:
     """
 
     var ptr = _DUCKDB_GLOBAL.get_or_create_ptr()
-    var ptr2 = UnsafePointer(to=ptr[].libduckdb).as_immutable().unsafe_origin_cast[StaticConstantOrigin
+    var ptr2 = Pointer(to=ptr[].libduckdb).as_imm().unsafe_origin_cast[ImmStaticOrigin
     ]()
     return Pointer(to=ptr2[])
 
 
 struct DuckDB(ImplicitlyCopyable):
-    var _impl: Pointer[LibDuckDB, StaticConstantOrigin]
+    var _impl: Pointer[LibDuckDB, ImmStaticOrigin]
 
     def __init__(out self):
         try:
@@ -128,7 +128,7 @@ struct DuckDB(ImplicitlyCopyable):
             abort(String("Failed to load libduckdb", e))
 
     @always_inline
-    def libduckdb(self) -> ref [StaticConstantOrigin] LibDuckDB:
+    def libduckdb(self) -> ref [ImmStaticOrigin] LibDuckDB:
         return self._impl[]
 
     @staticmethod
@@ -193,7 +193,7 @@ struct _DefaultConnGlobal(Defaultable, Movable):
 
 
 def _get_default_connection() raises -> Pointer[
-    Connection[ApiLevel.CLIENT], StaticConstantOrigin
+    Connection[ApiLevel.CLIENT], ImmStaticOrigin
 ]:
     """Return a static pointer to the lazily-created default connection.
 
@@ -203,7 +203,7 @@ def _get_default_connection() raises -> Pointer[
     thread-safe for concurrent use; open an explicit `connect()` for that.
     """
     var ptr = _DEFAULT_CONN_GLOBAL.get_or_create_ptr()
-    var conn_ptr = UnsafePointer(to=ptr[].conn).as_immutable().unsafe_origin_cast[
-        StaticConstantOrigin
+    var conn_ptr = Pointer(to=ptr[].conn).as_imm().unsafe_origin_cast[
+        ImmStaticOrigin
     ]()
     return Pointer(to=conn_ptr[])

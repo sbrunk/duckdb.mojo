@@ -27,7 +27,7 @@ Run from the repo root:
         extensions/mojo-gpu-operator/bench/native_decode_test.mojo
 """
 
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
 from std.math import ceildiv

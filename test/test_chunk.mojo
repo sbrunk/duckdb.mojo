@@ -74,8 +74,8 @@ def test_chunk_type() raises:
 
 def test_chunk_from_query() raises:
     """Test working with chunks from query results."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 42 as num, 'hello' as text")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 42 as num, 'hello' as text")
     
     var chunk = result.fetch_chunk()
     assert_equal(chunk.column_count(), 2)

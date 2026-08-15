@@ -61,9 +61,9 @@ from raw_plan_tags import (
 # Tape reader: a cursor over the flat int64 tape + the raw string blob.
 # ---------------------------------------------------------------------------
 struct RawPlanReader(Copyable, Movable):
-    var tape: UnsafePointer[Int64, MutAnyOrigin]
+    var tape: UnsafePointer[Int64, MutUntrackedOrigin]
     var tape_len: Int
-    var blob: UnsafePointer[UInt8, MutAnyOrigin]
+    var blob: UnsafePointer[UInt8, MutUntrackedOrigin]
     var blob_len: Int
     var cursor: Int
     # STRING_TABLE entries, filled in by parse_raw_plan once the section is read.
@@ -72,9 +72,9 @@ struct RawPlanReader(Copyable, Movable):
 
     def __init__(
         out self,
-        tape: UnsafePointer[Int64, MutAnyOrigin],
+        tape: UnsafePointer[Int64, MutUntrackedOrigin],
         tape_len: Int,
-        blob: UnsafePointer[UInt8, MutAnyOrigin],
+        blob: UnsafePointer[UInt8, MutUntrackedOrigin],
         blob_len: Int,
     ):
         self.tape = tape

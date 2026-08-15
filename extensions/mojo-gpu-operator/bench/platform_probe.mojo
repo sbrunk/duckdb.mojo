@@ -10,7 +10,7 @@ Run: pixi run mojo run extensions/mojo-gpu-operator/bench/platform_probe.mojo
 """
 
 from std.gpu import WARP_SIZE, thread_idx, block_idx
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.sys import has_accelerator
 from std.sys.info import (
     is_gpu,

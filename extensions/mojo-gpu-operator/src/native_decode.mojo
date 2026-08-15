@@ -40,16 +40,17 @@ gpu_decode_bitpacking.cu):
                                in storage/compression/bitpacking.cpp; the bias is
                                folded into data[0] before the inclusive scan.)
 
-`unpack_value` is the single load-bearing bit-twiddle (LSB-first width-bit field
-extraction from a uint32 stream), ported exactly from Sirius
+`unpack_value` is the bit-twiddle (LSB-first width-bit field
+extraction from a uint32 stream), ported from Sirius
 include/cuda/scan/unpack_value.cuh.
 
 These kernels live here and are imported by gpu_kernels.mojo (the dylib root,
 where the @export C-ABI wrappers must live per the build).
 """
 
-from std.gpu import block_idx, thread_idx, block_dim, grid_dim, barrier
-from std.gpu.memory import AddressSpace
+from std.gpu import block_idx, thread_idx, block_dim, grid_dim
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation, bitcast
 from std.math import ceildiv
 
@@ -100,9 +101,9 @@ def _tbytes[T: DType]() -> Int:
 # ---------------------------------------------------------------------------
 @always_inline
 def unpack_value(
-    packed: UnsafePointer[Scalar[DType.uint32], MutAnyOrigin],
+    packed: UnsafePointer[Scalar[DType.uint32], MutUntrackedOrigin],
     idx: Int,
-    width: Int,
+    width: SIMDLength,
 ) -> UInt64:
     comptime WORD_BITS = 32
     if width == 0:
@@ -134,7 +135,7 @@ def unpack_value(
 # (memcpy-equivalent; the segment bytes are native little-endian.)
 # ---------------------------------------------------------------------------
 @always_inline
-def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin], off: Int) -> UInt64:
+def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt64:
     var v = UInt64(0)
     comptime for b in range(8):
         v |= UInt64(p[off + b]) << UInt64(8 * b)
@@ -142,7 +143,7 @@ def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin], off: Int) -> 
 
 
 @always_inline
-def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin], off: Int) -> UInt32:
+def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt32:
     var v = UInt32(0)
     comptime for b in range(4):
         v |= UInt32(p[off + b]) << UInt32(8 * b)
@@ -157,12 +158,15 @@ def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin], off: Int) -> 
 def uncompressed_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
-    n_rows: Int,
-    data_off: Int,
-    out_row_offset: Int,
+    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    data_off_dp: Int64,
+    out_row_offset_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var data_off = Int(data_off_dp)
+    var out_row_offset = Int(out_row_offset_dp)
     comptime TBYTES = _tbytes[T]()
     comptime UT = _unsigned_of[T]()
     var tid = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
@@ -197,13 +201,17 @@ def uncompressed_decode_kernel[
 def bitpacking_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    seg_bytes: Int,
-    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
-    group_idx: Int,
-    group_rows: Int,
-    out_row_offset: Int,
+    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    seg_bytes_dp: Int64,
+    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    group_idx_dp: Int64,
+    group_rows_dp: Int64,
+    out_row_offset_dp: Int64,
 ):
+    var seg_bytes = Int(seg_bytes_dp)
+    var group_idx = Int(group_idx_dp)
+    var group_rows = Int(group_rows_dp)
+    var out_row_offset = Int(out_row_offset_dp)
     comptime TBYTES = _tbytes[T]()
     comptime UT = _unsigned_of[T]()
 

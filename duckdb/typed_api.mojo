@@ -67,12 +67,11 @@ Key features:
 - Pure Mojo ``MojoType`` descriptor that mirrors DuckDB's LogicalType
 """
 
-from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
 from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
-from std.memory import alloc, memcpy
+from std.memory import alloc, unsafe_memcpy
 from std.builtin.rebind import downcast
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
@@ -86,7 +85,7 @@ from duckdb.logical_type import LogicalType, struct_type
 # ──────────────────────────────────────────────────────────────────
 
 
-def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value:
+def _to_duckdb_value[T: Copyable & Movable & Deinitable](ref value: T) raises -> duckdb_value:
     """Convert a Mojo value to a duckdb_value.
 
     Supports scalar types (Bool, integers, floats, String),
@@ -106,99 +105,99 @@ def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value
     ref libduckdb = DuckDB().libduckdb()
     # Use UnsafePointer.bitcast to reinterpret ref value as the concrete
     # type without requiring ImplicitlyCopyable.
-    var vp = UnsafePointer(to=value)
+    var vp = Pointer(to=value)
 
-    comptime if _type_is_eq[T, Bool]():
-        return libduckdb.duckdb_create_bool(vp.bitcast[Bool]()[])
-    elif _type_is_eq[T, Int8]():
-        return libduckdb.duckdb_create_int8(vp.bitcast[Int8]()[])
-    elif _type_is_eq[T, Int16]():
-        return libduckdb.duckdb_create_int16(vp.bitcast[Int16]()[])
-    elif _type_is_eq[T, Int32]():
-        return libduckdb.duckdb_create_int32(vp.bitcast[Int32]()[])
-    elif _type_is_eq[T, Int64]():
-        return libduckdb.duckdb_create_int64(vp.bitcast[Int64]()[])
-    elif _type_is_eq[T, Int]():
+    comptime if T == Bool:
+        return libduckdb.duckdb_create_bool(vp.unsafe_bitcast[Bool]()[])
+    elif T == Int8:
+        return libduckdb.duckdb_create_int8(vp.unsafe_bitcast[Int8]()[])
+    elif T == Int16:
+        return libduckdb.duckdb_create_int16(vp.unsafe_bitcast[Int16]()[])
+    elif T == Int32:
+        return libduckdb.duckdb_create_int32(vp.unsafe_bitcast[Int32]()[])
+    elif T == Int64:
+        return libduckdb.duckdb_create_int64(vp.unsafe_bitcast[Int64]()[])
+    elif T == Int:
         # Int is platform-dependent: cast to the appropriate fixed-width type
         comptime if size_of[Int]() == 4:
             return libduckdb.duckdb_create_int32(
-                Int32(vp.bitcast[Int]()[])
+                Int32(vp.unsafe_bitcast[Int]()[])
             )
         else:
             return libduckdb.duckdb_create_int64(
-                Int64(vp.bitcast[Int]()[])
+                Int64(vp.unsafe_bitcast[Int]()[])
             )
-    elif _type_is_eq[T, UInt8]():
-        return libduckdb.duckdb_create_uint8(vp.bitcast[UInt8]()[])
-    elif _type_is_eq[T, UInt16]():
-        return libduckdb.duckdb_create_uint16(vp.bitcast[UInt16]()[])
-    elif _type_is_eq[T, UInt32]():
-        return libduckdb.duckdb_create_uint32(vp.bitcast[UInt32]()[])
-    elif _type_is_eq[T, UInt64]():
-        return libduckdb.duckdb_create_uint64(vp.bitcast[UInt64]()[])
-    elif _type_is_eq[T, UInt]():
+    elif T == UInt8:
+        return libduckdb.duckdb_create_uint8(vp.unsafe_bitcast[UInt8]()[])
+    elif T == UInt16:
+        return libduckdb.duckdb_create_uint16(vp.unsafe_bitcast[UInt16]()[])
+    elif T == UInt32:
+        return libduckdb.duckdb_create_uint32(vp.unsafe_bitcast[UInt32]()[])
+    elif T == UInt64:
+        return libduckdb.duckdb_create_uint64(vp.unsafe_bitcast[UInt64]()[])
+    elif T == UInt:
         comptime if size_of[UInt]() == 4:
             return libduckdb.duckdb_create_uint32(
-                UInt32(vp.bitcast[UInt]()[])
+                UInt32(vp.unsafe_bitcast[UInt]()[])
             )
         else:
             return libduckdb.duckdb_create_uint64(
-                UInt64(vp.bitcast[UInt]()[])
+                UInt64(vp.unsafe_bitcast[UInt]()[])
             )
-    elif _type_is_eq[T, Float32]():
-        return libduckdb.duckdb_create_float(vp.bitcast[Float32]()[])
-    elif _type_is_eq[T, Float64]():
-        return libduckdb.duckdb_create_double(vp.bitcast[Float64]()[])
-    elif _type_is_eq[T, Int128]():
-        return libduckdb.duckdb_create_hugeint(vp.bitcast[Int128]()[])
-    elif _type_is_eq[T, UInt128]():
-        return libduckdb.duckdb_create_uhugeint(vp.bitcast[UInt128]()[])
-    elif _type_is_eq[T, String]():
-        var s = String(vp.bitcast[String]()[])
+    elif T == Float32:
+        return libduckdb.duckdb_create_float(vp.unsafe_bitcast[Float32]()[])
+    elif T == Float64:
+        return libduckdb.duckdb_create_double(vp.unsafe_bitcast[Float64]()[])
+    elif T == Int128:
+        return libduckdb.duckdb_create_hugeint(vp.unsafe_bitcast[Int128]()[])
+    elif T == UInt128:
+        return libduckdb.duckdb_create_uhugeint(vp.unsafe_bitcast[UInt128]()[])
+    elif T == String:
+        var s = String(vp.unsafe_bitcast[String]()[])
         return libduckdb.duckdb_create_varchar_length(
             s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
         )
-    elif _type_is_eq[T, Date]():
-        return libduckdb.duckdb_create_date(vp.bitcast[Date]()[])
-    elif _type_is_eq[T, Time]():
-        return libduckdb.duckdb_create_time(vp.bitcast[Time]()[])
-    elif _type_is_eq[T, Timestamp]():
-        return libduckdb.duckdb_create_timestamp(vp.bitcast[Timestamp]()[])
-    elif _type_is_eq[T, Interval]():
+    elif T == Date:
+        return libduckdb.duckdb_create_date(vp.unsafe_bitcast[Date]()[])
+    elif T == Time:
+        return libduckdb.duckdb_create_time(vp.unsafe_bitcast[Time]()[])
+    elif T == Timestamp:
+        return libduckdb.duckdb_create_timestamp(vp.unsafe_bitcast[Timestamp]()[])
+    elif T == Interval:
         return libduckdb.duckdb_create_interval(
-            vp.bitcast[duckdb_interval]()[]
+            vp.unsafe_bitcast[duckdb_interval]()[]
         )
-    elif _type_is_eq[T, Decimal]():
-        return libduckdb.duckdb_create_decimal(vp.bitcast[Decimal]()[])
-    elif _type_is_eq[T, TimestampS]():
-        var raw = duckdb_timestamp_s(vp.bitcast[TimestampS]()[].seconds)
+    elif T == Decimal:
+        return libduckdb.duckdb_create_decimal(vp.unsafe_bitcast[Decimal]()[])
+    elif T == TimestampS:
+        var raw = duckdb_timestamp_s(vp.unsafe_bitcast[TimestampS]()[].seconds)
         return libduckdb.duckdb_create_timestamp_s(raw)
-    elif _type_is_eq[T, TimestampMS]():
-        var raw = duckdb_timestamp_ms(vp.bitcast[TimestampMS]()[].millis)
+    elif T == TimestampMS:
+        var raw = duckdb_timestamp_ms(vp.unsafe_bitcast[TimestampMS]()[].millis)
         return libduckdb.duckdb_create_timestamp_ms(raw)
-    elif _type_is_eq[T, TimestampNS]():
-        var raw = duckdb_timestamp_ns(vp.bitcast[TimestampNS]()[].nanos)
+    elif T == TimestampNS:
+        var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampNS]()[].nanos)
         return libduckdb.duckdb_create_timestamp_ns(raw)
-    elif _type_is_eq[T, TimestampTZ]():
-        var ts = Timestamp(vp.bitcast[TimestampTZ]()[].micros)
+    elif T == TimestampTZ:
+        var ts = Timestamp(vp.unsafe_bitcast[TimestampTZ]()[].micros)
         return libduckdb.duckdb_create_timestamp_tz(ts)
-    elif _type_is_eq[T, TimeTZ]():
-        var raw = duckdb_time_tz(vp.bitcast[TimeTZ]()[].bits)
+    elif T == TimeTZ:
+        var raw = duckdb_time_tz(vp.unsafe_bitcast[TimeTZ]()[].bits)
         return libduckdb.duckdb_create_time_tz_value(raw)
-    elif _type_is_eq[T, UUID]():
-        return libduckdb.duckdb_create_uuid(vp.bitcast[UUID]()[].value)
-    elif _type_is_eq[T, TimeNS]():
-        var raw = duckdb_time_ns(vp.bitcast[TimeNS]()[].nanos)
+    elif T == UUID:
+        return libduckdb.duckdb_create_uuid(vp.unsafe_bitcast[UUID]()[].value)
+    elif T == TimeNS:
+        var raw = duckdb_time_ns(vp.unsafe_bitcast[TimeNS]()[].nanos)
         return libduckdb.duckdb_create_time_ns(raw)
-    elif _type_is_eq[T, Bit]():
-        var bit_ref = vp.bitcast[Bit]()[].copy()
+    elif T == Bit:
+        var bit_ref = vp.unsafe_bitcast[Bit]()[].copy()
         # Allocate temp buffer for duckdb_bit.data — padding byte + bit bytes
         var buf = alloc[UInt8](len(bit_ref._data))
         for i in range(len(bit_ref._data)):
             buf[i] = bit_ref._data[i]
         var raw = duckdb_bit(buf, idx_t(len(bit_ref._data)))
         var val = libduckdb.duckdb_create_bit(raw)
-        buf.free()
+        buf.unsafe_free()
         return val
     else:
         raise Error(
@@ -212,7 +211,7 @@ def _to_duckdb_value[T: Copyable & Movable](ref value: T) raises -> duckdb_value
 # ──────────────────────────────────────────────────────────────────
 
 
-struct MojoType(Copyable, Movable, Writable):
+struct MojoType(Copyable, Movable, Deinitable, Writable):
     """A pure-Mojo descriptor that mirrors DuckDB's LogicalType.
 
     This allows representing DuckDB types (including nested ones like LIST
@@ -231,6 +230,13 @@ struct MojoType(Copyable, Movable, Writable):
 
     var field_names: List[String]
     """Field names (for STRUCT types). Empty for non-struct types."""
+
+    def __deinit__(deinit self):
+        # `List[T]` is only `Deinitable` when `T` is, which the compiler cannot
+        # prove for the self-referential `List[MojoType]` field.
+        # Declaring the destructor explicitly breaks that cycle. Fields are
+        # still destroyed automatically, so the body has nothing to do.
+        pass
 
     # -- Constructors ---------------------------------------------------
 
@@ -333,7 +339,7 @@ struct MojoType(Copyable, Movable, Writable):
     # -- Display --------------------------------------------------------
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         if self.type_id == DuckDBType.list:
@@ -378,42 +384,42 @@ def _is_list_compatible_type(actual: DuckDBType) -> Bool:
 def _is_known_scalar_type[T: AnyType]() -> Bool:
     """Returns True if T is one of the known DuckDB-mappable scalar types."""
     comptime if (
-        _type_is_eq[T, Bool]()
-        or _type_is_eq[T, Int8]()
-        or _type_is_eq[T, Int16]()
-        or _type_is_eq[T, Int32]()
-        or _type_is_eq[T, Int64]()
-        or _type_is_eq[T, Int]()
-        or _type_is_eq[T, UInt8]()
-        or _type_is_eq[T, UInt16]()
-        or _type_is_eq[T, UInt32]()
-        or _type_is_eq[T, UInt64]()
-        or _type_is_eq[T, UInt]()
-        or _type_is_eq[T, Float32]()
-        or _type_is_eq[T, Float64]()
-        or _type_is_eq[T, String]()
-        or _type_is_eq[T, Date]()
-        or _type_is_eq[T, Time]()
-        or _type_is_eq[T, Timestamp]()
-        or _type_is_eq[T, Interval]()
-        or _type_is_eq[T, Int128]()
-        or _type_is_eq[T, UInt128]()
-        or _type_is_eq[T, Decimal]()
-        or _type_is_eq[T, TimestampS]()
-        or _type_is_eq[T, TimestampMS]()
-        or _type_is_eq[T, TimestampNS]()
-        or _type_is_eq[T, TimestampTZ]()
-        or _type_is_eq[T, TimeTZ]()
-        or _type_is_eq[T, UUID]()
-        or _type_is_eq[T, TimeNS]()
-        or _type_is_eq[T, Bit]()
+        T == Bool
+        or T == Int8
+        or T == Int16
+        or T == Int32
+        or T == Int64
+        or T == Int
+        or T == UInt8
+        or T == UInt16
+        or T == UInt32
+        or T == UInt64
+        or T == UInt
+        or T == Float32
+        or T == Float64
+        or T == String
+        or T == Date
+        or T == Time
+        or T == Timestamp
+        or T == Interval
+        or T == Int128
+        or T == UInt128
+        or T == Decimal
+        or T == TimestampS
+        or T == TimestampMS
+        or T == TimestampNS
+        or T == TimestampTZ
+        or T == TimeTZ
+        or T == UUID
+        or T == TimeNS
+        or T == Bit
     ):
         return True
     else:
         return False
 
 
-def mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
+def mojo_type_to_duckdb_type[T: Copyable & Movable & Deinitable]() -> DuckDBType:
     """Maps a Mojo type to its corresponding DuckDB type at compile time.
 
     Supports scalar types, Date/Time/Timestamp/Interval, String, List[T],
@@ -425,71 +431,71 @@ def mojo_type_to_duckdb_type[T: Copyable & Movable]() -> DuckDBType:
     Returns:
         The corresponding DuckDBType.
     """
-    comptime if _type_is_eq[T, Bool]():
+    comptime if T == Bool:
         return DuckDBType.boolean
-    elif _type_is_eq[T, Int8]():
+    elif T == Int8:
         return DuckDBType.tinyint
-    elif _type_is_eq[T, Int16]():
+    elif T == Int16:
         return DuckDBType.smallint
-    elif _type_is_eq[T, Int32]():
+    elif T == Int32:
         return DuckDBType.integer
-    elif _type_is_eq[T, Int64]():
+    elif T == Int64:
         return DuckDBType.bigint
-    elif _type_is_eq[T, Int]():
+    elif T == Int:
         # Int is platform-dependent: 32-bit or 64-bit
         comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
-    elif _type_is_eq[T, UInt8]():
+    elif T == UInt8:
         return DuckDBType.utinyint
-    elif _type_is_eq[T, UInt16]():
+    elif T == UInt16:
         return DuckDBType.usmallint
-    elif _type_is_eq[T, UInt32]():
+    elif T == UInt32:
         return DuckDBType.uinteger
-    elif _type_is_eq[T, UInt64]():
+    elif T == UInt64:
         return DuckDBType.ubigint
-    elif _type_is_eq[T, UInt]():
+    elif T == UInt:
         # UInt is platform-dependent: 32-bit or 64-bit
         comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:
             return DuckDBType.ubigint
-    elif _type_is_eq[T, Float32]():
+    elif T == Float32:
         return DuckDBType.float
-    elif _type_is_eq[T, Float64]():
+    elif T == Float64:
         return DuckDBType.double
-    elif _type_is_eq[T, String]():
+    elif T == String:
         return DuckDBType.varchar
-    elif _type_is_eq[T, Date]():
+    elif T == Date:
         return DuckDBType.date
-    elif _type_is_eq[T, Time]():
+    elif T == Time:
         return DuckDBType.time
-    elif _type_is_eq[T, Timestamp]():
+    elif T == Timestamp:
         return DuckDBType.timestamp
-    elif _type_is_eq[T, Interval]():
+    elif T == Interval:
         return DuckDBType.interval
-    elif _type_is_eq[T, Int128]():
+    elif T == Int128:
         return DuckDBType.hugeint
-    elif _type_is_eq[T, UInt128]():
+    elif T == UInt128:
         return DuckDBType.uhugeint
-    elif _type_is_eq[T, Decimal]():
+    elif T == Decimal:
         return DuckDBType.decimal
-    elif _type_is_eq[T, TimestampS]():
+    elif T == TimestampS:
         return DuckDBType.timestamp_s
-    elif _type_is_eq[T, TimestampMS]():
+    elif T == TimestampMS:
         return DuckDBType.timestamp_ms
-    elif _type_is_eq[T, TimestampNS]():
+    elif T == TimestampNS:
         return DuckDBType.timestamp_ns
-    elif _type_is_eq[T, TimestampTZ]():
+    elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
-    elif _type_is_eq[T, TimeTZ]():
+    elif T == TimeTZ:
         return DuckDBType.time_tz
-    elif _type_is_eq[T, UUID]():
+    elif T == UUID:
         return DuckDBType.uuid
-    elif _type_is_eq[T, TimeNS]():
+    elif T == TimeNS:
         return DuckDBType.time_ns
-    elif _type_is_eq[T, Bit]():
+    elif T == Bit:
         return DuckDBType.bit
     else:
         comptime base_name = Reflected[T].base_name()
@@ -510,7 +516,7 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     """Map a field type (from struct_field_types) to DuckDBType.
 
     Used during struct reflection where field types come from
-    `struct_field_types` and may not satisfy Copyable & Movable.
+    `struct_field_types` and may not satisfy Copyable & Movable & Deinitable.
 
     Parameters:
         T: The field type.
@@ -518,69 +524,69 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     Returns:
         The DuckDBType for this field.
     """
-    comptime if _type_is_eq[T, Bool]():
+    comptime if T == Bool:
         return DuckDBType.boolean
-    elif _type_is_eq[T, Int8]():
+    elif T == Int8:
         return DuckDBType.tinyint
-    elif _type_is_eq[T, Int16]():
+    elif T == Int16:
         return DuckDBType.smallint
-    elif _type_is_eq[T, Int32]():
+    elif T == Int32:
         return DuckDBType.integer
-    elif _type_is_eq[T, Int64]():
+    elif T == Int64:
         return DuckDBType.bigint
-    elif _type_is_eq[T, Int]():
+    elif T == Int:
         comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
-    elif _type_is_eq[T, UInt8]():
+    elif T == UInt8:
         return DuckDBType.utinyint
-    elif _type_is_eq[T, UInt16]():
+    elif T == UInt16:
         return DuckDBType.usmallint
-    elif _type_is_eq[T, UInt32]():
+    elif T == UInt32:
         return DuckDBType.uinteger
-    elif _type_is_eq[T, UInt64]():
+    elif T == UInt64:
         return DuckDBType.ubigint
-    elif _type_is_eq[T, UInt]():
+    elif T == UInt:
         comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:
             return DuckDBType.ubigint
-    elif _type_is_eq[T, Float32]():
+    elif T == Float32:
         return DuckDBType.float
-    elif _type_is_eq[T, Float64]():
+    elif T == Float64:
         return DuckDBType.double
-    elif _type_is_eq[T, String]():
+    elif T == String:
         return DuckDBType.varchar
-    elif _type_is_eq[T, Date]():
+    elif T == Date:
         return DuckDBType.date
-    elif _type_is_eq[T, Time]():
+    elif T == Time:
         return DuckDBType.time
-    elif _type_is_eq[T, Timestamp]():
+    elif T == Timestamp:
         return DuckDBType.timestamp
-    elif _type_is_eq[T, Interval]():
+    elif T == Interval:
         return DuckDBType.interval
-    elif _type_is_eq[T, Int128]():
+    elif T == Int128:
         return DuckDBType.hugeint
-    elif _type_is_eq[T, UInt128]():
+    elif T == UInt128:
         return DuckDBType.uhugeint
-    elif _type_is_eq[T, Decimal]():
+    elif T == Decimal:
         return DuckDBType.decimal
-    elif _type_is_eq[T, TimestampS]():
+    elif T == TimestampS:
         return DuckDBType.timestamp_s
-    elif _type_is_eq[T, TimestampMS]():
+    elif T == TimestampMS:
         return DuckDBType.timestamp_ms
-    elif _type_is_eq[T, TimestampNS]():
+    elif T == TimestampNS:
         return DuckDBType.timestamp_ns
-    elif _type_is_eq[T, TimestampTZ]():
+    elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
-    elif _type_is_eq[T, TimeTZ]():
+    elif T == TimeTZ:
         return DuckDBType.time_tz
-    elif _type_is_eq[T, UUID]():
+    elif T == UUID:
         return DuckDBType.uuid
-    elif _type_is_eq[T, TimeNS]():
+    elif T == TimeNS:
         return DuckDBType.time_ns
-    elif _type_is_eq[T, Bit]():
+    elif T == Bit:
         return DuckDBType.bit
     else:
         comptime base_name = Reflected[T].base_name()
@@ -594,7 +600,7 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
             return DuckDBType.struct_t
 
 
-def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
+def mojo_logical_type[T: Copyable & Movable & Deinitable]() -> MojoType:
     """Build a pure-Mojo MojoType descriptor from a Mojo type parameter.
 
     For scalar types this returns a leaf MojoType.
@@ -645,7 +651,7 @@ def mojo_logical_type[T: Copyable & Movable]() -> MojoType:
 # ──────────────────────────────────────────────────────────────────
 
 
-def _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) raises -> T:
+def _deserialize_scalar[T: Copyable & Movable & Deinitable](vector: Vector, offset: Int) raises -> T:
     """Deserialize a scalar value from a vector.
 
     Parameters:
@@ -661,19 +667,19 @@ def _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) rais
     comptime expected_type = mojo_type_to_duckdb_type[T]()
 
     comptime if expected_type == DuckDBType.varchar:
-        var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+        var data_str_ptr = vector.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
         var string_length = Int(data_str_ptr[offset].length)
 
         var result: String
         if data_str_ptr[offset].length <= 12:
-            var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
-            var ptr = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+            var data_str_inlined = data_str_ptr.unsafe_bitcast[duckdb_string_t_inlined]()
+            var ptr = data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[Byte]()
             result = String(unsafe_uninit_length=string_length)
-            memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
+            unsafe_memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
         else:
-            var ptr = data_str_ptr[offset].ptr.bitcast[UInt8]()
+            var ptr = data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
             result = String(unsafe_uninit_length=string_length)
-            memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
+            unsafe_memcpy(dest=result.unsafe_ptr_mut(), src=ptr, count=string_length)
 
         return rebind_var[T](result^)
     elif expected_type == DuckDBType.decimal:
@@ -689,44 +695,44 @@ def _deserialize_scalar[T: Copyable & Movable](vector: Vector, offset: Int) rais
 
         var value: Int128
         if internal == DuckDBType.smallint.value:
-            value = vector.get_data().bitcast[Int16]()[offset].cast[DType.int128]()
+            value = vector.get_data().unsafe_bitcast[Int16]()[offset].cast[DType.int128]()
         elif internal == DuckDBType.integer.value:
-            value = vector.get_data().bitcast[Int32]()[offset].cast[DType.int128]()
+            value = vector.get_data().unsafe_bitcast[Int32]()[offset].cast[DType.int128]()
         elif internal == DuckDBType.bigint.value:
-            value = vector.get_data().bitcast[Int64]()[offset].cast[DType.int128]()
+            value = vector.get_data().unsafe_bitcast[Int64]()[offset].cast[DType.int128]()
         else:
             # hugeint (width > 18)
-            value = vector.get_data().bitcast[Int128]()[offset]
+            value = vector.get_data().unsafe_bitcast[Int128]()[offset]
 
         var dec = Decimal(width, scale, value)
         return rebind_var[T](dec)
     elif expected_type == DuckDBType.uuid:
         # UUIDs are stored as Int128 in vectors with a special encoding.
         # Convert from internal format to canonical UInt128.
-        var raw = vector.get_data().bitcast[Int128]()[offset]
+        var raw = vector.get_data().unsafe_bitcast[Int128]()[offset]
         var uuid = UUID(internal=raw)
         return rebind_var[T](uuid)
     elif expected_type == DuckDBType.bit:
         # BIT values use duckdb_string_t storage (like VARCHAR/BLOB).
         var bit = _deserialize_bit(vector, offset)
         return rebind_var[T](bit^)
-    elif _type_is_eq[T, Int]():
+    elif T == Int:
         # Int is platform-dependent — read the matching fixed-width type
         comptime if size_of[Int]() == 4:
-            var val = Int(vector.get_data().bitcast[Int32]()[offset])
+            var val = Int(vector.get_data().unsafe_bitcast[Int32]()[offset])
             return rebind_var[T](val)
         else:
-            var val = Int(vector.get_data().bitcast[Int64]()[offset])
+            var val = Int(vector.get_data().unsafe_bitcast[Int64]()[offset])
             return rebind_var[T](val)
-    elif _type_is_eq[T, UInt]():
+    elif T == UInt:
         comptime if size_of[UInt]() == 4:
-            var val = UInt(vector.get_data().bitcast[UInt32]()[offset])
+            var val = UInt(vector.get_data().unsafe_bitcast[UInt32]()[offset])
             return rebind_var[T](val)
         else:
-            var val = UInt(vector.get_data().bitcast[UInt64]()[offset])
+            var val = UInt(vector.get_data().unsafe_bitcast[UInt64]()[offset])
             return rebind_var[T](val)
     else:
-        var data_ptr = vector.get_data().bitcast[T]()
+        var data_ptr = vector.get_data().unsafe_bitcast[T]()
         return data_ptr[offset].copy()
 
 
@@ -748,17 +754,17 @@ def _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
     Returns:
         A List[UInt8] containing the raw binary data.
     """
-    var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+    var data_str_ptr = vector.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
     var blob_length = Int(data_str_ptr[offset].length)
     var result = List[UInt8](capacity=blob_length)
 
     if data_str_ptr[offset].length <= 12:
-        var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
-        var ptr = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8]()
+        var data_str_inlined = data_str_ptr.unsafe_bitcast[duckdb_string_t_inlined]()
+        var ptr = data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[UInt8]()
         for i in range(blob_length):
             result.append(ptr[i])
     else:
-        var ptr = data_str_ptr[offset].ptr.bitcast[UInt8]()
+        var ptr = data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
         for i in range(blob_length):
             result.append(ptr[i])
 
@@ -784,17 +790,17 @@ def _deserialize_bit(vector: Vector, offset: Int) -> Bit:
     Returns:
         A Bit value.
     """
-    var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+    var data_str_ptr = vector.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
     var byte_count = Int(data_str_ptr[offset].length)
     var raw = List[UInt8](capacity=byte_count)
 
     if data_str_ptr[offset].length <= 12:
-        var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
-        var ptr = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[UInt8]()
+        var data_str_inlined = data_str_ptr.unsafe_bitcast[duckdb_string_t_inlined]()
+        var ptr = data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[UInt8]()
         for i in range(byte_count):
             raw.append(ptr[i])
     else:
-        var ptr = data_str_ptr[offset].ptr.bitcast[UInt8]()
+        var ptr = data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
         for i in range(byte_count):
             raw.append(ptr[i])
 
@@ -830,22 +836,22 @@ def _deserialize_enum_value(vector: Vector, offset: Int) raises -> String:
 
     var enum_idx: idx_t
     if internal_type == DuckDBType.utinyint:
-        enum_idx = idx_t(vector.get_data().bitcast[UInt8]()[offset])
+        enum_idx = idx_t(vector.get_data().unsafe_bitcast[UInt8]()[offset])
     elif internal_type == DuckDBType.usmallint:
-        enum_idx = idx_t(vector.get_data().bitcast[UInt16]()[offset])
+        enum_idx = idx_t(vector.get_data().unsafe_bitcast[UInt16]()[offset])
     elif internal_type == DuckDBType.uinteger:
-        enum_idx = idx_t(vector.get_data().bitcast[UInt32]()[offset])
+        enum_idx = idx_t(vector.get_data().unsafe_bitcast[UInt32]()[offset])
     else:
         raise Error("Unexpected ENUM internal type: " + String(internal_type))
 
     var char_ptr = libduckdb.duckdb_enum_dictionary_value(col_type.internal_ptr(), enum_idx)
     var result = String(unsafe_from_utf8_ptr=char_ptr)
-    libduckdb.duckdb_free(char_ptr.bitcast[NoneType]())
+    libduckdb.duckdb_free(char_ptr.unsafe_bitcast[NoneType]())
     return result^
 
 
 def _deserialize_enum_column[
-    T: Copyable & Movable
+    T: Copyable & Movable & Deinitable
 ](vector: Vector, length: Int, offset: Int) raises -> List[Optional[T]]:
     """Deserialize an ENUM column into a list of Optional[String].
 
@@ -879,7 +885,7 @@ def _deserialize_enum_column[
 
 
 def _is_valid(
-    validity_mask: Optional[UnsafePointer[UInt64, MutAnyOrigin]], idx: Int
+    validity_mask: Optional[Pointer[UInt64, MutAnyOrigin]], idx: Int
 ) -> Bool:
     """Check if a value at idx is valid (non-NULL) given a validity mask.
 
@@ -894,7 +900,7 @@ def _is_valid(
 
 
 def _deserialize_struct_field[
-    FieldType: Copyable & Movable
+    FieldType: Copyable & Movable & Deinitable
 ](child_vector: Vector, offset: Int) raises -> FieldType:
     """Deserialize a single field value from a struct child vector.
 
@@ -919,7 +925,7 @@ def _deserialize_struct_field[
 
 
 def _deserialize_struct_row[
-    T: Copyable & Movable
+    T: Copyable & Movable & Deinitable
 ](vector: Vector, offset: Int) raises -> T:
     """Deserialize a single DuckDB STRUCT row into a Mojo struct T.
 
@@ -944,10 +950,10 @@ def _deserialize_struct_row[
     comptime for idx in range(field_count):
         var child_vec = vector.struct_get_child(idx_t(idx))
         comptime FieldType = Reflected[T].field_types()[idx]
-        comptime FT = downcast[FieldType, Copyable & Movable]
+        comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
 
         # Get raw pointer to the field's memory slot
-        var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
+        var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
 
         comptime if conforms_to(FT, _NullableColumn):
             # Optional field — check child vector validity for this row
@@ -956,33 +962,33 @@ def _deserialize_struct_row[
             var val = downcast[
                 FT, _NullableColumn
             ]._deserialize_single_nullable(child_vec, offset, is_null)
-            dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
+            dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
         else:
             comptime db_type = _scalar_type_to_duckdb[FieldType]()
 
             comptime if db_type == DuckDBType.varchar:
                 # String requires special construction
-                var data_str_ptr = child_vec.get_data().bitcast[duckdb_string_t_pointer]()
+                var data_str_ptr = child_vec.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
                 var string_length = Int(data_str_ptr[offset].length)
                 var result: String
                 if data_str_ptr[offset].length <= 12:
-                    var data_str_inlined = data_str_ptr.bitcast[duckdb_string_t_inlined]()
-                    var p = data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+                    var data_str_inlined = data_str_ptr.unsafe_bitcast[duckdb_string_t_inlined]()
+                    var p = data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[Byte]()
                     result = String(unsafe_uninit_length=string_length)
-                    memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
+                    unsafe_memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
                 else:
-                    var p = data_str_ptr[offset].ptr.bitcast[UInt8]()
+                    var p = data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
                     result = String(unsafe_uninit_length=string_length)
-                    memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
-                dst.bitcast[String]().init_pointee_move(result^)
+                    unsafe_memcpy(dest=result.unsafe_ptr_mut(), src=p, count=string_length)
+                dst.unsafe_bitcast[String]().unsafe_write(result^)
             else:
                 # Fixed-size type: bitwise copy from the vector data
                 comptime field_size = size_of[FieldType]()
-                var src = child_vec.get_data().bitcast[Byte]() + offset * field_size
-                memcpy(dest=dst.bitcast[Byte](), src=src, count=field_size)
+                var src = child_vec.get_data().unsafe_bitcast[Byte]() + offset * field_size
+                unsafe_memcpy(dest=dst.unsafe_bitcast[Byte](), src=src, count=field_size)
 
-    var result = ptr.take_pointee()
-    ptr.free()
+    var result = ptr.unsafe_take_pointee()
+    ptr.unsafe_free()
     return result^
 
 
@@ -1009,7 +1015,7 @@ def _deserialize_struct_row[
 
 
 def _deserialize_union_row[
-    T: Copyable & Movable
+    T: Copyable & Movable & Deinitable
 ](vector: Vector, offset: Int) raises -> T:
     """Deserialize a single DuckDB UNION row into a Mojo struct T.
 
@@ -1030,15 +1036,15 @@ def _deserialize_union_row[
 
     # Read the tag from child 0 (UTINYINT)
     var tag_vec = vector.struct_get_child(0)
-    var tag = Int(tag_vec.get_data().bitcast[UInt8]()[offset])
+    var tag = Int(tag_vec.get_data().unsafe_bitcast[UInt8]()[offset])
 
     # Allocate uninitialised memory — we fill every field
     var ptr = alloc[T](1)
 
     comptime for idx in range(field_count):
-        var dst = UnsafePointer(to=__struct_field_ref(idx, ptr[]))
+        var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
         comptime FieldType = Reflected[T].field_types()[idx]
-        comptime FT = downcast[FieldType, Copyable & Movable]
+        comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
 
         # Each field must be Optional. Child vectors are 1-indexed
         # (child 0 is the tag).
@@ -1052,11 +1058,11 @@ def _deserialize_union_row[
                 var val = downcast[
                     FT, _NullableColumn
                 ]._deserialize_single_nullable(child_vec, offset, is_null)
-                dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
+                dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
                 # Non-Optional field in union — deserialize directly
                 var val = _deserialize_table_field[FT](child_vec, offset)
-                dst.bitcast[FT]().init_pointee_move(val^)
+                dst.unsafe_bitcast[FT]().unsafe_write(val^)
         else:
             # Inactive member — set to None if Optional
             comptime if conforms_to(FT, _NullableColumn):
@@ -1065,17 +1071,17 @@ def _deserialize_union_row[
                 var val = downcast[
                     FT, _NullableColumn
                 ]._deserialize_single_nullable(child_vec, offset, True)
-                dst.bitcast[FT]().init_pointee_move(rebind_var[FT](val^))
+                dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
                 # Non-Optional inactive member — zero-init
                 var zero = alloc[Byte](size_of[FT]())
                 for i in range(size_of[FT]()):
                     zero[i] = 0
-                memcpy(dest=dst.bitcast[Byte](), src=zero, count=size_of[FT]())
-                zero.free()
+                unsafe_memcpy(dest=dst.unsafe_bitcast[Byte](), src=zero, count=size_of[FT]())
+                zero.unsafe_free()
 
-    var result = ptr.take_pointee()
-    ptr.free()
+    var result = ptr.unsafe_take_pointee()
+    ptr.unsafe_free()
     return result^
 
 
@@ -1116,14 +1122,14 @@ __extension Variant(_VariantUnionDeserializable):
     def _from_union_vector(vector: Vector, offset: Int) raises -> Self:
         # Read the tag from child 0 (UTINYINT)
         var tag_vec = vector.struct_get_child(0)
-        var tag = Int(tag_vec.get_data().bitcast[UInt8]()[offset])
+        var tag = Int(tag_vec.get_data().unsafe_bitcast[UInt8]()[offset])
 
         # Iterate over Variant's type parameters at compile time.
         # Each iteration generates a runtime branch for the matching tag.
         comptime for i in range(Self.Ts.size):
             if tag == i:
                 comptime MemberType = Self.Ts[i]
-                comptime MT = downcast[MemberType, Copyable & Movable]
+                comptime MT = downcast[MemberType, Copyable & Movable & Deinitable]
                 var child_vec = vector.struct_get_child(idx_t(i + 1))
                 var val = _deserialize_table_field[MT](child_vec, offset)
                 return Self(val^)
@@ -1135,7 +1141,7 @@ __extension Variant(_VariantUnionDeserializable):
 # List type decomposition — traits + extensions for recursive types
 # ──────────────────────────────────────────────────────────────────
 #
-# Problem: inside a generic `def foo[T: Copyable & Movable]()` we
+# Problem: inside a generic `def foo[T: Copyable & Movable & Deinitable]()` we
 # cannot access `T.T` to decompose `List[Optional[X]]` into X.
 #
 # Solution (inspired by EmberJson): use `__extension` blocks where
@@ -1153,7 +1159,7 @@ __extension Variant(_VariantUnionDeserializable):
 # scalar and _deserialize_list handles it directly.
 # ──────────────────────────────────────────────────────────────────
 
-comptime _DBase = Copyable & Movable & ImplicitlyDestructible
+comptime _DBase = Copyable & Movable & Deinitable
 
 
 trait _InnerListDeserializer(_DBase):
@@ -1166,7 +1172,7 @@ trait _InnerListDeserializer(_DBase):
     @staticmethod
     def _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
-    ) raises -> List[downcast[Self, Copyable]]:
+    ) raises -> List[downcast[Self, Copyable & Movable & Deinitable]]:
         ...
 
 
@@ -1174,13 +1180,13 @@ __extension Optional(_InnerListDeserializer):
     @staticmethod
     def _deser_as_list_elements(
         child_vector: Vector, length: Int, offset: Int
-    ) raises -> List[downcast[Self, Copyable]]:
+    ) raises -> List[downcast[Self, Copyable & Movable & Deinitable]]:
         # Self = Optional[X],  Self.T = X
         # _deserialize_list[X] returns List[Optional[X]] == List[Self]
         var inner = _deserialize_list[downcast[Self.T, _DBase]](
             child_vector, length, offset
         )
-        return rebind_var[List[downcast[Self, Copyable]]](inner^)
+        return rebind_var[List[downcast[Self, Copyable & Movable & Deinitable]]](inner^)
 
 
 trait _VectorListConstructible(_DBase):
@@ -1274,12 +1280,17 @@ __extension Dict(_DictMapDeserializable):
         var key_vec = struct_vec.struct_get_child(0)
         var val_vec = struct_vec.struct_get_child(1)
         var val_validity = val_vec.get_validity()
-        var result = Self()
 
         comptime KT = downcast[
-            Self.K, Copyable & Movable & ImplicitlyDestructible
+            Self.K, KeyElement & Copyable & Movable & Deinitable
         ]
         comptime VT = downcast[Self.V, _DBase]
+
+        # Build into a Dict over the refined key/value types: a Dict is
+        # `Deinitable` only when its key and value types are, and an
+        # `__extension Dict` cannot tighten Dict's own bounds — so a `Self()`
+        # local here would be rejected as abandoned on the raising paths below.
+        var result = Dict[KT, VT]()
 
         for i in range(length):
             var is_null = not _is_valid(val_validity, offset + i)
@@ -1291,9 +1302,7 @@ __extension Dict(_DictMapDeserializable):
                 ]._deserialize_single_nullable(
                     val_vec, offset + i, is_null
                 )
-                result[rebind_var[Self.K](key^)] = rebind_var[
-                    Self.V
-                ](val^)
+                result[key^] = rebind_var[VT](val^)
             else:
                 if is_null:
                     raise Error(
@@ -1305,11 +1314,9 @@ __extension Dict(_DictMapDeserializable):
                 var val = _deserialize_table_field[VT](
                     val_vec, offset + i
                 )
-                result[rebind_var[Self.K](key^)] = rebind_var[Self.V](
-                    val^
-                )
+                result[key^] = val^
 
-        return result^
+        return rebind_var[Self](result^)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1318,7 +1325,7 @@ __extension Dict(_DictMapDeserializable):
 
 
 def _deserialize_list[
-    ElementType: Copyable & Movable
+    ElementType: Copyable & Movable & Deinitable
 ](vector: Vector, length: Int, offset: Int) raises -> List[Optional[ElementType]]:
     """Deserialize list elements from a vector.
 
@@ -1349,7 +1356,7 @@ def _deserialize_list[
             else:
                 result.append(None)
     elif element_db_type.is_fixed_size():
-        var data_ptr = vector.get_data().bitcast[ElementType]()
+        var data_ptr = vector.get_data().unsafe_bitcast[ElementType]()
         if validity_mask is None:
             for idx in range(length):
                 result.append(Optional(data_ptr[offset + idx].copy()))
@@ -1378,7 +1385,7 @@ def _deserialize_list[
     elif element_db_type == DuckDBType.list:
         # Nested list — use the _VectorListConstructible extension to
         # decompose ElementType (a List[...]) and recurse.
-        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var child_vec = vector.list_get_child()
         if validity_mask is None:
             for idx in range(length):
@@ -1423,7 +1430,7 @@ def _deserialize_list[
 
 
 def deserialize_list_column[
-    ElementType: Copyable & Movable
+    ElementType: Copyable & Movable & Deinitable
 ](
     vector: Vector, length: Int, offset: Int = 0
 ) raises -> List[Optional[List[Optional[ElementType]]]]:
@@ -1486,7 +1493,7 @@ def deserialize_list_column[
             + String(actual_type)
         )
 
-    var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+    var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
     var child_vec = vector.list_get_child()
     var result = List[Optional[List[Optional[ElementType]]]](capacity=length)
     var validity_mask = vector.get_validity()
@@ -1510,7 +1517,7 @@ def deserialize_list_column[
 
 
 def _deserialize_table_field[
-    T: Copyable & Movable
+    T: Copyable & Movable & Deinitable
 ](vector: Vector, row: Int) raises -> T:
     """Deserialize a single non-null value from a column vector at a given row.
 
@@ -1551,7 +1558,7 @@ def _deserialize_table_field[
             return rebind_var[T](inner^)
         else:
             # LIST or MAP: both use duckdb_list_entry layout
-            var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+            var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
             var entry = list_entries[row]
             var child_vec = vector.list_get_child()
             var inner = downcast[
@@ -1562,7 +1569,7 @@ def _deserialize_table_field[
             return rebind_var[T](inner^)
     elif base_name == "Dict":
         # MAP column → Dict[K, V]
-        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var entry = list_entries[row]
         var child_vec = vector.list_get_child()
         var inner = downcast[
@@ -1599,7 +1606,7 @@ def _deserialize_table_field[
 
 
 def deserialize_from_vector[
-    T: Copyable & Movable
+    T: Copyable & Movable & Deinitable
 ](vector: Vector, length: Int, offset: Int = 0) raises -> List[Optional[T]]:
     """Deserialize values from a DuckDB vector into native Mojo types.
 
@@ -1672,7 +1679,7 @@ def deserialize_from_vector[
                 + String(actual_type)
             )
         # LIST and MAP both use duckdb_list_entry layout
-        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var child_vec = vector.list_get_child()
         var result = List[Optional[T]](capacity=length)
         var validity_mask = vector.get_validity()
@@ -1697,7 +1704,7 @@ def deserialize_from_vector[
                 "Type mismatch: Expected type map but got "
                 + String(actual_type)
             )
-        var list_entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var child_vec = vector.list_get_child()
         var result = List[Optional[T]](capacity=length)
         var validity_mask = vector.get_validity()
@@ -1832,7 +1839,7 @@ trait _NullableColumn(_DBase):
     @staticmethod
     def _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
-    ) raises -> List[downcast[Self, Copyable]]:
+    ) raises -> List[downcast[Self, Copyable & Movable & Deinitable]]:
         """Deserialize a full column with None for NULL entries."""
         ...
 
@@ -1851,13 +1858,14 @@ __extension Optional(_NullableColumn):
         var val = _deserialize_table_field[downcast[Self.T, _DBase]](
             vector, row
         )
+        comptime assert conforms_to(Self, Movable)
         return rebind_var[Self](Optional(val^))
 
     @staticmethod
     def _deserialize_column_nullable(
         vector: Vector, count: Int, offset: Int
-    ) raises -> List[downcast[Self, Copyable]]:
+    ) raises -> List[downcast[Self, Copyable & Movable & Deinitable]]:
         var inner = deserialize_from_vector[downcast[Self.T, _DBase]](
             vector, count, offset
         )
-        return rebind_var[List[downcast[Self, Copyable]]](inner^)
+        return rebind_var[List[downcast[Self, Copyable & Movable & Deinitable]]](inner^)

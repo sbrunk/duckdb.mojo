@@ -88,7 +88,7 @@ ORIGINAL_FUNCTION_GROUP_ORDER = [
 
 # These are "opaque pointer" types – in the C API they are
 #   typedef struct _duckdb_xxx { void *internal_ptr; } *duckdb_xxx;
-# In Mojo we model them as  UnsafePointer[_duckdb_xxx, MutUntrackedOrigin].
+# In Mojo we model them as  Pointer[_duckdb_xxx, MutUntrackedOrigin].
 OPAQUE_HANDLE_TYPES: set[str] = {
     "duckdb_database",
     "duckdb_connection",
@@ -147,8 +147,8 @@ OPAQUE_HANDLE_TYPES: set[str] = {
 # The `thin` effect declares a plain function pointer that doesn't carry captured
 # state; `abi("C")` ensures correct C-ABI argument/return coercion for FFI.
 CALLBACK_TYPES: dict[str, str] = {
-    "duckdb_delete_callback_t": 'def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
-    "duckdb_copy_callback_t": 'def(UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> UnsafePointer[NoneType, MutAnyOrigin]',
+    "duckdb_delete_callback_t": 'def(Pointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
+    "duckdb_copy_callback_t": 'def(Pointer[NoneType, MutAnyOrigin]) thin abi("C") -> Pointer[NoneType, MutAnyOrigin]',
     "duckdb_scalar_function_bind_t": 'def(duckdb_bind_info) thin abi("C") -> NoneType',
     "duckdb_scalar_function_init_t": 'def(duckdb_init_info) thin abi("C") -> NoneType',
     "duckdb_scalar_function_t": 'def(duckdb_function_info, duckdb_data_chunk, duckdb_vector) thin abi("C") -> NoneType',
@@ -157,17 +157,17 @@ CALLBACK_TYPES: dict[str, str] = {
     "duckdb_table_function_t": 'def(duckdb_function_info, duckdb_data_chunk) thin abi("C") -> NoneType',
     "duckdb_aggregate_state_size": 'def(duckdb_function_info) thin abi("C") -> idx_t',
     "duckdb_aggregate_init_t": 'def(duckdb_function_info, duckdb_aggregate_state) thin abi("C") -> NoneType',
-    "duckdb_aggregate_destroy_t": 'def(UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType',
-    "duckdb_aggregate_update_t": 'def(duckdb_function_info, duckdb_data_chunk, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType',
-    "duckdb_aggregate_combine_t": 'def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType',
-    "duckdb_aggregate_finalize_t": 'def(duckdb_function_info, UnsafePointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType',
-    "duckdb_replacement_callback_t": 'def(duckdb_replacement_scan_info, UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
+    "duckdb_aggregate_destroy_t": 'def(Pointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType',
+    "duckdb_aggregate_update_t": 'def(duckdb_function_info, duckdb_data_chunk, Pointer[duckdb_aggregate_state, MutUntrackedOrigin]) thin abi("C") -> NoneType',
+    "duckdb_aggregate_combine_t": 'def(duckdb_function_info, Pointer[duckdb_aggregate_state, MutUntrackedOrigin], Pointer[duckdb_aggregate_state, MutUntrackedOrigin], idx_t) thin abi("C") -> NoneType',
+    "duckdb_aggregate_finalize_t": 'def(duckdb_function_info, Pointer[duckdb_aggregate_state, MutUntrackedOrigin], duckdb_vector, idx_t, idx_t) thin abi("C") -> NoneType',
+    "duckdb_replacement_callback_t": 'def(duckdb_replacement_scan_info, Pointer[c_char, ImmutAnyOrigin], Pointer[NoneType, MutAnyOrigin]) thin abi("C") -> NoneType',
     "duckdb_cast_function_t": 'def(duckdb_function_info, idx_t, duckdb_vector, duckdb_vector) thin abi("C") -> Bool',
     "duckdb_copy_function_bind_t": 'def(duckdb_copy_function_bind_info) thin abi("C") -> NoneType',
     "duckdb_copy_function_global_init_t": 'def(duckdb_copy_function_global_init_info) thin abi("C") -> NoneType',
     "duckdb_copy_function_sink_t": 'def(duckdb_copy_function_sink_info, duckdb_data_chunk) thin abi("C") -> NoneType',
     "duckdb_copy_function_finalize_t": 'def(duckdb_copy_function_finalize_info) thin abi("C") -> NoneType',
-    "duckdb_logger_write_log_entry_t": 'def(UnsafePointer[NoneType, MutAnyOrigin], UnsafePointer[duckdb_timestamp, MutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin], UnsafePointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType',
+    "duckdb_logger_write_log_entry_t": 'def(Pointer[NoneType, MutAnyOrigin], Pointer[duckdb_timestamp, MutAnyOrigin], Pointer[c_char, ImmutAnyOrigin], Pointer[c_char, ImmutAnyOrigin], Pointer[c_char, ImmutAnyOrigin]) thin abi("C") -> NoneType',
 }
 
 # Scalar / small struct C-types whose Mojo equivalents differ.
@@ -241,6 +241,57 @@ def _strip(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Origin handling for the wrapper methods
+# ---------------------------------------------------------------------------
+#
+# The raw C function-pointer types have to name a concrete origin, and for a
+# pointer that crosses the FFI boundary the only honest choice is the
+# lifetime-erased `*AnyOrigin`. An erased origin is not accepted implicitly, so a
+# `LibDuckDB` wrapper that declared `MutAnyOrigin` directly would force every
+# caller to write `.as_unsafe_any_origin()`.
+#
+# Instead each wrapper takes the origin as a parameter, so it accepts a pointer
+# with any origin of the right mutability, and erases it once when forwarding to
+# the C function pointer. That keeps the unsafe cast inside this generated
+# shim.
+
+# Erased origin in a generated pointer type -> origin trait to genericize over.
+ERASED_ORIGINS = {
+    "MutAnyOrigin": "MutOrigin",
+    "ImmutAnyOrigin": "ImmOrigin",
+}
+
+
+def split_pointer_origin(mojo_type: str):
+    """Split `Pointer[T, ORIGIN]` into `("T", "ORIGIN")`, or return None.
+
+    Only looks at the top-level origin; a nested pointer keeps its own origin,
+    because the pointee type has to match the C function pointer exactly.
+    """
+    prefix = "Pointer["
+    if not mojo_type.startswith(prefix) or not mojo_type.endswith("]"):
+        return None
+    inner = mojo_type[len(prefix):-1]
+    depth = 0
+    parts: list[str] = []
+    current = ""
+    for ch in inner:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    if len(parts) != 2:
+        return None
+    return parts[0].strip(), parts[1].strip()
+
+
+# ---------------------------------------------------------------------------
 # C-type → Mojo-type conversion
 # ---------------------------------------------------------------------------
 
@@ -258,66 +309,66 @@ def c_type_to_mojo(c_type: str, *, is_return: bool = False) -> str:
 
     # ---- struct pointer types (ArrowSchema, ArrowArray) ------
     if t == "struct ArrowSchema *":
-        return "UnsafePointer[NoneType, MutAnyOrigin]"
+        return "Pointer[NoneType, MutAnyOrigin]"
     if t == "struct ArrowArray *":
-        return "UnsafePointer[NoneType, MutAnyOrigin]"
+        return "Pointer[NoneType, MutAnyOrigin]"
 
-    # ---- pointer-to-pointer:  char ** → UnsafePointer[UnsafePointer[c_char, …], …]
+    # ---- pointer-to-pointer:  char ** → Pointer[Pointer[c_char, …], …]
     if t in ("char **",):
-        return "UnsafePointer[UnsafePointer[c_char, MutAnyOrigin], MutAnyOrigin]"
+        return "Pointer[Pointer[c_char, MutAnyOrigin], MutAnyOrigin]"
 
     # ---- const pointer patterns -------------------------------------------
     # const char *
     if t == "const char *":
-        return "UnsafePointer[c_char, ImmutAnyOrigin]"
+        return "Pointer[c_char, ImmutAnyOrigin]"
     # const char **
     if t == "const char **":
-        return "UnsafePointer[UnsafePointer[c_char, ImmutAnyOrigin], MutAnyOrigin]"
+        return "Pointer[Pointer[c_char, ImmutAnyOrigin], MutAnyOrigin]"
     # const uint8_t *
     if t == "const uint8_t *":
-        return "UnsafePointer[UInt8, ImmutAnyOrigin]"
+        return "Pointer[UInt8, ImmutAnyOrigin]"
 
     # ---- opaque handle pointers  e.g. "duckdb_database *" -----------------
     for h in OPAQUE_HANDLE_TYPES:
         if t == f"{h} *":
-            return f"UnsafePointer[{h}, ImmutAnyOrigin]"
+            return f"Pointer[{h}, ImmutAnyOrigin]"
 
     # ---- misc pointer patterns -------------------------------------------
     # Plain void *
     if t == "void *":
         if is_return:
-            return "UnsafePointer[NoneType, MutUntrackedOrigin]"
-        return "UnsafePointer[NoneType, MutAnyOrigin]"
+            return "Pointer[NoneType, MutUntrackedOrigin]"
+        return "Pointer[NoneType, MutAnyOrigin]"
 
     # uint64_t *  (validity masks)
     if t == "uint64_t *":
-        return "UnsafePointer[UInt64, MutUntrackedOrigin]"
+        return "Pointer[UInt64, MutUntrackedOrigin]"
 
     # bool *  (deprecated nullmask)
     if t == "bool *":
-        return "UnsafePointer[Bool, MutUntrackedOrigin]"
+        return "Pointer[Bool, MutUntrackedOrigin]"
 
     # duckdb_logical_type *  (arrays of logical types)
     if t == "duckdb_logical_type *":
-        return "UnsafePointer[duckdb_logical_type, ImmutAnyOrigin]"
+        return "Pointer[duckdb_logical_type, ImmutAnyOrigin]"
 
     # duckdb_value * (arrays of values)
     if t == "duckdb_value *":
-        return "UnsafePointer[duckdb_value, MutAnyOrigin]"
+        return "Pointer[duckdb_value, MutAnyOrigin]"
 
     # duckdb_result *
     if t == "duckdb_result *":
-        return "UnsafePointer[duckdb_result, ImmutAnyOrigin]"
+        return "Pointer[duckdb_result, ImmutAnyOrigin]"
 
     # duckdb_string_t *
     if t == "duckdb_string_t *":
-        return "UnsafePointer[duckdb_string_t, MutAnyOrigin]"
+        return "Pointer[duckdb_string_t, MutAnyOrigin]"
 
     # char *  (return type = mutable external origin)
     if t == "char *":
         if is_return:
-            return "UnsafePointer[c_char, MutUntrackedOrigin]"
-        return "UnsafePointer[c_char, MutAnyOrigin]"
+            return "Pointer[c_char, MutUntrackedOrigin]"
+        return "Pointer[c_char, MutAnyOrigin]"
 
     # ---- generic pointer fallback -----------------------------------------
     m = re.match(r"^(const\s+)?(\w+)\s*\*$", t)
@@ -325,10 +376,10 @@ def c_type_to_mojo(c_type: str, *, is_return: bool = False) -> str:
         base = m.group(2)
         mojo_base = SIMPLE_TYPE_MAP.get(base, base)
         if m.group(1):  # const
-            return f"UnsafePointer[{mojo_base}, ImmutAnyOrigin]"
+            return f"Pointer[{mojo_base}, ImmutAnyOrigin]"
         if is_return:
-            return f"UnsafePointer[{mojo_base}, MutUntrackedOrigin]"
-        return f"UnsafePointer[{mojo_base}, MutAnyOrigin]"
+            return f"Pointer[{mojo_base}, MutUntrackedOrigin]"
+        return f"Pointer[{mojo_base}, MutAnyOrigin]"
 
     # ---- opaque handles passed by value -----------------------------------
     if t in OPAQUE_HANDLE_TYPES:
@@ -575,7 +626,7 @@ from std.sys.info import CompilationTarget
 from std.os import abort
 from std.pathlib import Path
 from std.ffi import _find_dylib, _Global, OwnedDLHandle, UnsafeUnion
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 # ===--------------------------------------------------------------------===#
 # FFI definitions for the DuckDB C API ported to Mojo.
@@ -781,7 +832,7 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("struct duckdb_string_t_pointer(Copyable, Movable):")
     lines.append("    var length: UInt32")
     lines.append("    var prefix: InlineArray[c_char, 4]")
-    lines.append("    var ptr: UnsafePointer[c_char, MutUntrackedOrigin]")
+    lines.append("    var ptr: Pointer[c_char, MutUntrackedOrigin]")
     lines.append("")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_string_t_inlined(Copyable, Movable):")
@@ -803,19 +854,19 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("#! A column consists of a pointer to its internal data. Don't operate on this type directly.")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_column(Copyable, Movable):")
-    lines.append("    var __deprecated_data: UnsafePointer[NoneType, MutUntrackedOrigin]")
-    lines.append("    var __deprecated_nullmask: UnsafePointer[Bool, MutUntrackedOrigin]")
+    lines.append("    var __deprecated_data: Pointer[NoneType, MutUntrackedOrigin]")
+    lines.append("    var __deprecated_nullmask: Pointer[Bool, MutUntrackedOrigin]")
     lines.append("    var __deprecated_type: Int32  # actually a duckdb_type enum")
-    lines.append("    var __deprecated_name: UnsafePointer[c_char, ImmutUntrackedOrigin]")
-    lines.append("    var internal_data: UnsafePointer[NoneType, MutUntrackedOrigin]")
+    lines.append("    var __deprecated_name: Pointer[c_char, ImmUntrackedOrigin]")
+    lines.append("    var internal_data: Pointer[NoneType, MutUntrackedOrigin]")
     lines.append("")
     lines.append("    def __init__(out self):")
     lines.append("        # All pointer fields are populated by DuckDB when fetched.")
-    lines.append("        self.__deprecated_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
-    lines.append("        self.__deprecated_nullmask = UnsafePointer[Bool, MutUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_data = Pointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_nullmask = Pointer[Bool, MutUntrackedOrigin].unsafe_dangling()")
     lines.append("        self.__deprecated_type = 0")
-    lines.append("        self.__deprecated_name = UnsafePointer[c_char, ImmutUntrackedOrigin].unsafe_dangling()")
-    lines.append("        self.internal_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_name = Pointer[c_char, ImmUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.internal_data = Pointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
     lines.append("")
 
     # Opaque handle types: struct + comptime alias
@@ -825,8 +876,8 @@ def _generate_types(duckdb_dir: str) -> str:
     ]
     for name, field, origin in opaque_handles:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var {field}: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, {origin}]")
+        lines.append(f"    var {field}: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, {origin}]")
         lines.append("")
 
     # ---- Types (explicit freeing) ----
@@ -835,21 +886,21 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("# ===--------------------------------------------------------------------===#")
     lines.append("")
     lines.append("struct duckdb_string:")
-    lines.append("    var data: UnsafePointer[c_char, MutUntrackedOrigin]")
+    lines.append("    var data: Pointer[c_char, MutUntrackedOrigin]")
     lines.append("    var size: idx_t")
     lines.append("")
     lines.append("struct duckdb_blob:")
-    lines.append("    var data: UnsafePointer[NoneType, MutUntrackedOrigin]")
+    lines.append("    var data: Pointer[NoneType, MutUntrackedOrigin]")
     lines.append("    var size: idx_t")
     lines.append("")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_bit(TrivialRegisterPassable, ImplicitlyCopyable, Movable):")
-    lines.append("    var data: UnsafePointer[UInt8, MutUntrackedOrigin]")
+    lines.append("    var data: Pointer[UInt8, MutUntrackedOrigin]")
     lines.append("    var size: idx_t")
     lines.append("")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_bignum(ImplicitlyCopyable, Movable):")
-    lines.append("    var data: UnsafePointer[UInt8, MutUntrackedOrigin]")
+    lines.append("    var data: Pointer[UInt8, MutUntrackedOrigin]")
     lines.append("    var size: idx_t")
     lines.append("    var is_negative: Bool")
     lines.append("")
@@ -869,18 +920,18 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")
-    lines.append("    var __deprecated_columns: UnsafePointer[duckdb_column, MutUntrackedOrigin]")
-    lines.append("    var __deprecated_error_message: UnsafePointer[c_char, ImmutUntrackedOrigin]")
-    lines.append("    var internal_data: UnsafePointer[NoneType, MutUntrackedOrigin]")
+    lines.append("    var __deprecated_columns: Pointer[duckdb_column, MutUntrackedOrigin]")
+    lines.append("    var __deprecated_error_message: Pointer[c_char, ImmUntrackedOrigin]")
+    lines.append("    var internal_data: Pointer[NoneType, MutUntrackedOrigin]")
     lines.append("")
     lines.append("    def __init__(out self):")
     lines.append("        # Pointer fields are populated by DuckDB when the result is filled.")
     lines.append("        self.__deprecated_column_count = 0")
     lines.append("        self.__deprecated_row_count = 0")
     lines.append("        self.__deprecated_rows_changed = 0")
-    lines.append("        self.__deprecated_columns = UnsafePointer[duckdb_column, MutUntrackedOrigin].unsafe_dangling()")
-    lines.append("        self.__deprecated_error_message = UnsafePointer[c_char, ImmutUntrackedOrigin].unsafe_dangling()")
-    lines.append("        self.internal_data = UnsafePointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_columns = Pointer[duckdb_column, MutUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.__deprecated_error_message = Pointer[c_char, ImmUntrackedOrigin].unsafe_dangling()")
+    lines.append("        self.internal_data = Pointer[NoneType, MutUntrackedOrigin].unsafe_dangling()")
     lines.append("")
 
     # Opaque pointer types that need explicit destroy
@@ -907,8 +958,8 @@ def _generate_types(duckdb_dir: str) -> str:
     ]
     for name, field in opaque_destroy_types:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var {field}: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var {field}: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     # ---- Function types ----
@@ -924,8 +975,8 @@ def _generate_types(duckdb_dir: str) -> str:
     ]
     for name, field in fn_info_types:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     # ---- Scalar function types ----
@@ -939,8 +990,8 @@ def _generate_types(duckdb_dir: str) -> str:
     ]:
         lines.append(f"#! {field_comment}. Must be destroyed with `duckdb_destroy_{name.replace('duckdb_', '')}`.")
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     lines.append("#! The bind function of the scalar function.")
@@ -957,8 +1008,8 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("")
     lines.append("#! A table function. Must be destroyed with `duckdb_destroy_table_function`.")
     lines.append("struct _duckdb_table_function:")
-    lines.append("    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-    lines.append("comptime duckdb_table_function = UnsafePointer[_duckdb_table_function, MutUntrackedOrigin]")
+    lines.append("    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+    lines.append("comptime duckdb_table_function = Pointer[_duckdb_table_function, MutUntrackedOrigin]")
     lines.append("")
     lines.append("#! The bind function of the table function.")
     lines.append(f"comptime duckdb_table_function_bind_t = {CALLBACK_TYPES['duckdb_table_function_bind_t']}")
@@ -982,8 +1033,8 @@ def _generate_types(duckdb_dir: str) -> str:
     ]:
         lines.append(f"#! {comment}.")
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     agg_callbacks = [
@@ -1005,8 +1056,8 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("# ===--------------------------------------------------------------------===#")
     lines.append("")
     lines.append("struct _duckdb_replacement_scan_info:")
-    lines.append("    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-    lines.append("comptime duckdb_replacement_scan_info = UnsafePointer[_duckdb_replacement_scan_info, MutUntrackedOrigin]")
+    lines.append("    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+    lines.append("comptime duckdb_replacement_scan_info = Pointer[_duckdb_replacement_scan_info, MutUntrackedOrigin]")
     lines.append("")
     lines.append(f"comptime duckdb_replacement_callback_t = {CALLBACK_TYPES['duckdb_replacement_callback_t']}")
     lines.append("")
@@ -1017,8 +1068,8 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("# ===--------------------------------------------------------------------===#")
     lines.append("")
     lines.append("struct _duckdb_cast_function:")
-    lines.append("    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-    lines.append("comptime duckdb_cast_function = UnsafePointer[_duckdb_cast_function, MutUntrackedOrigin]")
+    lines.append("    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+    lines.append("comptime duckdb_cast_function = Pointer[_duckdb_cast_function, MutUntrackedOrigin]")
     lines.append("")
     lines.append(f"comptime duckdb_cast_function_t = {CALLBACK_TYPES['duckdb_cast_function_t']}")
     lines.append("")
@@ -1032,8 +1083,8 @@ def _generate_types(duckdb_dir: str) -> str:
                   "duckdb_copy_function_global_init_info", "duckdb_copy_function_sink_info",
                   "duckdb_copy_function_finalize_info"]:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
     
     for cb_name in ["duckdb_copy_function_bind_t", "duckdb_copy_function_global_init_t",
@@ -1049,8 +1100,8 @@ def _generate_types(duckdb_dir: str) -> str:
     for name in ["duckdb_arrow", "duckdb_arrow_stream", "duckdb_arrow_schema",
                   "duckdb_arrow_array", "duckdb_arrow_converted_schema", "duckdb_arrow_options"]:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     # ---- File system types ----
@@ -1060,8 +1111,8 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("")
     for name in ["duckdb_file_open_options", "duckdb_file_system", "duckdb_file_handle"]:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     # ---- Catalog types ----
@@ -1071,8 +1122,8 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("")
     for name in ["duckdb_catalog", "duckdb_catalog_entry"]:
         lines.append(f"struct _{name}:")
-        lines.append(f"    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-        lines.append(f"comptime {name} = UnsafePointer[_{name}, MutUntrackedOrigin]")
+        lines.append(f"    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+        lines.append(f"comptime {name} = Pointer[_{name}, MutUntrackedOrigin]")
         lines.append("")
 
     # ---- Logging types ----
@@ -1081,14 +1132,14 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("# ===--------------------------------------------------------------------===#")
     lines.append("")
     lines.append("struct _duckdb_log_storage:")
-    lines.append("    var internal_ptr: UnsafePointer[NoneType, MutUntrackedOrigin]")
-    lines.append("comptime duckdb_log_storage = UnsafePointer[_duckdb_log_storage, MutUntrackedOrigin]")
+    lines.append("    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]")
+    lines.append("comptime duckdb_log_storage = Pointer[_duckdb_log_storage, MutUntrackedOrigin]")
     lines.append("")
     lines.append(f"comptime duckdb_logger_write_log_entry_t = {CALLBACK_TYPES['duckdb_logger_write_log_entry_t']}")
     lines.append("")
 
     # ---- Task state type ----
-    lines.append("comptime duckdb_task_state = UnsafePointer[NoneType, MutUntrackedOrigin]")
+    lines.append("comptime duckdb_task_state = Pointer[NoneType, MutUntrackedOrigin]")
     lines.append("")
 
     return "\n".join(lines)
@@ -1173,7 +1224,7 @@ def _generate_libduckdb_struct(
     _emit_init_body(lines, {})  # all via dlsym
 
     # ---- __init__ (from stable ext API struct) ----
-    lines.append("    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1, ImmutUntrackedOrigin]):")
+    lines.append("    def __init__(out self, api: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]):")
     lines.append("        \"\"\"Initialize LibDuckDB from a stable DuckDB extension API struct pointer.")
     lines.append("")
     lines.append("        This constructor is used when loaded as a DuckDB extension")
@@ -1184,7 +1235,7 @@ def _generate_libduckdb_struct(
     _emit_init_body(lines, stable_loader)
 
     # ---- __init__ (from unstable ext API struct) ----
-    lines.append("    def __init__(out self, api: UnsafePointer[duckdb_ext_api_v1_unstable, ImmutUntrackedOrigin]):")
+    lines.append("    def __init__(out self, api: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin]):")
     lines.append("        \"\"\"Initialize LibDuckDB from an unstable DuckDB extension API struct pointer.")
     lines.append("")
     lines.append("        This constructor is used when loaded as a DuckDB extension")
@@ -1223,15 +1274,35 @@ def _generate_normal_method(entry: dict) -> str:
 
     lines: list[str] = []
 
-    # Signature
-    sig_parts = [f"    def {name}(\n        self"]
+    # Signature. A pointer parameter whose generated type names an erased
+    # origin becomes generic over the origin, so callers can pass a pointer with
+    # a concrete origin.
+    origin_params: list[tuple[str, str]] = []
+    args: list[str] = []
+    sig_params: list[str] = []
     for p in params:
         ptype = p["type"].strip()
         pname = p["name"]
         if pname in MOJO_RESERVED_PARAM_NAMES:
             pname = pname + "_"
         mojo_type = c_type_to_mojo(ptype)
-        sig_parts.append(f",\n        {pname}: {mojo_type}")
+        arg = pname
+        split = split_pointer_origin(mojo_type)
+        if split is not None and split[1] in ERASED_ORIGINS:
+            pointee, origin = split
+            origin_param = f"{pname}_origin"
+            origin_params.append((origin_param, ERASED_ORIGINS[origin]))
+            mojo_type = f"Pointer[{pointee}, {origin_param}]"
+            arg = f"{pname}.as_unsafe_any_origin()"
+        sig_params.append(f",\n        {pname}: {mojo_type}")
+        args.append(arg)
+
+    param_list = ""
+    if origin_params:
+        param_list = "[" + ", ".join(
+            f"{n}: {trait}" for n, trait in origin_params
+        ) + "]"
+    sig_parts = [f"    def {name}{param_list}(\n        self"] + sig_params
     mojo_ret = c_type_to_mojo(ret, is_return=True)
     lines.append("".join(sig_parts) + f",\n    ) -> {mojo_ret}:")
 
@@ -1245,14 +1316,7 @@ def _generate_normal_method(entry: dict) -> str:
             lines.append(f"        {stripped}" if stripped else "")
         lines.append('        """')
 
-    # Call body
-    args: list[str] = []
-    for p in params:
-        pname = p["name"]
-        if pname in MOJO_RESERVED_PARAM_NAMES:
-            pname = pname + "_"
-        args.append(pname)
-    # Default: direct struct-field call
+    # Call body: direct struct-field call
     lines.append(f"        return self._{name}({', '.join(args)})")
 
     return "\n".join(lines)

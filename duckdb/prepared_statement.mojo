@@ -77,20 +77,20 @@ struct PreparedStatement(Movable):
         var state = libduckdb.duckdb_prepare(
             conn,
             _query.as_c_string_slice().unsafe_ptr(),
-            UnsafePointer(to=self._stmt),
+            Pointer(to=self._stmt),
         )
         if state == DuckDBError:
             var err = self._error_str()
             # Per the C API, the statement must be destroyed even on failure.
-            libduckdb.duckdb_destroy_prepare(UnsafePointer(to=self._stmt))
+            libduckdb.duckdb_destroy_prepare(Pointer(to=self._stmt))
             raise ResultError(err^, ErrorType.INVALID)
 
     def __init__(out self, *, deinit take: Self):
         self._stmt = take._stmt
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_prepare(UnsafePointer(to=self._stmt))
+        libduckdb.duckdb_destroy_prepare(Pointer(to=self._stmt))
 
     # ── Error handling ────────────────────────────────────────────
 
@@ -128,7 +128,7 @@ struct PreparedStatement(Movable):
             )
         var name = String(unsafe_from_utf8_ptr=p)
         libduckdb.duckdb_free(
-            UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=Int(p))
+            Pointer[NoneType, MutAnyOrigin](unsafe_from_address=Int(p))
         )
         return name^
 
@@ -139,7 +139,7 @@ struct PreparedStatement(Movable):
         var _name = name.copy()
         var state = libduckdb.duckdb_bind_parameter_index(
             self._stmt,
-            UnsafePointer(to=out_idx),
+            Pointer(to=out_idx),
             _name.as_c_string_slice().unsafe_ptr(),
         )
         if state == DuckDBError:
@@ -178,7 +178,7 @@ struct PreparedStatement(Movable):
             String("bind_value failed"),
         )
 
-    def bind[T: Copyable & Movable](mut self, index: Int, value: T) raises ResultError:
+    def bind[T: Copyable & Movable & Deinitable](mut self, index: Int, value: T) raises ResultError:
         """Bind a typed Mojo ``value`` at the given 1-based ``index``.
 
         Scalars (Bool, integers, floats, String, temporal types, ...) are bound
@@ -201,7 +201,7 @@ struct PreparedStatement(Movable):
             except e:
                 raise ResultError(String(e), ErrorType.INVALID)
             var state = libduckdb.duckdb_bind_value(self._stmt, idx_t(index), raw)
-            libduckdb.duckdb_destroy_value(UnsafePointer(to=raw))
+            libduckdb.duckdb_destroy_value(Pointer(to=raw))
             self._check(state, String("bind failed"))
 
     # ── Execution ─────────────────────────────────────────────────
@@ -209,7 +209,7 @@ struct PreparedStatement(Movable):
     def execute(mut self) raises ResultError -> Result:
         """Execute the statement with the currently bound parameters."""
         var result = duckdb_result()
-        var result_ptr = UnsafePointer(to=result)
+        var result_ptr = Pointer(to=result)
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_execute_prepared(self._stmt, result_ptr)
         if state == DuckDBError:
@@ -230,10 +230,10 @@ struct PreparedStatement(Movable):
 __extension Optional(Bindable):
     def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
         if self:
-            # Refine Self.T to Copyable & Movable so the inner value can be
+            # Refine Self.T to Copyable & Movable & Deinitable so the inner value can be
             # bound — only Copyable values can be converted to a duckdb_value.
-            comptime CT = downcast[Self.T, Copyable & Movable]
-            var vp = UnsafePointer(to=self).bitcast[Optional[CT]]()
+            comptime CT = downcast[Self.T, Copyable & Movable & Deinitable]
+            var vp = Pointer(to=self).unsafe_bitcast[Optional[CT]]()
             stmt.bind(index, vp[].value())
         else:
             stmt.bind_null(index)

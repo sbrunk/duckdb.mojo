@@ -1,7 +1,7 @@
 from duckdb.vector import Vector
 from std.collections import Dict, Optional
 from std.collections.string import StringSlice, StaticString
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 
 
 trait DuckDBWrapper(Copyable & Movable & Writable):
@@ -23,7 +23,7 @@ trait DuckDBKeyElement(DuckDBWrapper, KeyElement):
 struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & TrivialRegisterPassable):
     comptime Type = Self.duckdb_type
 
-    var value: Scalar[Self.Type.to_dtype()]
+    var value: Scalar[Self.Type.to_dtype().value()]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.value)
@@ -43,7 +43,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & Trivial
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector.get_data().bitcast[Self]()[offset=offset]
+        self = vector.get_data().unsafe_bitcast[Self]()[offset=offset]
 
 comptime BoolVal = DTypeValue[DuckDBType.boolean]
 comptime Int8Val = DTypeValue[DuckDBType.tinyint]
@@ -61,7 +61,7 @@ comptime Float64Val = DTypeValue[DuckDBType.double]
 @fieldwise_init
 struct FixedSizeValue[
     duckdb_type: DuckDBType,
-    underlying: Writable & ImplicitlyCopyable & Movable & ImplicitlyDestructible,
+    underlying: Writable & ImplicitlyCopyable & Movable & Deinitable,
 ](DuckDBWrapper & ImplicitlyCopyable):
     comptime Type = Self.duckdb_type
     var value: Self.underlying
@@ -84,7 +84,7 @@ struct FixedSizeValue[
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector.get_data().bitcast[Self]()[offset=offset]
+        self = vector.get_data().unsafe_bitcast[Self]()[offset=offset]
 
     def __init__(out self, *, copy: Self):
         self.value = copy.value
@@ -105,28 +105,28 @@ struct DuckDBString(DuckDBWrapper):
             raise "Expected type " + String(
                 DuckDBType.varchar
             ) + " but got " + String(vector.get_column_type().get_type_id())
-        var data_str_ptr = vector.get_data().bitcast[duckdb_string_t_pointer]()
+        var data_str_ptr = vector.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
         var string_length = Int(data_str_ptr[offset].length)
         # TODO use duckdb_string_is_inlined helper instead
         if data_str_ptr[offset].length <= 12:
-            var data_str_inlined = data_str_ptr.bitcast[
+            var data_str_inlined = data_str_ptr.unsafe_bitcast[
                 duckdb_string_t_inlined
             ]()
-            var ptr=data_str_inlined[offset].inlined.unsafe_ptr().bitcast[Byte]()
+            var ptr=data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[Byte]()
             self.value = String(unsafe_uninit_length=string_length)
-            memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
+            unsafe_memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
         else:
-            ptr=data_str_ptr[offset].ptr.bitcast[UInt8]()
+            ptr=data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
             self.value = String(unsafe_uninit_length=string_length)
-            memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
+            unsafe_memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.value)
 
 
 @fieldwise_init
-struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable):
+struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copyable & Movable & Deinitable):
     """A DuckDB list."""
     comptime Type = DuckDBType.list
 
@@ -144,7 +144,7 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
             ) + " but got " + String(runtime_element_type)
         self.value = List[Optional[Self.T]](capacity=length)
 
-        var data_ptr = vector.get_data().bitcast[Self.T]()
+        var data_ptr = vector.get_data().unsafe_bitcast[Self.T]()
         var validity_mask = vector.get_validity()
 
         # TODO factor out the validity mask check into a higher-order function to avoid repetition
@@ -191,7 +191,7 @@ struct DuckDBList[T: DuckDBWrapper & Movable](DuckDBWrapper & Copyable & Movable
 
             # pointer to list metadata (length and offset) that allows us to get the
             # correct positions of the actual data in the child vector
-            var data_ptr = data_ptr.bitcast[duckdb_list_entry]()
+            var data_ptr = data_ptr.unsafe_bitcast[duckdb_list_entry]()
             # The child vector holds the actual list data in variable size entries (list_entry.length)
             var child_vector = vector.list_get_child()
 

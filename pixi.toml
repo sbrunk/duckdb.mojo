@@ -12,10 +12,10 @@ version = "0.0.1"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "==1.0.0b2"
+mojo-compiler = "==1.0.0"
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0b2"
+mojo-compiler = "==1.0.0"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -64,6 +64,7 @@ overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
 
 # mojo-gpu-operator: transparent GPU offload (array_cosine_distance + TPC-H Q1/Q3/Q5/Q6/Q14)
 # via an optimizer extension, with Mojo GPU kernels. See extensions/mojo-gpu-operator/README.md.
+# Needs the `gpu` environment (max-core): `pixi run -e gpu gpu-op-build`.
 gpu-op-build = "bash extensions/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf extensions/mojo-gpu-operator/build"
 
@@ -91,7 +92,7 @@ compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
 [dependencies]
 libduckdb-devel = "=1.5.4"
 duckdb-cli = "=1.5.4"
-mojo = "==1.0.0b2"
+mojo = "==1.0.0"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
@@ -109,7 +110,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "duckdb-from-source" }
 duckdb-operator-replacement = { path = "extensions/operator-replacement" }
-mojo = "==1.0.0b2"
+mojo = "==1.0.0"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
@@ -118,6 +119,16 @@ mojo = "==1.0.0b2"
 # Stdlib path first (see note above): keeps each env's own std.mojoc from being
 # shadowed by the other env's copy when both are materialized under .pixi/.
 [feature.operator-replacement.activation.env]
+MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
+
+# Feature: gpu (mojo-gpu-operator).
+# max-core provides the accelerator APIs (`max.gpu.*`) and the `layout` package, which
+# the GPU kernels import. It pins mojo-compiler exactly, so its version has to move in
+# lockstep with the `mojo` pin above.
+[feature.gpu.dependencies]
+max-core = "==26.5.0"
+
+[feature.gpu.activation.env]
 MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 
 # Environments
@@ -133,8 +144,12 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 #          between conda-forge's libduckdb and duckdb-from-source.
 #          no-default-feature = true prevents including default dependencies, ensuring only
 #          duckdb-from-source is used (avoiding binary incompatibility issues).
+#
+# gpu:     Default environment plus max-core, for the accelerator APIs and the
+#          `layout` package. Only mojo-gpu-operator needs it.
 [environments]
 full = { features = ["operator-replacement"], solve-group = "full", no-default-feature = true }
+gpu = { features = ["gpu"] }
 
 [target.linux-64.dependencies]
 c-compiler = ">=1.11.0,<2"

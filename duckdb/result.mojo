@@ -108,7 +108,7 @@ struct ResultType(
             String: A human-readable string representation of the result type
                 (e.g., "INVALID", "QUERY_RESULT").
         """
-        return String.write(self)
+        return String(self)
 
     @no_inline
     def __repr__(self) -> String:
@@ -456,7 +456,7 @@ struct ErrorType(
             String: A human-readable string representation of the error type
                 (e.g., "PARSER", "CONSTRAINT").
         """
-        return String.write(self)
+        return String(self)
 
     @no_inline
     def __repr__(self) -> String:
@@ -625,7 +625,7 @@ struct StatementType(
             String: A human-readable string representation of the statement type
                 (e.g., "SELECT", "INSERT").
         """
-        return String.write(self)
+        return String(self)
 
     @no_inline
     def __repr__(self) -> String:
@@ -669,7 +669,7 @@ struct Result(Writable, Iterable, Movable):
     comptime Element = Row
     comptime IteratorType[
         iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
-    ]: Iterator = RowIter[ImmutOrigin(iterable_origin)]
+    ]: Iterator = RowIter[ImmOrigin(iterable_origin)]
 
     var _result: duckdb_result
     var _columns: List[Column]
@@ -692,13 +692,13 @@ struct Result(Writable, Iterable, Movable):
     def column_count(self) -> Int:
         ref libduckdb = DuckDB().libduckdb()
         return Int(
-            libduckdb.duckdb_column_count(UnsafePointer(to=self._result))
+            libduckdb.duckdb_column_count(Pointer(to=self._result))
         )
 
     def column_name(self, col: Int) -> String:
         ref libduckdb = DuckDB().libduckdb()
         var c_str = libduckdb.duckdb_column_name(
-            UnsafePointer(to=self._result), UInt64(col)
+            Pointer(to=self._result), UInt64(col)
         )
         return String(unsafe_from_utf8_ptr=c_str)
 
@@ -714,7 +714,7 @@ struct Result(Writable, Iterable, Movable):
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](
             libduckdb.duckdb_column_logical_type(
-                UnsafePointer(to=self._result), UInt64(col)
+                Pointer(to=self._result), UInt64(col)
             )
         )
 
@@ -735,7 +735,7 @@ struct Result(Writable, Iterable, Movable):
         * returns: The number of rows changed.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Int(libduckdb.duckdb_rows_changed(UnsafePointer(to=self._result)))
+        return Int(libduckdb.duckdb_rows_changed(Pointer(to=self._result)))
 
     def rowcount(self) -> Int:
         """Rows affected by the last DML statement.
@@ -750,7 +750,7 @@ struct Result(Writable, Iterable, Movable):
             writer.write(col, ", ")
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     # ── Column metadata (Python-style) ────────────────────────────
 
@@ -805,7 +805,7 @@ struct Result(Writable, Iterable, Movable):
             raise Error("No more chunks available")
         return Chunk[is_owned=True](raw.value())
 
-    def chunks(ref self) -> ChunkIter[ImmutOrigin(origin_of(self))]:
+    def chunks(ref self) -> ChunkIter[ImmOrigin(origin_of(self))]:
         """Iterate over data chunks in this result.
 
         Returns:
@@ -819,7 +819,7 @@ struct Result(Writable, Iterable, Movable):
         """
         return ChunkIter(Pointer(to=self))
 
-    def rows(ref self) -> RowIter[ImmutOrigin(origin_of(self))]:
+    def rows(ref self) -> RowIter[ImmOrigin(origin_of(self))]:
         """Iterate over rows — explicit spelling of ``__iter__``.
 
         Equivalent to ``for row in result``, provided for
@@ -848,7 +848,7 @@ struct Result(Writable, Iterable, Movable):
         return MaterializedResult(self^)
 
     def fetchone[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](mut self) raises -> Optional[Tuple[*Ts]]:
         """Fetch the next row as an owned tuple, or ``None`` if exhausted.
 
@@ -881,7 +881,7 @@ struct Result(Writable, Iterable, Movable):
             return t^
 
     def fetchmany[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Movable & Deinitable
     ](mut self, size: Int = 1) raises -> List[Tuple[*Ts]]:
         """Fetch up to ``size`` rows as owned tuples, advancing the cursor.
 
@@ -922,9 +922,9 @@ struct Result(Writable, Iterable, Movable):
         """
         self^.fetchall().show(max_rows=max_rows, max_col_width=max_col_width)
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_result(UnsafePointer(to=self._result))
+        libduckdb.duckdb_destroy_result(Pointer(to=self._result))
 
     def __init__(out self, *, deinit take: Self):
         self._result = take._result^
@@ -1050,19 +1050,19 @@ struct MaterializedResult(Sized, Movable):
     """
 
     var result: Result
-    var chunks: List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]
+    var chunks: List[Pointer[Chunk[is_owned=True], MutUntrackedOrigin]]
     var size: Int
 
     def __init__(out self, var result: Result) raises:
         self.result = result^
-        self.chunks = List[UnsafePointer[Chunk[is_owned=True], MutAnyOrigin]]()
+        self.chunks = List[Pointer[Chunk[is_owned=True], MutUntrackedOrigin]]()
         self.size = 0
         while True:
             try:
                 var chunk = self.result.fetch_chunk()
                 self.size += len(chunk)
                 var chunk_ptr = alloc[Chunk[is_owned=True]](1)
-                chunk_ptr.init_pointee_move(chunk^)
+                chunk_ptr.unsafe_write(chunk^)
                 self.chunks.append(chunk_ptr)
             except StopIteration:
                 break
@@ -1099,7 +1099,7 @@ struct MaterializedResult(Sized, Movable):
         return (self.size, self.column_count())
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -1144,7 +1144,7 @@ struct MaterializedResult(Sized, Movable):
         raise Error(String("No column named '", name, "'"))
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self, name: String) raises -> List[T]:
         """Get all typed values from the named column.
 
@@ -1154,7 +1154,7 @@ struct MaterializedResult(Sized, Movable):
         """
         return self.get[T](col=self.column_index(name))
 
-    def get[T: Copyable & Movable](self, name: String, *, row: Int) raises -> T:
+    def get[T: Copyable & Movable & Deinitable](self, name: String, *, row: Int) raises -> T:
         """Get a single typed value from the named column and ``row``."""
         return self.get[T](col=self.column_index(name), row=row)
 
@@ -1175,7 +1175,7 @@ struct MaterializedResult(Sized, Movable):
         raise Error("Row index out of bounds")
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & Deinitable
     ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value.
 
@@ -1202,7 +1202,7 @@ struct MaterializedResult(Sized, Movable):
         return self.chunks[loc[0]][].get[T](col=col, row=loc[1])
 
     def get[
-        T: Copyable & Movable
+        T: Copyable & Movable & Deinitable
     ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
 
@@ -1228,7 +1228,7 @@ struct MaterializedResult(Sized, Movable):
         return self.chunks[loc[0]][].get[T](row=loc[1])
 
     def get[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Movable & Deinitable
     ](self) raises -> List[T]:
         """Deserialize all rows into a list of Mojo structs.
 
@@ -1330,7 +1330,7 @@ struct MaterializedResult(Sized, Movable):
         return out^
 
     @staticmethod
-    def _field(content: String, w: Int, right_aligned: Bool) -> String:
+    def _field(content: String, w: SIMDLength, right_aligned: Bool) -> String:
         """A value cell: 1 space of padding each side, aligned within ``w``."""
         var extra = w - content.count_codepoints()
         if extra < 0:
@@ -1473,10 +1473,10 @@ struct MaterializedResult(Sized, Movable):
         """
         print(self._render_table(max_rows=max_rows, max_col_width=max_col_width))
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         for chunk_ptr in self.chunks:
-            chunk_ptr.destroy_pointee()
-            chunk_ptr.free()
+            chunk_ptr.unsafe_deinit_pointee()
+            chunk_ptr.unsafe_free()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1486,7 +1486,7 @@ struct MaterializedResult(Sized, Movable):
 
 @fieldwise_init
 struct ChunkIter[
-    origin: ImmutOrigin
+    origin: ImmOrigin
 ](ImplicitlyCopyable, Iterable, Iterator):
     """Streams data chunks from a Result.
 
@@ -1526,7 +1526,7 @@ struct ChunkIter[
 
 
 struct RowIter[
-    origin: ImmutOrigin
+    origin: ImmOrigin
 ](ImplicitlyCopyable, Iterable, Iterator):
     """Streams Row proxies from a Result, transparently fetching chunks.
 
@@ -1570,7 +1570,7 @@ struct RowIter[
         if self._raw_chunk is not None:
             ref libduckdb = DuckDB().libduckdb()
             var chunk = self._raw_chunk.value()
-            libduckdb.duckdb_destroy_data_chunk(UnsafePointer(to=chunk))
+            libduckdb.duckdb_destroy_data_chunk(Pointer(to=chunk))
             self._raw_chunk = None
 
     def __next__(mut self) raises StopIteration -> Row:
@@ -1692,7 +1692,7 @@ def _render_value(vector: Vector, row: Int) raises -> String:
     elif tid == DuckDBType.blob:
         return _render_blob(_deserialize_blob(vector, row))
     elif tid == DuckDBType.list:
-        var entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var entry = entries[row]
         return _render_list(
             vector.list_get_child(), Int(entry.offset), Int(entry.length)
@@ -1701,7 +1701,7 @@ def _render_value(vector: Vector, row: Int) raises -> String:
         var size = Int(vector.get_column_type().array_type_array_size())
         return _render_list(vector.array_get_child(), row * size, size)
     elif tid == DuckDBType.map:
-        var entries = vector.get_data().bitcast[duckdb_list_entry]()
+        var entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var entry = entries[row]
         return _render_map(
             vector.list_get_child(), Int(entry.offset), Int(entry.length)

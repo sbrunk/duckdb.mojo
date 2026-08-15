@@ -58,7 +58,7 @@ struct ApiLevel(Equatable, Writable, ImplicitlyCopyable):
 
     @always_inline("nodebug")
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         if self == Self.CLIENT:

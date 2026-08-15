@@ -731,21 +731,21 @@ def test_from_function_on_table() raises:
 # ===--------------------------------------------------------------------===#
 
 # SIMD-vectorized functions (operate on SIMD[dt, width] vectors)
-def simd_add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+def simd_add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
     return x + 1
 
 
-def simd_double[width: Int](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
+def simd_double[width: SIMDLength](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
     return x * 2.0
 
 
-def simd_add[width: Int](
+def simd_add[width: SIMDLength](
     a: SIMD[DType.int32, width], b: SIMD[DType.int32, width]
 ) -> SIMD[DType.int32, width]:
     return a + b
 
 
-def simd_add_f64[width: Int](
+def simd_add_f64[width: SIMDLength](
     a: SIMD[DType.float64, width], b: SIMD[DType.float64, width]
 ) -> SIMD[DType.float64, width]:
     return a + b

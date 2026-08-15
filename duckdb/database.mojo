@@ -2,7 +2,7 @@ from duckdb._libduckdb import *
 from duckdb.api import DuckDB
 
 
-def _null_ptr[T: AnyType, origin: Origin]() -> UnsafePointer[T, origin]:
+def _null_ptr[T: AnyType, origin: Origin]() -> Pointer[T, origin]:
     """Return a NULL UnsafePointer via Optional's null-niche encoding.
 
     Mojo 1.0.0b2+ forbids `UnsafePointer(unsafe_from_address=0)`. For C APIs
@@ -10,8 +10,8 @@ def _null_ptr[T: AnyType, origin: Origin]() -> UnsafePointer[T, origin]:
     meaning "use defaults"), we reinterpret a `None` Optional — which uses the
     null address as its niche — as the raw pointer.
     """
-    var opt: Optional[UnsafePointer[T, origin]] = None
-    return UnsafePointer(to=opt).bitcast[UnsafePointer[T, origin]]()[]
+    var opt: Optional[Pointer[T, origin]] = None
+    return Pointer(to=opt).unsafe_bitcast[Pointer[T, origin]]()[]
 
 
 struct Database(Movable):
@@ -21,14 +21,14 @@ struct Database(Movable):
     def __init__(out self, path: Optional[String] = None) raises:
         ref libduckdb = DuckDB().libduckdb()
         # NULL handle — duckdb_open_ext populates it via out-param. If
-        # construction raises after this, __del__'s duckdb_close becomes a
+        # construction raises after this, __deinit__'s duckdb_close becomes a
         # safe no-op on NULL.
         self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
         self._is_owned = True
-        var db_addr = UnsafePointer(to=self._db)
+        var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
         var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
-        var out_error = alloc[UnsafePointer[c_char, MutAnyOrigin]](1)
+        var out_error = alloc[Pointer[c_char, MutAnyOrigin]](1)
         # config=NULL signals "use default config" to DuckDB.
         if (
             libduckdb.duckdb_open_ext(path_ptr, db_addr, config=_null_ptr[duckdb_config.type, MutUntrackedOrigin](), out_error=out_error)
@@ -36,7 +36,7 @@ struct Database(Movable):
             var error_ptr = out_error[]
             var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
             # the String constructor copies the data so this is safe
-            libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
+            libduckdb.duckdb_free(error_ptr.unsafe_bitcast[NoneType]())
             raise Error(error_msg)
 
     def __init__(out self, path: Optional[String], config: Config) raises:
@@ -50,16 +50,16 @@ struct Database(Movable):
         # NULL handle — duckdb_open_ext populates it via out-param.
         self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
         self._is_owned = True
-        var db_addr = UnsafePointer(to=self._db)
+        var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
         var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
-        var out_error = alloc[UnsafePointer[c_char, MutAnyOrigin]](1)
+        var out_error = alloc[Pointer[c_char, MutAnyOrigin]](1)
         if (
             libduckdb.duckdb_open_ext(path_ptr, db_addr, config=config._handle(), out_error=out_error)
         ) == DuckDBError:
             var error_ptr = out_error[]
             var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
-            libduckdb.duckdb_free(error_ptr.bitcast[NoneType]())
+            libduckdb.duckdb_free(error_ptr.unsafe_bitcast[NoneType]())
             raise Error(error_msg)
 
     def __init__(out self, *, _handle: duckdb_database):
@@ -74,8 +74,8 @@ struct Database(Movable):
         self._db = _handle
         self._is_owned = False
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         if not self._is_owned:
             return
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_close(UnsafePointer(to=self._db))
+        libduckdb.duckdb_close(Pointer(to=self._db))

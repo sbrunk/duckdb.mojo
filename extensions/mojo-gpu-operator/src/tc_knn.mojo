@@ -36,11 +36,11 @@ from std.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
-    barrier,
     warp_id as get_warp_id,
 )
-from std.gpu.memory import AddressSpace, async_copy_wait_all
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.sync import barrier
+from max.gpu.memory import AddressSpace, async_copy_wait_all
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc, stack_allocation
 from layout import Layout, LayoutTensor, UNKNOWN_VALUE
 from layout.runtime_layout import RuntimeLayout
@@ -115,16 +115,19 @@ def tc_knn_supported(K: Int, k: Int) -> Bool:
 def tc_fused_knn_kernel[
     KD: Int, metric: Int, q_layout: Layout, e_layout: Layout,
 ](
-    q: LayoutTensor[DType.float16, q_layout, MutAnyOrigin],
-    e: LayoutTensor[DType.float16, e_layout, MutAnyOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    k: Int,
-    nblocks: Int,
+    q: LayoutTensor[DType.float16, q_layout, MutUntrackedOrigin],
+    e: LayoutTensor[DType.float16, e_layout, MutUntrackedOrigin],
+    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    k_dp: Int64,
+    nblocks_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var k = Int(k_dp)
+    var nblocks = Int(nblocks_dp)
     comptime if is_nvidia_gpu():
         var mma = TensorCore[
             DType.float32, DType.float16,
@@ -136,15 +139,15 @@ def tc_fused_knn_kernel[
         warp_y, warp_x = udivmod(warp_id, TC_BN // TC_WN)
 
         var a_smem = LayoutTensor[
-            DType.float16, Layout.row_major(TC_BM, TC_BK), MutAnyOrigin,
+            DType.float16, Layout.row_major(TC_BM, TC_BK), MutUntrackedOrigin,
             address_space = AddressSpace.SHARED,
         ].stack_allocation()
         var b_smem = LayoutTensor[
-            DType.float16, Layout.row_major(TC_BN, TC_BK), MutAnyOrigin,
+            DType.float16, Layout.row_major(TC_BN, TC_BK), MutUntrackedOrigin,
             address_space = AddressSpace.SHARED,
         ].stack_allocation()
         var s_smem = LayoutTensor[
-            DType.float32, Layout.row_major(TC_BM, TC_BN), MutAnyOrigin,
+            DType.float32, Layout.row_major(TC_BM, TC_BN), MutUntrackedOrigin,
             address_space = AddressSpace.SHARED,
         ].stack_allocation()
 
@@ -152,7 +155,7 @@ def tc_fused_knn_kernel[
             LayoutTensor[
                 DType.float32,
                 Layout.row_major(TC_WM // TC_MMA_M, (TC_WN * 4) // TC_MMA_N),
-                MutAnyOrigin, address_space = AddressSpace.LOCAL,
+                MutUntrackedOrigin, address_space = AddressSpace.LOCAL,
             ]
             .stack_allocation()
             .fill(0.0)
@@ -293,14 +296,17 @@ def tc_fused_knn_kernel[
 # `(block_idx.x*TC_BM + m)*k` emit). NVIDIA-only via the comptime gate.
 # ===-------------------------------------------------------------------===#
 def tc_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    Mq: Int,
-    nblocks: Int,
-    k: Int,
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    Mq_dp: Int64,
+    nblocks_dp: Int64,
+    k_dp: Int64,
 ):
+    var Mq = Int(Mq_dp)
+    var nblocks = Int(nblocks_dp)
+    var k = Int(k_dp)
     comptime if is_nvidia_gpu():
         var sd = stack_allocation[
             TC_K_CAP, Scalar[DType.float32],
@@ -397,8 +403,8 @@ def _run_tc_knn_for_kd[
     n_rows: Int,
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
     # HOST gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
     # is False in host context). On Apple this is comptime-False so the body --
@@ -409,8 +415,14 @@ def _run_tc_knn_for_kd[
         comptime q_layout = Layout.row_major(TC_BM, KD)
 
         var e_rt = RuntimeLayout[e_layout].row_major(Index(n_rows, KD))
-        var e_tensor = LayoutTensor[DType.float16, e_layout, MutAnyOrigin](
-            emb16.unsafe_ptr(), e_rt
+        var e_span = Span[Scalar[DType.float16], MutUntrackedOrigin](
+            unsafe_ptr=emb16.unsafe_ptr()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin](),
+            length=n_rows * KD,
+        )
+        var e_tensor = LayoutTensor[DType.float16, e_layout, MutUntrackedOrigin](
+            e_span, e_rt
         )
 
         var nblocks = TC_NBLOCKS
@@ -443,9 +455,15 @@ def _run_tc_knn_for_kd[
                 TC_BM * KD,
                 owning=False,
             )
+            var q_span = Span[Scalar[DType.float16], MutUntrackedOrigin](
+                unsafe_ptr=q_sub.unsafe_ptr()
+                .unsafe_mut_cast[True]()
+                .unsafe_origin_cast[MutUntrackedOrigin](),
+                length=TC_BM * KD,
+            )
             var q_tensor = LayoutTensor[
-                DType.float16, q_layout, MutAnyOrigin
-            ](q_sub.unsafe_ptr())
+                DType.float16, q_layout, MutUntrackedOrigin
+            ](q_span)
             # qnorm offset for this tile.
             var qnorm_sub = qnorm_dev.unsafe_ptr() + q0
 
@@ -456,23 +474,21 @@ def _run_tc_knn_for_kd[
                 enorm_dev.unsafe_ptr(),
                 cand_dist_dev.unsafe_ptr(),
                 cand_id_dev.unsafe_ptr(),
-                n_rows,
-                k,
-                nblocks,
+                Int64(n_rows),
+                Int64(k),
+                Int64(nblocks),
                 grid_dim=nblocks,
-                block_dim=TC_NUM_THREADS,
-            )
+                block_dim=TC_NUM_THREADS)
             ctx.enqueue_function[tc_merge_kernel](
                 cand_dist_dev.unsafe_ptr(),
                 cand_id_dev.unsafe_ptr(),
                 merged_dist_dev.unsafe_ptr(),
                 merged_id_dev.unsafe_ptr(),
-                TC_BM,
-                nblocks,
-                k,
+                Int64(TC_BM),
+                Int64(nblocks),
+                Int64(k),
                 grid_dim=TC_BM,
-                block_dim=WARP_SIZE,
-            )
+                block_dim=WARP_SIZE)
             ctx.enqueue_copy(merged_dist_h, merged_dist_dev)
             ctx.enqueue_copy(merged_id_h, merged_id_dev)
             ctx.synchronize()
@@ -521,12 +537,12 @@ def run_tc_knn_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
     # HOST gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
     # host-side comptime query; Apple never compiles this body.
@@ -570,7 +586,7 @@ def run_tc_knn_batch(
         var enorm_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
         ctx.synchronize()
         ctx.enqueue_copy(qs_dev, qh16)
-        var qnorm_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+        var qnorm_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qnorm_h)
         )
         ctx.enqueue_copy(qnorm_dev, qnorm_imm)
@@ -583,12 +599,11 @@ def run_tc_knn_batch(
         ctx.enqueue_function[_tc_enorm_kernel](
             emb16.unsafe_ptr(),
             enorm_dev.unsafe_ptr(),
-            n_rows,
-            K,
-            enorm_squared,
+            Int64(n_rows),
+            Int64(K),
+            Int64(enorm_squared),
             grid_dim=n_rows,
-            block_dim=WARP_SIZE,
-        )
+            block_dim=WARP_SIZE)
         ctx.synchronize()
 
         # Dispatch the runtime metric to the comptime kernel instantiation. Each
@@ -674,12 +689,15 @@ def run_tc_knn_batch(
 # SQUARED norm (sum of squares, no sqrt) for the L2-distance epilogue. NVIDIA
 # -only via the comptime gate.
 def _tc_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
-    squared: Int,
+    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
+    squared_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
+    var squared = Int(squared_dp)
     comptime if is_nvidia_gpu():
         from std.gpu.primitives import warp
 

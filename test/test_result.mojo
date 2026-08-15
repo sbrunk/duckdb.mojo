@@ -194,8 +194,8 @@ def test_result_column_name_unnamed() raises:
     # DuckDB generates default names for unnamed columns
     var name0 = result.column_name(0)
     var name1 = result.column_name(1)
-    assert_true(len(name0) > 0)
-    assert_true(len(name1) > 0)
+    assert_true(name0.byte_length() > 0)
+    assert_true(name1.byte_length() > 0)
 
 
 def test_result_fetch_chunk() raises:

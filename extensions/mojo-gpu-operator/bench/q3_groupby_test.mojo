@@ -26,7 +26,7 @@ check that int64 never overflows).
 
 from std.gpu import block_idx, thread_idx
 from std.gpu.primitives import warp
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
 from std.time import perf_counter_ns

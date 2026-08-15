@@ -8,7 +8,7 @@ from duckdb.table_function import (
 from duckdb._libduckdb import *
 from std.testing import *
 from std.testing.suite import TestSuite
-from std.memory.unsafe_pointer import alloc
+from std.memory.alloc import alloc
 
 
 # ===--------------------------------------------------------------------===#

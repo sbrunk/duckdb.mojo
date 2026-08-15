@@ -90,14 +90,14 @@ struct duckdb_extension_access(ImplicitlyCopyable, Movable):
     """
 
     var set_error: def(
-        duckdb_extension_info, UnsafePointer[c_char, ImmutAnyOrigin]
+        duckdb_extension_info, Pointer[c_char, ImmutAnyOrigin]
     ) thin abi("C") -> NoneType
     var get_database: def(
         duckdb_extension_info,
-    ) thin abi("C") -> UnsafePointer[duckdb_database, MutUntrackedOrigin]
+    ) thin abi("C") -> Pointer[duckdb_database, MutUntrackedOrigin]
     var get_api: def(
-        duckdb_extension_info, UnsafePointer[c_char, ImmutAnyOrigin]
-    ) thin abi("C") -> UnsafePointer[NoneType, ImmutUntrackedOrigin]
+        duckdb_extension_info, Pointer[c_char, ImmutAnyOrigin]
+    ) thin abi("C") -> Pointer[NoneType, ImmUntrackedOrigin]
 
 
 # ===--------------------------------------------------------------------===#
@@ -129,12 +129,12 @@ struct Extension(Movable):
     """
 
     var _info: duckdb_extension_info
-    var _access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin]
+    var _access: Pointer[duckdb_extension_access, MutUntrackedOrigin]
 
     def __init__(
         out self,
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
+        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
     ):
         """Create an Extension from the DuckDB-provided info and access.
 
@@ -164,12 +164,12 @@ struct Extension(Movable):
         """Report an error back to DuckDB."""
         var error_copy = error.copy()
         self._access[].set_error(
-            self._info, error_copy.as_c_string_slice().unsafe_ptr()
+            self._info, error_copy.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin()
         )
 
     def get_api(
         self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[UnsafePointer[NoneType, ImmutUntrackedOrigin]]:
+    ) -> Optional[Pointer[NoneType, ImmUntrackedOrigin]]:
         """Request the DuckDB C API function pointer struct (untyped).
 
         Returns an opaque pointer that can be bitcast to the appropriate
@@ -184,14 +184,14 @@ struct Extension(Movable):
         """
         var version_copy = version.copy()
         return self._access[].get_api(
-            self._info, version_copy.as_c_string_slice().unsafe_ptr()
+            self._info, version_copy.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin()
         )
 
     def get_api_typed[
         ApiStruct: AnyType = ExtApi
     ](
         self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[UnsafePointer[ApiStruct, ImmutUntrackedOrigin]]:
+    ) -> Optional[Pointer[ApiStruct, ImmUntrackedOrigin]]:
         """Request the DuckDB C API as a typed struct pointer.
 
         Returns a pointer to the API struct with the expected struct layout.
@@ -220,14 +220,14 @@ struct Extension(Movable):
         var raw = self.get_api(version)
         if raw is None:
             return None
-        return raw.value().bitcast[ApiStruct]()
+        return raw.value().unsafe_bitcast[ApiStruct]()
 
     @staticmethod
     def run[
         init_fn: def(conn: Connection[ApiLevel.EXT_STABLE]) raises thin -> None,
     ](
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
+        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
     ) -> Bool:
         """Run an extension init function (stable API) with automatic error handling.
 
@@ -289,7 +289,7 @@ struct Extension(Movable):
         init_fn: def(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises thin -> None,
     ](
         info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
+        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
     ) -> Bool:
         """Run an extension init function (unstable API) with automatic error handling.
 

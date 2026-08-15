@@ -51,7 +51,7 @@ struct FunctionInfo:
         """
         self._info = info
     
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `ScalarFunction.set_extra_info()`.
         
         Returns:
@@ -60,7 +60,7 @@ struct FunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_scalar_function_get_extra_info(self._info)
     
-    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during the bind phase.
         
         Note that the bind data is read-only during execution.
@@ -135,7 +135,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def __init__(out self):
         """Creates a new scalar function.
         
-        The function must be destroyed with `__del__` or by letting it go out of scope.
+        The function must be destroyed with `__deinit__` or by letting it go out of scope.
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_scalar_function()
@@ -144,10 +144,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """Move constructor that transfers ownership."""
         self._function = take._function
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the scalar function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_scalar_function(UnsafePointer(to=self._function))
+        libduckdb.duckdb_destroy_scalar_function(Pointer(to=self._function))
 
     def set_name(self, name: String):
         """Sets the name of the scalar function.
@@ -204,9 +204,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_return_type(self._function, type._logical_type)
 
-    def set_extra_info(
-        self, 
-        extra_info: UnsafePointer[NoneType, MutAnyOrigin], 
+    def set_extra_info[extra_info_origin: MutOrigin](
+        self,
+        extra_info: Pointer[NoneType, extra_info_origin], 
         destroy: duckdb_delete_callback_t
     ):
         """Assigns extra information to the scalar function.
@@ -288,7 +288,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def set_simd_function[
         In1: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ](self):
         """Sets a unary SIMD-vectorized function as the execution function.
 
@@ -302,7 +302,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         Parameters:
             In1: The DType of the input data in memory.
             Out: The DType of the output data in memory.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
@@ -310,7 +310,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         from duckdb.logical_type import decimal_type
         from duckdb.connection import Connection
 
-        fn add_one[w: Int](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        fn add_one[w: SIMDLength](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return x + 1
 
         var conn = Connection(":memory:")
@@ -324,11 +324,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
-            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
 
             def apply[w: Int](idx: Int) {mut}:
-                (out_data + idx).store(func((in_data + idx).load[width=w]()))
+                (out_data + idx).unsafe_store(func((in_data + idx).unsafe_load[width=w]()))
 
             vectorize[simd_width_of[In1]()](size, apply)
 
@@ -338,7 +338,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         In2: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ](self):
         """Sets a binary SIMD-vectorized function as the execution function.
 
@@ -352,7 +352,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             In1: The DType of the first input in memory.
             In2: The DType of the second input in memory.
             Out: The DType of the output data in memory.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
@@ -360,7 +360,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         from duckdb.logical_type import decimal_type
         from duckdb.connection import Connection
 
-        fn my_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        fn my_add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return a + b
 
         var conn = Connection(":memory:")
@@ -375,15 +375,15 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
-            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
-            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
+            var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[In2]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
 
             def apply[w: Int](idx: Int) {mut}:
-                (out_data + idx).store(
+                (out_data + idx).unsafe_store(
                     func(
-                        (in1_data + idx).load[width=w](),
-                        (in2_data + idx).load[width=w](),
+                        (in1_data + idx).unsafe_load[width=w](),
+                        (in2_data + idx).unsafe_load[width=w](),
                     )
                 )
 
@@ -393,17 +393,17 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         self.set_function[wrapper]()
 
     # --- Overloads accepting stdlib math function signatures ----------------
-    # These accept def[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]
+    # These accept def[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]
     # so you can pass math.sqrt, math.sin, etc. directly.
 
     def set_simd_function[
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](self):
         """Sets a unary SIMD function using the stdlib math function signature.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
         (e.g. `math.sqrt`, `math.sin`, `math.cos`, `math.exp`, `math.log`).
 
         Parameters:
@@ -428,11 +428,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
-            var out_data = output.get_data().bitcast[Scalar[D]]()
+            var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[D]]()
 
             def apply[w: Int](idx: Int) {mut}:
-                (out_data + idx).store(func((in_data + idx).load[width=w]()))
+                (out_data + idx).unsafe_store(func((in_data + idx).unsafe_load[width=w]()))
 
             vectorize[simd_width_of[D]()](size, apply)
 
@@ -440,12 +440,12 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     def set_simd_function[
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](self):
         """Sets a binary SIMD function using the stdlib math function signature.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: Int](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
         (e.g. `math.atan2`).
 
         Parameters:
@@ -472,15 +472,15 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[D]]()
-            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[D]]()
-            var out_data = output.get_data().bitcast[Scalar[D]]()
+            var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
+            var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[D]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[D]]()
 
             def apply[w: Int](idx: Int) {mut}:
-                (out_data + idx).store(
+                (out_data + idx).unsafe_store(
                     func(
-                        (in1_data + idx).load[width=w](),
-                        (in2_data + idx).load[width=w](),
+                        (in1_data + idx).unsafe_load[width=w](),
+                        (in2_data + idx).unsafe_load[width=w](),
                     )
                 )
 
@@ -695,8 +695,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
-            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
             for i in range(size):
                 out_data[i] = func(in_data[i])
 
@@ -767,9 +767,9 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
             var size = len(input)
-            var in1_data = input.get_vector(0).get_data().bitcast[Scalar[In1]]()
-            var in2_data = input.get_vector(1).get_data().bitcast[Scalar[In2]]()
-            var out_data = output.get_data().bitcast[Scalar[Out]]()
+            var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
+            var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[In2]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
             for i in range(size):
                 out_data[i] = func(in1_data[i], in2_data[i])
 
@@ -822,7 +822,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a scalar function from a SIMD-vectorized function.
 
@@ -832,11 +832,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             name: The SQL function name.
             In1: The input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
-        fn add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+        fn add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
             return x + 1
 
         var func = ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one]()
@@ -855,7 +855,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         In1: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width]) thin -> SIMD[Out, width],
     ](conn: Connection[_]) raises:
         """Create and register a scalar function from a SIMD-vectorized function.
 
@@ -863,14 +863,14 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             name: The SQL function name.
             In1: The input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+        fn add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
             return x + 1
 
         var conn = Connection(":memory:")
@@ -886,7 +886,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         In2: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a SIMD-vectorized function.
 
@@ -897,11 +897,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             In1: The first input DType.
             In2: The second input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
-        fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
 
         var func = ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add]()
@@ -922,7 +922,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         In2: DType,
         Out: DType,
-        func: def[width: Int] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
+        func: def[width: SIMDLength] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
     ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a SIMD-vectorized function.
 
@@ -931,14 +931,14 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             In1: The first input DType.
             In2: The second input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: Int](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
 
         var conn = Connection(":memory:")
@@ -954,14 +954,14 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a unary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: Int](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
         so you can pass `math.sqrt`, `math.sin`, `math.cos`, etc. directly.
 
         Parameters:
@@ -988,7 +988,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](conn: Connection[_]) raises:
         """Create and register a unary scalar function from a stdlib math function.
 
@@ -1015,7 +1015,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ]() -> ScalarFunction[ApiLevel.CLIENT]:
         """Create a binary scalar function from a stdlib math function.
 
@@ -1048,7 +1048,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: Int] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
+        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
     ](conn: Connection[_]) raises:
         """Create and register a binary scalar function from a stdlib math function.
 
@@ -1071,7 +1071,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
 
     @staticmethod
-    def get_extra_info(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(info: duckdb_function_info) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `set_extra_info`.
         
         This can be called during function execution.
@@ -1083,7 +1083,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return libduckdb.duckdb_scalar_function_get_extra_info(info)
 
     @staticmethod
-    def get_bind_data(info: duckdb_function_info) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(info: duckdb_function_info) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during binding.
         
         This can be called during function execution to access data stored during binding.
@@ -1104,7 +1104,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         var error_copy = error.copy()
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_scalar_function_set_error(info, error_copy.as_c_string_slice().unsafe_ptr().bitcast[c_char]())
+        libduckdb.duckdb_scalar_function_set_error(info, error_copy.as_c_string_slice().unsafe_ptr().unsafe_bitcast[c_char]())
 
 
 struct BindInfo:
@@ -1123,9 +1123,9 @@ struct BindInfo:
         """
         self._info = info
 
-    def set_bind_data(
-        self, 
-        bind_data: UnsafePointer[NoneType, MutAnyOrigin], 
+    def set_bind_data[bind_data_origin: MutOrigin](
+        self,
+        bind_data: Pointer[NoneType, bind_data_origin], 
         destroy: duckdb_delete_callback_t
     ):
         """Sets user-provided bind data.
@@ -1157,7 +1157,7 @@ struct BindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_bind_set_error(self._info, error_copy.as_c_string_slice().unsafe_ptr())
 
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `ScalarFunction.set_extra_info`.
 
         * returns: The extra info pointer.
@@ -1236,10 +1236,10 @@ struct ScalarFunctionSet(Movable):
         """Move constructor that transfers ownership."""
         self._function_set = take._function_set
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the scalar function set and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_scalar_function_set(UnsafePointer(to=self._function_set))
+        libduckdb.duckdb_destroy_scalar_function_set(Pointer(to=self._function_set))
 
     def add_function(self, function: ScalarFunction) raises:
         """Adds a scalar function as a new overload to the function set.

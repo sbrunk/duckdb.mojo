@@ -42,7 +42,7 @@ struct Config(Movable):
         # Placeholder handle — duckdb_create_config populates it via out-param.
         self._config = duckdb_config.unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
-        if libduckdb.duckdb_create_config(UnsafePointer(to=self._config)) == DuckDBError:
+        if libduckdb.duckdb_create_config(Pointer(to=self._config)) == DuckDBError:
             raise Error("Failed to create DuckDB config")
 
     def __init__(out self, options: Dict[String, String]) raises:
@@ -59,9 +59,9 @@ struct Config(Movable):
     def __init__(out self, *, deinit take: Self):
         self._config = take._config
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_config(UnsafePointer(to=self._config))
+        libduckdb.duckdb_destroy_config(Pointer(to=self._config))
 
     def set(mut self, name: String, value: String) raises:
         """Set a configuration option.
@@ -109,13 +109,13 @@ struct Config(Movable):
         var result = Dict[String, String]()
         for i in range(count):
             # Placeholders — duckdb_get_config_flag fills both via out-params.
-            var name_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
-            var desc_ptr = UnsafePointer[c_char, ImmutAnyOrigin].unsafe_dangling()
+            var name_ptr = Pointer[c_char, ImmutAnyOrigin].unsafe_dangling()
+            var desc_ptr = Pointer[c_char, ImmutAnyOrigin].unsafe_dangling()
             if (
                 libduckdb.duckdb_get_config_flag(
                     UInt(i),
-                    UnsafePointer(to=name_ptr),
-                    UnsafePointer(to=desc_ptr),
+                    Pointer(to=name_ptr),
+                    Pointer(to=desc_ptr),
                 )
             ) == DuckDBSuccess:
                 var name = String(unsafe_from_utf8_ptr=name_ptr)

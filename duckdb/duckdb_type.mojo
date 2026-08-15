@@ -3,7 +3,6 @@ from duckdb.vector import Vector
 from duckdb.api import DuckDB
 from std.collections import Set
 from std.hashlib.hasher import Hasher
-from std.sys.intrinsics import _type_is_eq
 from std.sys.info import size_of
 
 
@@ -162,7 +161,7 @@ struct DuckDBType(
 
     @always_inline("nodebug")
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         if self == DuckDBType.invalid:
@@ -275,8 +274,11 @@ struct DuckDBType(
             return DuckDBType.double
         return DuckDBType.invalid
 
-    def to_dtype(self) -> DType:
-        """Convert a DuckDBType to a Mojo numeric DType."""
+    def to_dtype(self) -> Optional[DType]:
+        """Convert a DuckDBType to a Mojo numeric DType.
+
+        Returns `None` for DuckDB types with no numeric DType equivalent.
+        """
         if self == DuckDBType.boolean:
             return DType.bool
         if self == DuckDBType.tinyint:
@@ -299,7 +301,7 @@ struct DuckDBType(
             return DType.float32
         if self == DuckDBType.double:
             return DType.float64
-        return DType.invalid
+        return None
 
 
 def _zpad(value: Int, width: Int) -> String:
@@ -357,7 +359,7 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         writer.write("-", _zpad(Int(p.month), 2), "-", _zpad(Int(p.day), 2))
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def __repr__(self) -> String:
         return "Date(" + String(self.days) + ")"
@@ -394,7 +396,7 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         )
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # HH:MM:SS with zero-padding and a fractional suffix when present.
@@ -453,7 +455,7 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
         )
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         return writer.write(self.date(), " ", self.time())
@@ -508,7 +510,7 @@ struct TimestampS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyab
     var seconds: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Render as a formatted timestamp, not the raw second count.
@@ -535,7 +537,7 @@ struct TimestampMS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var millis: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Render as a formatted timestamp, not the raw millisecond count.
@@ -562,7 +564,7 @@ struct TimestampNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var nanos: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Render as a formatted timestamp (microsecond precision).
@@ -589,7 +591,7 @@ struct TimeNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
     var nanos: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Render as a formatted time (microsecond precision).
@@ -772,7 +774,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
         return (self._data[byte_idx] >> bit_in_byte) & 1 == 1
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         for i in range(self._size):
@@ -805,7 +807,7 @@ struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
     var micros: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Render as a formatted timestamp (UTC); timezone offset is not shown.
@@ -874,7 +876,7 @@ struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Mo
     var value: UInt128
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         # Canonical 8-4-4-4-12 lowercase hex form (e.g. 4f6e...-...-...).
@@ -936,7 +938,7 @@ struct Interval(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable
     var micros: Int64
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -1143,66 +1145,66 @@ def mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     # duckdb_int == DuckDBType.integer
     ```
     """
-    comptime if _type_is_eq[T, Bool]():
+    comptime if T == Bool:
         return DuckDBType.boolean
-    elif _type_is_eq[T, Int8]():
+    elif T == Int8:
         return DuckDBType.tinyint
-    elif _type_is_eq[T, Int16]():
+    elif T == Int16:
         return DuckDBType.smallint
-    elif _type_is_eq[T, Int32]():
+    elif T == Int32:
         return DuckDBType.integer
-    elif _type_is_eq[T, Int64]():
+    elif T == Int64:
         return DuckDBType.bigint
-    elif _type_is_eq[T, UInt8]():
+    elif T == UInt8:
         return DuckDBType.utinyint
-    elif _type_is_eq[T, UInt16]():
+    elif T == UInt16:
         return DuckDBType.usmallint
-    elif _type_is_eq[T, UInt32]():
+    elif T == UInt32:
         return DuckDBType.uinteger
-    elif _type_is_eq[T, UInt64]():
+    elif T == UInt64:
         return DuckDBType.ubigint
-    elif _type_is_eq[T, Float32]():
+    elif T == Float32:
         return DuckDBType.float
-    elif _type_is_eq[T, Float64]():
+    elif T == Float64:
         return DuckDBType.double
-    elif _type_is_eq[T, Int128]():
+    elif T == Int128:
         return DuckDBType.hugeint
-    elif _type_is_eq[T, UInt128]():
+    elif T == UInt128:
         return DuckDBType.uhugeint
-    elif _type_is_eq[T, String]():
+    elif T == String:
         return DuckDBType.varchar
-    elif _type_is_eq[T, Date]():
+    elif T == Date:
         return DuckDBType.date
-    elif _type_is_eq[T, Time]():
+    elif T == Time:
         return DuckDBType.time
-    elif _type_is_eq[T, TimeNS]():
+    elif T == TimeNS:
         return DuckDBType.time_ns
-    elif _type_is_eq[T, Timestamp]():
+    elif T == Timestamp:
         return DuckDBType.timestamp
-    elif _type_is_eq[T, TimestampS]():
+    elif T == TimestampS:
         return DuckDBType.timestamp_s
-    elif _type_is_eq[T, TimestampMS]():
+    elif T == TimestampMS:
         return DuckDBType.timestamp_ms
-    elif _type_is_eq[T, TimestampNS]():
+    elif T == TimestampNS:
         return DuckDBType.timestamp_ns
-    elif _type_is_eq[T, TimestampTZ]():
+    elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
-    elif _type_is_eq[T, TimeTZ]():
+    elif T == TimeTZ:
         return DuckDBType.time_tz
-    elif _type_is_eq[T, Interval]():
+    elif T == Interval:
         return DuckDBType.interval
-    elif _type_is_eq[T, Decimal]():
+    elif T == Decimal:
         return DuckDBType.decimal
-    elif _type_is_eq[T, UUID]():
+    elif T == UUID:
         return DuckDBType.uuid
-    elif _type_is_eq[T, Bit]():
+    elif T == Bit:
         return DuckDBType.bit
-    elif _type_is_eq[T, Int]():
+    elif T == Int:
         comptime if size_of[Int]() == 4:
             return DuckDBType.integer
         else:
             return DuckDBType.bigint
-    elif _type_is_eq[T, UInt]():
+    elif T == UInt:
         comptime if size_of[UInt]() == 4:
             return DuckDBType.uinteger
         else:

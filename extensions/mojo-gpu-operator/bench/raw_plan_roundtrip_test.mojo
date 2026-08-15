@@ -186,7 +186,7 @@ def build_q1() -> RawPlanReader:
     b.puti(0)  # group_index (grouped)
     b.puti(1)  # aggregate_index
     b.emit_string_table()
-    # OUT_TYPES: 2 group cols (VARCHAR) + 8 agg cols (types not load-bearing here)
+    # OUT_TYPES: 2 group cols (VARCHAR) + 8 agg cols
     b.puti(10)
     b.put(TYPE_VARCHAR); b.puti(0); b.puti(0)
     b.put(TYPE_VARCHAR); b.puti(0); b.puti(0)

@@ -21,22 +21,22 @@ comptime W32 = 16
 # Elementwise SIMD-generic primitives (DOUBLE -> DOUBLE)
 # ===--------------------------------------------------------------------===#
 
-def ksqrt[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def ksqrt[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return sqrt(x)
 
-def ksin[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def ksin[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return sin(x)
 
-def kcos[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def kcos[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return cos(x)
 
-def kln[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def kln[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return log(x)
 
-def kexp[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def kexp[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return exp(x)
 
-def klog10[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def klog10[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return log(x) * INV_LN10
 
 
@@ -45,22 +45,22 @@ def klog10[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
 # ===--------------------------------------------------------------------===#
 
 def map_unary[
-    f: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
-](a: UnsafePointer[Float64, ImmutAnyOrigin], dst: UnsafePointer[Float64, MutAnyOrigin], n: Int):
+    f: def[w: SIMDLength] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
+](a: Pointer[Float64, ImmutAnyOrigin], dst: Pointer[Float64, MutAnyOrigin], n: Int):
     var i = 0
     while i + W64 <= n:
-        dst.store(i, f[W64]((a + i).load[width=W64]()))
+        dst.unsafe_store(i, f[W64]((a + i).unsafe_load[width=W64]()))
         i += W64
     while i < n:
-        dst.store(i, f[1]((a + i).load[width=1]()))
+        dst.unsafe_store(i, f[1]((a + i).unsafe_load[width=1]()))
         i += 1
 
 
-def reduce_sum_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+def reduce_sum_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
     var acc = SIMD[DType.float64, W64](0)
     var i = 0
     while i + W64 <= n:
-        acc += (a + i).load[width=W64]()
+        acc += (a + i).unsafe_load[width=W64]()
         i += W64
     var s = acc.reduce_add()
     while i < n:
@@ -69,11 +69,11 @@ def reduce_sum_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64
     return s
 
 
-def reduce_min_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+def reduce_min_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
     var acc = SIMD[DType.float64, W64](a[0])
     var i = 0
     while i + W64 <= n:
-        acc = min(acc, (a + i).load[width=W64]())
+        acc = min(acc, (a + i).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_min()
     while i < n:
@@ -82,11 +82,11 @@ def reduce_min_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64
     return s
 
 
-def reduce_max_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+def reduce_max_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
     var acc = SIMD[DType.float64, W64](a[0])
     var i = 0
     while i + W64 <= n:
-        acc = max(acc, (a + i).load[width=W64]())
+        acc = max(acc, (a + i).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_max()
     while i < n:
@@ -96,10 +96,10 @@ def reduce_max_f64(a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64
 
 
 def reduce_sum_i128(
-    a: UnsafePointer[Int128, ImmutAnyOrigin],
+    a: Pointer[Int128, ImmutAnyOrigin],
     n: Int,
-    out_val: UnsafePointer[Int128, MutAnyOrigin],
-    out_overflow: UnsafePointer[Int32, MutAnyOrigin],
+    out_val: Pointer[Int128, MutAnyOrigin],
+    out_overflow: Pointer[Int32, MutAnyOrigin],
 ):
     """Sum of a FLAT int128 column with multiple independent accumulators.
 
@@ -155,17 +155,17 @@ def reduce_sum_i128(
 
 def array_dot[
     dt: DType, w: Int
-](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+](a: Pointer[Scalar[dt], ImmutAnyOrigin], b: Pointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
     var acc0 = SIMD[dt, w](0)
     var acc1 = SIMD[dt, w](0)
     var i = 0
     while i + 2 * w <= n:
-        acc0 += (a + i).load[width=w]() * (b + i).load[width=w]()
-        acc1 += (a + i + w).load[width=w]() * (b + i + w).load[width=w]()
+        acc0 += (a + i).unsafe_load[width=w]() * (b + i).unsafe_load[width=w]()
+        acc1 += (a + i + w).unsafe_load[width=w]() * (b + i + w).unsafe_load[width=w]()
         i += 2 * w
     var acc = acc0 + acc1
     while i + w <= n:
-        acc += (a + i).load[width=w]() * (b + i).load[width=w]()
+        acc += (a + i).unsafe_load[width=w]() * (b + i).unsafe_load[width=w]()
         i += w
     var s = acc.reduce_add()
     while i < n:
@@ -176,19 +176,19 @@ def array_dot[
 
 def array_l2dist[
     dt: DType, w: Int
-](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+](a: Pointer[Scalar[dt], ImmutAnyOrigin], b: Pointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
     var acc0 = SIMD[dt, w](0)
     var acc1 = SIMD[dt, w](0)
     var i = 0
     while i + 2 * w <= n:
-        var d0 = (a + i).load[width=w]() - (b + i).load[width=w]()
-        var d1 = (a + i + w).load[width=w]() - (b + i + w).load[width=w]()
+        var d0 = (a + i).unsafe_load[width=w]() - (b + i).unsafe_load[width=w]()
+        var d1 = (a + i + w).unsafe_load[width=w]() - (b + i + w).unsafe_load[width=w]()
         acc0 += d0 * d0
         acc1 += d1 * d1
         i += 2 * w
     var acc = acc0 + acc1
     while i + w <= n:
-        var d = (a + i).load[width=w]() - (b + i).load[width=w]()
+        var d = (a + i).unsafe_load[width=w]() - (b + i).unsafe_load[width=w]()
         acc += d * d
         i += w
     var s = acc.reduce_add()
@@ -201,14 +201,14 @@ def array_l2dist[
 
 def array_cosine_sim[
     dt: DType, w: Int
-](a: UnsafePointer[Scalar[dt], ImmutAnyOrigin], b: UnsafePointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
+](a: Pointer[Scalar[dt], ImmutAnyOrigin], b: Pointer[Scalar[dt], ImmutAnyOrigin], n: Int) -> Scalar[dt]:
     var dot = SIMD[dt, w](0)
     var na = SIMD[dt, w](0)
     var nb = SIMD[dt, w](0)
     var i = 0
     while i + w <= n:
-        var x = (a + i).load[width=w]()
-        var y = (b + i).load[width=w]()
+        var x = (a + i).unsafe_load[width=w]()
+        var y = (b + i).unsafe_load[width=w]()
         dot += x * y
         na += x * x
         nb += y * y
@@ -241,11 +241,11 @@ def array_cosine_sim[
 
 
 def reduce_sum_f64_masked(
-    a: UnsafePointer[Float64, ImmutAnyOrigin],
-    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    a: Pointer[Float64, ImmutAnyOrigin],
+    valid: Pointer[UInt64, ImmutAnyOrigin],
     n: Int,
-    out_sum: UnsafePointer[Float64, MutAnyOrigin],
-    out_count: UnsafePointer[Int64, MutAnyOrigin],
+    out_sum: Pointer[Float64, MutAnyOrigin],
+    out_count: Pointer[Int64, MutAnyOrigin],
 ):
     comptime LOWMASK = (UInt64(1) << UInt64(W64)) - 1
     var lane = iota[DType.uint64, W64]()
@@ -256,7 +256,7 @@ def reduce_sum_f64_masked(
         var bits = valid[i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
         var m = mbits.gt(SIMD[DType.uint64, W64](0))
-        acc += m.select((a + i).load[width=W64](), SIMD[DType.float64, W64](0))
+        acc += m.select((a + i).unsafe_load[width=W64](), SIMD[DType.float64, W64](0))
         cnt += Int64(pop_count(Int(bits & LOWMASK)))
         i += W64
     var s = acc.reduce_add()
@@ -270,13 +270,13 @@ def reduce_sum_f64_masked(
 
 
 def reduce_minmax_masked[
-    dt: DType, w: Int, is_min: Bool
+    dt: DType, w: SIMDLength, is_min: Bool
 ](
-    a: UnsafePointer[Scalar[dt], ImmutAnyOrigin],
-    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    a: Pointer[Scalar[dt], ImmutAnyOrigin],
+    valid: Pointer[UInt64, ImmutAnyOrigin],
     n: Int,
-    out_val: UnsafePointer[Scalar[dt], MutAnyOrigin],
-    out_count: UnsafePointer[Int64, MutAnyOrigin],
+    out_val: Pointer[Scalar[dt], MutAnyOrigin],
+    out_count: Pointer[Int64, MutAnyOrigin],
 ):
     comptime LOWMASK = (UInt64(1) << UInt64(w)) - 1
     comptime ident = Scalar[dt].MAX_FINITE if is_min else -Scalar[dt].MAX_FINITE
@@ -289,7 +289,7 @@ def reduce_minmax_masked[
         var bits = valid[i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, w](bits) >> lane) & SIMD[DType.uint64, w](1)
         var m = mbits.gt(SIMD[DType.uint64, w](0))
-        var x = m.select((a + i).load[width=w](), identv)
+        var x = m.select((a + i).unsafe_load[width=w](), identv)
         comptime if is_min:
             acc = min(acc, x)
         else:
@@ -314,12 +314,12 @@ def reduce_minmax_masked[
 
 
 def reduce_sum_i128_masked(
-    a: UnsafePointer[Int128, ImmutAnyOrigin],
-    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    a: Pointer[Int128, ImmutAnyOrigin],
+    valid: Pointer[UInt64, ImmutAnyOrigin],
     n: Int,
-    out_val: UnsafePointer[Int128, MutAnyOrigin],
-    out_count: UnsafePointer[Int64, MutAnyOrigin],
-    out_overflow: UnsafePointer[Int32, MutAnyOrigin],
+    out_val: Pointer[Int128, MutAnyOrigin],
+    out_count: Pointer[Int64, MutAnyOrigin],
+    out_overflow: Pointer[Int32, MutAnyOrigin],
 ):
     """Validity-masked int128 sum. Scalar (int128 has no register SIMD path) with
     the same branchless overflow detection as `reduce_sum_i128`."""
@@ -348,28 +348,28 @@ def reduce_sum_i128_masked(
 
 
 def reduce_fsum_map[
-    f: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
-](a: UnsafePointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+    f: def[w: SIMDLength] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
+](a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
     var acc = SIMD[DType.float64, W64](0)
     var i = 0
     while i + W64 <= n:
-        acc += f[W64]((a + i).load[width=W64]())
+        acc += f[W64]((a + i).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_add()
     while i < n:
-        s += f[1]((a + i).load[width=1]())[0]
+        s += f[1]((a + i).unsafe_load[width=1]())[0]
         i += 1
     return s
 
 
 def reduce_fsum_map_masked[
-    f: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
+    f: def[w: SIMDLength] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w]
 ](
-    a: UnsafePointer[Float64, ImmutAnyOrigin],
-    valid: UnsafePointer[UInt64, ImmutAnyOrigin],
+    a: Pointer[Float64, ImmutAnyOrigin],
+    valid: Pointer[UInt64, ImmutAnyOrigin],
     n: Int,
-    out_sum: UnsafePointer[Float64, MutAnyOrigin],
-    out_count: UnsafePointer[Int64, MutAnyOrigin],
+    out_sum: Pointer[Float64, MutAnyOrigin],
+    out_count: Pointer[Int64, MutAnyOrigin],
 ):
     comptime LOWMASK = (UInt64(1) << UInt64(W64)) - 1
     var lane = iota[DType.uint64, W64]()
@@ -380,13 +380,13 @@ def reduce_fsum_map_masked[
         var bits = valid[i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
         var m = mbits.gt(SIMD[DType.uint64, W64](0))
-        acc += m.select(f[W64]((a + i).load[width=W64]()), SIMD[DType.float64, W64](0))
+        acc += m.select(f[W64]((a + i).unsafe_load[width=W64]()), SIMD[DType.float64, W64](0))
         cnt += Int64(pop_count(Int(bits & LOWMASK)))
         i += W64
     var s = acc.reduce_add()
     while i < n:
         if (valid[i >> 6] >> UInt64(i & 63)) & 1:
-            s += f[1]((a + i).load[width=1]())[0]
+            s += f[1]((a + i).unsafe_load[width=1]())[0]
             cnt += 1
         i += 1
     out_sum[0] = s
@@ -408,8 +408,8 @@ def reduce_fsum_map_masked[
 
 
 def _topk_insert(
-    td: UnsafePointer[Float32, MutAnyOrigin],
-    ti: UnsafePointer[Int64, MutAnyOrigin],
+    td: Pointer[Float32, MutAnyOrigin],
+    ti: Pointer[Int64, MutAnyOrigin],
     base: Int,
     k: Int,
     d: Float32,
@@ -437,16 +437,16 @@ def _dist_from_dot[metric: Int](s: Float32, qn: Float32, en: Float32) -> Float32
 def knn_topk[
     metric: Int
 ](
-    q: UnsafePointer[Float32, ImmutAnyOrigin],
-    nrm_q: UnsafePointer[Float32, ImmutAnyOrigin],
+    q: Pointer[Float32, ImmutAnyOrigin],
+    nrm_q: Pointer[Float32, ImmutAnyOrigin],
     m: Int,
-    e: UnsafePointer[Float32, ImmutAnyOrigin],
-    nrm_e: UnsafePointer[Float32, ImmutAnyOrigin],
+    e: Pointer[Float32, ImmutAnyOrigin],
+    nrm_e: Pointer[Float32, ImmutAnyOrigin],
     n: Int,
     d_dim: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: Pointer[Int64, MutAnyOrigin],
+    out_dists: Pointer[Float32, MutAnyOrigin],
 ):
     comptime QT = 4
     comptime W = W32
@@ -460,9 +460,9 @@ def knn_topk[
             var acc = InlineArray[SIMD[DType.float32, W], QT](fill=SIMD[DType.float32, W](0))
             var dd = 0
             while dd + W <= d_dim:
-                var ev = (ep + dd).load[width=W]()
+                var ev = (ep + dd).unsafe_load[width=W]()
                 comptime for t in range(QT):
-                    acc[t] += (q + (qg + t) * d_dim + dd).load[width=W]() * ev
+                    acc[t] += (q + (qg + t) * d_dim + dd).unsafe_load[width=W]() * ev
                 dd += W
             comptime for t in range(QT):
                 var s = acc[t].reduce_add()
@@ -483,11 +483,11 @@ def knn_topk[
         qg += 1
 
 
-def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
+def reduce_min_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
     var acc = SIMD[DType.float32, W32](a[0])
     var i = 0
     while i + W32 <= n:
-        acc = min(acc, (a + i).load[width=W32]())
+        acc = min(acc, (a + i).unsafe_load[width=W32]())
         i += W32
     var s = acc.reduce_min()
     while i < n:
@@ -496,11 +496,11 @@ def reduce_min_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32
     return s
 
 
-def reduce_max_f32(a: UnsafePointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
+def reduce_max_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
     var acc = SIMD[DType.float32, W32](a[0])
     var i = 0
     while i + W32 <= n:
-        acc = max(acc, (a + i).load[width=W32]())
+        acc = max(acc, (a + i).unsafe_load[width=W32]())
         i += W32
     var s = acc.reduce_max()
     while i < n:

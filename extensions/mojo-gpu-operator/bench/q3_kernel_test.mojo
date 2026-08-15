@@ -36,7 +36,7 @@ a single exact int64. We still compare the full accumulator bit-for-bit.
 """
 
 from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.memory import alloc
 from std.sys import has_accelerator

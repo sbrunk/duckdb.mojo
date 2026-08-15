@@ -150,7 +150,7 @@ def test_to_table_and_create_view() raises:
 def test_explain_nonempty() raises:
     var con = _con()
     var plan = con.table("t").explain()
-    assert_true(len(plan) > 0)
+    assert_true(plan.byte_length() > 0)
 
 
 # ── Lifetime: a relation kept in a var must keep its connection alive ──

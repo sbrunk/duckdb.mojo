@@ -39,7 +39,7 @@ def sql_type() -> String:
 # Custom reduce kernel — sum of squares (not a DuckDB builtin)
 # ===--------------------------------------------------------------------===#
 
-def simd_add[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
+def simd_add[w: SIMDLength](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
     return a + b
 
 def zero() -> Scalar[F]:
@@ -76,7 +76,7 @@ def run_benchmark(
 ) raises:
     """Run a single benchmark comparing standard vs Mojo query."""
     print("\n  " + name)
-    print("  " + "-" * len(name))
+    print("  " + "-" * name.byte_length())
 
     # Warmup
     for _ in range(warmup_iters):
