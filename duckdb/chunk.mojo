@@ -12,7 +12,7 @@ from duckdb.typed_api import (
 )
 from std.collections import Optional
 from std.memory import UnsafePointer
-from std.memory.alloc import alloc
+from std.memory.alloc import unsafe_alloc
 from std.builtin.rebind import downcast, rebind_var
 from std.iter import Iterator, Iterable, StopIteration
 from std.reflection import Reflected
@@ -75,9 +75,9 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         ref libduckdb = DuckDB().libduckdb()
         
         # Create array of duckdb_logical_type pointers
-        var type_ptrs = alloc[duckdb_logical_type](len(types))
+        var type_ptrs = unsafe_alloc[duckdb_logical_type](len(types))
         for i in range(len(types)):
-            type_ptrs[i] = types[i]._logical_type
+            type_ptrs[unsafe_offset=i] = types[i]._logical_type
         
         var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, UInt64(len(types)))
         type_ptrs.unsafe_free()
@@ -93,8 +93,8 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_data_chunk(Pointer(to=self._chunk))
 
-    def __init__(out self, *, deinit take: Self):
-        self._chunk = take._chunk
+    def __init__(out self, *, deinit move: Self):
+        self._chunk = move._chunk
 
     def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
         """Iterate over rows in this chunk.
@@ -205,7 +205,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         for row in range(n):
             var entry_idx = row // 64
             var idx_in_entry = row % 64
-            var is_valid = validity_mask.value()[entry_idx] & UInt64(
+            var is_valid = validity_mask.value()[unsafe_offset=entry_idx] & UInt64(
                 1 << idx_in_entry
             )
             if is_valid:
@@ -220,11 +220,11 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return False
         var entry_idx = row // 64
         var idx_in_entry = row % 64
-        var is_valid = validity_mask.value()[entry_idx] & UInt64((1 << idx_in_entry))
+        var is_valid = validity_mask.value()[unsafe_offset=entry_idx] & UInt64((1 << idx_in_entry))
         return not is_valid
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value from the chunk.
 
@@ -341,7 +341,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return _deserialize_table_field[T](self.get_vector(col), row)
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -461,7 +461,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             return result^
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
 
@@ -509,7 +509,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate column types match field types
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
+            comptime FT = downcast[FieldType, Copyable & Deinitable]
             var actual_type = self.type(idx)
 
             comptime if conforms_to(FT, _NullableColumn):
@@ -607,7 +607,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Check non-Optional fields for NULL before allocating
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
+            comptime FT = downcast[FieldType, Copyable & Deinitable]
 
             comptime if not conforms_to(FT, _NullableColumn):
                 if self.is_null(col=idx, row=row):
@@ -621,11 +621,11 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
 
         # Deserialize each field from its column vector
-        var ptr = alloc[T](1)
+        var ptr = unsafe_alloc[T](1)
 
         comptime for idx in range(field_count_):
             comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Movable & Deinitable]
+            comptime FT = downcast[FieldType, Copyable & Deinitable]
             var vector = self.get_vector(idx)
             var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
 
@@ -645,7 +645,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return result^
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self) raises -> List[T]:
         """Deserialize all table rows into Mojo structs.
 
@@ -673,7 +673,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return result^
 
     def get_tuple[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self, *, row: Int) raises -> Tuple[*Ts]:
         """Deserialize a table row into a Mojo Tuple.
 
@@ -713,7 +713,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         # Validate types and NULL constraints
         comptime for idx in range(n):
             comptime ET = T.element_types[idx]
-            comptime ETC = downcast[ET, Copyable & Movable & Deinitable]
+            comptime ETC = downcast[ET, Copyable & Deinitable]
             var actual_type = self.type(idx)
 
             comptime if conforms_to(ETC, _NullableColumn):
@@ -809,14 +809,14 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                     )
 
         # Construct the tuple element by element
-        var ptr = alloc[T](1)
+        var ptr = unsafe_alloc[T](1)
         __mlir_op.`lit.ownership.mark_initialized`(
             __get_mvalue_as_litref(ptr[]._mlir_value)
         )
 
         comptime for idx in range(n):
             comptime ET = T.element_types[idx]
-            comptime ETC = downcast[ET, Copyable & Movable & Deinitable]
+            comptime ETC = downcast[ET, Copyable & Deinitable]
             var vector = self.get_vector(idx)
 
             comptime if conforms_to(ETC, _NullableColumn):
@@ -839,8 +839,8 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         return result^
 
     def get_tuple[
-        *Ts: Copyable & Movable & Deinitable
-    ](self) raises -> List[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]]:
+        *Ts: Copyable & Deinitable
+    ](self) raises -> List[downcast[Tuple[*Ts], Copyable & Deinitable]]:
         """Deserialize all rows into Mojo Tuples.
 
         Parameters:
@@ -856,9 +856,9 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
                 print(rows[i][0], rows[i][1])
             ```
         """
-        var result = List[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]](capacity=len(self))
+        var result = List[downcast[Tuple[*Ts], Copyable & Deinitable]](capacity=len(self))
         for row in range(len(self)):
-            result.append(rebind_var[downcast[Tuple[*Ts], Copyable & Movable & Deinitable]](self.get_tuple[*Ts](row=row)))
+            result.append(rebind_var[downcast[Tuple[*Ts], Copyable & Deinitable]](self.get_tuple[*Ts](row=row)))
         return result^
 
 
@@ -884,7 +884,7 @@ struct Row(Movable, Copyable):
         self._row = row
         self._num_cols = num_cols
 
-    def get[T: Copyable & Movable & Deinitable](self, *, col: Int) raises -> T:
+    def get[T: Copyable & Deinitable](self, *, col: Int) raises -> T:
         """Get a typed value from this row.
 
         Parameters:
@@ -924,7 +924,7 @@ struct Row(Movable, Copyable):
         return self._row
 
     def get_tuple[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self) raises -> Tuple[*Ts]:
         """Deserialize this row into a Mojo Tuple.
 

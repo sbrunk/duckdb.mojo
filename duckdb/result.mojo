@@ -30,6 +30,8 @@ from duckdb.typed_api import (
 from std.collections import Optional
 from std.builtin.error import StackTrace
 from std.iter import Iterator, Iterable, StopIteration
+from duckdb.logical_type import LogicalType
+from std.memory.alloc import unsafe_alloc
 
 
 @fieldwise_init
@@ -639,7 +641,7 @@ struct StatementType(
 
 
 @fieldwise_init
-struct Column(Movable & Copyable & Writable):
+struct Column(Copyable & Writable):
     var index: Int
     var name: String
     var type: LogicalType[is_owned=True, origin=MutUntrackedOrigin]
@@ -848,7 +850,7 @@ struct Result(Writable, Iterable, Movable):
         return MaterializedResult(self^)
 
     def fetchone[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](mut self) raises -> Optional[Tuple[*Ts]]:
         """Fetch the next row as an owned tuple, or ``None`` if exhausted.
 
@@ -881,7 +883,7 @@ struct Result(Writable, Iterable, Movable):
             return t^
 
     def fetchmany[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](mut self, size: Int = 1) raises -> List[Tuple[*Ts]]:
         """Fetch up to ``size`` rows as owned tuples, advancing the cursor.
 
@@ -926,11 +928,11 @@ struct Result(Writable, Iterable, Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_result(Pointer(to=self._result))
 
-    def __init__(out self, *, deinit take: Self):
-        self._result = take._result^
-        self._columns = take._columns^
-        self._cur_chunk = take._cur_chunk^
-        self._cur_row = take._cur_row
+    def __init__(out self, *, deinit move: Self):
+        self._result = move._result^
+        self._columns = move._columns^
+        self._cur_chunk = move._cur_chunk^
+        self._cur_row = move._cur_row
 
 
 @fieldwise_init
@@ -1061,7 +1063,7 @@ struct MaterializedResult(Sized, Movable):
             try:
                 var chunk = self.result.fetch_chunk()
                 self.size += len(chunk)
-                var chunk_ptr = alloc[Chunk[is_owned=True]](1)
+                var chunk_ptr = unsafe_alloc[Chunk[is_owned=True]](1)
                 chunk_ptr.unsafe_write(chunk^)
                 self.chunks.append(chunk_ptr)
             except StopIteration:
@@ -1099,7 +1101,7 @@ struct MaterializedResult(Sized, Movable):
         return (self.size, self.column_count())
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, col: Int) raises -> List[T]:
         """Get all typed values from a column.
 
@@ -1144,7 +1146,7 @@ struct MaterializedResult(Sized, Movable):
         raise Error(String("No column named '", name, "'"))
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, name: String) raises -> List[T]:
         """Get all typed values from the named column.
 
@@ -1154,7 +1156,7 @@ struct MaterializedResult(Sized, Movable):
         """
         return self.get[T](col=self.column_index(name))
 
-    def get[T: Copyable & Movable & Deinitable](self, name: String, *, row: Int) raises -> T:
+    def get[T: Copyable & Deinitable](self, name: String, *, row: Int) raises -> T:
         """Get a single typed value from the named column and ``row``."""
         return self.get[T](col=self.column_index(name), row=row)
 
@@ -1175,7 +1177,7 @@ struct MaterializedResult(Sized, Movable):
         raise Error("Row index out of bounds")
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, col: Int, row: Int) raises -> T:
         """Get a single typed value.
 
@@ -1202,7 +1204,7 @@ struct MaterializedResult(Sized, Movable):
         return self.chunks[loc[0]][].get[T](col=col, row=loc[1])
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, *, row: Int) raises -> T:
         """Deserialize a table row into a Mojo struct.
 
@@ -1228,7 +1230,7 @@ struct MaterializedResult(Sized, Movable):
         return self.chunks[loc[0]][].get[T](row=loc[1])
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self) raises -> List[T]:
         """Deserialize all rows into a list of Mojo structs.
 
@@ -1624,7 +1626,7 @@ def _render_value(vector: Vector, row: Int) raises -> String:
     if validity:
         var entry_idx = row // 64
         var idx_in_entry = row % 64
-        var valid = validity.value()[entry_idx] & UInt64(1 << idx_in_entry)
+        var valid = validity.value()[unsafe_offset=entry_idx] & UInt64(1 << idx_in_entry)
         if not valid:
             return String("NULL")
 
@@ -1693,7 +1695,7 @@ def _render_value(vector: Vector, row: Int) raises -> String:
         return _render_blob(_deserialize_blob(vector, row))
     elif tid == DuckDBType.list:
         var entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
-        var entry = entries[row]
+        var entry = entries[unsafe_offset=row]
         return _render_list(
             vector.list_get_child(), Int(entry.offset), Int(entry.length)
         )
@@ -1702,7 +1704,7 @@ def _render_value(vector: Vector, row: Int) raises -> String:
         return _render_list(vector.array_get_child(), row * size, size)
     elif tid == DuckDBType.map:
         var entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
-        var entry = entries[row]
+        var entry = entries[unsafe_offset=row]
         return _render_map(
             vector.list_get_child(), Int(entry.offset), Int(entry.length)
         )

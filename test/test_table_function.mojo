@@ -89,7 +89,7 @@ def counter_function(info: TableFunctionInfo, mut output: Chunk):
     var remaining = limit - current
     var batch_size = min(remaining, 2048)
 
-    var out_data = output.get_vector(0).get_data().bitcast[Int32]()
+    var out_data = output.get_vector(0).get_data().unsafe_mut_cast[True]().bitcast[Int32]()
     for i in range(batch_size):
         out_data[i] = Int32(current + i)
 
@@ -133,9 +133,9 @@ def multi_col_function(info: TableFunctionInfo, mut output: Chunk):
     var remaining = num_rows - current
     var batch_size = min(remaining, 2048)
 
-    var id_data = output.get_vector(0).get_data().bitcast[Int32]()
+    var id_data = output.get_vector(0).get_data().unsafe_mut_cast[True]().bitcast[Int32]()
     var name_vec = output.get_vector(1)
-    var score_data = output.get_vector(2).get_data().bitcast[Float64]()
+    var score_data = output.get_vector(2).get_data().unsafe_mut_cast[True]().bitcast[Float64]()
 
     # Names for our test data
     var names: List[String] = ["alice", "bob", "carol"]
@@ -187,7 +187,7 @@ def static_function(info: TableFunctionInfo, mut output: Chunk):
         output.set_size(0)
         return
 
-    var out_data = output.get_vector(0).get_data().bitcast[Int32]()
+    var out_data = output.get_vector(0).get_data().unsafe_mut_cast[True]().bitcast[Int32]()
     out_data[0] = Int32(100)
     out_data[1] = Int32(200)
 

@@ -41,13 +41,13 @@ struct DuckDBValue(Movable):
         """
         self._value = value
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor that transfers ownership of the underlying value.
         
         Args:
-            take: The existing DuckDBValue to move from.
+            move: The existing DuckDBValue to move from.
         """
-        self._value = take._value
+        self._value = move._value
 
     def __deinit__(deinit self):
         """Destroys the value and deallocates all associated memory."""
@@ -573,7 +573,7 @@ struct DuckDBValue(Movable):
         var result = List[UInt8](capacity=Int(blob.size))
         var data_ptr = blob.data.unsafe_bitcast[UInt8]()
         for i in range(Int(blob.size)):
-            result.append(data_ptr[i])
+            result.append(data_ptr[unsafe_offset=i])
         libduckdb.duckdb_free(blob.data)
         return result^
 
@@ -587,7 +587,7 @@ struct DuckDBValue(Movable):
         var bit_val = libduckdb.duckdb_get_bit(self._value)
         var result = List[UInt8](capacity=Int(bit_val.size))
         for i in range(Int(bit_val.size)):
-            result.append(bit_val.data[i])
+            result.append(bit_val.data[unsafe_offset=i])
         libduckdb.duckdb_free(bit_val.data.unsafe_bitcast[NoneType]())
         return result^
 

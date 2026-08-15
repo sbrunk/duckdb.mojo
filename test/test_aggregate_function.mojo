@@ -72,7 +72,7 @@ def sum_finalize(
     offset: Int,
 ):
     """Produces the final SUM result."""
-    var out = result.get_data().bitcast[Int64]()
+    var out = result.get_data().unsafe_mut_cast[True]().bitcast[Int64]()
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[SumState]()
         out[offset + i] = s[].total
@@ -139,7 +139,7 @@ def count_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Int64]()
+    var out = result.get_data().unsafe_mut_cast[True]().bitcast[Int64]()
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[CountState]()
         out[offset + i] = s[].count
@@ -199,7 +199,7 @@ def avg_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Float64]()
+    var out = result.get_data().unsafe_mut_cast[True]().bitcast[Float64]()
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[AvgState]()
         if s[].count > 0:
@@ -257,7 +257,7 @@ def sum_double_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Float64]()
+    var out = result.get_data().unsafe_mut_cast[True]().bitcast[Float64]()
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[SumDoubleState]()
         out[offset + i] = s[].total

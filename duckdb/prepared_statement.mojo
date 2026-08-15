@@ -85,8 +85,8 @@ struct PreparedStatement(Movable):
             libduckdb.duckdb_destroy_prepare(Pointer(to=self._stmt))
             raise ResultError(err^, ErrorType.INVALID)
 
-    def __init__(out self, *, deinit take: Self):
-        self._stmt = take._stmt
+    def __init__(out self, *, deinit move: Self):
+        self._stmt = move._stmt
 
     def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
@@ -178,7 +178,7 @@ struct PreparedStatement(Movable):
             String("bind_value failed"),
         )
 
-    def bind[T: Copyable & Movable & Deinitable](mut self, index: Int, value: T) raises ResultError:
+    def bind[T: Copyable & Deinitable](mut self, index: Int, value: T) raises ResultError:
         """Bind a typed Mojo ``value`` at the given 1-based ``index``.
 
         Scalars (Bool, integers, floats, String, temporal types, ...) are bound
@@ -192,7 +192,7 @@ struct PreparedStatement(Movable):
             value: The value to bind.
         """
         comptime if conforms_to(T, Bindable):
-            trait_downcast[Bindable](value).bind_to(self, index)
+            value.bind_to(self, index)
         else:
             ref libduckdb = DuckDB().libduckdb()
             var raw: duckdb_value
@@ -230,9 +230,9 @@ struct PreparedStatement(Movable):
 __extension Optional(Bindable):
     def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
         if self:
-            # Refine Self.T to Copyable & Movable & Deinitable so the inner value can be
+            # Refine Self.T to Copyable & Deinitable so the inner value can be
             # bound — only Copyable values can be converted to a duckdb_value.
-            comptime CT = downcast[Self.T, Copyable & Movable & Deinitable]
+            comptime CT = downcast[Self.T, Copyable & Deinitable]
             var vp = Pointer(to=self).unsafe_bitcast[Optional[CT]]()
             stmt.bind(index, vp[].value())
         else:

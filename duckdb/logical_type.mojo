@@ -4,7 +4,7 @@ from std.collections import List, Optional
 
 
 
-struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Movable & Equatable & Writable):
+struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Equatable & Writable):
     """Represents a potentially nested DuckDB type.
     
     LogicalTypes can be borrowed from DuckDB structures or owned standalone. Ownership
@@ -54,7 +54,7 @@ struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Movab
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took.
                 # Null sentinel — duckdb_destroy_logical_type is a no-op on NULL.
-                list_type._logical_type = _null_ptr[duckdb_logical_type.type, MutUntrackedOrigin]()
+                list_type._logical_type = _null_ptr[duckdb_logical_type.T, MutUntrackedOrigin]()
             elif copy.get_type_id() == DuckDBType.array:
                 # Deep copy array type: recreate from child type and size
                 var child = copy.array_type_child_type()
@@ -75,7 +75,7 @@ struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Movab
                 var c_names = List[Pointer[c_char, ImmutAnyOrigin]]()
                 var base_ptr = child_names_str.unsafe_ptr()
                 for i in range(child_count):
-                    c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
+                    c_names.append((base_ptr.unsafe_offset(i))[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
                 ref libduckdb = DuckDB().libduckdb()
                 self._logical_type = libduckdb.duckdb_create_struct_type(
                     child_types.unsafe_ptr().unsafe_bitcast[duckdb_logical_type](),
@@ -88,8 +88,8 @@ struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Movab
         else:
             self._logical_type = copy._logical_type
 
-    def __init__(out self, *, deinit take: Self):
-        self._logical_type = take._logical_type
+    def __init__(out self, *, deinit move: Self):
+        self._logical_type = move._logical_type
 
     def __deinit__(deinit self):
         """Destroys owned LogicalTypes only."""
@@ -302,7 +302,7 @@ def enum_type(mut names: List[String]) -> LogicalType[True, MutUntrackedOrigin]:
     var base_ptr = names.unsafe_ptr()
     
     for i in range(count):
-        var s = (base_ptr + i)[].as_c_string_slice()
+        var s = (base_ptr.unsafe_offset(i))[].as_c_string_slice()
         c_names_list.append(s.unsafe_ptr().as_unsafe_any_origin())
         
     # Get pointer to the array of pointers
@@ -338,7 +338,7 @@ def struct_type(
     c_names.reserve(count)
     var base_ptr = names.unsafe_ptr()
     for i in range(count):
-        c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
+        c_names.append((base_ptr.unsafe_offset(i))[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
 
     return LogicalType[True, MutUntrackedOrigin](
         libduckdb.duckdb_create_struct_type(

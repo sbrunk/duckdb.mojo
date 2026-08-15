@@ -1,5 +1,7 @@
 from duckdb._libduckdb import *
 from duckdb.api import DuckDB
+from duckdb.config import Config
+from std.memory.alloc import unsafe_alloc
 
 
 def _null_ptr[T: AnyType, origin: Origin]() -> Pointer[T, origin]:
@@ -23,15 +25,15 @@ struct Database(Movable):
         # NULL handle — duckdb_open_ext populates it via out-param. If
         # construction raises after this, __deinit__'s duckdb_close becomes a
         # safe no-op on NULL.
-        self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
+        self._db = _null_ptr[duckdb_database.T, MutUntrackedOrigin]()
         self._is_owned = True
         var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
         var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
-        var out_error = alloc[Pointer[c_char, MutAnyOrigin]](1)
+        var out_error = unsafe_alloc[Pointer[c_char, MutAnyOrigin]](1)
         # config=NULL signals "use default config" to DuckDB.
         if (
-            libduckdb.duckdb_open_ext(path_ptr, db_addr, config=_null_ptr[duckdb_config.type, MutUntrackedOrigin](), out_error=out_error)
+            libduckdb.duckdb_open_ext(path_ptr, db_addr, config=_null_ptr[duckdb_config.T, MutUntrackedOrigin](), out_error=out_error)
         ) == DuckDBError:
             var error_ptr = out_error[]
             var error_msg = String(unsafe_from_utf8_ptr=error_ptr)
@@ -48,12 +50,12 @@ struct Database(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         # NULL handle — duckdb_open_ext populates it via out-param.
-        self._db = _null_ptr[duckdb_database.type, MutUntrackedOrigin]()
+        self._db = _null_ptr[duckdb_database.T, MutUntrackedOrigin]()
         self._is_owned = True
         var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
         var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
-        var out_error = alloc[Pointer[c_char, MutAnyOrigin]](1)
+        var out_error = unsafe_alloc[Pointer[c_char, MutAnyOrigin]](1)
         if (
             libduckdb.duckdb_open_ext(path_ptr, db_addr, config=config._handle(), out_error=out_error)
         ) == DuckDBError:

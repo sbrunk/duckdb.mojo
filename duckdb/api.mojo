@@ -1,4 +1,13 @@
 from std.ffi import _Global, external_call
+from std.os import abort
+from duckdb._libduckdb import (
+    LibDuckDB,
+    duckdb_ext_api_v1,
+    duckdb_ext_api_v1_unstable,
+)
+from duckdb.api_level import ApiLevel
+from duckdb.config import Config
+from duckdb.connection import Connection
 
 comptime _DUCKDB_GLOBAL = _Global["DuckDB", _init_duckdb_global]
 

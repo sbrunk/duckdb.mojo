@@ -2,9 +2,16 @@ from duckdb.vector import Vector
 from std.collections import Dict, Optional
 from std.collections.string import StringSlice, StaticString
 from std.memory import unsafe_memcpy
+from std.hashlib.hasher import Hasher
+from duckdb._libduckdb import (
+    duckdb_list_entry,
+    duckdb_string_t_inlined,
+    duckdb_string_t_pointer,
+)
+from duckdb.duckdb_type import Date, DuckDBType, Time, Timestamp
 
 
-trait DuckDBWrapper(Copyable & Movable & Writable):
+trait DuckDBWrapper(Copyable & Writable):
     """Represents a DuckDB value of any supported type.
 
     Implementations are thin wrappers around native Mojo types
@@ -20,7 +27,7 @@ trait DuckDBKeyElement(DuckDBWrapper, KeyElement):
 
 
 @fieldwise_init
-struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & TrivialRegisterPassable):
+struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & TrivialRegisterPassable):
     comptime Type = Self.duckdb_type
 
     var value: Scalar[Self.Type.to_dtype().value()]
@@ -43,7 +50,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & Hashable & Trivial
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector.get_data().unsafe_bitcast[Self]()[offset=offset]
+        self = vector.get_data().unsafe_bitcast[Self]()[unsafe_offset=offset]
 
 comptime BoolVal = DTypeValue[DuckDBType.boolean]
 comptime Int8Val = DTypeValue[DuckDBType.tinyint]
@@ -61,7 +68,7 @@ comptime Float64Val = DTypeValue[DuckDBType.double]
 @fieldwise_init
 struct FixedSizeValue[
     duckdb_type: DuckDBType,
-    underlying: Writable & ImplicitlyCopyable & Movable & Deinitable,
+    underlying: Writable & ImplicitlyCopyable & Deinitable,
 ](DuckDBWrapper & ImplicitlyCopyable):
     comptime Type = Self.duckdb_type
     var value: Self.underlying
@@ -84,7 +91,7 @@ struct FixedSizeValue[
                 vector.get_column_type().get_type_id()
             )
 
-        self = vector.get_data().unsafe_bitcast[Self]()[offset=offset]
+        self = vector.get_data().unsafe_bitcast[Self]()[unsafe_offset=offset]
 
     def __init__(out self, *, copy: Self):
         self.value = copy.value
@@ -107,17 +114,17 @@ struct DuckDBString(DuckDBWrapper):
             ) + " but got " + String(vector.get_column_type().get_type_id())
         var data_str_ptr = vector.get_data().unsafe_bitcast[duckdb_string_t_pointer]()
         # Short strings are inlined so need to check the length and then cast accordingly.
-        var string_length = Int(data_str_ptr[offset].length)
+        var string_length = Int(data_str_ptr[unsafe_offset=offset].length)
         # TODO use duckdb_string_is_inlined helper instead
-        if data_str_ptr[offset].length <= 12:
+        if data_str_ptr[unsafe_offset=offset].length <= 12:
             var data_str_inlined = data_str_ptr.unsafe_bitcast[
                 duckdb_string_t_inlined
             ]()
-            var ptr=data_str_inlined[offset].inlined.unsafe_ptr().unsafe_bitcast[Byte]()
+            var ptr=data_str_inlined[unsafe_offset=offset].inlined.unsafe_ptr().unsafe_bitcast[Byte]()
             self.value = String(unsafe_uninit_length=string_length)
             unsafe_memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
         else:
-            ptr=data_str_ptr[offset].ptr.unsafe_bitcast[UInt8]()
+            var ptr = data_str_ptr[unsafe_offset=offset].ptr.unsafe_bitcast[UInt8]()
             self.value = String(unsafe_uninit_length=string_length)
             unsafe_memcpy(dest=self.value.unsafe_ptr_mut(), src=ptr, count=string_length)
 
@@ -126,7 +133,7 @@ struct DuckDBString(DuckDBWrapper):
 
 
 @fieldwise_init
-struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copyable & Movable & Deinitable):
+struct DuckDBList[T: DuckDBWrapper & Deinitable](DuckDBWrapper & Deinitable):
     """A DuckDB list."""
     comptime Type = DuckDBType.list
 
@@ -156,17 +163,17 @@ struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copya
             # validity mask is None if there are no NULL values
             if validity_mask is None:
                 for idx in range(length):
-                    self.value.append(Optional(data_ptr[idx + offset].copy()))
+                    self.value.append(Optional(data_ptr[unsafe_offset=idx + offset].copy()))
             else:  # otherwise we have to check the validity mask for each element
                 var mask = validity_mask.value()
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = mask[entry_idx] & UInt64((
+                    var is_valid = mask[unsafe_offset=entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:
-                        self.value.append(Optional(data_ptr[idx + offset].copy()))
+                        self.value.append(Optional(data_ptr[unsafe_offset=idx + offset].copy()))
                     else:
                         self.value.append(None)
         elif Self.expected_element_type == DuckDBType.varchar:
@@ -179,7 +186,7 @@ struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copya
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = mask[entry_idx] & UInt64((
+                    var is_valid = mask[unsafe_offset=entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:
@@ -198,7 +205,7 @@ struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copya
             # validity mask is None if there are no NULL values
             if validity_mask is None:
                 for idx in range(length):
-                    var list_entry = data_ptr[offset + idx]
+                    var list_entry = data_ptr[unsafe_offset=offset + idx]
                     self.value.append(
                         Optional(
                             Self.T(
@@ -213,11 +220,11 @@ struct DuckDBList[T: DuckDBWrapper & Movable & Deinitable](DuckDBWrapper & Copya
                 for idx in range(length):
                     var entry_idx = idx // 64
                     var idx_in_entry = idx % 64
-                    var is_valid = mask[entry_idx] & UInt64((
+                    var is_valid = mask[unsafe_offset=entry_idx] & UInt64((
                         1 << idx_in_entry
                     ))
                     if is_valid:
-                        var list_entry = data_ptr[offset + idx]
+                        var list_entry = data_ptr[unsafe_offset=offset + idx]
                         self.value.append(
                             Optional(
                                 Self.T(

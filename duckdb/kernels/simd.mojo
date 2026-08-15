@@ -49,10 +49,10 @@ def map_unary[
 ](a: Pointer[Float64, ImmutAnyOrigin], dst: Pointer[Float64, MutAnyOrigin], n: Int):
     var i = 0
     while i + W64 <= n:
-        dst.unsafe_store(i, f[W64]((a + i).unsafe_load[width=W64]()))
+        dst.unsafe_store(i, f[W64]((a.unsafe_offset(i)).unsafe_load[width=W64]()))
         i += W64
     while i < n:
-        dst.unsafe_store(i, f[1]((a + i).unsafe_load[width=1]()))
+        dst.unsafe_store(i, f[1]((a.unsafe_offset(i)).unsafe_load[width=1]()))
         i += 1
 
 
@@ -60,37 +60,37 @@ def reduce_sum_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
     var acc = SIMD[DType.float64, W64](0)
     var i = 0
     while i + W64 <= n:
-        acc += (a + i).unsafe_load[width=W64]()
+        acc += (a.unsafe_offset(i)).unsafe_load[width=W64]()
         i += W64
     var s = acc.reduce_add()
     while i < n:
-        s += a[i]
+        s += a[unsafe_offset=i]
         i += 1
     return s
 
 
 def reduce_min_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
-    var acc = SIMD[DType.float64, W64](a[0])
+    var acc = SIMD[DType.float64, W64](a[unsafe_offset=0])
     var i = 0
     while i + W64 <= n:
-        acc = min(acc, (a + i).unsafe_load[width=W64]())
+        acc = min(acc, (a.unsafe_offset(i)).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_min()
     while i < n:
-        s = min(s, a[i])
+        s = min(s, a[unsafe_offset=i])
         i += 1
     return s
 
 
 def reduce_max_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
-    var acc = SIMD[DType.float64, W64](a[0])
+    var acc = SIMD[DType.float64, W64](a[unsafe_offset=0])
     var i = 0
     while i + W64 <= n:
-        acc = max(acc, (a + i).unsafe_load[width=W64]())
+        acc = max(acc, (a.unsafe_offset(i)).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_max()
     while i < n:
-        s = max(s, a[i])
+        s = max(s, a[unsafe_offset=i])
         i += 1
     return s
 
@@ -118,7 +118,7 @@ def reduce_sum_i128(
     var i = 0
     while i + K <= n:
         comptime for k in range(K):
-            var x = a[i + k]
+            var x = a[unsafe_offset=i + k]
             var s = acc[k] + x
             ovf |= (acc[k] ^ s) & (x ^ s)
             acc[k] = s
@@ -129,13 +129,13 @@ def reduce_sum_i128(
         ovf |= (total ^ s) & (acc[k] ^ s)
         total = s
     while i < n:
-        var x = a[i]
+        var x = a[unsafe_offset=i]
         var s = total + x
         ovf |= (total ^ s) & (x ^ s)
         total = s
         i += 1
-    out_val[0] = total
-    out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
+    out_val[unsafe_offset=0] = total
+    out_overflow[unsafe_offset=0] = Int32(1) if ovf < 0 else Int32(0)
 
 
 # ===--------------------------------------------------------------------===#
@@ -160,16 +160,16 @@ def array_dot[
     var acc1 = SIMD[dt, w](0)
     var i = 0
     while i + 2 * w <= n:
-        acc0 += (a + i).unsafe_load[width=w]() * (b + i).unsafe_load[width=w]()
-        acc1 += (a + i + w).unsafe_load[width=w]() * (b + i + w).unsafe_load[width=w]()
+        acc0 += (a.unsafe_offset(i)).unsafe_load[width=w]() * (b.unsafe_offset(i)).unsafe_load[width=w]()
+        acc1 += (a.unsafe_offset(i).unsafe_offset(w)).unsafe_load[width=w]() * (b.unsafe_offset(i).unsafe_offset(w)).unsafe_load[width=w]()
         i += 2 * w
     var acc = acc0 + acc1
     while i + w <= n:
-        acc += (a + i).unsafe_load[width=w]() * (b + i).unsafe_load[width=w]()
+        acc += (a.unsafe_offset(i)).unsafe_load[width=w]() * (b.unsafe_offset(i)).unsafe_load[width=w]()
         i += w
     var s = acc.reduce_add()
     while i < n:
-        s += a[i] * b[i]
+        s += a[unsafe_offset=i] * b[unsafe_offset=i]
         i += 1
     return s
 
@@ -181,19 +181,19 @@ def array_l2dist[
     var acc1 = SIMD[dt, w](0)
     var i = 0
     while i + 2 * w <= n:
-        var d0 = (a + i).unsafe_load[width=w]() - (b + i).unsafe_load[width=w]()
-        var d1 = (a + i + w).unsafe_load[width=w]() - (b + i + w).unsafe_load[width=w]()
+        var d0 = (a.unsafe_offset(i)).unsafe_load[width=w]() - (b.unsafe_offset(i)).unsafe_load[width=w]()
+        var d1 = (a.unsafe_offset(i).unsafe_offset(w)).unsafe_load[width=w]() - (b.unsafe_offset(i).unsafe_offset(w)).unsafe_load[width=w]()
         acc0 += d0 * d0
         acc1 += d1 * d1
         i += 2 * w
     var acc = acc0 + acc1
     while i + w <= n:
-        var d = (a + i).unsafe_load[width=w]() - (b + i).unsafe_load[width=w]()
+        var d = (a.unsafe_offset(i)).unsafe_load[width=w]() - (b.unsafe_offset(i)).unsafe_load[width=w]()
         acc += d * d
         i += w
     var s = acc.reduce_add()
     while i < n:
-        var d = a[i] - b[i]
+        var d = a[unsafe_offset=i] - b[unsafe_offset=i]
         s += d * d
         i += 1
     return sqrt(s)
@@ -207,8 +207,8 @@ def array_cosine_sim[
     var nb = SIMD[dt, w](0)
     var i = 0
     while i + w <= n:
-        var x = (a + i).unsafe_load[width=w]()
-        var y = (b + i).unsafe_load[width=w]()
+        var x = (a.unsafe_offset(i)).unsafe_load[width=w]()
+        var y = (b.unsafe_offset(i)).unsafe_load[width=w]()
         dot += x * y
         na += x * x
         nb += y * y
@@ -217,8 +217,8 @@ def array_cosine_sim[
     var sna = na.reduce_add()
     var snb = nb.reduce_add()
     while i < n:
-        var x = a[i]
-        var y = b[i]
+        var x = a[unsafe_offset=i]
+        var y = b[unsafe_offset=i]
         sdot += x * y
         sna += x * x
         snb += y * y
@@ -253,20 +253,20 @@ def reduce_sum_f64_masked(
     var cnt = Int64(0)
     var i = 0
     while i + W64 <= n:
-        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var bits = valid[unsafe_offset=i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
         var m = mbits.gt(SIMD[DType.uint64, W64](0))
-        acc += m.select((a + i).unsafe_load[width=W64](), SIMD[DType.float64, W64](0))
+        acc += m.select((a.unsafe_offset(i)).unsafe_load[width=W64](), SIMD[DType.float64, W64](0))
         cnt += Int64(pop_count(Int(bits & LOWMASK)))
         i += W64
     var s = acc.reduce_add()
     while i < n:
-        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
-            s += a[i]
+        if (valid[unsafe_offset=i >> 6] >> UInt64(i & 63)) & 1:
+            s += a[unsafe_offset=i]
             cnt += 1
         i += 1
-    out_sum[0] = s
-    out_count[0] = cnt
+    out_sum[unsafe_offset=0] = s
+    out_count[unsafe_offset=0] = cnt
 
 
 def reduce_minmax_masked[
@@ -286,10 +286,10 @@ def reduce_minmax_masked[
     var cnt = Int64(0)
     var i = 0
     while i + w <= n:
-        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var bits = valid[unsafe_offset=i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, w](bits) >> lane) & SIMD[DType.uint64, w](1)
         var m = mbits.gt(SIMD[DType.uint64, w](0))
-        var x = m.select((a + i).unsafe_load[width=w](), identv)
+        var x = m.select((a.unsafe_offset(i)).unsafe_load[width=w](), identv)
         comptime if is_min:
             acc = min(acc, x)
         else:
@@ -302,15 +302,15 @@ def reduce_minmax_masked[
     else:
         s = acc.reduce_max()
     while i < n:
-        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
+        if (valid[unsafe_offset=i >> 6] >> UInt64(i & 63)) & 1:
             comptime if is_min:
-                s = min(s, a[i])
+                s = min(s, a[unsafe_offset=i])
             else:
-                s = max(s, a[i])
+                s = max(s, a[unsafe_offset=i])
             cnt += 1
         i += 1
-    out_val[0] = s
-    out_count[0] = cnt
+    out_val[unsafe_offset=0] = s
+    out_count[unsafe_offset=0] = cnt
 
 
 def reduce_sum_i128_masked(
@@ -328,16 +328,16 @@ def reduce_sum_i128_masked(
     var cnt = Int64(0)
     var i = 0
     while i < n:
-        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
-            var x = a[i]
+        if (valid[unsafe_offset=i >> 6] >> UInt64(i & 63)) & 1:
+            var x = a[unsafe_offset=i]
             var s = total + x
             ovf |= (total ^ s) & (x ^ s)
             total = s
             cnt += 1
         i += 1
-    out_val[0] = total
-    out_count[0] = cnt
-    out_overflow[0] = Int32(1) if ovf < 0 else Int32(0)
+    out_val[unsafe_offset=0] = total
+    out_count[unsafe_offset=0] = cnt
+    out_overflow[unsafe_offset=0] = Int32(1) if ovf < 0 else Int32(0)
 
 
 # ===--------------------------------------------------------------------===#
@@ -353,11 +353,11 @@ def reduce_fsum_map[
     var acc = SIMD[DType.float64, W64](0)
     var i = 0
     while i + W64 <= n:
-        acc += f[W64]((a + i).unsafe_load[width=W64]())
+        acc += f[W64]((a.unsafe_offset(i)).unsafe_load[width=W64]())
         i += W64
     var s = acc.reduce_add()
     while i < n:
-        s += f[1]((a + i).unsafe_load[width=1]())[0]
+        s += f[1]((a.unsafe_offset(i)).unsafe_load[width=1]())[0]
         i += 1
     return s
 
@@ -377,20 +377,20 @@ def reduce_fsum_map_masked[
     var cnt = Int64(0)
     var i = 0
     while i + W64 <= n:
-        var bits = valid[i >> 6] >> UInt64(i & 63)
+        var bits = valid[unsafe_offset=i >> 6] >> UInt64(i & 63)
         var mbits = (SIMD[DType.uint64, W64](bits) >> lane) & SIMD[DType.uint64, W64](1)
         var m = mbits.gt(SIMD[DType.uint64, W64](0))
-        acc += m.select(f[W64]((a + i).unsafe_load[width=W64]()), SIMD[DType.float64, W64](0))
+        acc += m.select(f[W64]((a.unsafe_offset(i)).unsafe_load[width=W64]()), SIMD[DType.float64, W64](0))
         cnt += Int64(pop_count(Int(bits & LOWMASK)))
         i += W64
     var s = acc.reduce_add()
     while i < n:
-        if (valid[i >> 6] >> UInt64(i & 63)) & 1:
-            s += f[1]((a + i).unsafe_load[width=1]())[0]
+        if (valid[unsafe_offset=i >> 6] >> UInt64(i & 63)) & 1:
+            s += f[1]((a.unsafe_offset(i)).unsafe_load[width=1]())[0]
             cnt += 1
         i += 1
-    out_sum[0] = s
-    out_count[0] = cnt
+    out_sum[unsafe_offset=0] = s
+    out_count[unsafe_offset=0] = cnt
 
 
 # ===--------------------------------------------------------------------===#
@@ -415,15 +415,15 @@ def _topk_insert(
     d: Float32,
     id: Int64,
 ):
-    if d >= td[base + k - 1]:
+    if d >= td[unsafe_offset=base + k - 1]:
         return
     var j = k - 1
-    while j > 0 and td[base + j - 1] > d:
-        td[base + j] = td[base + j - 1]
-        ti[base + j] = ti[base + j - 1]
+    while j > 0 and td[unsafe_offset=base + j - 1] > d:
+        td[unsafe_offset=base + j] = td[unsafe_offset=base + j - 1]
+        ti[unsafe_offset=base + j] = ti[unsafe_offset=base + j - 1]
         j -= 1
-    td[base + j] = d
-    ti[base + j] = id
+    td[unsafe_offset=base + j] = d
+    ti[unsafe_offset=base + j] = id
 
 
 def _dist_from_dot[metric: Int](s: Float32, qn: Float32, en: Float32) -> Float32:
@@ -451,59 +451,59 @@ def knn_topk[
     comptime QT = 4
     comptime W = W32
     for x in range(m * k):
-        out_dists[x] = Float32(1e30)
-        out_ids[x] = Int64(-1)
+        out_dists[unsafe_offset=x] = Float32(1e30)
+        out_ids[unsafe_offset=x] = Int64(-1)
     var qg = 0
     while qg + QT <= m:
         for ni in range(n):
-            var ep = e + ni * d_dim
+            var ep = e.unsafe_offset(ni * d_dim)
             var acc = InlineArray[SIMD[DType.float32, W], QT](fill=SIMD[DType.float32, W](0))
             var dd = 0
             while dd + W <= d_dim:
-                var ev = (ep + dd).unsafe_load[width=W]()
+                var ev = (ep.unsafe_offset(dd)).unsafe_load[width=W]()
                 comptime for t in range(QT):
-                    acc[t] += (q + (qg + t) * d_dim + dd).unsafe_load[width=W]() * ev
+                    acc[t] += (q.unsafe_offset((qg + t) * d_dim).unsafe_offset(dd)).unsafe_load[width=W]() * ev
                 dd += W
             comptime for t in range(QT):
                 var s = acc[t].reduce_add()
-                var qp = q + (qg + t) * d_dim
+                var qp = q.unsafe_offset((qg + t) * d_dim)
                 var j = dd
                 while j < d_dim:
-                    s += qp[j] * ep[j]
+                    s += qp[unsafe_offset=j] * ep[unsafe_offset=j]
                     j += 1
-                var dist = _dist_from_dot[metric](s, nrm_q[qg + t], nrm_e[ni])
+                var dist = _dist_from_dot[metric](s, nrm_q[unsafe_offset=qg + t], nrm_e[unsafe_offset=ni])
                 _topk_insert(out_dists, out_ids, (qg + t) * k, k, dist, Int64(ni))
         qg += QT
     while qg < m:
-        var qp = q + qg * d_dim
+        var qp = q.unsafe_offset(qg * d_dim)
         for ni in range(n):
-            var s = array_dot[DType.float32, W](qp, e + ni * d_dim, d_dim)
-            var dist = _dist_from_dot[metric](s, nrm_q[qg], nrm_e[ni])
+            var s = array_dot[DType.float32, W](qp, e.unsafe_offset(ni * d_dim), d_dim)
+            var dist = _dist_from_dot[metric](s, nrm_q[unsafe_offset=qg], nrm_e[unsafe_offset=ni])
             _topk_insert(out_dists, out_ids, qg * k, k, dist, Int64(ni))
         qg += 1
 
 
 def reduce_min_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
-    var acc = SIMD[DType.float32, W32](a[0])
+    var acc = SIMD[DType.float32, W32](a[unsafe_offset=0])
     var i = 0
     while i + W32 <= n:
-        acc = min(acc, (a + i).unsafe_load[width=W32]())
+        acc = min(acc, (a.unsafe_offset(i)).unsafe_load[width=W32]())
         i += W32
     var s = acc.reduce_min()
     while i < n:
-        s = min(s, a[i])
+        s = min(s, a[unsafe_offset=i])
         i += 1
     return s
 
 
 def reduce_max_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
-    var acc = SIMD[DType.float32, W32](a[0])
+    var acc = SIMD[DType.float32, W32](a[unsafe_offset=0])
     var i = 0
     while i + W32 <= n:
-        acc = max(acc, (a + i).unsafe_load[width=W32]())
+        acc = max(acc, (a.unsafe_offset(i)).unsafe_load[width=W32]())
         i += W32
     var s = acc.reduce_max()
     while i < n:
-        s = max(s, a[i])
+        s = max(s, a[unsafe_offset=i])
         i += 1
     return s

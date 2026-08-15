@@ -916,7 +916,7 @@ def _generate_types(duckdb_dir: str) -> str:
     # (unmarked) structs still miscompile, so an upstream follow-up is still
     # needed. `RegisterPassable` and `TrivialRegisterPassable` both select the
     # working path.
-    lines.append("struct duckdb_result(RegisterPassable, ImplicitlyCopyable & Movable):")
+    lines.append("struct duckdb_result(RegisterPassable, ImplicitlyCopyable):")
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")
@@ -1243,10 +1243,10 @@ def _generate_libduckdb_struct(
     unstable_loader = {name: f"api[].{name}" for name in all_fn_names}
     _emit_init_body(lines, unstable_loader)
 
-    # ---- move-init (unified __init__ in Mojo 1.0+) ----
-    lines.append("    def __init__(out self, *, deinit take: Self):")
+    # ---- move-init ----
+    lines.append("    def __init__(out self, *, deinit move: Self):")
     for name in all_fn_names:
-        lines.append(f"        self._{name} = take._{name}")
+        lines.append(f"        self._{name} = move._{name}")
     lines.append("")
 
     # ---- Methods ----

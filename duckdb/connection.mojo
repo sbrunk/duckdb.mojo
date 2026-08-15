@@ -68,9 +68,9 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def __init__(out self, path: String) raises:
         """Create a connection with a new database."""
         self._db = Database(path)
-        # Placeholder handle — duckdb_connect populates it via out-param.
+        # Placeholder handle. duckdb_connect populates it via out-param.
         self._conn = Pointer[
-            duckdb_connection.type, MutUntrackedOrigin
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
@@ -86,9 +86,9 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             config: Startup configuration.
         """
         self._db = Database(path, config)
-        # Placeholder handle — duckdb_connect populates it via out-param.
+        # Placeholder handle. duckdb_connect populates it via out-param.
         self._conn = Pointer[
-            duckdb_connection.type, MutUntrackedOrigin
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
@@ -117,9 +117,9 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             db: An existing database handle.
         """
         self._db = Database(_handle=db._db)
-        # Placeholder handle — duckdb_connect populates it via out-param.
+        # Placeholder handle. duckdb_connect populates it via out-param.
         self._conn = Pointer[
-            duckdb_connection.type, MutUntrackedOrigin
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
@@ -273,7 +273,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return PreparedStatement(self._conn, query)
 
     def execute[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self, query: String, *args: *Ts) raises ResultError -> Result:
         """Execute ``query`` with positional parameters (``?`` or ``$1``).
 
@@ -309,7 +309,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return stmt.execute()
 
     def execute_named[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self, query: String, params: Dict[String, T]) raises ResultError -> Result:
         """Execute ``query`` binding named parameters (``$name``).
 
@@ -330,7 +330,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return stmt.execute()
 
     def executemany[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self, query: String, rows: List[Tuple[*Ts]]) raises ResultError:
         """Execute ``query`` once per row of positional parameters.
 

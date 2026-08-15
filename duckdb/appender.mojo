@@ -91,7 +91,7 @@ from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
 from std.builtin.rebind import downcast, rebind_var, trait_downcast
-from std.memory.alloc import alloc
+from std.memory.alloc import unsafe_alloc
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface
@@ -325,9 +325,9 @@ __extension TimeNS(Appendable):
 __extension Bit(Appendable):
     def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
-        var buf = alloc[UInt8](len(self._data))
+        var buf = unsafe_alloc[UInt8](len(self._data))
         for i in range(len(self._data)):
-            buf[i] = self._data[i]
+            buf[unsafe_offset=i] = self._data[i]
         var raw = duckdb_bit(buf, idx_t(len(self._data)))
         var val = libduckdb.duckdb_create_bit(raw)
         buf.unsafe_free()
@@ -351,17 +351,17 @@ __extension List(Appendable):
             )
         elif _is_known_scalar_type[Self.T]():
             # General list of known scalars — create a list or array value.
-            # Refine Self.T to Copyable & Movable & Deinitable so we can call _to_duckdb_value /
+            # Refine Self.T to Copyable & Deinitable so we can call _to_duckdb_value /
             # mojo_type_to_duckdb_type — every known scalar satisfies both traits.
-            comptime CT = downcast[Self.T, Copyable & Movable & Deinitable]
+            comptime CT = downcast[Self.T, Copyable & Deinitable]
             ref libduckdb = DuckDB().libduckdb()
             var src_ptr = Pointer(to=self).unsafe_bitcast[List[CT]]()
             var n = len(src_ptr[])
 
             # Create duckdb_values for each element
-            var values = alloc[duckdb_value](n)
+            var values = unsafe_alloc[duckdb_value](n)
             for i in range(n):
-                values[i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
+                values[unsafe_offset=i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
 
             # Check target column type to decide LIST vs ARRAY
             var col_type = libduckdb.duckdb_appender_column_type(
@@ -399,7 +399,7 @@ __extension List(Appendable):
             # Clean up
             for i in range(n):
                 libduckdb.duckdb_destroy_value(
-                    Pointer(to=values[i])
+                    Pointer(to=values[unsafe_offset=i])
                 )
             values.unsafe_free()
             libduckdb.duckdb_destroy_value(Pointer(to=val))
@@ -415,7 +415,7 @@ __extension Optional(Appendable):
     def append(ref self, mut appender: Appender) raises:
         if self:
             comptime if conforms_to(Self.T, Appendable):
-                trait_downcast[Appendable](self.value()).append(appender)
+                self.value().append(appender)
             else:
                 raise Error(
                     "Unsupported inner type for Optional in appender"
@@ -440,18 +440,18 @@ __extension Dict(Appendable):
         )
 
         var n = len(self)
-        var keys = alloc[duckdb_value](n)
-        var vals = alloc[duckdb_value](n)
+        var keys = unsafe_alloc[duckdb_value](n)
+        var vals = unsafe_alloc[duckdb_value](n)
 
         # Refine K and V so they satisfy _to_duckdb_value's bounds — any type
         # convertible to a duckdb_value is copyable, movable and deinitable.
-        comptime KT = downcast[Self.K, Copyable & Movable & Deinitable]
-        comptime VT = downcast[Self.V, Copyable & Movable & Deinitable]
+        comptime KT = downcast[Self.K, Copyable & Deinitable]
+        comptime VT = downcast[Self.V, Copyable & Deinitable]
 
         var i = 0
         for item in self.items():
-            keys[i] = _to_duckdb_value(rebind_var[KT](item.key.copy()))
-            vals[i] = _to_duckdb_value(rebind_var[VT](item.value.copy()))
+            keys[unsafe_offset=i] = _to_duckdb_value(rebind_var[KT](item.key.copy()))
+            vals[unsafe_offset=i] = _to_duckdb_value(rebind_var[VT](item.value.copy()))
             i += 1
 
         var map_val = libduckdb.duckdb_create_map_value(
@@ -466,8 +466,8 @@ __extension Dict(Appendable):
 
         # Clean up
         for j in range(n):
-            libduckdb.duckdb_destroy_value(Pointer(to=keys[j]))
-            libduckdb.duckdb_destroy_value(Pointer(to=vals[j]))
+            libduckdb.duckdb_destroy_value(Pointer(to=keys[unsafe_offset=j]))
+            libduckdb.duckdb_destroy_value(Pointer(to=vals[unsafe_offset=j]))
         keys.unsafe_free()
         vals.unsafe_free()
         libduckdb.duckdb_destroy_value(Pointer(to=map_val))
@@ -497,9 +497,9 @@ __extension Variant(Appendable):
         # Placeholder handle — overwritten in the loop below.
         var tag = 0
         var member_val = duckdb_value.unsafe_dangling()
-        comptime for i in range(Self.Ts.size):
+        comptime for i in range(Self.Ts.length):
             comptime MemberType = Self.Ts[i]
-            comptime MT = downcast[MemberType, Copyable & Movable & Deinitable]
+            comptime MT = downcast[MemberType, Copyable & Deinitable]
             if self.isa[MT]():
                 tag = i
                 member_val = _to_duckdb_value(self.unsafe_get[MT]())
@@ -582,9 +582,9 @@ struct Appender(Movable):
             _ = libduckdb.duckdb_appender_destroy(Pointer(to=self._appender))
             raise Error("Failed to create appender: " + err)
 
-    def __init__(out self, *, deinit take: Self):
-        self._appender = take._appender
-        self._current_col = take._current_col
+    def __init__(out self, *, deinit move: Self):
+        self._appender = move._appender
+        self._current_col = move._current_col
 
     def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
@@ -612,7 +612,7 @@ struct Appender(Movable):
         self._check(libduckdb.duckdb_append_default(self._appender))
         self._current_col += 1
 
-    def append_value[T: Copyable & Movable & Deinitable](mut self, value: T) raises:
+    def append_value[T: Copyable & Deinitable](mut self, value: T) raises:
         """Append a single typed value to the current row.
 
         Supports all DuckDB-mappable scalar types, String, and Optional[T]
@@ -641,7 +641,7 @@ struct Appender(Movable):
                 )
             self._current_col += 1
         elif conforms_to(T, Appendable):
-            trait_downcast[Appendable](value).append(self)
+            value.append(self)
             self._current_col += 1
         else:
             raise Error(
@@ -663,7 +663,7 @@ struct Appender(Movable):
         self._check(libduckdb.duckdb_appender_begin_row(self._appender))
         self._current_col = 0
 
-    def append_row[T: Copyable & Movable & Deinitable](mut self, row: T) raises:
+    def append_row[T: Copyable & Deinitable](mut self, row: T) raises:
         """Append a struct as a complete table row.
 
         Each struct field is mapped to a column by position. Field types
@@ -690,7 +690,7 @@ struct Appender(Movable):
         self._append_struct_fields(row)
         self.end_row()
 
-    def _append_struct_fields[T: Copyable & Movable & Deinitable](mut self, ref row: T) raises:
+    def _append_struct_fields[T: Copyable & Deinitable](mut self, ref row: T) raises:
         """Append all fields of a struct as values in the current row."""
         comptime field_count = Reflected[T].field_count()
 
@@ -710,7 +710,7 @@ struct Appender(Movable):
                     + "'"
                 )
 
-    def append_tuple_row[*Ts: Copyable & Movable & Deinitable](mut self, row: Tuple[*Ts]) raises:
+    def append_tuple_row[*Ts: Copyable & Deinitable](mut self, row: Tuple[*Ts]) raises:
         """Append a tuple as a complete table row.
 
         Each tuple element maps to a column by position.
@@ -730,7 +730,7 @@ struct Appender(Movable):
         self.end_row()
 
     def _append_tuple_elements[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](mut self, ref row: Tuple[*Ts]) raises:
         """Append all elements of a tuple as values in the current row."""
         comptime T = Tuple[*Ts]
@@ -740,9 +740,7 @@ struct Appender(Movable):
             comptime ET = T.element_types[idx]
 
             comptime if conforms_to(ET, Appendable):
-                trait_downcast[Appendable](row[idx]).append(
-                    self
-                )
+                row[idx].append(self)
                 self._current_col += 1
             else:
                 raise Error(
@@ -752,7 +750,7 @@ struct Appender(Movable):
 
     # ── Bulk appending ────────────────────────────────────────────
 
-    def append_rows[T: Copyable & Movable & Deinitable](mut self, rows: List[T]) raises:
+    def append_rows[T: Copyable & Deinitable](mut self, rows: List[T]) raises:
         """Append multiple structs as table rows.
 
         Parameters:

@@ -313,21 +313,21 @@ struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
         return self._run(self._sql).fetchall()
 
     def fetchone[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self) raises -> Optional[Tuple[*Ts]]:
         """Execute and fetch the first row as a typed tuple, or ``None``."""
         var r = self._run(self._sql)
         return r.fetchone[*Ts]()
 
     def fetchmany[
-        *Ts: Copyable & Movable & Deinitable
+        *Ts: Copyable & Deinitable
     ](self, size: Int = 1) raises -> List[Tuple[*Ts]]:
         """Execute and fetch up to ``size`` rows as typed tuples."""
         var r = self._run(self._sql)
         return r.fetchmany[*Ts](size)
 
     def get[
-        T: Copyable & Movable & Deinitable
+        T: Copyable & Deinitable
     ](self) raises -> List[T]:
         """Execute and decode all rows into ``List[T]`` (struct/scalar)."""
         return self._run(self._sql).fetchall().get[T]()

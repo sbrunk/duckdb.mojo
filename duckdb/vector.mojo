@@ -73,7 +73,7 @@ struct Vector[is_owned: Bool, origin: ImmOrigin, api_level: ApiLevel = ApiLevel.
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_vector_get_column_type(self._vector))
 
-    def get_data(self) -> Pointer[NoneType, MutAnyOrigin]:
+    def get_data(self) -> Pointer[NoneType, Self.origin]:
         """Retrieves the data pointer of the vector.
 
         The data pointer can be used to read or write values from the vector.
@@ -84,9 +84,9 @@ struct Vector[is_owned: Bool, origin: ImmOrigin, api_level: ApiLevel = ApiLevel.
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_get_data(
             self._vector
-        ).as_unsafe_any_origin()
+        ).as_imm().unsafe_origin_cast[Self.origin]()
 
-    def get_validity(self) -> Optional[Pointer[UInt64, MutAnyOrigin]]:
+    def get_validity(self) -> Optional[Pointer[UInt64, Self.origin]]:
         """Retrieves the validity mask pointer of the specified vector.
 
         Returns `None` if all values are valid (DuckDB elides the mask).
@@ -105,14 +105,14 @@ struct Vector[is_owned: Bool, origin: ImmOrigin, api_level: ApiLevel = ApiLevel.
 
         * returns: The pointer to the validity mask, or `None` if no validity mask is present.
         """
-        # Erased origin for the same reason as `get_data` above.
+        # Origin-bound for the same reason as `get_data` above.
         ref libduckdb = DuckDB().libduckdb()
         var mask: Optional[
             Pointer[UInt64, MutUntrackedOrigin]
         ] = libduckdb.duckdb_vector_get_validity(self._vector)
         if mask is None:
             return None
-        return mask.value().as_unsafe_any_origin()
+        return mask.value().as_imm().unsafe_origin_cast[Self.origin]()
 
     def ensure_validity_writable(self) -> NoneType:
         """Ensures the validity mask is writable by allocating it.

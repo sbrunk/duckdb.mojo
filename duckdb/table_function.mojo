@@ -4,6 +4,7 @@ from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
 from duckdb.value import DuckDBValue
+from duckdb.chunk import Chunk
 
 
 struct TableFunctionInfo:
@@ -383,9 +384,9 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_table_function()
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor that transfers ownership."""
-        self._function = take._function
+        self._function = move._function
 
     def __deinit__(deinit self):
         """Destroys the table function and deallocates all memory."""

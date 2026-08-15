@@ -56,8 +56,8 @@ struct Config(Movable):
         for entry in options.items():
             self.set(entry.key, entry.value)
 
-    def __init__(out self, *, deinit take: Self):
-        self._config = take._config
+    def __init__(out self, *, deinit move: Self):
+        self._config = move._config
 
     def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
