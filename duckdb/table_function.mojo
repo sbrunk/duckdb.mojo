@@ -18,7 +18,7 @@ struct TableFunctionInfo:
     from duckdb import Chunk
     from duckdb.table_function import TableFunctionInfo
 
-    fn my_function(info: TableFunctionInfo, output: Chunk):
+    fn my_function(info: TableFunctionInfo, mut output: Chunk):
         var bind_data = info.get_bind_data()
         var init_data = info.get_init_data()
         # ... produce rows into output chunk

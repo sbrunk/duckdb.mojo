@@ -22,7 +22,7 @@ struct FunctionInfo:
     from duckdb.logical_type import LogicalType
     from duckdb.vector import Vector
     
-    fn my_function(info: FunctionInfo, input: Chunk, output: Vector):
+    fn my_function(info: FunctionInfo, mut input: Chunk, mut output: Vector):
         # Access extra info
         var extra = info.get_extra_info()
         
@@ -111,11 +111,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     from duckdb import Chunk
     from duckdb.vector import Vector
     
-    fn add_one(info: FunctionInfo, input: Chunk, output: Vector):
+    fn add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
         var size = len(input)
         var in_vec = input.get_vector(0)
         var in_data = in_vec.get_data().bitcast[Int32]()
-        var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+        var out_data = output.get_data().bitcast[Int32]()
         
         for i in range(size):
             out_data[i] = in_data[i] + 1
@@ -243,7 +243,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
     def set_function[
-        func: def(FunctionInfo, mut Chunk, Vector) thin -> None
+        func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None
     ](self):
         """Sets the main execution function using high-level Mojo types.
         
@@ -254,11 +254,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ```mojo
         from duckdb import Chunk, Vector
         from duckdb.scalar_function import FunctionInfo, ScalarFunction
-        fn my_add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+        fn my_add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_vec = input.get_vector(0)
             var in_data = in_vec.get_data().bitcast[Int32]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+            var out_data = output.get_data().bitcast[Int32]()
             
             for i in range(size):
                 out_data[i] = in_data[i] + 1
@@ -267,7 +267,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func.set_function[my_add_one]()  # Pass function as compile-time parameter
         ```
         
-        * func: Your function with signature fn(FunctionInfo, mut Chunk, Vector)..
+        * func: Your function with signature fn(FunctionInfo, mut Chunk, mut Vector)..
         """
         # Create a wrapper function that converts FFI types to high-level types
         def wrapper(raw_info: duckdb_function_info,
@@ -323,10 +323,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[Out]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
 
             def apply[w: Int](idx: Int) {mut}:
                 (out_data.unsafe_offset(idx)).unsafe_store(func((in_data.unsafe_offset(idx)).unsafe_load[width=w]()))
@@ -374,11 +374,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
             var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[In2]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[Out]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
 
             def apply[w: Int](idx: Int) {mut}:
                 (out_data.unsafe_offset(idx)).unsafe_store(
@@ -427,10 +427,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[D]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[D]]()
 
             def apply[w: Int](idx: Int) {mut}:
                 (out_data.unsafe_offset(idx)).unsafe_store(func((in_data.unsafe_offset(idx)).unsafe_load[width=w]()))
@@ -471,11 +471,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         sf.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[D]]()
             var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[D]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[D]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[D]]()
 
             def apply[w: Int](idx: Int) {mut}:
                 (out_data.unsafe_offset(idx)).unsafe_store(
@@ -512,7 +512,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     @staticmethod
     def create[
         name: StringLiteral,
-        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
+        func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         Out: DType,
     ](conn: Connection[_]) raises:
         """Create and register a zero-parameter scalar function.
@@ -531,8 +531,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn constant_42(info: FunctionInfo, mut input: Chunk, output: Vector):
-            var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+        fn constant_42(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+            var out_data = output.get_data().bitcast[Int32]()
             for i in range(len(input)):
                 out_data[i] = 42
 
@@ -549,7 +549,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     @staticmethod
     def create[
         name: StringLiteral,
-        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
+        func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         In1: DType,
         Out: DType,
     ](conn: Connection[_]) raises:
@@ -570,10 +570,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+        fn add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Int32]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+            var out_data = output.get_data().bitcast[Int32]()
             for i in range(size):
                 out_data[i] = in_data[i] + 1
 
@@ -591,7 +591,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     @staticmethod
     def create[
         name: StringLiteral,
-        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
+        func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         In1: DType,
         In2: DType,
         Out: DType,
@@ -612,11 +612,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn my_add(info: FunctionInfo, mut input: Chunk, output: Vector):
+        fn my_add(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var a = input.get_vector(0).get_data().bitcast[Int32]()
             var b = input.get_vector(1).get_data().bitcast[Int32]()
-            var out = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+            var out = output.get_data().bitcast[Int32]()
             for i in range(size):
                 out[i] = a[i] + b[i]
 
@@ -635,7 +635,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     @staticmethod
     def create[
         name: StringLiteral,
-        func: def(FunctionInfo, mut Chunk, Vector) thin -> None,
+        func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         In1: DType,
         In2: DType,
         In3: DType,
@@ -694,10 +694,10 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[Out]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
             for i in range(size):
                 out_data[unsafe_offset=i] = func(in_data[unsafe_offset=i])
 
@@ -766,11 +766,11 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func.register(conn)
         ```
         """
-        def wrapper(info: FunctionInfo, mut input: Chunk, output: Vector):
+        def wrapper(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in1_data = input.get_vector(0).get_data().unsafe_bitcast[Scalar[In1]]()
             var in2_data = input.get_vector(1).get_data().unsafe_bitcast[Scalar[In2]]()
-            var out_data = output.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[Out]]()
+            var out_data = output.get_data().unsafe_bitcast[Scalar[Out]]()
             for i in range(size):
                 out_data[unsafe_offset=i] = func(in1_data[unsafe_offset=i], in2_data[unsafe_offset=i])
 

@@ -886,7 +886,7 @@ def _deserialize_enum_column[
 
 
 def _is_valid[
-    mask_origin: ImmOrigin
+    mask_origin: Origin
 ](validity_mask: Optional[Pointer[UInt64, mask_origin]], idx: Int) -> Bool:
     """Check if a value at idx is valid (non-NULL) given a validity mask.
 

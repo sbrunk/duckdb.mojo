@@ -11,49 +11,49 @@ from std import math
 # Helper UDF implementations (using high-level API)
 # ===--------------------------------------------------------------------===#
 
-def add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+def add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds 1 to the input."""
     var size = len(input)
     var in_vec = input.get_vector(0)
     var in_data = in_vec.get_data().bitcast[Int32]()
-    var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+    var out_data = output.get_data().bitcast[Int32]()
     
     for i in range(size):
         out_data[i] = in_data[i] + 1
 
 
-def multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
+def multiply_two(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that multiplies input by 2."""
     var size = len(input)
     var in_vec = input.get_vector(0)
     var in_data = in_vec.get_data().bitcast[Float32]()
-    var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Float32]()
+    var out_data = output.get_data().bitcast[Float32]()
     
     for i in range(size):
         out_data[i] = in_data[i] * 2.0
 
 
-def binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds two integers."""
     var size = len(input)
     var vec_a = input.get_vector(0)
     var vec_b = input.get_vector(1)
     var a_data = vec_a.get_data().bitcast[Int32]()
     var b_data = vec_b.get_data().bitcast[Int32]()
-    var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Int32]()
+    var out_data = output.get_data().bitcast[Int32]()
     
     for i in range(size):
         out_data[i] = a_data[i] + b_data[i]
 
 
-def binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add_float(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds two floats."""
     var size = len(input)
     var vec_a = input.get_vector(0)
     var vec_b = input.get_vector(1)
     var a_data = vec_a.get_data().bitcast[Float32]()
     var b_data = vec_b.get_data().bitcast[Float32]()
-    var out_data = output.get_data().unsafe_mut_cast[True]().bitcast[Float32]()
+    var out_data = output.get_data().bitcast[Float32]()
     
     for i in range(size):
         out_data[i] = a_data[i] + b_data[i]

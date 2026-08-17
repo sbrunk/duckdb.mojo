@@ -146,17 +146,23 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_data_chunk_reset(self._chunk)
 
-    def get_vector(self, col: Int) -> Vector[is_owned=False, origin=origin_of(self)]:
-        """Retrieves a mutable vector at the specified column index in the data chunk.
+    def get_vector[
+        vec_origin: Origin, //
+    ](ref [vec_origin] self, col: Int) -> Vector[
+        is_owned=False, origin=vec_origin
+    ]:
+        """Retrieves the vector at the specified column index in the data chunk.
         
-        The pointer to the vector is valid for as long as the chunk is alive.
-        It does NOT need to be destroyed. The returned vector extends the chunk's lifetime.
+        The vector is valid for as long as the chunk is alive and does not need to
+        be destroyed. It carries the chunk's origin, so it keeps the chunk alive.
+        It is mutable only if `self` is bound mutably. You need to take the chunk as
+        `mut` to write to the returned vector.
         
         Args:
             col: The column index.
         
         Returns:
-            A borrowed mutable vector (not owned) at the specified column.  
+            A borrowed vector (not owned) at the specified column.
         """
         ref libduckdb = DuckDB().libduckdb()
         return Vector[False, origin_of(self)](

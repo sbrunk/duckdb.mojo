@@ -223,7 +223,7 @@ struct AggregateFunction(Movable):
 
     fn my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
                    result: Vector, count: Int, offset: Int):
-        var out = result.get_data().unsafe_mut_cast[True]().bitcast[Int64]()
+        var out = result.get_data().bitcast[Int64]()
         for i in range(count):
             var s = source.get_state(i).get_data().bitcast[Int64]()
             out[offset + i] = s[]
@@ -327,7 +327,7 @@ struct AggregateFunction(Movable):
         state_init_fn: def(AggregateFunctionInfo, AggregateState) thin -> None,
         update_fn: def(AggregateFunctionInfo, mut Chunk, AggregateStateArray) thin -> None,
         combine_fn: def(AggregateFunctionInfo, AggregateStateArray, AggregateStateArray, Int) thin -> None,
-        finalize_fn: def(AggregateFunctionInfo, AggregateStateArray, Vector, Int, Int) thin -> None,
+        finalize_fn: def(AggregateFunctionInfo, AggregateStateArray, mut Vector, Int, Int) thin -> None,
     ](self):
         """Sets all callback functions for the aggregate function using high-level Mojo types.
 
@@ -372,7 +372,7 @@ struct AggregateFunction(Movable):
 
         fn finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
                     result: Vector, count: Int, offset: Int):
-            var out = result.get_data().unsafe_mut_cast[True]().bitcast[Int64]()
+            var out = result.get_data().bitcast[Int64]()
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[Int64]()
                 out[offset + i] = s[]
@@ -577,14 +577,14 @@ struct AggregateFunction(Movable):
         def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
-            result: Vector,
+            mut result: Vector,
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
-            var validity = result.get_validity().value().unsafe_mut_cast[True]()
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
@@ -679,14 +679,14 @@ struct AggregateFunction(Movable):
         def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
-            result: Vector,
+            mut result: Vector,
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[Out]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[Out]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
-            var validity = result.get_validity().value().unsafe_mut_cast[True]()
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[Out]]()
                 if s[].count > 0:
@@ -777,14 +777,14 @@ struct AggregateFunction(Movable):
         def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
-            result: Vector,
+            mut result: Vector,
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
-            var validity = result.get_validity().value().unsafe_mut_cast[True]()
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
@@ -966,14 +966,14 @@ struct AggregateFunction(Movable):
         def _finalize(
             info: AggregateFunctionInfo,
             source: AggregateStateArray,
-            result: Vector,
+            mut result: Vector,
             count: Int,
             offset: Int,
         ):
-            var out = result.get_data().unsafe_mut_cast[True]().unsafe_bitcast[Scalar[D]]()
+            var out = result.get_data().unsafe_bitcast[Scalar[D]]()
             result.ensure_validity_writable()
             # Safe to unwrap: ensure_validity_writable guarantees a non-None mask.
-            var validity = result.get_validity().value().unsafe_mut_cast[True]()
+            var validity = result.get_validity().value()
             for i in range(count):
                 var s = source.get_state(i).get_data().unsafe_bitcast[_ReduceState[D]]()
                 if s[].count > 0:
