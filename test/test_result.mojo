@@ -450,5 +450,126 @@ def test_row_is_null_in_loop() raises:
         idx += 1
 
 
+def test_result_statement_type_set() raises:
+    """Test statement_type returns SET for SET statements."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SET memory_limit='1GB'")
+    assert_equal(result.statement_type(), StatementType.SET)
+
+
+def test_result_statement_type_load() raises:
+    """Test statement_type returns LOAD for LOAD statements."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("LOAD icu")
+    assert_equal(result.statement_type(), StatementType.LOAD)
+
+
+def test_result_statement_type_attach() raises:
+    """Test statement_type returns ATTACH for ATTACH statements."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("ATTACH ':memory:' AS db2")
+    assert_equal(result.statement_type(), StatementType.ATTACH)
+
+
+def test_result_statement_type_detach() raises:
+    """Test statement_type returns DETACH for DETACH statements."""
+    var conn = DuckDB.connect(":memory:")
+    _ = conn.execute("ATTACH ':memory:' AS db2")
+    var result = conn.execute("DETACH db2")
+    assert_equal(result.statement_type(), StatementType.DETACH)
+
+
+def test_result_statement_type_update_extensions() raises:
+    """Test statement_type returns UPDATE_EXTENSIONS for UPDATE EXTENSIONS."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("UPDATE EXTENSIONS")
+    assert_equal(result.statement_type(), StatementType.UPDATE_EXTENSIONS)
+
+
+def test_result_statement_type_merge_into() raises:
+    """Test statement_type returns MERGE_INTO for MERGE INTO statements."""
+    var conn = DuckDB.connect(":memory:")
+    _ = conn.execute("CREATE TABLE target (id INT)")
+    _ = conn.execute("CREATE TABLE source (id INT)")
+    var result = conn.execute(
+        "MERGE INTO target USING source ON target.id = source.id"
+        " WHEN MATCHED THEN DO NOTHING"
+    )
+    assert_equal(result.statement_type(), StatementType.MERGE_INTO)
+
+
+def test_statement_type_str_covers_every_alias() raises:
+    """Every StatementType alias stringifies to its own name, not "" ."""
+    assert_equal(String(StatementType.INVALID), "INVALID")
+    assert_equal(String(StatementType.SELECT), "SELECT")
+    assert_equal(String(StatementType.INSERT), "INSERT")
+    assert_equal(String(StatementType.UPDATE), "UPDATE")
+    assert_equal(String(StatementType.EXPLAIN), "EXPLAIN")
+    assert_equal(String(StatementType.DELETE), "DELETE")
+    assert_equal(String(StatementType.PREPARE), "PREPARE")
+    assert_equal(String(StatementType.CREATE), "CREATE")
+    assert_equal(String(StatementType.EXECUTE), "EXECUTE")
+    assert_equal(String(StatementType.ALTER), "ALTER")
+    assert_equal(String(StatementType.TRANSACTION), "TRANSACTION")
+    assert_equal(String(StatementType.COPY), "COPY")
+    assert_equal(String(StatementType.ANALYZE), "ANALYZE")
+    assert_equal(String(StatementType.VARIABLE_SET), "VARIABLE_SET")
+    assert_equal(String(StatementType.CREATE_FUNC), "CREATE_FUNC")
+    assert_equal(String(StatementType.DROP), "DROP")
+    assert_equal(String(StatementType.EXPORT), "EXPORT")
+    assert_equal(String(StatementType.PRAGMA), "PRAGMA")
+    assert_equal(String(StatementType.VACUUM), "VACUUM")
+    assert_equal(String(StatementType.CALL), "CALL")
+    assert_equal(String(StatementType.SET), "SET")
+    assert_equal(String(StatementType.LOAD), "LOAD")
+    assert_equal(String(StatementType.RELATION), "RELATION")
+    assert_equal(String(StatementType.EXTENSION), "EXTENSION")
+    assert_equal(String(StatementType.LOGICAL_PLAN), "LOGICAL_PLAN")
+    assert_equal(String(StatementType.ATTACH), "ATTACH")
+    assert_equal(String(StatementType.DETACH), "DETACH")
+    assert_equal(String(StatementType.MULTI), "MULTI")
+    assert_equal(String(StatementType.COPY_DATABASE), "COPY_DATABASE")
+    assert_equal(String(StatementType.UPDATE_EXTENSIONS), "UPDATE_EXTENSIONS")
+    assert_equal(String(StatementType.MERGE_INTO), "MERGE_INTO")
+
+
+def test_statement_type_aliases_are_distinct() raises:
+    """The statement types added past CALL must not collide with each other."""
+    var added: List[StatementType] = [
+        StatementType.SET,
+        StatementType.LOAD,
+        StatementType.RELATION,
+        StatementType.EXTENSION,
+        StatementType.LOGICAL_PLAN,
+        StatementType.ATTACH,
+        StatementType.DETACH,
+        StatementType.MULTI,
+        StatementType.COPY_DATABASE,
+        StatementType.UPDATE_EXTENSIONS,
+        StatementType.MERGE_INTO,
+    ]
+    for i in range(len(added)):
+        # distinct from CALL (the last of the original block) and from each other
+        assert_true(added[i] != StatementType.CALL)
+        for j in range(i + 1, len(added)):
+            assert_true(added[i] != added[j])
+
+
+def test_statement_type_unknown_value_degrades_gracefully() raises:
+    """An unmapped statement type reports its value instead of an empty string."""
+    var unknown = StatementType(Int32(99))
+    assert_equal(String(unknown), "UNKNOWN(99)")
+    assert_true(String(unknown) != "")
+    assert_equal(unknown.__repr__(), "StatementType.UNKNOWN(99)")
+
+
+def test_statement_type_repr_includes_name() raises:
+    """__repr__ prefixes the type name to the statement type name."""
+    assert_equal(StatementType.SELECT.__repr__(), "StatementType.SELECT")
+    assert_equal(
+        StatementType.MERGE_INTO.__repr__(), "StatementType.MERGE_INTO"
+    )
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

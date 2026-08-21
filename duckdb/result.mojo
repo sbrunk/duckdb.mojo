@@ -545,6 +545,39 @@ struct StatementType(
     comptime CALL = Self(DUCKDB_STATEMENT_TYPE_CALL)
     """CALL statement."""
 
+    comptime SET = Self(DUCKDB_STATEMENT_TYPE_SET)
+    """SET statement."""
+
+    comptime LOAD = Self(DUCKDB_STATEMENT_TYPE_LOAD)
+    """LOAD statement (extension loading)."""
+
+    comptime RELATION = Self(DUCKDB_STATEMENT_TYPE_RELATION)
+    """Relation statement (from the relational API)."""
+
+    comptime EXTENSION = Self(DUCKDB_STATEMENT_TYPE_EXTENSION)
+    """Statement provided by an extension."""
+
+    comptime LOGICAL_PLAN = Self(DUCKDB_STATEMENT_TYPE_LOGICAL_PLAN)
+    """Logical plan statement."""
+
+    comptime ATTACH = Self(DUCKDB_STATEMENT_TYPE_ATTACH)
+    """ATTACH statement."""
+
+    comptime DETACH = Self(DUCKDB_STATEMENT_TYPE_DETACH)
+    """DETACH statement."""
+
+    comptime MULTI = Self(DUCKDB_STATEMENT_TYPE_MULTI)
+    """Multi-statement."""
+
+    comptime COPY_DATABASE = Self(DUCKDB_STATEMENT_TYPE_COPY_DATABASE)
+    """COPY DATABASE statement."""
+
+    comptime UPDATE_EXTENSIONS = Self(DUCKDB_STATEMENT_TYPE_UPDATE_EXTENSIONS)
+    """UPDATE EXTENSIONS statement."""
+
+    comptime MERGE_INTO = Self(DUCKDB_STATEMENT_TYPE_MERGE_INTO)
+    """MERGE INTO statement."""
+
     @always_inline
     def __eq__(self, other: Self) -> Bool:
         """Returns True if this statement type equals the other statement type.
@@ -618,6 +651,32 @@ struct StatementType(
             writer.write("VACUUM")
         elif self == Self.CALL:
             writer.write("CALL")
+        elif self == Self.SET:
+            writer.write("SET")
+        elif self == Self.LOAD:
+            writer.write("LOAD")
+        elif self == Self.RELATION:
+            writer.write("RELATION")
+        elif self == Self.EXTENSION:
+            writer.write("EXTENSION")
+        elif self == Self.LOGICAL_PLAN:
+            writer.write("LOGICAL_PLAN")
+        elif self == Self.ATTACH:
+            writer.write("ATTACH")
+        elif self == Self.DETACH:
+            writer.write("DETACH")
+        elif self == Self.MULTI:
+            writer.write("MULTI")
+        elif self == Self.COPY_DATABASE:
+            writer.write("COPY_DATABASE")
+        elif self == Self.UPDATE_EXTENSIONS:
+            writer.write("UPDATE_EXTENSIONS")
+        elif self == Self.MERGE_INTO:
+            writer.write("MERGE_INTO")
+        else:
+            # A statement type added by a newer DuckDB than these bindings were
+            # generated against: keep the value visible instead of writing nothing.
+            writer.write("UNKNOWN(", self._value, ")")
 
     @no_inline
     def __str__(self) -> String:
