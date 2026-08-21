@@ -101,6 +101,10 @@ struct ResultType(
             writer.write("NOTHING")
         elif self == Self.QUERY_RESULT:
             writer.write("QUERY_RESULT")
+        else:
+            # A result type added by a newer DuckDB than these bindings were
+            # generated against: keep the value visible instead of writing nothing.
+            writer.write("UNKNOWN(", self._value, ")")
 
     @no_inline
     def __str__(self) -> String:
@@ -112,6 +116,17 @@ struct ResultType(
         """
         return String(self)
 
+    def write_repr_to(self, mut writer: Some[Writer]):
+        """Writes the detailed representation of this result type to a writer.
+
+        This is what `repr()` dispatches to; without it `repr()` falls back to
+        the fieldwise representation and prints the raw enum value.
+
+        Args:
+            writer: The writer to write to.
+        """
+        writer.write("ResultType.", self)
+
     @no_inline
     def __repr__(self) -> String:
         """Returns the detailed string representation of this result type.
@@ -120,7 +135,9 @@ struct ResultType(
             String: A string representation including the type name and value
                 (e.g., "ResultType.QUERY_RESULT").
         """
-        return String("ResultType.", self)
+        var result = String()
+        self.write_repr_to(result)
+        return result^
 
 
 @fieldwise_init
@@ -449,6 +466,10 @@ struct ErrorType(
             writer.write("SEQUENCE")
         elif self == Self.INVALID_CONFIGURATION:
             writer.write("INVALID_CONFIGURATION")
+        else:
+            # An error type added by a newer DuckDB than these bindings were
+            # generated against: keep the value visible instead of writing nothing.
+            writer.write("UNKNOWN(", self._value, ")")
 
     @no_inline
     def __str__(self) -> String:

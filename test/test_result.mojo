@@ -577,6 +577,17 @@ def test_builtin_repr_dispatches_to_write_repr_to() raises:
     assert_equal(repr(StatementType.MERGE_INTO), "StatementType.MERGE_INTO")
     assert_equal(repr(StatementType(Int32(99))), "StatementType.UNKNOWN(99)")
     assert_equal(repr(ErrorType.PARSER), "ErrorType.PARSER")
+    assert_equal(repr(ResultType.QUERY_RESULT), "ResultType.QUERY_RESULT")
+
+
+def test_unknown_value_degrades_for_every_enum_type() raises:
+    """None of the enum-like types may stringify an unmapped value to "" ."""
+    assert_equal(String(ResultType(Int32(99))), "UNKNOWN(99)")
+    assert_equal(String(ErrorType(Int32(99))), "UNKNOWN(99)")
+    assert_equal(String(StatementType(Int32(99))), "UNKNOWN(99)")
+    assert_equal(repr(ResultType(Int32(99))), "ResultType.UNKNOWN(99)")
+    assert_equal(repr(ErrorType(Int32(99))), "ErrorType.UNKNOWN(99)")
+    assert_equal(repr(StatementType(Int32(99))), "StatementType.UNKNOWN(99)")
 
 
 def test_builtin_repr_agrees_with_dunder_repr() raises:
@@ -585,6 +596,7 @@ def test_builtin_repr_agrees_with_dunder_repr() raises:
         repr(StatementType.MERGE_INTO), StatementType.MERGE_INTO.__repr__()
     )
     assert_equal(repr(ErrorType.PARSER), ErrorType.PARSER.__repr__())
+    assert_equal(repr(ResultType.NOTHING), ResultType.NOTHING.__repr__())
 
 
 def main() raises:

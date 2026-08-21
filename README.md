@@ -4,11 +4,11 @@
 
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
-duckdb.mojo can be used in two ways:
+duckdb.mojo can be used in multiple ways:
 
-1. **Client API**: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. **Extension development**: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
-3. **Accelerate DuckDB**: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
+1. Client API: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
+2. Extension development: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
+3. Accelerate DuckDB: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
