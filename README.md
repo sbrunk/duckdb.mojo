@@ -223,8 +223,8 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb_extension.h)
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb_extension.h)
 instead of relying on dynamic symbol lookup. The struct is split into a
 **stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
 for the full design):
@@ -341,7 +341,7 @@ clang++ -std=c++17 -O2 -fPIC -shared -undefined dynamic_lookup \
 # 3. Append the footer. CPP is version-locked, so the version field is the DuckDB
 #    version (not the C API version).
 python3 scripts/append_extension_metadata.py myext.duckdb_extension \
-    --abi-type CPP --duckdb-version v1.5.4
+    --abi-type CPP --duckdb-version v1.5.5
 ```
 
 Caveats specific to the CPP ABI:

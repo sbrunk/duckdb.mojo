@@ -28,7 +28,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
 - `extensions/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
-- `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.4`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
+- `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.5`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
 
 ## Development Commands
 
@@ -110,15 +110,15 @@ DuckDB source lives in the `third_party/duckdb` git submodule, pinned (via the
 gitlink in the index, with `branch`/`shallow` recorded in `.gitmodules`) to the
 release tag the FFI bindings were generated against. The `libduckdb`/`duckdb-cli`
 conda pins and the submodule pin must stay in lockstep; `pixi run clone-duckdb`
-warns when they drift. To bump (e.g. `1.5.4` → `1.5.5`):
+warns when they drift. To bump (e.g. `1.5.5` → `1.5.6`):
 
 1. Move the submodule pin to the new tag and stage it:
    ```shell
-   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.5
-   git -C third_party/duckdb checkout tags/v1.5.5
+   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.6
+   git -C third_party/duckdb checkout tags/v1.5.6
    git add third_party/duckdb
    ```
-   Optionally bump `branch = v1.5.5` in `.gitmodules`.
+   Optionally bump `branch = v1.5.6` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
    the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
    `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +

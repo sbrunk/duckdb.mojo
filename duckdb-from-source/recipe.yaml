@@ -1,6 +1,6 @@
 package:
   name: duckdb-from-source
-  version: 1.5.4
+  version: 1.5.5
 
 source:
   # Build from the in-repo DuckDB source submodule (third_party/duckdb), pinned
