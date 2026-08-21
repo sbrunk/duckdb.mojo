@@ -571,5 +571,21 @@ def test_statement_type_repr_includes_name() raises:
     )
 
 
+def test_builtin_repr_dispatches_to_write_repr_to() raises:
+    """`repr()` must show the type name, not the raw enum value."""
+    assert_equal(repr(StatementType.SELECT), "StatementType.SELECT")
+    assert_equal(repr(StatementType.MERGE_INTO), "StatementType.MERGE_INTO")
+    assert_equal(repr(StatementType(Int32(99))), "StatementType.UNKNOWN(99)")
+    assert_equal(repr(ErrorType.PARSER), "ErrorType.PARSER")
+
+
+def test_builtin_repr_agrees_with_dunder_repr() raises:
+    """`repr(x)` and `x.__repr__()` must not disagree."""
+    assert_equal(
+        repr(StatementType.MERGE_INTO), StatementType.MERGE_INTO.__repr__()
+    )
+    assert_equal(repr(ErrorType.PARSER), ErrorType.PARSER.__repr__())
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

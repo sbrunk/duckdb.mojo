@@ -460,6 +460,17 @@ struct ErrorType(
         """
         return String(self)
 
+    def write_repr_to(self, mut writer: Some[Writer]):
+        """Writes the detailed representation of this error type to a writer.
+
+        This is what `repr()` dispatches to; without it `repr()` falls back to
+        the fieldwise representation and prints the raw enum value.
+
+        Args:
+            writer: The writer to write to.
+        """
+        writer.write("ErrorType.", self)
+
     @no_inline
     def __repr__(self) -> String:
         """Returns the detailed string representation of this error type.
@@ -468,7 +479,9 @@ struct ErrorType(
             String: A string representation including the type name and value
                 (e.g., "ErrorType.PARSER").
         """
-        return String("ErrorType.", self)
+        var result = String()
+        self.write_repr_to(result)
+        return result^
 
 
 @fieldwise_init
@@ -688,6 +701,17 @@ struct StatementType(
         """
         return String(self)
 
+    def write_repr_to(self, mut writer: Some[Writer]):
+        """Writes the detailed representation of this statement type to a writer.
+
+        This is what `repr()` dispatches to; without it `repr()` falls back to
+        the fieldwise representation and prints the raw enum value.
+
+        Args:
+            writer: The writer to write to.
+        """
+        writer.write("StatementType.", self)
+
     @no_inline
     def __repr__(self) -> String:
         """Returns the detailed string representation of this statement type.
@@ -696,7 +720,9 @@ struct StatementType(
             String: A string representation including the type name and value
                 (e.g., "StatementType.SELECT").
         """
-        return String("StatementType.", self)
+        var result = String()
+        self.write_repr_to(result)
+        return result^
 
 
 @fieldwise_init
