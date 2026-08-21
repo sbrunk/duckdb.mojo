@@ -146,6 +146,58 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_data_chunk_reset(self._chunk)
 
+    def get_span[
+        span_origin: Origin, //, dtype: DType
+    ](ref [span_origin] self, col: Int) raises -> Span[
+        Scalar[dtype], span_origin
+    ]:
+        """Returns a bounds-checked view of a fixed-width column's data.
+
+        Unlike `get_vector(col).get_data()` this does not hand out a raw pointer:
+        the chunk knows its own row count, so the length is not the caller's
+        problem, and the column's type is checked against `dtype` instead of
+        being asserted by an unchecked `bitcast`. The span carries the chunk's
+        origin, so it keeps the chunk alive and is mutable only if the chunk is
+        bound mutably.
+
+        Only valid for types with a fixed-width physical layout; VARCHAR and the
+        nested types (LIST/STRUCT/MAP) are rejected.
+
+        Parameters:
+            span_origin: Inferred from how the chunk is bound.
+            dtype: The expected element type of the column.
+
+        Args:
+            col: The column index.
+
+        Returns:
+            A span over the column's `len(self)` elements.
+
+        Raises:
+            If the column's type does not match `dtype`.
+        """
+        var vec = self.get_vector(col)
+        var actual = vec.get_column_type().get_type_id()
+        comptime expected = dtype_to_duckdb_type[dtype]()
+        if actual != expected:
+            raise Error(
+                "Column ",
+                col,
+                " is ",
+                String(actual),
+                ", not ",
+                String(expected),
+            )
+        # The buffer belongs to the chunk, not to the borrowed Vector handle, so
+        # re-anchor the pointer onto the chunk's origin.
+        return Span[Scalar[dtype], span_origin](
+            unsafe_ptr=vec.get_data()
+            .unsafe_bitcast[Scalar[dtype]]()
+            .unsafe_mut_cast[span_origin.mut]()
+            .unsafe_origin_cast[span_origin](),
+            length=len(self),
+        )
+
     def get_vector[
         vec_origin: Origin, //
     ](ref [vec_origin] self, col: Int) -> Vector[
