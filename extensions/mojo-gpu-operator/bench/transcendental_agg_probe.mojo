@@ -26,9 +26,10 @@ Run (Apple or NVIDIA -- pass on both):
         extensions/mojo-gpu-operator/bench/transcendental_agg_probe.mojo
 """
 
-from std.gpu import block_idx, thread_idx, barrier
-from std.gpu.host import DeviceContext
-from std.gpu.memory import AddressSpace
+from std.gpu import block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.host import DeviceContext
+from max.gpu.memory import AddressSpace
 from std.memory import alloc, stack_allocation
 from std.math import sqrt, exp, log, abs
 from std.sys import has_accelerator

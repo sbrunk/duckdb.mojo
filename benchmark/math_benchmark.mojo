@@ -50,24 +50,24 @@ def sql_type() -> String:
 
 # --- Fused (compound) kernels ---
 
-def simd_sin_plus_cos[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_sin_plus_cos[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sin(x) + cos(x) — a common fused trig computation."""
     return math.sin(x) + math.cos(x)
 
 
-def simd_hypot1[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_hypot1[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sqrt(x*x + 1) — distance from origin to (x, 1)."""
     return math.sqrt(x * x + 1.0)
 
 
-def simd_gauss[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+def simd_gauss[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
     """Computes exp(-x*x) — unnormalized Gaussian kernel."""
     return math.exp(-(x * x))
 
 
 # --- Binary kernels (compound only) ---
 
-def simd_hypot[w: Int](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
+def simd_hypot[w: SIMDLength](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
     """Computes sqrt(a*a + b*b) — Euclidean distance."""
     return math.sqrt(a * a + b * b)
 
@@ -87,7 +87,7 @@ def register_functions(conn: Connection) raises:
     ScalarFunction.from_simd_function["mojo_log", F, math.log](conn)
 
     # abs uses a trait-based signature, so it still needs the original overload
-    def simd_abs[w: Int](x: SIMD[F, w]) -> SIMD[F, w]:
+    def simd_abs[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
         return math.abs(x)
 
     ScalarFunction.from_simd_function["mojo_abs", F, F, simd_abs](conn)
@@ -120,7 +120,7 @@ def run_benchmark(
 ) raises:
     """Run a single benchmark comparing standard vs Mojo query."""
     print("\n  " + name)
-    print("  " + "-" * len(name))
+    print("  " + "-" * name.byte_length())
 
     # Warmup
     for _ in range(warmup_iters):

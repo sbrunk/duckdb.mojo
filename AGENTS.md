@@ -28,7 +28,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
 - `extensions/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
-- `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.4`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
+- `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.5`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
 
 ## Development Commands
 
@@ -91,11 +91,11 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
 
 ## FFI Struct ABI Workaround
 
-Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >16-byte by-value struct arguments when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list — this routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0b2` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
+Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >16-byte by-value struct arguments when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list — this routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
 
 ## Updating Mojo
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0b2` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) **and** in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) **and** in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
 
 1. Check available versions: query `https://conda.modular.com/max/osx-arm64/repodata.json` (stable releases) or `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (nightlies) — also `linux-64`/`linux-aarch64` — for `mojo-compiler` packages. Note `curl` must follow redirects (`-L`).
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`); when moving between stable and nightly also update the channel in `[workspace] channels` (stable = `.../max/`, nightly = `.../max-nightly/`)
@@ -110,15 +110,15 @@ DuckDB source lives in the `third_party/duckdb` git submodule, pinned (via the
 gitlink in the index, with `branch`/`shallow` recorded in `.gitmodules`) to the
 release tag the FFI bindings were generated against. The `libduckdb`/`duckdb-cli`
 conda pins and the submodule pin must stay in lockstep; `pixi run clone-duckdb`
-warns when they drift. To bump (e.g. `1.5.4` → `1.5.5`):
+warns when they drift. To bump (e.g. `1.5.5` → `1.5.6`):
 
 1. Move the submodule pin to the new tag and stage it:
    ```shell
-   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.5
-   git -C third_party/duckdb checkout tags/v1.5.5
+   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.6
+   git -C third_party/duckdb checkout tags/v1.5.6
    git add third_party/duckdb
    ```
-   Optionally bump `branch = v1.5.5` in `.gitmodules`.
+   Optionally bump `branch = v1.5.6` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
    the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
    `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +
@@ -142,4 +142,9 @@ The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler
 ## Environments
 
 - **default** - Standard dev environment with precompiled libduckdb from conda-forge
+- **gpu** - default plus `max-core`, which provides the accelerator APIs (`max.gpu.*`)
+  and the `layout` package. Only `mojo-gpu-operator` needs it:
+  `pixi run -e gpu gpu-op-build`. On macOS the GPU kernels compile to Metal, which
+  needs Xcode's separately-downloaded Metal Toolchain component
+  (`xcodebuild -downloadComponent MetalToolchain`).
 - **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now a **reference implementation** — superseded by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload) — but is kept wired here. See `extensions/operator-replacement/README.md`.

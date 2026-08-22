@@ -2696,9 +2696,9 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   //   * exactly ONE aggregate, kind SUM with an INT128 result (ret_is_int128):
   //     - SUM excludes count(*) (counts ALL rows incl. NULL-input -> a shared-pass
   //       fold would undercount), MIN/MAX (declined anyway), and stat kinds.
-  //     - the INT128-result requirement is load-bearing in TWO ways: (a) it keeps
+  //     - the INT128-result requirement is important in TWO ways: (a) it keeps
   //       this to the int64/int128 assembly path that writes res_lo/res_hi (the f64
-  //       transcendental SUM -- sum(sqrt(x)) etc. -- returns DOUBLE, ret_is_int128=0,
+  //       transcendental SUM, sum(sqrt(x)) etc. returns DOUBLE, ret_is_int128=0,
   //       so it declines: that path is NVIDIA-only and unvalidated for nullable);
   //       (b) it EXCLUDES AVG: DuckDB rewrites a nullable avg(x) into a `sum`
   //       aggregate (kind_tag == AGG_SUM!) with a DOUBLE output column + a division

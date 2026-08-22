@@ -24,9 +24,10 @@ Run (on frederick, after the COPY produces /tmp/lext_scaled.bin):
         extensions/mojo-gpu-operator/bench/transcendental_scale_probe.mojo
 """
 
-from std.gpu import block_idx, thread_idx, barrier
-from std.gpu.host import DeviceContext
-from std.gpu.memory import AddressSpace
+from std.gpu import block_idx, thread_idx
+from max.gpu.sync import barrier
+from max.gpu.host import DeviceContext
+from max.gpu.memory import AddressSpace
 from std.memory import alloc, stack_allocation
 from std.math import sqrt, log, abs
 from std.sys import has_accelerator

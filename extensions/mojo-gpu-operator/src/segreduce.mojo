@@ -59,10 +59,10 @@ row-major as result[g * M + m]. For UNGROUPED n_out_groups == 1; for DENSE_GROUP
 n_out_groups == G; for SORT_SEGREDUCE n_out_groups == n_seg.
 """
 
-from std.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim, barrier
+from std.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim
 from std.gpu.primitives import warp
-from std.gpu.memory import AddressSpace
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.memory import AddressSpace
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc, stack_allocation
 from std.atomic import Atomic
 from std.os import abort, getenv
@@ -94,6 +94,7 @@ from raw_plan_tags import (
     CMP_GT,
     CMP_GE,
 )
+from max.gpu.sync import barrier
 from expr_vm import eval_program, eval_program_f64, _col_at
 
 comptime SEG_NBLOCKS = 4096  # one warp per block (matches the existing kernels)
@@ -114,13 +115,13 @@ comptime SEG_MAX_METRICS = 8  # per-lane accumulator cap for the grid kernels
 def _row_passes[
     USE_COLPTR: Bool = False
 ](
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Bool:
     # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
     # eval_program[USE_COLPTR] reads the SAME values through it. Default False =
@@ -156,13 +157,13 @@ def _row_passes[
 def eval_program_fast[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Int64:
     """Stackless evaluator for the fixed expression shapes the GPU kinds emit.
 
@@ -187,13 +188,13 @@ def eval_program_fast[
     # Column reads route through `_col_at[USE_COLPTR]` (packed or pointer-table).
     @always_inline
     def _operand(
-        prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
         k: Int,
-        cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
         n_rows: Int,
         row: Int,
-        dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-        dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+        dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+        dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     ) -> Int64:
         var op = prog[3 * k + 0]
         var a = prog[3 * k + 1]
@@ -266,13 +267,13 @@ def eval_program_fast[
 
 @always_inline
 def _row_passes_fast(
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Bool:
     if pass_len == 0:
         return True
@@ -288,18 +289,21 @@ def _row_passes_fast(
 # 1-op pass column; the single metric is the fast-path expression. Identical lane
 # striding / warp.sum / partial layout to seg_ungrouped_kernel.
 def seg_ungrouped_kernel_q6(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
@@ -346,19 +350,19 @@ def seg_ungrouped_kernel_q6(
 def seg_ungrouped_kernel_f64[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     # PREDICATE-INDEPENDENT (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): the general
     # in-kernel fact-range filter, evaluated per row from `fpred` launch params
     # (n_fpred (slot,cmp,bound) triples) instead of a host-baked pass column --
@@ -370,9 +374,13 @@ def seg_ungrouped_kernel_f64[
     # agnostic; the metric eval stays float64. The resident columns are the FULL
     # unfiltered table (the materialize SQL has no WHERE), so DIFFERENT bound sets
     # reuse the same residency -> warm-across-constants.
-    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_fpred: Int,
+    fpred: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_fpred_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var n_fpred = Int(n_fpred_dp)
     # NVIDIA-only: Metal has no kernel-side f64 (and no f64 global atomics). The
     # host never routes a transcendental aggregate to Apple (the descriptor only
     # accepts the float path under GPU_OP_TRANSCENDENTAL, which is itself a
@@ -449,29 +457,34 @@ def seg_ungrouped_kernel_f64[
 def seg_dense_kernel_f64[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     # Per-group passing-row count (G doubles). The dense gid is built over ALL
     # materialized rows (the materialize SQL has no WHERE; the filter is the
     # in-kernel pass program), so a group can exist in the gid map yet have ZERO
     # passing rows. A stock GROUP BY emits a group only if it has >=1 passing row,
     # so the host gates emit on gcount[g] > 0. (G*M sums alone can't distinguish a
     # genuine 0 sum from "no rows" for sign-bearing metrics like sin/cos.)
-    gcount: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    gcount: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     comptime if is_nvidia_gpu():
         # Shared reduction buffer: WARP lanes x (G*M <= SEG_MAX_METRICS^2). 16KB.
         var smem = stack_allocation[
@@ -557,25 +570,30 @@ def seg_dense_kernel_f64[
 def seg_dense_kernel_f64_global[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    fpartials: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    fpartials: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     # Per-group passing-row count (G doubles) -- same emit-gate semantics as
     # seg_dense_kernel_f64: a group with 0 passing rows is not emitted by the host.
-    gcount: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    gcount: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     comptime if is_nvidia_gpu():
         var stride = grid_dim.x * block_dim.x
         var i = Int(global_idx.x)
@@ -619,23 +637,28 @@ def seg_dense_kernel_f64_global[
 def seg_hash_kernel_f64[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gk_slot: Int,
-    cap: Int,  # hash table capacity (power of two)
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    slot_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    slot_facc: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gk_slot_dp: Int64,
+    cap_dp: Int64,  # hash table capacity (power of two)
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    slot_key: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    slot_facc: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gk_slot = Int(gk_slot_dp)
+    var cap = Int(cap_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     comptime if is_nvidia_gpu():
         var i = Int(global_idx.x)
         var grid = Int(block_dim.x) * Int(grid_dim.x)
@@ -695,24 +718,29 @@ def seg_hash_kernel_f64[
 def seg_ungrouped_kernel_q6_pred[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ship_slot: Int,
-    disc_slot: Int,
-    qty_slot: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    ship_slot_dp: Int64,
+    disc_slot_dp: Int64,
+    qty_slot_dp: Int64,
     ship_lo: Int64,
     ship_hi: Int64,
     disc_lo: Int64,
     disc_hi: Int64,
     qty_hi: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var M = Int(M_dp)
+    var ship_slot = Int(ship_slot_dp)
+    var disc_slot = Int(disc_slot_dp)
+    var qty_slot = Int(qty_slot_dp)
     # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
     # _col_at[USE_COLPTR] / eval_program_fast[USE_COLPTR] read the SAME values
     # through it. Packed (False) reads the packed buffer. Bit-exact either way.
@@ -765,10 +793,10 @@ def seg_ungrouped_kernel_q6_pred[
 def _fpred_pass_dev[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    fpred: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_fpred: Int,
 ) -> Bool:
     # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
@@ -814,20 +842,25 @@ def _fpred_pass_dev[
 def seg_dense_kernel_q1_pred[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_fpred: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    fpred: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_fpred_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
+    var n_fpred = Int(n_fpred_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -860,18 +893,21 @@ def seg_dense_kernel_q1_pred[
 def seg_ungrouped_kernel_q14_pred[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    fpred: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_fpred: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    fpred: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_fpred_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var M = Int(M_dp)
+    var n_fpred = Int(n_fpred_dp)
     # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
     # the filter (_fpred_pass_dev) + metric (eval_program_fast) read columns
     # through it. The FK-gather dim arrays (`dims`) stay a separate buffer.
@@ -899,18 +935,21 @@ def seg_ungrouped_kernel_q14_pred[
 # program and metric programs use OP_LOAD_DIM gathers (handled by the fast path /
 # its fallback). Kept as a distinct symbol for clarity + per-kind dispatch.
 def seg_ungrouped_kernel_q14(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
@@ -937,20 +976,25 @@ def seg_ungrouped_kernel_q14(
 # filter path. Per-lane [G*M] accumulators, partials[(block*G+g)*M+m] layout, and
 # warp.sum reduction are byte-identical to seg_dense_kernel.
 def seg_dense_kernel_q1(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -980,20 +1024,25 @@ def seg_dense_kernel_q1(
 # program uses OP_LOAD_DIM gathers + OP_EQ + OP_MUL (fast-path fallback handles
 # it) and the metric is the fact-only revenue expression.
 def seg_dense_kernel_q5(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -1046,23 +1095,29 @@ def seg_dense_kernel_q5(
 def seg_dense_kernel_q5_pred[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    lok_slot: Int,
-    lsk_slot: Int,
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    lok_slot_dp: Int64,
+    lsk_slot_dp: Int64,
     o_lo: Int64,
     o_hi: Int64,
     asia_region: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
+    var lok_slot = Int(lok_slot_dp)
+    var lsk_slot = Int(lsk_slot_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -1109,18 +1164,21 @@ def seg_dense_kernel_q5_pred[
 # Reproduces q6_kernel for M=1 and a one-group multi-metric q1 shape.
 # ---------------------------------------------------------------------------
 def seg_ungrouped_kernel(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
@@ -1150,20 +1208,25 @@ def seg_ungrouped_kernel(
 # Reproduces q1_kernel.
 # ---------------------------------------------------------------------------
 def seg_dense_kernel(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     var lane = Int(thread_idx.x)
     var stride = SEG_NBLOCKS * WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -1199,18 +1262,21 @@ def seg_dense_kernel(
 # SEG_NBLOCKS blocks), so only the in-block reduction differs.
 # ---------------------------------------------------------------------------
 def seg_ungrouped_kernel_mw(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     var lane = Int(thread_idx.x) % WARP
     var wid = Int(thread_idx.x) // WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS](fill=0)
@@ -1247,20 +1313,25 @@ def seg_ungrouped_kernel_mw(
 
 
 def seg_dense_kernel_mw(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gid_slot: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    G: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gid_slot_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    G_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    partials: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gid_slot = Int(gid_slot_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
+    var G = Int(G_dp)
     var lane = Int(thread_idx.x) % WARP
     var wid = Int(thread_idx.x) // WARP
     var acc = InlineArray[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
@@ -1311,20 +1382,24 @@ def seg_dense_kernel_mw(
 # seg_out[s * M + m]. Reproduces q3_seg_kernel.
 # ---------------------------------------------------------------------------
 def seg_sort_kernel(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    seg_off: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_seg: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    seg_out: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    seg_off: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_seg_dp: Int64,
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    seg_out: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var n_seg = Int(n_seg_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     var s = Int(block_idx.x)
     if s >= n_seg:
         return
@@ -1374,21 +1449,26 @@ def seg_sort_kernel(
 def seg_hash_kernel[
     USE_COLPTR: Bool = False
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    gk_slot: Int,
-    cap: Int,  # hash table capacity (power of two)
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    slot_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    slot_acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    gk_slot_dp: Int64,
+    cap_dp: Int64,  # hash table capacity (power of two)
+    pass_prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    pass_len_dp: Int64,
+    metric_progs: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    M_dp: Int64,
+    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    slot_key: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    slot_acc: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
 ):
+    var n_rows = Int(n_rows_dp)
+    var gk_slot = Int(gk_slot_dp)
+    var cap = Int(cap_dp)
+    var pass_len = Int(pass_len_dp)
+    var M = Int(M_dp)
     # When USE_COLPTR is True, `cols` is the per-column POINTER TABLE (Phase 3);
     # the filter (_row_passes), the fact group-key read (_col_at), and the metric
     # (eval_program) read columns through it -> the SAME int64 values, so the per-
@@ -1485,13 +1565,13 @@ struct SegResident(Movable):
 # ---------------------------------------------------------------------------
 def segreduce_upload(
     ctx: DeviceContext,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_seg: Int,
-    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_dims: Int,
 ) raises -> SegResident:
     # These resident uploads are one-time (the pin-resident design uploads once
@@ -1553,10 +1633,10 @@ def segreduce_upload_from_packed(
     var cols_d: DeviceBuffer[DType.int64],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_seg: Int,
-    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_dims: Int,
 ) raises -> SegResident:
     # ---- packed columns: already assembled on device; NO upload here. ----
@@ -1608,10 +1688,10 @@ def segreduce_upload_from_colptr(
     var derived_bufs: List[DeviceBuffer[DType.int64]],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_seg: Int,
-    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_dims: Int,
 ) raises -> SegResident:
     # ---- FK-join dim arrays (concatenated). Identical to the other uploaders. ----
@@ -1649,12 +1729,12 @@ def segreduce_upload_from_colptr(
 def segreduce_run(
     mut res: SegResident,
     mode: Int64,
-    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     metric_progs_n_ops: Int,
-    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     M: Int,
     gid_slot: Int,
     G: Int,
@@ -1747,13 +1827,12 @@ def segreduce_run(
         # one warp per segment; lane 0 writes per-segment int64 -> host int128
         var out_d = ctx.enqueue_create_buffer[DType.int64](n_seg * M)
         ctx.enqueue_function[seg_sort_kernel](
-            cols_d, n_rows, res.seg_off_d, n_seg,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows), res.seg_off_d, Int64(n_seg),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             out_d,
-            grid_dim=n_seg, block_dim=WARP,
-        )
+            grid_dim=n_seg, block_dim=WARP)
         var out_h = alloc[Int64](n_seg * M)
         var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n_seg * M, owning=False)
         ctx.enqueue_copy(out_h, out_sub)
@@ -1778,25 +1857,23 @@ def segreduce_run(
                 # kernel reads fact cols through it (dims stay a separate buffer).
                 comptime kq5p = seg_dense_kernel_q5_pred[True]
                 ctx.enqueue_function[kq5p](
-                    col_ptrs_d, n_rows, gid_slot,
-                    mp_d, moff_d, mlen_d, M, G,
+                    col_ptrs_d, Int64(n_rows), Int64(gid_slot),
+                    mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                     dims_d, doff_d,
                     part_d,
-                    q5_lok_slot, q5_lsk_slot,
+                    Int64(q5_lok_slot), Int64(q5_lsk_slot),
                     q5_o_lo, q5_o_hi, q5_asia_region,
-                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
-                )
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP)
             else:
                 comptime kq5p0 = seg_dense_kernel_q5_pred[False]
                 ctx.enqueue_function[kq5p0](
-                    cols_d, n_rows, gid_slot,
-                    mp_d, moff_d, mlen_d, M, G,
+                    cols_d, Int64(n_rows), Int64(gid_slot),
+                    mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                     dims_d, doff_d,
                     part_d,
-                    q5_lok_slot, q5_lsk_slot,
+                    Int64(q5_lok_slot), Int64(q5_lsk_slot),
                     q5_o_lo, q5_o_hi, q5_asia_region,
-                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
-                )
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP)
         elif gen_pred_active and kind == KIND_Q1:
             # Phase G Stage 2 (generalized): Q1 in-kernel predicate over resident
             # columns + per-run bounds (no host pass column). Takes priority over
@@ -1807,61 +1884,55 @@ def segreduce_run(
                 # kernel reads columns (incl. the gid slot) through it.
                 comptime kq1p = seg_dense_kernel_q1_pred[True]
                 ctx.enqueue_function[kq1p](
-                    col_ptrs_d, n_rows, gid_slot,
-                    mp_d, moff_d, mlen_d, M, G,
+                    col_ptrs_d, Int64(n_rows), Int64(gid_slot),
+                    mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                     dims_d, doff_d,
                     part_d,
-                    fpred_d, n_fpred,
-                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
-                )
+                    fpred_d, Int64(n_fpred),
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP)
             else:
                 comptime kq1p0 = seg_dense_kernel_q1_pred[False]
                 ctx.enqueue_function[kq1p0](
-                    cols_d, n_rows, gid_slot,
-                    mp_d, moff_d, mlen_d, M, G,
+                    cols_d, Int64(n_rows), Int64(gid_slot),
+                    mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                     dims_d, doff_d,
                     part_d,
-                    fpred_d, n_fpred,
-                    grid_dim=SEG_NBLOCKS, block_dim=WARP,
-                )
+                    fpred_d, Int64(n_fpred),
+                    grid_dim=SEG_NBLOCKS, block_dim=WARP)
         elif use_mw:
             # Multi-warp occupancy variant is unchanged (generic interpreter):
             # the comptime-specialized kernels mirror the 1-warp-block layout.
             ctx.enqueue_function[seg_dense_kernel_mw](
-                cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 dims_d, doff_d,
                 part_d,
-                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
         elif kind == KIND_Q1:
             ctx.enqueue_function[seg_dense_kernel_q1](
-                cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 dims_d, doff_d,
                 part_d,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         elif kind == KIND_Q5:
             ctx.enqueue_function[seg_dense_kernel_q5](
-                cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 dims_d, doff_d,
                 part_d,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         else:
             ctx.enqueue_function[seg_dense_kernel](
-                cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 dims_d, doff_d,
                 part_d,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         var part_h = alloc[Int64](npart)
         var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
         ctx.enqueue_copy(part_h, part_sub)
@@ -1889,25 +1960,23 @@ def segreduce_run(
             # kernel reads columns through it (no packed cols_d at all).
             comptime kq6p = seg_ungrouped_kernel_q6_pred[True]
             ctx.enqueue_function[kq6p](
-                col_ptrs_d, n_rows,
-                mp_d, moff_d, mlen_d, M,
+                col_ptrs_d, Int64(n_rows),
+                mp_d, moff_d, mlen_d, Int64(M),
                 dims_d, doff_d,
                 part_d,
-                q6_ship_slot, q6_disc_slot, q6_qty_slot,
+                Int64(q6_ship_slot), Int64(q6_disc_slot), Int64(q6_qty_slot),
                 q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         else:
             comptime kq6p0 = seg_ungrouped_kernel_q6_pred[False]
             ctx.enqueue_function[kq6p0](
-                cols_d, n_rows,
-                mp_d, moff_d, mlen_d, M,
+                cols_d, Int64(n_rows),
+                mp_d, moff_d, mlen_d, Int64(M),
                 dims_d, doff_d,
                 part_d,
-                q6_ship_slot, q6_disc_slot, q6_qty_slot,
+                Int64(q6_ship_slot), Int64(q6_disc_slot), Int64(q6_qty_slot),
                 q6_ship_lo, q6_ship_hi, q6_disc_lo, q6_disc_hi, q6_qty_hi,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
     elif gen_pred_active and kind == KIND_Q14:
         # Phase G Stage 2 (generalized): Q14 in-kernel predicate over resident
         # columns + per-run bounds (no host pass column). Takes priority over
@@ -1918,60 +1987,54 @@ def segreduce_run(
             # Phase 3: pass the per-column POINTER TABLE as `cols`; dims stay separate.
             comptime kq14p = seg_ungrouped_kernel_q14_pred[True]
             ctx.enqueue_function[kq14p](
-                col_ptrs_d, n_rows,
-                mp_d, moff_d, mlen_d, M,
+                col_ptrs_d, Int64(n_rows),
+                mp_d, moff_d, mlen_d, Int64(M),
                 dims_d, doff_d,
                 part_d,
-                fpred_d, n_fpred,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                fpred_d, Int64(n_fpred),
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         else:
             comptime kq14p0 = seg_ungrouped_kernel_q14_pred[False]
             ctx.enqueue_function[kq14p0](
-                cols_d, n_rows,
-                mp_d, moff_d, mlen_d, M,
+                cols_d, Int64(n_rows),
+                mp_d, moff_d, mlen_d, Int64(M),
                 dims_d, doff_d,
                 part_d,
-                fpred_d, n_fpred,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                fpred_d, Int64(n_fpred),
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
     elif use_mw:
         # Multi-warp occupancy variant is unchanged (generic interpreter).
         ctx.enqueue_function[seg_ungrouped_kernel_mw](
-            cols_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             part_d,
-            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-        )
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
     elif kind == KIND_Q6:
         ctx.enqueue_function[seg_ungrouped_kernel_q6](
-            cols_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             part_d,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+            grid_dim=SEG_NBLOCKS, block_dim=WARP)
     elif kind == KIND_Q14:
         ctx.enqueue_function[seg_ungrouped_kernel_q14](
-            cols_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             part_d,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+            grid_dim=SEG_NBLOCKS, block_dim=WARP)
     else:
         ctx.enqueue_function[seg_ungrouped_kernel](
-            cols_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             part_d,
-            grid_dim=SEG_NBLOCKS, block_dim=WARP,
-        )
+            grid_dim=SEG_NBLOCKS, block_dim=WARP)
     var part_h = alloc[Int64](npart)
     var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
     ctx.enqueue_copy(part_h, part_sub)
@@ -2002,16 +2065,16 @@ def segreduce_run(
 # ---------------------------------------------------------------------------
 def segreduce_run_f64(
     mut res: SegResident,
-    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     metric_progs_n_ops: Int,
-    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     M: Int,
-    col_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    col_div_host: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     n_slots: Int,
-    const_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div_host: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     # GROUPED transcendental (GPU_OP_TRANSCENDENTAL): mode==STRAT_DENSE_GROUP routes
     # to the float64 DENSE accumulator (G*M float64 globals, gid read from
     # `gid_slot`) and returns G*M doubles laid out result[g*M+m]. The default
@@ -2104,25 +2167,23 @@ def segreduce_run_f64(
         if use_colptr:
             comptime kfg = seg_dense_kernel_f64_global[True]
             ctx.enqueue_function[kfg](
-                col_ptrs_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                col_ptrs_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 cdiv_d, kdiv_d,
                 dims_d, doff_d,
                 fpart_d, gcnt_d,
-                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
         else:
             comptime kfg0 = seg_dense_kernel_f64_global[False]
             ctx.enqueue_function[kfg0](
-                res.cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                res.cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 cdiv_d, kdiv_d,
                 dims_d, doff_d,
                 fpart_d, gcnt_d,
-                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
     elif mode == STRAT_DENSE_GROUP:
         # ONE warp per block (block_dim=WARP): the f64 dense kernel reduces G*M
         # accumulators in shared mem over the WARP lanes; a 128-thread block would
@@ -2130,49 +2191,45 @@ def segreduce_run_f64(
         if use_colptr:
             comptime kfd = seg_dense_kernel_f64[True]
             ctx.enqueue_function[kfd](
-                col_ptrs_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                col_ptrs_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 cdiv_d, kdiv_d,
                 dims_d, doff_d,
                 fpart_d, gcnt_d,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
         else:
             comptime kfd0 = seg_dense_kernel_f64[False]
             ctx.enqueue_function[kfd0](
-                res.cols_d, n_rows, gid_slot,
-                pass_d, pass_len,
-                mp_d, moff_d, mlen_d, M, G,
+                res.cols_d, Int64(n_rows), Int64(gid_slot),
+                pass_d, Int64(pass_len),
+                mp_d, moff_d, mlen_d, Int64(M), Int64(G),
                 cdiv_d, kdiv_d,
                 dims_d, doff_d,
                 fpart_d, gcnt_d,
-                grid_dim=SEG_NBLOCKS, block_dim=WARP,
-            )
+                grid_dim=SEG_NBLOCKS, block_dim=WARP)
     elif use_colptr:
         comptime kf = seg_ungrouped_kernel_f64[True]
         ctx.enqueue_function[kf](
-            col_ptrs_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            col_ptrs_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             fpart_d,
-            fpred_d, n_fpred,
-            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-        )
+            fpred_d, Int64(n_fpred),
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
     else:
         comptime kf0 = seg_ungrouped_kernel_f64[False]
         ctx.enqueue_function[kf0](
-            res.cols_d, n_rows,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            res.cols_d, Int64(n_rows),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             fpart_d,
-            fpred_d, n_fpred,
-            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
-        )
+            fpred_d, Int64(n_fpred),
+            grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
     var fpart_h = alloc[Float64](nout)
     var fpart_sub = DeviceBuffer(ctx, fpart_d.unsafe_ptr(), nout, owning=False)
     ctx.enqueue_copy(fpart_h, fpart_sub)
@@ -2227,12 +2284,12 @@ def segreduce_run_hash(
     mut res: SegResident,
     gk_slot: Int,
     cap: Int,
-    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     metric_progs_n_ops: Int,
-    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     M: Int,
 ) raises -> HashGroupResult:
     var ctx = res.ctx
@@ -2285,23 +2342,21 @@ def segreduce_run_hash(
         # reads columns (incl. the fact group key) through it. dims stay separate.
         comptime khash = seg_hash_kernel[True]
         ctx.enqueue_function[khash](
-            col_ptrs_d, n_rows, gk_slot, cap,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            col_ptrs_d, Int64(n_rows), Int64(gk_slot), Int64(cap),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             slot_key_d, slot_acc_d,
-            grid_dim=nblocks, block_dim=HASH_BLOCK,
-        )
+            grid_dim=nblocks, block_dim=HASH_BLOCK)
     else:
         comptime khash0 = seg_hash_kernel[False]
         ctx.enqueue_function[khash0](
-            cols_d, n_rows, gk_slot, cap,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows), Int64(gk_slot), Int64(cap),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             dims_d, doff_d,
             slot_key_d, slot_acc_d,
-            grid_dim=nblocks, block_dim=HASH_BLOCK,
-        )
+            grid_dim=nblocks, block_dim=HASH_BLOCK)
 
     # ---- read back occupied slots, widen int64 -> int128 on the host ----
     var key_h = alloc[Int64](cap)
@@ -2348,16 +2403,16 @@ def segreduce_run_hash_f64(
     mut res: SegResident,
     gk_slot: Int,
     cap: Int,
-    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     metric_progs_n_ops: Int,
-    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     M: Int,
-    col_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    col_div_host: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
     n_slots: Int,
-    const_div_host: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    const_div_host: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
 ) raises -> HashGroupResultF64:
     var ctx = res.ctx
     var cols_d = res.cols_d
@@ -2408,25 +2463,23 @@ def segreduce_run_hash_f64(
     if use_colptr:
         comptime khash = seg_hash_kernel_f64[True]
         ctx.enqueue_function[khash](
-            col_ptrs_d, n_rows, gk_slot, cap,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            col_ptrs_d, Int64(n_rows), Int64(gk_slot), Int64(cap),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             slot_key_d, slot_facc_d,
-            grid_dim=nblocks, block_dim=HASH_BLOCK,
-        )
+            grid_dim=nblocks, block_dim=HASH_BLOCK)
     else:
         comptime khash0 = seg_hash_kernel_f64[False]
         ctx.enqueue_function[khash0](
-            cols_d, n_rows, gk_slot, cap,
-            pass_d, pass_len,
-            mp_d, moff_d, mlen_d, M,
+            cols_d, Int64(n_rows), Int64(gk_slot), Int64(cap),
+            pass_d, Int64(pass_len),
+            mp_d, moff_d, mlen_d, Int64(M),
             cdiv_d, kdiv_d,
             dims_d, doff_d,
             slot_key_d, slot_facc_d,
-            grid_dim=nblocks, block_dim=HASH_BLOCK,
-        )
+            grid_dim=nblocks, block_dim=HASH_BLOCK)
 
     var key_h = alloc[Int64](cap)
     var acc_h = alloc[Float64](cap * M)
@@ -2482,21 +2535,21 @@ def run_segreduce(
     ctx: DeviceContext,
     mode: Int64,
     n_rows: Int,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_cols: Int,
-    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     pass_len: Int,
-    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     metric_progs_n_ops: Int,
-    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    metric_lens_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     M: Int,
     gid_slot: Int,
     G: Int,
-    seg_off_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    seg_off_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_seg: Int,
-    dims_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_dims: Int,
 ) raises -> List[Int128]:
     var res = segreduce_upload(

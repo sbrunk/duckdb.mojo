@@ -4,11 +4,11 @@
 
 [Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
 
-duckdb.mojo can be used in two ways:
+duckdb.mojo can be used in multiple ways:
 
-1. **Client API**: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. **Extension development**: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
-3. **Accelerate DuckDB**: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
+1. Client API: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
+2. Extension development: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
+3. Accelerate DuckDB: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
@@ -223,8 +223,8 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.4/src/include/duckdb_extension.h)
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb/main/capi/header_generation/README.md)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb_extension.h)
 instead of relying on dynamic symbol lookup. The struct is split into a
 **stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
 for the full design):
@@ -341,7 +341,7 @@ clang++ -std=c++17 -O2 -fPIC -shared -undefined dynamic_lookup \
 # 3. Append the footer. CPP is version-locked, so the version field is the DuckDB
 #    version (not the C API version).
 python3 scripts/append_extension_metadata.py myext.duckdb_extension \
-    --abi-type CPP --duckdb-version v1.5.4
+    --abi-type CPP --duckdb-version v1.5.5
 ```
 
 Caveats specific to the CPP ABI:

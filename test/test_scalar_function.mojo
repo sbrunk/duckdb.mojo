@@ -11,7 +11,7 @@ from std import math
 # Helper UDF implementations (using high-level API)
 # ===--------------------------------------------------------------------===#
 
-def add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
+def add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds 1 to the input."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -22,7 +22,7 @@ def add_one(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = in_data[i] + 1
 
 
-def multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
+def multiply_two(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that multiplies input by 2."""
     var size = len(input)
     var in_vec = input.get_vector(0)
@@ -33,7 +33,7 @@ def multiply_two(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = in_data[i] * 2.0
 
 
-def binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds two integers."""
     var size = len(input)
     var vec_a = input.get_vector(0)
@@ -46,7 +46,7 @@ def binary_add(info: FunctionInfo, mut input: Chunk, output: Vector):
         out_data[i] = a_data[i] + b_data[i]
 
 
-def binary_add_float(info: FunctionInfo, mut input: Chunk, output: Vector):
+def binary_add_float(info: FunctionInfo, mut input: Chunk, mut output: Vector):
     """UDF that adds two floats."""
     var size = len(input)
     var vec_a = input.get_vector(0)
@@ -731,21 +731,21 @@ def test_from_function_on_table() raises:
 # ===--------------------------------------------------------------------===#
 
 # SIMD-vectorized functions (operate on SIMD[dt, width] vectors)
-def simd_add_one[width: Int](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+def simd_add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
     return x + 1
 
 
-def simd_double[width: Int](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
+def simd_double[width: SIMDLength](x: SIMD[DType.float32, width]) -> SIMD[DType.float32, width]:
     return x * 2.0
 
 
-def simd_add[width: Int](
+def simd_add[width: SIMDLength](
     a: SIMD[DType.int32, width], b: SIMD[DType.int32, width]
 ) -> SIMD[DType.int32, width]:
     return a + b
 
 
-def simd_add_f64[width: Int](
+def simd_add_f64[width: SIMDLength](
     a: SIMD[DType.float64, width], b: SIMD[DType.float64, width]
 ) -> SIMD[DType.float64, width]:
     return a + b

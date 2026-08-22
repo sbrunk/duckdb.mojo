@@ -19,11 +19,11 @@ The compute core is the proven warp kernel from
 `benchmark/gpu_table_function_poc.mojo`, with K promoted to a runtime argument.
 """
 
-from std.gpu import block_idx, thread_idx, barrier
+from std.gpu import block_idx, thread_idx
 from std.gpu.primitives import warp
-from std.gpu.memory import AddressSpace
+from max.gpu.memory import AddressSpace
 from gpu_platform import WARP
-from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
 from std.io import FileDescriptor
 from std.os import abort, getenv
@@ -32,10 +32,11 @@ from std.sys.info import (
     has_apple_gpu_accelerator,
     num_logical_cores,
 )
+from max.gpu.sync import barrier
 from std.math import sqrt, ceildiv, nan
 from std.memory import alloc, memcpy, stack_allocation
 from std.time import perf_counter_ns
-from std.algorithm import parallelize
+from max.algorithm import parallelize
 
 from tc_knn import run_tc_knn_batch, tc_knn_supported
 from tc_knn_apple import run_tc_knn_apple_batch, tc_knn_apple_supported
@@ -205,13 +206,15 @@ def mojo_gpu_ctx_init() abi("C"):
 # Kernel: one warp (32 lanes) per row; lane-strided dot/norm, warp.sum, no barriers.
 # ---------------------------------------------------------------------------
 def cosine_kernel_warp(
-    emb: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    q: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    res: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
+    emb: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    q: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    res: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
     qnorm: Float32,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
     var row = Int(block_idx.x)
     if row >= n_rows:
         return
@@ -243,13 +246,15 @@ def cosine_kernel_warp(
 # accuracy for unit-normalized embeddings while halving the bandwidth-bound read.
 # ---------------------------------------------------------------------------
 def cosine_kernel_warp_f16(
-    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    q: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    res: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
+    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    q: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    res: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
     qnorm: Float32,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
     var row = Int(block_idx.x)
     if row >= n_rows:
         return
@@ -310,7 +315,7 @@ struct CosineState(Movable):
 # non-nullable, and an Int return is ABI-compatible with the C++ `void*`.
 @export("mojo_gpu_cosine_init")
 def mojo_gpu_cosine_init(
-    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    q: UnsafePointer[Float32, ImmUntrackedOrigin],
     K: Int,
     capacity_rows: Int,
 ) abi("C") -> Int:
@@ -345,10 +350,10 @@ def mojo_gpu_cosine_init(
 
 @export("mojo_gpu_cosine_run")
 def mojo_gpu_cosine_run(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    emb: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
-    out_ptr: UnsafePointer[Float32, MutAnyOrigin],
+    out_ptr: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
@@ -370,12 +375,11 @@ def mojo_gpu_cosine_run(
             st.in_buf,
             st.q_buf,
             st.out_buf,
-            n_rows,
-            st.K,
+            Int64(n_rows),
+            Int64(st.K),
             st.qnorm,
             grid_dim=n_rows,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         var out_sub = DeviceBuffer(
             st.ctx, st.out_buf.unsafe_ptr(), n_rows, owning=False
         )
@@ -388,7 +392,7 @@ def mojo_gpu_cosine_run(
 
 @export("mojo_gpu_cosine_free")
 def mojo_gpu_cosine_free(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C"):
     if Int(handle) == 0:
         return
@@ -415,8 +419,8 @@ struct PinState(Movable):
     # the largest k we support (TOPK_MAX) => cand_cap candidates.
     var cand_dist_dev: DeviceBuffer[DType.float32]
     var cand_id_dev: DeviceBuffer[DType.int64]
-    var cand_dist_h: UnsafePointer[Float32, MutAnyOrigin]
-    var cand_id_h: UnsafePointer[Int64, MutAnyOrigin]
+    var cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin]
+    var cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin]
     var cand_cap: Int  # capacity of the candidate buffers (>= nblocks*k)
     var n_rows: Int
     var K: Int
@@ -429,8 +433,8 @@ struct PinState(Movable):
         var out_dev: DeviceBuffer[DType.float32],
         var cand_dist_dev: DeviceBuffer[DType.float32],
         var cand_id_dev: DeviceBuffer[DType.int64],
-        cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
-        cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+        cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
+        cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
         cand_cap: Int,
         n_rows: Int,
         K: Int,
@@ -452,7 +456,7 @@ struct PinState(Movable):
 # Returns the handle as an integer address (0 == failure).
 @export("mojo_gpu_pin")
 def mojo_gpu_pin(
-    emb: UnsafePointer[Float32, ImmutAnyOrigin],
+    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
     K: Int,
 ) abi("C") -> Int:
@@ -502,9 +506,9 @@ def mojo_gpu_pin(
 # resident rows, copy the n_rows distances back into out_ptr.
 @export("mojo_gpu_pin_query")
 def mojo_gpu_pin_query(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    q: UnsafePointer[Float32, ImmutAnyOrigin],
-    out_ptr: UnsafePointer[Float32, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    q: UnsafePointer[Float32, ImmUntrackedOrigin],
+    out_ptr: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
@@ -520,12 +524,11 @@ def mojo_gpu_pin_query(
             st.emb_dev,
             st.q_dev,
             st.out_dev,
-            st.n_rows,
-            st.K,
+            Int64(st.n_rows),
+            Int64(st.K),
             qnorm,
             grid_dim=st.n_rows,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         st.ctx.enqueue_copy(out_ptr, st.out_dev)
         st.ctx.synchronize()
         return 0
@@ -534,7 +537,7 @@ def mojo_gpu_pin_query(
 
 
 @export("mojo_gpu_pin_free")
-def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
+def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi("C"):
     if Int(handle) == 0:
         return
     var p = handle.bitcast[PinState]()
@@ -653,8 +656,8 @@ struct PinStateF16(Movable):
     var out_dev: DeviceBuffer[DType.float32]  # resident dist scratch: n_rows
     var cand_dist_dev: DeviceBuffer[DType.float32]
     var cand_id_dev: DeviceBuffer[DType.int64]
-    var cand_dist_h: UnsafePointer[Float32, MutAnyOrigin]
-    var cand_id_h: UnsafePointer[Int64, MutAnyOrigin]
+    var cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin]
+    var cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin]
     var cand_cap: Int
     var n_rows: Int
     var K: Int
@@ -667,8 +670,8 @@ struct PinStateF16(Movable):
         var out_dev: DeviceBuffer[DType.float32],
         var cand_dist_dev: DeviceBuffer[DType.float32],
         var cand_id_dev: DeviceBuffer[DType.int64],
-        cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
-        cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+        cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
+        cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
         cand_cap: Int,
         n_rows: Int,
         K: Int,
@@ -691,7 +694,7 @@ struct PinStateF16(Movable):
 # Returns the handle as an integer address (0 == failure).
 @export("mojo_gpu_pin_f16")
 def mojo_gpu_pin_f16(
-    emb: UnsafePointer[Float32, ImmutAnyOrigin],
+    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
     K: Int,
 ) abi("C") -> Int:
@@ -747,11 +750,11 @@ def mojo_gpu_pin_f16(
 # the distance kernel reads halves and casts to fp32 (math stays fp32).
 @export("mojo_gpu_pin_query_topk_f16")
 def mojo_gpu_pin_query_topk_f16(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    q: UnsafePointer[Float32, ImmUntrackedOrigin],
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
@@ -780,22 +783,20 @@ def mojo_gpu_pin_query_topk_f16(
             st.emb_dev,
             st.q_dev,
             st.out_dev,
-            st.n_rows,
-            st.K,
+            Int64(st.n_rows),
+            Int64(st.K),
             qnorm,
             grid_dim=st.n_rows,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         st.ctx.enqueue_function[topk_partial_kernel](
             st.out_dev,
             cand_dist_dev,
             cand_id_dev,
-            st.n_rows,
-            k,
-            nblocks,
+            Int64(st.n_rows),
+            Int64(k),
+            Int64(nblocks),
             grid_dim=nblocks,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
         st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
         st.ctx.synchronize()
@@ -810,7 +811,7 @@ def mojo_gpu_pin_query_topk_f16(
 
 @export("mojo_gpu_pin_free_f16")
 def mojo_gpu_pin_free_f16(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C"):
     if Int(handle) == 0:
         return
@@ -863,13 +864,16 @@ comptime TOPK_MAX = 1024
 # stays consistent without atomics. The expensive cosine math already ran in
 # kernel A; this is a cheap scan over N float distances.
 def topk_partial_kernel(
-    dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    k: Int,
-    nblocks: Int,
+    dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    k_dp: Int64,
+    nblocks_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var k = Int(k_dp)
+    var nblocks = Int(nblocks_dp)
     # Raw-pointer shared memory (std.memory.stack_allocation) — avoids a dependency
     # on the `layout` package (TileTensor), which isn't installed in every Mojo env.
     var sd = stack_allocation[
@@ -994,11 +998,11 @@ def _topk_nblocks_batch(n_rows: Int) -> Int:
 # stays resident. Returns the k smallest into out_ids/out_dists (ascending).
 @export("mojo_gpu_pin_query_topk")
 def mojo_gpu_pin_query_topk(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    q: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    q: UnsafePointer[Float32, ImmUntrackedOrigin],
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
@@ -1032,22 +1036,20 @@ def mojo_gpu_pin_query_topk(
             st.emb_dev,
             st.q_dev,
             st.out_dev,
-            st.n_rows,
-            st.K,
+            Int64(st.n_rows),
+            Int64(st.K),
             qnorm,
             grid_dim=st.n_rows,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         st.ctx.enqueue_function[topk_partial_kernel](
             st.out_dev,
             cand_dist_dev,
             cand_id_dev,
-            st.n_rows,
-            k,
-            nblocks,
+            Int64(st.n_rows),
+            Int64(k),
+            Int64(nblocks),
             grid_dim=nblocks,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         st.ctx.enqueue_copy(st.cand_dist_h, cand_dist_dev)
         st.ctx.enqueue_copy(st.cand_id_h, cand_id_dev)
         st.ctx.synchronize()
@@ -1114,18 +1116,24 @@ comptime BATCH_MAX_LANE_DIMS = 64
 # the tile. `qnorms` holds all M precomputed query norms. Candidates are written
 # row-major [block*qcount*k + local_q*k + slot] into cand_dist/cand_id.
 def topk_batch_kernel(
-    emb: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    qs: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    qnorms: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
-    q0: Int,
-    qcount: Int,
-    k: Int,
-    nblocks: Int,
+    emb: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qs: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qnorms: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
+    q0_dp: Int64,
+    qcount_dp: Int64,
+    k_dp: Int64,
+    nblocks_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
+    var q0 = Int(q0_dp)
+    var qcount = Int(qcount_dp)
+    var k = Int(k_dp)
+    var nblocks = Int(nblocks_dp)
     # Per-block per-query shared top-k: sd/si laid out [local_q*k + slot], kept
     # ascending by (dist, rowid). scnt[local_q] is the current fill for query q.
     var sd = stack_allocation[
@@ -1240,18 +1248,24 @@ def topk_batch_kernel(
 # each element cast to fp32 before any arithmetic (math stays fp32). Identical
 # tiling, tie-break and amortization to the fp32 kernel above.
 def topk_batch_kernel_f16(
-    emb: UnsafePointer[Scalar[DType.float16], MutAnyOrigin],
-    qs: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    qnorms: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    n_rows: Int,
-    K: Int,
-    q0: Int,
-    qcount: Int,
-    k: Int,
-    nblocks: Int,
+    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
+    qs: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qnorms: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    n_rows_dp: Int64,
+    K_dp: Int64,
+    q0_dp: Int64,
+    qcount_dp: Int64,
+    k_dp: Int64,
+    nblocks_dp: Int64,
 ):
+    var n_rows = Int(n_rows_dp)
+    var K = Int(K_dp)
+    var q0 = Int(q0_dp)
+    var qcount = Int(qcount_dp)
+    var k = Int(k_dp)
+    var nblocks = Int(nblocks_dp)
     var sd = stack_allocation[
         TOPK_BATCH_CAND_CAP,
         Scalar[DType.float32],
@@ -1356,14 +1370,17 @@ def topk_batch_kernel_f16(
 # k candidates live at cand[(b*qcount + lq)*k + j]. The merged final k for query
 # lq are written to out[lq*k + j].
 def topk_batch_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    qcount: Int,
-    nblocks: Int,
-    k: Int,
+    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    qcount_dp: Int64,
+    nblocks_dp: Int64,
+    k_dp: Int64,
 ):
+    var qcount = Int(qcount_dp)
+    var nblocks = Int(nblocks_dp)
+    var k = Int(k_dp)
     var sd = stack_allocation[
         TOPK_MAX, Scalar[DType.float32], address_space = AddressSpace.SHARED
     ]()
@@ -1464,12 +1481,12 @@ def _run_topk_batch[
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
     # `metric` (0=cosine, 1=L2, 2=inner-product; see tc_knn.TC_METRIC_*). Only
     # the FUSED tensor-core path below honors non-cosine metrics; the scalar
@@ -1555,7 +1572,7 @@ def _run_topk_batch[
     var merged_id_h = alloc[Int64](qtile * k)
     ctx.synchronize()
     ctx.enqueue_copy(qs_dev, qs)
-    var qnorm_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var qnorm_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qnorms_h)
     )
     ctx.enqueue_copy(qnorm_dev, qnorm_imm)
@@ -1588,15 +1605,14 @@ def _run_topk_batch[
                 qnorm_dev,
                 cd_view,
                 cid_view,
-                n_rows,
-                K,
-                q0,
-                qcount,
-                k,
-                nblocks,
+                Int64(n_rows),
+                Int64(K),
+                Int64(q0),
+                Int64(qcount),
+                Int64(k),
+                Int64(nblocks),
                 grid_dim=nblocks,
-                block_dim=WARP,
-            )
+                block_dim=WARP)
         else:
             ctx.enqueue_function[topk_batch_kernel](
                 emb32,
@@ -1604,27 +1620,25 @@ def _run_topk_batch[
                 qnorm_dev,
                 cd_view,
                 cid_view,
-                n_rows,
-                K,
-                q0,
-                qcount,
-                k,
-                nblocks,
+                Int64(n_rows),
+                Int64(K),
+                Int64(q0),
+                Int64(qcount),
+                Int64(k),
+                Int64(nblocks),
                 grid_dim=nblocks,
-                block_dim=WARP,
-            )
+                block_dim=WARP)
         # Stage 2 (GPU): merge each query's nblocks*k candidates to the final k.
         ctx.enqueue_function[topk_batch_merge_kernel](
             cd_view,
             cid_view,
             md_view,
             mid_view,
-            qcount,
-            nblocks,
-            k,
+            Int64(qcount),
+            Int64(nblocks),
+            Int64(k),
             grid_dim=qcount,
-            block_dim=WARP,
-        )
+            block_dim=WARP)
         ctx.enqueue_copy(merged_dist_h, md_view)
         ctx.enqueue_copy(merged_id_h, mid_view)
         ctx.synchronize()
@@ -1650,12 +1664,12 @@ def _run_topk_batch[
 # sharply with M. Returns the SAME exact (ids, dists) as M single-query calls.
 @export("mojo_gpu_pin_query_topk_batch")
 def mojo_gpu_pin_query_topk_batch(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
@@ -1693,13 +1707,13 @@ def mojo_gpu_pin_query_topk_batch(
 # tensor-core path (see _run_topk_batch); otherwise it returns a nonzero rc so
 # the C++ caller falls back to stock DuckDB.
 def _pin_query_topk_batch_f16_impl(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) -> Int32:
     if Int(handle) == 0:
         return 1
@@ -1732,12 +1746,12 @@ def _pin_query_topk_batch_f16_impl(
 
 @export("mojo_gpu_pin_query_topk_batch_f16")
 def mojo_gpu_pin_query_topk_batch_f16(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     # Unchanged signature/behavior: cosine (metric 0).
     return _pin_query_topk_batch_f16_impl(
@@ -1752,13 +1766,13 @@ def mojo_gpu_pin_query_topk_batch_f16(
 # supported K/k); a nonzero rc signals the C++ caller to fall back to DuckDB.
 @export("mojo_gpu_pin_query_topk_batch_f16_metric")
 def mojo_gpu_pin_query_topk_batch_f16_metric(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     return _pin_query_topk_batch_f16_impl(
         handle, qs, M, k, metric, out_ids, out_dists
@@ -1769,12 +1783,12 @@ def mojo_gpu_pin_query_topk_batch_f16_metric(
 # `ncand` candidates produced by the partial kernel. Padded slots carry rowid -1
 # and are skipped. k is small, so a simple k-pass selection is exact + cheap.
 def _host_merge_topk(
-    cand_dist_h: UnsafePointer[Float32, MutAnyOrigin],
-    cand_id_h: UnsafePointer[Int64, MutAnyOrigin],
+    cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
+    cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
     ncand: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ):
     var taken = alloc[Bool](ncand if ncand > 0 else 1)
     for c in range(ncand):
@@ -1816,9 +1830,9 @@ def _host_merge_topk(
 # ===-------------------------------------------------------------------===#
 @export("mojo_gpu_build_descriptor")
 def mojo_gpu_build_descriptor(
-    tape: UnsafePointer[Int64, MutAnyOrigin],
+    tape: UnsafePointer[Int64, MutUntrackedOrigin],
     tape_len: Int,
-    blob: UnsafePointer[UInt8, MutAnyOrigin],
+    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
     blob_len: Int,
 ) abi("C") -> Int:
     try:
@@ -1834,7 +1848,7 @@ def mojo_gpu_build_descriptor(
 
 
 @export("mojo_gpu_desc_free")
-def mojo_gpu_desc_free(handle: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
+def mojo_gpu_desc_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi("C"):
     if Int(handle) == 0:
         return
     # Drop any Stage-2 exec state keyed by this handle (the pin cache is
@@ -1847,7 +1861,7 @@ def mojo_gpu_desc_free(handle: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
 
 @export("mojo_gpu_desc_kind")
 def mojo_gpu_desc_kind(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(KIND_UNKNOWN)
@@ -1863,7 +1877,7 @@ def mojo_gpu_desc_kind(
 # handle, so this only ever sees an accepted transcendental descriptor.
 @export("mojo_gpu_desc_is_transcendental")
 def mojo_gpu_desc_is_transcendental(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1876,7 +1890,7 @@ def mojo_gpu_desc_is_transcendental(
 # DENSE, no FK dims, NVIDIA-only); a non-buildable shape returns a null handle.
 @export("mojo_gpu_desc_is_stats")
 def mojo_gpu_desc_is_stats(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1894,7 +1908,7 @@ def mojo_gpu_desc_is_stats(
 # KIND_Q6, so this only ADDS the multi-agg case.
 @export("mojo_gpu_desc_a1_ungrouped_ok")
 def mojo_gpu_desc_a1_ungrouped_ok(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1923,7 +1937,7 @@ def mojo_gpu_desc_a1_ungrouped_ok(
 # mixing an int128 SUM with an f64 stat on the f64 dense path.
 @export("mojo_gpu_desc_a1_grouped_ok")
 def mojo_gpu_desc_a1_grouped_ok(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1943,7 +1957,7 @@ def mojo_gpu_desc_a1_grouped_ok(
 
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(STRAT_UNGROUPED)
@@ -1952,7 +1966,7 @@ def mojo_gpu_desc_strategy(
 
 @export("mojo_gpu_desc_n_dims")
 def mojo_gpu_desc_n_dims(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1961,7 +1975,7 @@ def mojo_gpu_desc_n_dims(
 
 @export("mojo_gpu_desc_n_aggs")
 def mojo_gpu_desc_n_aggs(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -1970,8 +1984,8 @@ def mojo_gpu_desc_n_aggs(
 
 @export("mojo_gpu_desc_fact_table")
 def mojo_gpu_desc_fact_table(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
-    out_ptr: UnsafePointer[UInt8, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -1994,7 +2008,7 @@ def mojo_gpu_desc_fact_table(
 # One fed flat column: an owned host copy of the transient DuckDB pointer, plus
 # its element width (bytes) and the contract TypeTag it arrived as.
 struct FedColumn(Movable):
-    var data: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    var data: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
     var n_rows: Int
     var elem_size: Int
     var type_tag: Int64
@@ -2007,14 +2021,14 @@ struct FedColumn(Movable):
     # non-inlined string's bytes. The copied string_t structs in `data` are
     # rewritten to point into this heap so the column is self-contained after the
     # source DuckDB result (and its string heap) is freed. None for non-VARCHAR.
-    var str_heap: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    var str_heap: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
     # GPU_OP_NULLABLE: optional per-row validity (1 byte/row, 1=valid, 0=SQL NULL).
     # None when the column carries no NULLs (the common case / all NOT-NULL columns)
     # -> every row is valid. C++ feeds this (via mojo_gpu_feed_validity) ONLY for a
     # column the materialize scan observed an actual NULL in; the finalize pass-bake
     # ANDs it into the host pass column so a NULL row is excluded exactly like a
     # filtered-out row (SQL aggregate NULL semantics). See _pin_finalize_generic.
-    var validity: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    var validity: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
 
     def __init__(out self):
         self.data = None
@@ -2027,7 +2041,7 @@ struct FedColumn(Movable):
 
     def fill(
         mut self,
-        src: UnsafePointer[NoneType, MutAnyOrigin],
+        src: UnsafePointer[NoneType, MutUntrackedOrigin],
         n_rows: Int,
         elem_size: Int,
         type_tag: Int64,
@@ -2035,7 +2049,7 @@ struct FedColumn(Movable):
         self.free_data()
         var nbytes = n_rows * elem_size
         var p = alloc[UInt8](nbytes if nbytes > 0 else 1)
-        var src_b = UnsafePointer[UInt8, ImmutAnyOrigin](
+        var src_b = UnsafePointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=Int(src)
         )
         memcpy(dest=p, src=src_b, count=nbytes)
@@ -2055,14 +2069,14 @@ struct FedColumn(Movable):
     # 0=NULL, n_rows bytes) into an owned buffer. Called after fill() for a column
     # the scan saw a NULL in. No-op semantics elsewhere (validity stays None).
     def set_validity(
-        mut self, src: UnsafePointer[NoneType, MutAnyOrigin], n_rows: Int
+        mut self, src: UnsafePointer[NoneType, MutUntrackedOrigin], n_rows: Int
     ):
         if self.validity:
             self.validity.value().free()
             self.validity = None
         var nb = n_rows if n_rows > 0 else 1
         var p = alloc[UInt8](nb)
-        var src_b = UnsafePointer[UInt8, ImmutAnyOrigin](
+        var src_b = UnsafePointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=Int(src)
         )
         memcpy(dest=p, src=src_b, count=n_rows if n_rows > 0 else 0)
@@ -2103,7 +2117,7 @@ struct FedColumn(Movable):
             var addr = 0
             for b in range(8):
                 addr |= Int(p[8 + b]) << (8 * b)
-            var srcp = UnsafePointer[UInt8, ImmutAnyOrigin](
+            var srcp = UnsafePointer[UInt8, ImmUntrackedOrigin](
                 unsafe_from_address=addr
             )
             var dstp = heap + w
@@ -2237,7 +2251,7 @@ def _make_exec_map() -> Dict[Int, GpuExecState]:
 comptime _exec_map = _Global["mojo_gpu_exec_map", _make_exec_map]
 
 
-def _exec_ptr() raises -> UnsafePointer[Dict[Int, GpuExecState], MutAnyOrigin]:
+def _exec_ptr() raises -> UnsafePointer[Dict[Int, GpuExecState], MutUntrackedOrigin]:
     return _exec_map.get_or_create_ptr()
 
 
@@ -2490,7 +2504,7 @@ def _make_pin2() -> Dict[String, GpuPinned]:
 comptime _pin2 = _Global["mojo_gpu_pin2", _make_pin2]
 
 
-def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutAnyOrigin]:
+def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutUntrackedOrigin]:
     return _pin2.get_or_create_ptr()
 
 
@@ -2734,7 +2748,7 @@ def _colpool_assemble_cols_d(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2863,7 +2877,7 @@ def _colpool_assemble_col_ptrs(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2937,7 +2951,7 @@ def _colpool_assemble_col_ptrs(
     var col_ptrs_d = ctx.enqueue_create_buffer[DType.int64](
         n_slots if n_slots > 0 else 1
     )
-    ctx.enqueue_copy(col_ptrs_d, addr_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(col_ptrs_d, addr_h.unsafe_origin_cast[MutUntrackedOrigin]())
     ctx.synchronize()
     addr_h.free()
     if pin_log and skipped_cols > 0:
@@ -3142,16 +3156,16 @@ def _assemble_f64(
             fpred_list.append(gen_bounds[p])
     var fsums = segreduce_run_f64(
         gp.res,
-        gp.pass_prog.unsafe_ptr(),
+        gp.pass_prog.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.pass_len,
-        gp.metric_ops.unsafe_ptr(),
+        gp.metric_ops.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_ops_total,
-        gp.metric_offsets.unsafe_ptr(),
-        gp.metric_lens.unsafe_ptr(),
+        gp.metric_offsets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        gp.metric_lens.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.M,
-        gp.col_div.unsafe_ptr(),
+        gp.col_div.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_slots,
-        gp.const_div.unsafe_ptr(),
+        gp.const_div.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         mode=gp.mode,
         gid_slot=gp.gid_slot,
         G=gp.G,
@@ -3300,16 +3314,16 @@ def _assemble_hash_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         gp.res,
         gp.hash_gk_slot,
         gp.hash_cap,
-        gp.pass_prog.unsafe_ptr(),
+        gp.pass_prog.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.pass_len,
-        gp.metric_ops.unsafe_ptr(),
+        gp.metric_ops.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_ops_total,
-        gp.metric_offsets.unsafe_ptr(),
-        gp.metric_lens.unsafe_ptr(),
+        gp.metric_offsets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        gp.metric_lens.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.M,
-        gp.col_div.unsafe_ptr(),
+        gp.col_div.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_slots,
-        gp.const_div.unsafe_ptr(),
+        gp.const_div.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
     )
     var n_groups = len(hr.keys)
     var n_cols = gp.n_cols
@@ -3418,12 +3432,12 @@ def _assemble(
     var sums = segreduce_run(
         gp.res,
         gp.mode,
-        gp.pass_prog.unsafe_ptr(),
+        gp.pass_prog.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.pass_len,
-        gp.metric_ops.unsafe_ptr(),
+        gp.metric_ops.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_ops_total,
-        gp.metric_offsets.unsafe_ptr(),
-        gp.metric_lens.unsafe_ptr(),
+        gp.metric_offsets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        gp.metric_lens.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.M,
         gp.gid_slot,
         gp.G,
@@ -3559,12 +3573,12 @@ def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
         gp.res,
         gp.hash_gk_slot,
         gp.hash_cap,
-        gp.pass_prog.unsafe_ptr(),
+        gp.pass_prog.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.pass_len,
-        gp.metric_ops.unsafe_ptr(),
+        gp.metric_ops.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.n_ops_total,
-        gp.metric_offsets.unsafe_ptr(),
-        gp.metric_lens.unsafe_ptr(),
+        gp.metric_offsets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        gp.metric_lens.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         gp.M,
     )
     var n_groups = len(hr.keys)
@@ -3638,7 +3652,7 @@ def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_desc_group_index")
 def mojo_gpu_desc_group_index(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(IDX_NONE)
@@ -3647,7 +3661,7 @@ def mojo_gpu_desc_group_index(
 
 @export("mojo_gpu_desc_aggregate_index")
 def mojo_gpu_desc_aggregate_index(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(IDX_NONE)
@@ -3656,7 +3670,7 @@ def mojo_gpu_desc_aggregate_index(
 
 @export("mojo_gpu_desc_out_arity")
 def mojo_gpu_desc_out_arity(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -3665,11 +3679,11 @@ def mojo_gpu_desc_out_arity(
 
 @export("mojo_gpu_desc_out_type")
 def mojo_gpu_desc_out_type(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     i: Int,
-    out_tag: UnsafePointer[Int64, MutAnyOrigin],
-    out_scale: UnsafePointer[Int64, MutAnyOrigin],
-    out_width: UnsafePointer[Int64, MutAnyOrigin],
+    out_tag: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_scale: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_width: UnsafePointer[Int64, MutUntrackedOrigin],
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -3688,7 +3702,7 @@ def mojo_gpu_desc_out_type(
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_desc_materialize_count")
 def mojo_gpu_desc_materialize_count(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -3824,9 +3838,9 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
 # `ORDER BY` is appended iff strategy == SORT_SEGREDUCE (no-op for Q6).
 @export("mojo_gpu_desc_materialize_sql")
 def mojo_gpu_desc_materialize_sql(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     i: Int,
-    out_ptr: UnsafePointer[UInt8, MutAnyOrigin],
+    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -4279,7 +4293,7 @@ def _signature(d: GpuPlanDescriptor) -> String:
 
 @export("mojo_gpu_pin_begin")
 def mojo_gpu_pin_begin(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     # 0 = WARM (resident buffers cached, skip feeding), 1 = COLD.
     # WARM iff the signature is already in the process-global resident pin cache
@@ -4327,10 +4341,10 @@ def mojo_gpu_pin_begin(
 # (the DuckDB pointer is transient).
 @export("mojo_gpu_feed_column")
 def mojo_gpu_feed_column(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     req_i: Int,
     col_j: Int,
-    ptr: UnsafePointer[NoneType, MutAnyOrigin],
+    ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
     type_tag: Int64,
     # GPU_OP_STATS: source-column decimal scale (0 for non-DECIMAL). Used to build
@@ -4401,7 +4415,7 @@ def mojo_gpu_feed_column(
 # scan), so this is harmless/idempotent. Returns 0 on success.
 @export("mojo_gpu_feed_rowcount")
 def mojo_gpu_feed_rowcount(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -4426,10 +4440,10 @@ def mojo_gpu_feed_rowcount(
 # Must be called AFTER mojo_gpu_feed_column for that column (fill resets validity).
 @export("mojo_gpu_feed_validity")
 def mojo_gpu_feed_validity(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     req_i: Int,
     col_j: Int,
-    ptr: UnsafePointer[NoneType, MutAnyOrigin],
+    ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -4468,7 +4482,7 @@ def mojo_gpu_feed_validity(
 # omit decision so C++ and Mojo agree exactly.
 @export("mojo_gpu_skipmat_active")
 def mojo_gpu_skipmat_active(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -4480,16 +4494,16 @@ def mojo_gpu_skipmat_active(
 # host buffer -- the origin `mojo_q6_pin` expects. Rebuilt from the raw address.
 def _col_i32(
     st: GpuExecState, j: Int
-) -> UnsafePointer[Int32, ImmutAnyOrigin]:
-    return UnsafePointer[Int32, ImmutAnyOrigin](
+) -> UnsafePointer[Int32, ImmUntrackedOrigin]:
+    return UnsafePointer[Int32, ImmUntrackedOrigin](
         unsafe_from_address=st.cols[j].addr()
     )
 
 
 def _col_i64(
     st: GpuExecState, j: Int
-) -> UnsafePointer[Int64, ImmutAnyOrigin]:
-    return UnsafePointer[Int64, ImmutAnyOrigin](
+) -> UnsafePointer[Int64, ImmUntrackedOrigin]:
+    return UnsafePointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=st.cols[j].addr()
     )
 
@@ -4512,7 +4526,7 @@ def _col_str(st: GpuExecState, j: Int, i: Int) raises -> String:
     var base = st.cols[j].addr()
     if base == 0:
         return String("")
-    var p = UnsafePointer[UInt8, ImmutAnyOrigin](
+    var p = UnsafePointer[UInt8, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 16
     )
     # length: little-endian uint32 in the first 4 bytes.
@@ -4524,7 +4538,7 @@ def _col_str(st: GpuExecState, j: Int, i: Int) raises -> String:
     )
     if length <= 0:
         return String("")
-    var data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin]
+    var data_ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
     if length <= 12:
         data_ptr = p + 4  # inlined right after the length
     else:
@@ -4532,7 +4546,7 @@ def _col_str(st: GpuExecState, j: Int, i: Int) raises -> String:
         var addr = 0
         for b in range(8):
             addr |= Int(p[8 + b]) << (8 * b)
-        data_ptr = UnsafePointer[UInt8, ImmutAnyOrigin](
+        data_ptr = UnsafePointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=addr
         )
     var s = String("")
@@ -4634,11 +4648,11 @@ def _col_val(st: GpuExecState, j: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if c.elem_size == 4:
-        var p = UnsafePointer[Int32, ImmutAnyOrigin](
+        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmutAnyOrigin](
+    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -4664,11 +4678,11 @@ def _dim_col_val(st: GpuExecState, de: Int, c: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if col.elem_size == 4:
-        var p = UnsafePointer[Int32, ImmutAnyOrigin](
+        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmutAnyOrigin](
+    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -4680,7 +4694,7 @@ def _dim_col_str(st: GpuExecState, de: Int, c: Int, i: Int) raises -> String:
     var base = st.dim_cols[de][c].addr()
     if base == 0:
         return String("")
-    var p = UnsafePointer[UInt8, ImmutAnyOrigin](
+    var p = UnsafePointer[UInt8, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 16
     )
     var length = (
@@ -4688,14 +4702,14 @@ def _dim_col_str(st: GpuExecState, de: Int, c: Int, i: Int) raises -> String:
     )
     if length <= 0:
         return String("")
-    var data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin]
+    var data_ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
     if length <= 12:
         data_ptr = p + 4
     else:
         var addr = 0
         for b in range(8):
             addr |= Int(p[8 + b]) << (8 * b)
-        data_ptr = UnsafePointer[UInt8, ImmutAnyOrigin](
+        data_ptr = UnsafePointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=addr
         )
     var s = String("")
@@ -5289,11 +5303,11 @@ def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if elem_size == 4:
-        var p = UnsafePointer[Int32, ImmutAnyOrigin](
+        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmutAnyOrigin](
+    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -5303,7 +5317,7 @@ def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
 # parallelized over `_finalize_workers()` chunks. Used for the numeric fact
 # columns. Equivalent serial loop: `for i in range(n): cols[slot*n+i] = ...`.
 def _pack_col_par(
-    cols: UnsafePointer[Int64, MutAnyOrigin],
+    cols: UnsafePointer[Int64, MutUntrackedOrigin],
     slot: Int,
     n: Int,
     base: Int,
@@ -5318,7 +5332,7 @@ def _pack_col_par(
     def work(t: Int):
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
+        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
         for i in range(start, end):
             out[i] = _read_packed(base, elem_size, i)
 
@@ -5328,10 +5342,10 @@ def _pack_col_par(
 # Copy `cols[slot*n + i] = src[i]` for i in [0,n), parallelized. Used for the
 # gid column (a precomputed Int64 array) and the host pass column.
 def _pack_copy_par(
-    cols: UnsafePointer[Int64, MutAnyOrigin],
+    cols: UnsafePointer[Int64, MutUntrackedOrigin],
     slot: Int,
     n: Int,
-    src: UnsafePointer[Int64, MutAnyOrigin],
+    src: UnsafePointer[Int64, MutUntrackedOrigin],
 ):
     var nw = _finalize_workers()
     var chunk = ceildiv(n, nw)
@@ -5343,8 +5357,8 @@ def _pack_copy_par(
     def work(t: Int):
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
-        var sp = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=s)
+        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var sp = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=s)
         for i in range(start, end):
             out[i] = sp[i]
 
@@ -5356,7 +5370,7 @@ def _pack_copy_par(
 # column base addresses + element sizes (in filter order); `cmps`/`ks` the
 # per-filter cmp ops + constants. Equivalent to the serial AND-of-predicates bake.
 def _bake_pass_par(
-    pass_col: UnsafePointer[Int64, MutAnyOrigin],
+    pass_col: UnsafePointer[Int64, MutUntrackedOrigin],
     n: Int,
     bases: List[Int],
     esizes: List[Int],
@@ -5394,9 +5408,9 @@ def _bake_pass_par(
     def work(t: Int):
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
-        var f = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=fbp)
-        var vv = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=vbp)
+        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var f = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=fbp)
+        var vv = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=vbp)
         for i in range(start, end):
             var ok = True
             for fi in range(nf):
@@ -5408,7 +5422,7 @@ def _bake_pass_par(
                     break
             if ok:
                 for vi in range(nv):
-                    var vp = UnsafePointer[UInt8, ImmutAnyOrigin](
+                    var vp = UnsafePointer[UInt8, ImmUntrackedOrigin](
                         unsafe_from_address=Int(vv[vi]) + i
                     )
                     if vp[] == 0:
@@ -5426,12 +5440,12 @@ def _bake_pass_par(
 # (when `guard_nonneg`) a negative group value -> 0. Parallel over row chunks;
 # disjoint writes. Equivalent to the serial Q5 gid-gather loop.
 def _q5_gid_gather_par(
-    cols: UnsafePointer[Int64, MutAnyOrigin],
+    cols: UnsafePointer[Int64, MutUntrackedOrigin],
     gid_slot: Int,
     n: Int,
     sk_base: Int,
     sk_es: Int,
-    grp: UnsafePointer[Int64, MutAnyOrigin],
+    grp: UnsafePointer[Int64, MutUntrackedOrigin],
     max_sk: Int,
     guard_nonneg: Bool,
 ):
@@ -5445,8 +5459,8 @@ def _q5_gid_gather_par(
     def work(t: Int):
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutAnyOrigin](unsafe_from_address=dst)
-        var gp = UnsafePointer[Int64, ImmutAnyOrigin](unsafe_from_address=g)
+        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var gp = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=g)
         for i in range(start, end):
             var sk = Int(_read_packed(sk_base, sk_es, i))
             var gv = Int64(0)
@@ -5928,7 +5942,7 @@ def _q5_pred_params(
 
 # The fully generic finalize for n_dims == 0 (UNGROUPED + DENSE_GROUP).
 def _pin_finalize_generic(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
     ref d = handle.bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
@@ -7232,7 +7246,7 @@ def _resolve_dim_program(
 # groups with revenue>0 (stock GROUP BY over passing rows).
 # ===-------------------------------------------------------------------===#
 def _pin_finalize_q5(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
     ref d = handle.bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
@@ -7967,7 +7981,7 @@ def _pin_finalize_q5(
 
 
 def _pin_finalize_generic_dims(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
     ref d = handle.bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
@@ -8919,7 +8933,7 @@ def _pin_finalize_generic_dims(
 
 @export("mojo_gpu_pin_finalize")
 def mojo_gpu_pin_finalize(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -9002,7 +9016,7 @@ def mojo_gpu_pin_finalize(
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_result_rows")
 def mojo_gpu_result_rows(
-    handle: UnsafePointer[NoneType, MutAnyOrigin]
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -9018,11 +9032,11 @@ def mojo_gpu_result_rows(
 
 @export("mojo_gpu_result_i128")
 def mojo_gpu_result_i128(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     row: Int,
     col: Int,
-    out_lo: UnsafePointer[Int64, MutAnyOrigin],
-    out_hi: UnsafePointer[Int64, MutAnyOrigin],
+    out_lo: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_hi: UnsafePointer[Int64, MutUntrackedOrigin],
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -9044,7 +9058,7 @@ def mojo_gpu_result_i128(
 
 @export("mojo_gpu_result_i64")
 def mojo_gpu_result_i64(
-    handle: UnsafePointer[NoneType, MutAnyOrigin], row: Int, col: Int
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Int64:
     # BIGINT/INTEGER/DATE cells are stored as a plain int64 in res_lo.
     if Int(handle) == 0:
@@ -9064,7 +9078,7 @@ def mojo_gpu_result_i64(
 
 @export("mojo_gpu_result_f64")
 def mojo_gpu_result_f64(
-    handle: UnsafePointer[NoneType, MutAnyOrigin], row: Int, col: Int
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Float64:
     if Int(handle) == 0:
         return 0.0
@@ -9087,7 +9101,7 @@ def mojo_gpu_result_f64(
 # paths never populate res_valid), so those readbacks are byte-identical.
 @export("mojo_gpu_result_valid")
 def mojo_gpu_result_valid(
-    handle: UnsafePointer[NoneType, MutAnyOrigin], row: Int, col: Int
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -9109,10 +9123,10 @@ def mojo_gpu_result_valid(
 
 @export("mojo_gpu_result_str")
 def mojo_gpu_result_str(
-    handle: UnsafePointer[NoneType, MutAnyOrigin],
+    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
     row: Int,
     col: Int,
-    out_ptr: UnsafePointer[UInt8, MutAnyOrigin],
+    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     # Write the cell string's UTF-8 bytes into out_ptr (up to cap) and return the
@@ -9155,11 +9169,11 @@ def mojo_gpu_result_str(
 def _decode_segment_typed[
     T: DType
 ](
-    seg_bytes: UnsafePointer[UInt8, ImmutAnyOrigin],
+    seg_bytes: UnsafePointer[UInt8, ImmUntrackedOrigin],
     seg_nbytes: Int,
     n_rows: Int,
     codec: Int,
-    out_ptr: UnsafePointer[Scalar[T], MutAnyOrigin],
+    out_ptr: UnsafePointer[Scalar[T], MutUntrackedOrigin],
 ) raises -> Int32:
     var ctx = shared_device_context()
     var seg_d = ctx.enqueue_create_buffer[DType.uint8](seg_nbytes)
@@ -9172,9 +9186,8 @@ def _decode_segment_typed[
         # UNCOMPRESSED fixed-width: data_off = 0, one grid-strided launch.
         comptime ukernel = uncompressed_decode_kernel[T]
         ctx.enqueue_function[ukernel](
-            seg_d, out_d, n_rows, 0, 0,
-            grid_dim=256, block_dim=256,
-        )
+            seg_d, out_d, Int64(n_rows), Int64(0), Int64(0),
+            grid_dim=256, block_dim=256)
     else:
         # BITPACKING: one block per 2048-row metadata group.
         comptime bkernel = bitpacking_decode_kernel[T]
@@ -9186,9 +9199,8 @@ def _decode_segment_typed[
                 else n_rows - g0
             )
             ctx.enqueue_function[bkernel](
-                seg_d, seg_nbytes, out_d, g, rows, g0,
-                grid_dim=1, block_dim=256,
-            )
+                seg_d, Int64(seg_nbytes), out_d, Int64(g), Int64(rows), Int64(g0),
+                grid_dim=1, block_dim=256)
     ctx.synchronize()
 
     # Copy decoded values back into the caller's host out-buffer.
@@ -9200,12 +9212,12 @@ def _decode_segment_typed[
 
 @export("mojo_gpu_decode_segment")
 def mojo_gpu_decode_segment(
-    seg_bytes: UnsafePointer[UInt8, ImmutAnyOrigin],
+    seg_bytes: UnsafePointer[UInt8, ImmUntrackedOrigin],
     seg_nbytes: Int,
     n_rows: Int,
     codec: Int,
     type_code: Int,
-    out_ptr: UnsafePointer[NoneType, MutAnyOrigin],
+    out_ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if seg_nbytes <= 0 or n_rows <= 0:
         return 1

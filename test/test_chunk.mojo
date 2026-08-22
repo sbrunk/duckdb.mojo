@@ -74,14 +74,78 @@ def test_chunk_type() raises:
 
 def test_chunk_from_query() raises:
     """Test working with chunks from query results."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 42 as num, 'hello' as text")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 42 as num, 'hello' as text")
     
     var chunk = result.fetch_chunk()
     assert_equal(chunk.column_count(), 2)
     assert_equal(len(chunk), 1)
     assert_equal(chunk.type(0), DuckDBType.integer)
     assert_equal(chunk.type(1), DuckDBType.varchar)
+
+
+def test_get_span_reads_column_values() raises:
+    """get_span yields the column's values with the chunk's row count as length."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT i::INT AS v FROM range(5) t(i)")
+    var chunk = result.fetch_chunk()
+    var span = chunk.get_span[DType.int32](col=0)
+    assert_equal(len(span), 5)
+    for i in range(5):
+        assert_equal(span[i], Int32(i))
+
+
+def test_get_span_length_matches_chunk_rows() raises:
+    """The span length comes from the chunk, so it cannot run past the rows."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT i::BIGINT AS v FROM range(3) t(i)")
+    var chunk = result.fetch_chunk()
+    assert_equal(len(chunk.get_span[DType.int64](col=0)), len(chunk))
+
+
+def test_get_span_rejects_wrong_dtype() raises:
+    """Asking for the wrong element type raises instead of reinterpreting bits."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT 1.5::DOUBLE AS v")
+    var chunk = result.fetch_chunk()
+    with assert_raises():
+        _ = chunk.get_span[DType.int32](col=0)
+
+
+def test_get_span_rejects_varchar() raises:
+    """VARCHAR has no fixed-width scalar layout, so it must be rejected."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT 'abc' AS v")
+    var chunk = result.fetch_chunk()
+    with assert_raises():
+        _ = chunk.get_span[DType.int32](col=0)
+
+
+def test_get_span_is_writable_when_chunk_is_mut() raises:
+    """A span from a mutably bound chunk can be written through."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT i::INT AS v FROM range(4) t(i)")
+    var chunk = result.fetch_chunk()
+    var span = chunk.get_span[DType.int32](col=0)
+    span[0] = Int32(41)
+    span[1] = Int32(42)
+    assert_equal(span[0], Int32(41))
+    assert_equal(span[1], Int32(42))
+    # untouched elements keep their original values
+    assert_equal(span[2], Int32(2))
+    assert_equal(span[3], Int32(3))
+
+
+def test_get_span_matches_get_data() raises:
+    """get_span agrees with the raw get_data path it is meant to replace."""
+    var conn = DuckDB.connect(":memory:")
+    var result = conn.execute("SELECT (i * 7)::DOUBLE AS v FROM range(6) t(i)")
+    var chunk = result.fetch_chunk()
+    var span = chunk.get_span[DType.float64](col=0)
+    var vec = chunk.get_vector(0)
+    var raw = vec.get_data().unsafe_bitcast[Float64]()
+    for i in range(len(chunk)):
+        assert_equal(span[i], raw[unsafe_offset=i])
 
 
 def main() raises:

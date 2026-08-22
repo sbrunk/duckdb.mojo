@@ -225,7 +225,7 @@ def test_appender_auto_destroy() raises:
     var appender = Appender(con, "t")
     appender.append_value(Int32(42))
     appender.end_row()
-    appender^.__del__()
+    appender^.__deinit__()
 
     result = con.execute("SELECT id FROM t")
     chunk = result.fetch_chunk()

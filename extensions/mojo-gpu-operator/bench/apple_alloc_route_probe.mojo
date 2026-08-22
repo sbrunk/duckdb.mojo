@@ -25,7 +25,7 @@ Findings (Apple GPU):
 from std.sys import has_accelerator
 from std.sys.info import has_apple_gpu_accelerator
 from std.gpu import global_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major
 

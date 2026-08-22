@@ -334,7 +334,7 @@ def test_blob_values() raises:
     """Test creating and extracting blob values."""
     var data: List[UInt8] = [1, 2, 3, 4, 5]
     var span = Span[UInt8, ImmutAnyOrigin](
-        ptr=data.unsafe_ptr(), length=len(data)
+        unsafe_ptr=data.unsafe_ptr().as_unsafe_any_origin(), length=len(data)
     )
     var val_blob = DuckDBValue.from_blob(span)
 

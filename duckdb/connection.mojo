@@ -68,13 +68,13 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
     def __init__(out self, path: String) raises:
         """Create a connection with a new database."""
         self._db = Database(path)
-        # Placeholder handle — duckdb_connect populates it via out-param.
-        self._conn = UnsafePointer[
-            duckdb_connection.type, MutUntrackedOrigin
+        # Placeholder handle. duckdb_connect populates it via out-param.
+        self._conn = Pointer[
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
+            libduckdb.duckdb_connect(self._db._db, Pointer(to=self._conn))
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
@@ -86,13 +86,13 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             config: Startup configuration.
         """
         self._db = Database(path, config)
-        # Placeholder handle — duckdb_connect populates it via out-param.
-        self._conn = UnsafePointer[
-            duckdb_connection.type, MutUntrackedOrigin
+        # Placeholder handle. duckdb_connect populates it via out-param.
+        self._conn = Pointer[
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
+            libduckdb.duckdb_connect(self._db._db, Pointer(to=self._conn))
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
@@ -117,23 +117,23 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             db: An existing database handle.
         """
         self._db = Database(_handle=db._db)
-        # Placeholder handle — duckdb_connect populates it via out-param.
-        self._conn = UnsafePointer[
-            duckdb_connection.type, MutUntrackedOrigin
+        # Placeholder handle. duckdb_connect populates it via out-param.
+        self._conn = Pointer[
+            duckdb_connection.T, MutUntrackedOrigin
         ].unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if (
-            libduckdb.duckdb_connect(self._db._db, UnsafePointer(to=self._conn))
+            libduckdb.duckdb_connect(self._db._db, Pointer(to=self._conn))
         ) == DuckDBError:
             raise Error("Could not connect to database")
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
+        libduckdb.duckdb_disconnect(Pointer(to=self._conn))
 
     def execute(self, query: String) raises ResultError -> Result:
         var result = duckdb_result()
-        var result_ptr = UnsafePointer(to=result)
+        var result_ptr = Pointer(to=result)
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_query(self._conn, _query.as_c_string_slice().unsafe_ptr(), result_ptr)
@@ -144,7 +144,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
             raise ResultError(error_msg, ErrorType(error_type_value))
         return Result(result)
 
-    def sql(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def sql(ref self, query: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Build a lazy `Relation` from ``query``.
 
         Unlike `execute` (which runs immediately and returns a `Result`), `sql`
@@ -158,25 +158,25 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         The relation borrows this connection so we need to keep the connection alive while
         the relation is in use.
         """
-        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+        return Relation[ImmOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
 
-    def query(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def query(ref self, query: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Alias for `sql` (Python ``con.query``)."""
-        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+        return Relation[ImmOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
 
-    def from_query(ref self, query: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def from_query(ref self, query: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Alias for `sql` (Python ``con.from_query``)."""
-        return Relation[ImmutOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
+        return Relation[ImmOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
 
-    def table(ref self, name: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def table(ref self, name: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """A relation over an existing table (Python ``con.table``)."""
-        return Relation[ImmutOrigin(origin_of(self._conn))](
+        return Relation[ImmOrigin(origin_of(self._conn))](
             Pointer(to=self._conn), String("SELECT * FROM ", _quote_qualified(name))
         )
 
-    def view(ref self, name: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def view(ref self, name: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """A relation over an existing view (Python ``con.view``)."""
-        return Relation[ImmutOrigin(origin_of(self._conn))](
+        return Relation[ImmOrigin(origin_of(self._conn))](
             Pointer(to=self._conn), String("SELECT * FROM ", _quote_qualified(name))
         )
 
@@ -208,7 +208,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         an error (queries will fail).
         """
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_disconnect(UnsafePointer(to=self._conn))
+        libduckdb.duckdb_disconnect(Pointer(to=self._conn))
 
     def cursor(self) raises -> Connection[Self.api_level]:
         """Open a second connection to the same database.
@@ -273,7 +273,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return PreparedStatement(self._conn, query)
 
     def execute[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Deinitable
     ](self, query: String, *args: *Ts) raises ResultError -> Result:
         """Execute ``query`` with positional parameters (``?`` or ``$1``).
 
@@ -309,7 +309,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return stmt.execute()
 
     def execute_named[
-        T: Copyable & Movable & ImplicitlyDestructible
+        T: Copyable & Deinitable
     ](self, query: String, params: Dict[String, T]) raises ResultError -> Result:
         """Execute ``query`` binding named parameters (``$name``).
 
@@ -330,7 +330,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         return stmt.execute()
 
     def executemany[
-        *Ts: Copyable & Movable
+        *Ts: Copyable & Deinitable
     ](self, query: String, rows: List[Tuple[*Ts]]) raises ResultError:
         """Execute ``query`` once per row of positional parameters.
 
@@ -356,7 +356,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     # ── File readers ──────────────────────────────────────────────
 
-    def read_csv(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def read_csv(ref self, path: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a CSV file as a lazy `Relation`.
 
         ``con.read_csv('f.csv').filter(...).show()`` composes like any relation
@@ -366,7 +366,7 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
     def read_csv(
         ref self, path: String, options: Dict[String, String]
-    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    ) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a CSV file with reader options appended as ``key=value``.
 
         Option *values* are inserted verbatim, so quote string values with
@@ -374,22 +374,22 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """
         return self.sql(String("SELECT * FROM ", _reader_call("read_csv", path, options)))
 
-    def read_parquet(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def read_parquet(ref self, path: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a Parquet file as a lazy `Relation` (Python ``con.read_parquet``)."""
         return self.sql(String("SELECT * FROM ", _reader_call("read_parquet", path, Dict[String, String]())))
 
     def read_parquet(
         ref self, path: String, options: Dict[String, String]
-    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    ) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a Parquet file with reader options appended as ``key=value``."""
         return self.sql(String("SELECT * FROM ", _reader_call("read_parquet", path, options)))
 
-    def read_json(ref self, path: String) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    def read_json(ref self, path: String) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a JSON file as a lazy `Relation` (Python ``con.read_json``)."""
         return self.sql(String("SELECT * FROM ", _reader_call("read_json", path, Dict[String, String]())))
 
     def read_json(
         ref self, path: String, options: Dict[String, String]
-    ) -> Relation[ImmutOrigin(origin_of(self._conn))]:
+    ) -> Relation[ImmOrigin(origin_of(self._conn))]:
         """Read a JSON file with reader options appended as ``key=value``."""
         return self.sql(String("SELECT * FROM ", _reader_call("read_json", path, options)))

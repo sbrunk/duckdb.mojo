@@ -48,7 +48,7 @@ from col_pool import (
     REPR_INT64_PACKED,
     ORDERING_STORAGE,
 )
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.memory import alloc
 from std.os import getenv
 from std.sys import has_accelerator

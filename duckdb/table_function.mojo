@@ -4,6 +4,7 @@ from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
 from duckdb.value import DuckDBValue
+from duckdb.chunk import Chunk
 
 
 struct TableFunctionInfo:
@@ -17,7 +18,7 @@ struct TableFunctionInfo:
     from duckdb import Chunk
     from duckdb.table_function import TableFunctionInfo
 
-    fn my_function(info: TableFunctionInfo, output: Chunk):
+    fn my_function(info: TableFunctionInfo, mut output: Chunk):
         var bind_data = info.get_bind_data()
         var init_data = info.get_init_data()
         # ... produce rows into output chunk
@@ -34,7 +35,7 @@ struct TableFunctionInfo:
         """
         self._info = info
 
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info()`.
 
         Returns:
@@ -43,7 +44,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_extra_info(self._info)
 
-    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during the bind phase.
 
         Note that the bind data is read-only during execution.
@@ -54,7 +55,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_bind_data(self._info)
 
-    def get_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_init_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the init data set during the init phase.
 
         Returns:
@@ -63,7 +64,7 @@ struct TableFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_function_get_init_data(self._info)
 
-    def get_local_init_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_local_init_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the thread-local init data set during the local init phase.
 
         Returns:
@@ -172,9 +173,9 @@ struct TableBindInfo:
             )
         )
 
-    def set_bind_data(
+    def set_bind_data[bind_data_origin: MutOrigin](
         self,
-        bind_data: UnsafePointer[NoneType, MutAnyOrigin],
+        bind_data: Pointer[NoneType, bind_data_origin],
         destroy: duckdb_delete_callback_t,
     ):
         """Sets user-provided bind data.
@@ -212,7 +213,7 @@ struct TableBindInfo:
             error_copy.as_c_string_slice().unsafe_ptr(),
         )
 
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info`.
 
         Returns:
@@ -248,7 +249,7 @@ struct TableInitInfo:
         """
         self._info = info
 
-    def get_extra_info(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `TableFunction.set_extra_info`.
 
         Returns:
@@ -257,7 +258,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_extra_info(self._info)
 
-    def get_bind_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_bind_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during the bind phase.
 
         Returns:
@@ -266,9 +267,9 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_init_get_bind_data(self._info)
 
-    def set_init_data(
+    def set_init_data[init_data_origin: MutOrigin](
         self,
-        init_data: UnsafePointer[NoneType, MutAnyOrigin],
+        init_data: Pointer[NoneType, init_data_origin],
         destroy: duckdb_delete_callback_t,
     ):
         """Sets the user-provided init data.
@@ -378,20 +379,20 @@ struct TableFunction(Movable):
     def __init__(out self):
         """Creates a new table function.
 
-        The function must be destroyed with `__del__` or by letting it go out of scope.
+        The function must be destroyed with `__deinit__` or by letting it go out of scope.
         """
         ref libduckdb = DuckDB().libduckdb()
         self._function = libduckdb.duckdb_create_table_function()
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor that transfers ownership."""
-        self._function = take._function
+        self._function = move._function
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the table function and deallocates all memory."""
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_destroy_table_function(
-            UnsafePointer(to=self._function)
+            Pointer(to=self._function)
         )
 
     def set_name(self, name: String):
@@ -433,9 +434,9 @@ struct TableFunction(Movable):
             type._logical_type,
         )
 
-    def set_extra_info(
+    def set_extra_info[extra_info_origin: MutOrigin](
         self,
-        extra_info: UnsafePointer[NoneType, MutAnyOrigin],
+        extra_info: Pointer[NoneType, extra_info_origin],
         destroy: duckdb_delete_callback_t,
     ):
         """Assigns extra information to the table function.

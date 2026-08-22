@@ -15,7 +15,7 @@ amortized across queries, and the margin widens with K. Run single-threaded.
 
 from std.gpu import block_idx, thread_idx
 from std.gpu.primitives import warp
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.math import sqrt
 from std.sys.info import simd_width_of, has_apple_gpu_accelerator

@@ -4,10 +4,9 @@ from duckdb.duckdb_wrapper import *
 from duckdb.api_level import ApiLevel
 from std.collections import Optional
 
-from std.sys.intrinsics import _type_is_eq
 
 
-struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLevel.CLIENT]:
+struct Vector[is_owned: Bool, origin: Origin, api_level: ApiLevel = ApiLevel.CLIENT]:
     """A wrapper around a DuckDB vector.
     
     Vectors can be borrowed from a Chunk or owned standalone. Ownership is tracked
@@ -16,8 +15,9 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
     - `Vector[True, ...]`: Owned standalone vector, will be destroyed when it goes out of scope
     
     The origin parameter tracks the lifetime dependency:
-    - For standalone vectors: ImmutUntrackedOrigin (no dependency)
-    - For vectors from chunks: origin_of(chunk) (extends chunk's lifetime)
+    - For standalone vectors: an untracked origin (no dependency)
+    - For vectors from a chunk: the chunk's origin, so the chunk is kept alive
+      and its mutability carries through to `get_data`/`get_validity`
     
     The ``api_level`` parameter gates access to unstable C API functions at
     compile time.  The default (``CLIENT``) gives full access.
@@ -58,13 +58,13 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         self._vector = libduckdb.duckdb_create_vector(type._logical_type, capacity)
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys standalone owned vectors."""
         comptime if Self.is_owned:
             comptime assert Self.api_level.includes_unstable(), "destroying an owned Vector requires the unstable API or client mode"
             
             ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_vector(UnsafePointer(to=self._vector))
+            libduckdb.duckdb_destroy_vector(Pointer(to=self._vector))
 
     def get_column_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:
         """Retrieves the column type of the specified vector.
@@ -74,18 +74,30 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return LogicalType[is_owned=False, origin=origin_of(self)](libduckdb.duckdb_vector_get_column_type(self._vector))
 
-    def get_data(self) -> UnsafePointer[NoneType, MutAnyOrigin]:
+    def get_data[
+        data_origin: Origin, //
+    ](ref [data_origin] self) -> Pointer[NoneType, data_origin]:
         """Retrieves the data pointer of the vector.
 
         The data pointer can be used to read or write values from the vector.
         How to read or write values depends on the type of the vector.
 
+        The pointer carries this vector's origin, so it keeps the owning `Chunk`
+        alive and cannot outlive it. It is mutable only if `self` is bound
+        mutably, so writing through it requires a `mut` binding.
+
         * returns: The data pointer
         """
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_vector_get_data(self._vector)
+        return (
+            libduckdb.duckdb_vector_get_data(self._vector)
+            .unsafe_mut_cast[data_origin.mut]()
+            .unsafe_origin_cast[data_origin]()
+        )
 
-    def get_validity(self) -> Optional[UnsafePointer[UInt64, MutAnyOrigin]]:
+    def get_validity[
+        mask_origin: Origin, //
+    ](ref [mask_origin] self) -> Optional[Pointer[UInt64, mask_origin]]:
         """Retrieves the validity mask pointer of the specified vector.
 
         Returns `None` if all values are valid (DuckDB elides the mask).
@@ -104,8 +116,18 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
 
         * returns: The pointer to the validity mask, or `None` if no validity mask is present.
         """
+        # Origin-bound for the same reason as `get_data` above.
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_vector_get_validity(self._vector)
+        var mask: Optional[
+            Pointer[UInt64, MutUntrackedOrigin]
+        ] = libduckdb.duckdb_vector_get_validity(self._vector)
+        if mask is None:
+            return None
+        return (
+            mask.value()
+            .unsafe_mut_cast[mask_origin.mut]()
+            .unsafe_origin_cast[mask_origin]()
+        )
 
     def ensure_validity_writable(self) -> NoneType:
         """Ensures the validity mask is writable by allocating it.
@@ -220,7 +242,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         return libduckdb.duckdb_slice_vector(self._vector, sel, len)
 
     def copy_sel[
-        dst_owned: Bool, dst_origin: ImmutOrigin, dst_api: ApiLevel,
+        dst_owned: Bool, dst_origin: ImmOrigin, dst_api: ApiLevel,
     ](
         self,
         dst: Vector[dst_owned, dst_origin, dst_api],
@@ -261,7 +283,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         return libduckdb.duckdb_vector_reference_value(self._vector, value)
 
     def reference_vector[
-        from_owned: Bool, from_origin: ImmutOrigin, from_api: ApiLevel,
+        from_owned: Bool, from_origin: ImmOrigin, from_api: ApiLevel,
     ](self, from_vector: Vector[from_owned, from_origin, from_api]) -> NoneType:
         """Changes this vector to reference `from_vector`. After, the vectors share ownership of the data.
 
@@ -275,7 +297,7 @@ struct Vector[is_owned: Bool, origin: ImmutOrigin, api_level: ApiLevel = ApiLeve
         ref libduckdb = DuckDB().libduckdb()
         return libduckdb.duckdb_vector_reference_vector(self._vector, from_vector._vector)
 
-    def _check_type[db_is_owned: Bool, db_origin: ImmutOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
+    def _check_type[db_is_owned: Bool, db_origin: ImmOrigin](self, db_type: LogicalType[db_is_owned, db_origin]) raises:
         """Recursively check that the runtime type of the vector matches the expected type.
         """
         var self_type_id = self.get_column_type().get_type_id()

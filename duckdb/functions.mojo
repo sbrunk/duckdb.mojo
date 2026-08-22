@@ -55,7 +55,7 @@ def connect(
     return Connection(database, cfg)
 
 
-def sql(query: String) raises -> Relation[StaticConstantOrigin]:
+def sql(query: String) raises -> Relation[ImmStaticOrigin]:
     """Build a lazy `Relation` from ``query`` on the default connection.
 
     Mirrors Python's top-level ``duckdb.sql(...)``: composable and executed
@@ -65,11 +65,11 @@ def sql(query: String) raises -> Relation[StaticConstantOrigin]:
     # The default connection lives until process exit, so a static-origin
     # borrow of its handle is safe (same pattern as the LibDuckDB global).
     var handle = (
-        UnsafePointer(to=conn_ptr[]._conn)
-        .as_immutable()
-        .unsafe_origin_cast[StaticConstantOrigin]()
+        Pointer(to=conn_ptr[]._conn)
+        .as_imm()
+        .unsafe_origin_cast[ImmStaticOrigin]()
     )
-    return Relation[StaticConstantOrigin](Pointer(to=handle[]), query)
+    return Relation[ImmStaticOrigin](Pointer(to=handle[]), query)
 
 
 def execute(query: String) raises ResultError -> Result:
@@ -77,21 +77,21 @@ def execute(query: String) raises ResultError -> Result:
     return _get_default_connection()[].execute(query)
 
 
-def read_csv(path: String) raises -> Relation[StaticConstantOrigin]:
+def read_csv(path: String) raises -> Relation[ImmStaticOrigin]:
     """Read a CSV file as a lazy `Relation` via the default connection."""
     return sql(
         String("SELECT * FROM ", _reader_call("read_csv", path, Dict[String, String]()))
     )
 
 
-def read_parquet(path: String) raises -> Relation[StaticConstantOrigin]:
+def read_parquet(path: String) raises -> Relation[ImmStaticOrigin]:
     """Read a Parquet file as a lazy `Relation` via the default connection."""
     return sql(
         String("SELECT * FROM ", _reader_call("read_parquet", path, Dict[String, String]()))
     )
 
 
-def read_json(path: String) raises -> Relation[StaticConstantOrigin]:
+def read_json(path: String) raises -> Relation[ImmStaticOrigin]:
     """Read a JSON file as a lazy `Relation` via the default connection."""
     return sql(
         String("SELECT * FROM ", _reader_call("read_json", path, Dict[String, String]()))

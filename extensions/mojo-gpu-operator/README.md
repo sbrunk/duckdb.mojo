@@ -17,7 +17,7 @@ DuckDB's, the warm/cold pin model, and performance.
 
 > **Scope / caveats.** CPP-ABI extension linking DuckDB's internal C++ headers —
 > **locked to the exact DuckDB build** it was compiled against (currently
-> `v1.5.4`); not part of the conda package. **Validated on Apple (Metal) and
+> `v1.5.5`); not part of the conda package. **Validated on Apple (Metal) and
 > NVIDIA (RTX 4090, Linux)** — see [DESIGN.md](DESIGN.md#hardware-portability) for
 > the Linux/NixOS build notes.
 You need to load the exstion with `-unsigned` / `allow_unsigned_extensions`.

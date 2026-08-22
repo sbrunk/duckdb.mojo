@@ -4,7 +4,7 @@ from std.collections import List, Optional
 
 
 
-struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Movable & Equatable & Writable):
+struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Equatable & Writable):
     """Represents a potentially nested DuckDB type.
     
     LogicalTypes can be borrowed from DuckDB structures or owned standalone. Ownership
@@ -54,7 +54,7 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took.
                 # Null sentinel — duckdb_destroy_logical_type is a no-op on NULL.
-                list_type._logical_type = _null_ptr[duckdb_logical_type.type, MutUntrackedOrigin]()
+                list_type._logical_type = _null_ptr[duckdb_logical_type.T, MutUntrackedOrigin]()
             elif copy.get_type_id() == DuckDBType.array:
                 # Deep copy array type: recreate from child type and size
                 var child = copy.array_type_child_type()
@@ -72,13 +72,13 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
                     var ct = copy.struct_type_child_type(idx_t(i))
                     child_types.append(ct.internal_ptr())
                     child_names_str.append(copy.struct_type_child_name(idx_t(i)))
-                var c_names = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+                var c_names = List[Pointer[c_char, ImmutAnyOrigin]]()
                 var base_ptr = child_names_str.unsafe_ptr()
                 for i in range(child_count):
-                    c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr())
+                    c_names.append((base_ptr.unsafe_offset(i))[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
                 ref libduckdb = DuckDB().libduckdb()
                 self._logical_type = libduckdb.duckdb_create_struct_type(
-                    child_types.unsafe_ptr().bitcast[duckdb_logical_type](),
+                    child_types.unsafe_ptr().unsafe_bitcast[duckdb_logical_type](),
                     c_names.unsafe_ptr(),
                     idx_t(child_count),
                 )
@@ -88,15 +88,15 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         else:
             self._logical_type = copy._logical_type
 
-    def __init__(out self, *, deinit take: Self):
-        self._logical_type = take._logical_type
+    def __init__(out self, *, deinit move: Self):
+        self._logical_type = move._logical_type
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys owned LogicalTypes only."""
         comptime if Self.is_owned:
             ref libduckdb = DuckDB().libduckdb()
             libduckdb.duckdb_destroy_logical_type(
-                UnsafePointer(to=self._logical_type)
+                Pointer(to=self._logical_type)
             )
 
     def create_list_type(self) -> LogicalType[is_owned=True, origin=MutUntrackedOrigin]:
@@ -207,14 +207,14 @@ struct LogicalType[is_owned: Bool, origin: ImmutOrigin](ImplicitlyCopyable & Mov
         ref libduckdb = DuckDB().libduckdb()
         # A NULL char* (not a GEOMETRY / no CRS) converts to a `None` Optional
         # via the pointer null-niche encoding.
-        var c_str: Optional[UnsafePointer[c_char, MutUntrackedOrigin]] = (
+        var c_str: Optional[Pointer[c_char, MutUntrackedOrigin]] = (
             libduckdb.duckdb_geometry_type_get_crs(self._logical_type)
         )
         if not c_str:
             return None
         var ptr = c_str.value()
         var result = String(unsafe_from_utf8_ptr=ptr)
-        libduckdb.duckdb_free(ptr.bitcast[NoneType]())
+        libduckdb.duckdb_free(ptr.unsafe_bitcast[NoneType]())
         return result
 
     def __eq__(self, other: Self) -> Bool:
@@ -295,15 +295,15 @@ def enum_type(mut names: List[String]) -> LogicalType[True, MutUntrackedOrigin]:
     var count = len(names)
     
     # Use List to manage array of pointers
-    var c_names_list = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+    var c_names_list = List[Pointer[c_char, ImmutAnyOrigin]]()
     c_names_list.reserve(count)
     
     # Use UnsafePointer to iterate without copying strings
     var base_ptr = names.unsafe_ptr()
     
     for i in range(count):
-        var s = (base_ptr + i)[].as_c_string_slice()
-        c_names_list.append(s.unsafe_ptr())
+        var s = (base_ptr.unsafe_offset(i))[].as_c_string_slice()
+        c_names_list.append(s.unsafe_ptr().as_unsafe_any_origin())
         
     # Get pointer to the array of pointers
     return LogicalType[True, MutUntrackedOrigin](
@@ -334,15 +334,15 @@ def struct_type(
         c_types.append(types[i].internal_ptr())
 
     # Build array of C string pointers
-    var c_names = List[UnsafePointer[c_char, ImmutAnyOrigin]]()
+    var c_names = List[Pointer[c_char, ImmutAnyOrigin]]()
     c_names.reserve(count)
     var base_ptr = names.unsafe_ptr()
     for i in range(count):
-        c_names.append((base_ptr + i)[].as_c_string_slice().unsafe_ptr())
+        c_names.append((base_ptr.unsafe_offset(i))[].as_c_string_slice().unsafe_ptr().as_unsafe_any_origin())
 
     return LogicalType[True, MutUntrackedOrigin](
         libduckdb.duckdb_create_struct_type(
-            c_types.unsafe_ptr().bitcast[duckdb_logical_type](),
+            c_types.unsafe_ptr().unsafe_bitcast[duckdb_logical_type](),
             c_names.unsafe_ptr(),
             idx_t(count),
         )

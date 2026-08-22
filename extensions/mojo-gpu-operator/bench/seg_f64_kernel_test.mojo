@@ -17,7 +17,7 @@ Run (frederick; after the COPY in transcendental_scale_probe produces the bin):
         extensions/mojo-gpu-operator/bench/seg_f64_kernel_test.mojo
 """
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.memory import alloc
 from std.math import sqrt, abs
 from std.sys import has_accelerator

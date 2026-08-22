@@ -18,15 +18,15 @@ build:
 
 requirements:
   build:
-    - mojo-compiler ==1.0.0b2
+    - mojo-compiler ==1.0.0
   host:
-    - mojo-compiler ==1.0.0b2
+    - mojo-compiler ==1.0.0
   run:
     # Exact pin, NOT pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would allow a newer
     # release at install time, which fails with a version-mismatch error.
-    - mojo-compiler ==1.0.0b2
-    - libduckdb >=1.5.4,<1.6
+    - mojo-compiler ==1.0.0
+    - libduckdb >=1.5.5,<1.6
 
 tests:
   - script:
@@ -44,7 +44,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=1.5.4,<1.6
+        - libduckdb >=1.5.5,<1.6
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

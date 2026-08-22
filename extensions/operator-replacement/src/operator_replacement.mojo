@@ -69,9 +69,14 @@ struct OperatorReplacementLib:
         """
         var orig = original_name.as_c_string_slice()
         var repl = replacement_name.as_c_string_slice()
-        _ = self._register_function_replacement(orig.unsafe_ptr(), repl.unsafe_ptr())
+        _ = self._register_function_replacement(
+            orig.unsafe_ptr().as_unsafe_any_origin(),
+            repl.unsafe_ptr().as_unsafe_any_origin(),
+        )
     
-    def register_operator_replacement(self, connection: UnsafePointer[NoneType, MutAnyOrigin]):
+    def register_operator_replacement[
+        connection_origin: MutOrigin
+    ](self, connection: Pointer[NoneType, connection_origin]):
         """Activate all registered function/operator replacements.
         
         This registers the optimizer extension that performs the replacements.
@@ -80,4 +85,4 @@ struct OperatorReplacementLib:
         Args:
             connection: The DuckDB connection handle (pass conn._conn[].__conn).
         """
-        _ = self._register_operator_replacement(connection)
+        _ = self._register_operator_replacement(connection.as_unsafe_any_origin())

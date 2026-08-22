@@ -16,7 +16,7 @@ from duckdb.kernels.simd import ksqrt, ksin, kcos, kln, kexp, klog10
 
 def _register[
     name: StringLiteral,
-    func: def[w: Int] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w],
+    func: def[w: SIMDLength] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w],
 ](conn: Connection[_]) raises:
     var sf = ScalarFunction()
     sf.set_name(name)

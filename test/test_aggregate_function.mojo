@@ -67,7 +67,7 @@ def sum_combine(
 def sum_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
-    result: Vector,
+    mut result: Vector,
     count: Int,
     offset: Int,
 ):
@@ -135,7 +135,7 @@ def count_combine(
 def count_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
-    result: Vector,
+    mut result: Vector,
     count: Int,
     offset: Int,
 ):
@@ -195,7 +195,7 @@ def avg_combine(
 def avg_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
-    result: Vector,
+    mut result: Vector,
     count: Int,
     offset: Int,
 ):
@@ -253,7 +253,7 @@ def sum_double_combine(
 def sum_double_finalize(
     info: AggregateFunctionInfo,
     source: AggregateStateArray,
-    result: Vector,
+    mut result: Vector,
     count: Int,
     offset: Int,
 ):

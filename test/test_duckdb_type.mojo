@@ -236,9 +236,9 @@ def test_interval_to_total_seconds_combined() raises:
 
 
 def test_interval_writable() raises:
-    """Interval is Writable via String.write()."""
+    """Interval is Writable via String()."""
     var iv = Interval(1, 2, 3)
-    var s = String.write(iv)
+    var s = String(iv)
     assert_true("months: 1" in s)
     assert_true("days: 2" in s)
     assert_true("micros: 3" in s)
@@ -481,10 +481,10 @@ def test_date_epoch() raises:
 def test_date_write_to() raises:
     """Date write_to produces a zero-padded ISO year-month-day string."""
     var d = Date(Int32(2025), Int8(3), Int8(29))
-    assert_equal(String.write(d), "2025-03-29")
+    assert_equal(String(d), "2025-03-29")
     # Single-digit month and day are zero-padded.
     var d2 = Date(Int32(7), Int8(1), Int8(5))
-    assert_equal(String.write(d2), "0007-01-05")
+    assert_equal(String(d2), "0007-01-05")
 
 
 def test_time_from_components() raises:
@@ -507,15 +507,15 @@ def test_time_midnight() raises:
 
 def test_time_write_to() raises:
     """Time write_to is zero-padded HH:MM:SS with a trimmed fractional part."""
-    assert_equal(String.write(Time(Int8(14), Int8(30), Int8(45), Int32(0))), "14:30:45")
-    assert_equal(String.write(Time(Int8(9), Int8(5), Int8(3), Int32(0))), "09:05:03")
+    assert_equal(String(Time(Int8(14), Int8(30), Int8(45), Int32(0))), "14:30:45")
+    assert_equal(String(Time(Int8(9), Int8(5), Int8(3), Int32(0))), "09:05:03")
     assert_equal(
-        String.write(Time(Int8(14), Int8(30), Int8(45), Int32(123456))),
+        String(Time(Int8(14), Int8(30), Int8(45), Int32(123456))),
         "14:30:45.123456",
     )
     # Trailing zeros in the fraction are stripped (.5, not .500000).
     assert_equal(
-        String.write(Time(Int8(0), Int8(0), Int8(0), Int32(500000))), "00:00:00.5"
+        String(Time(Int8(0), Int8(0), Int8(0), Int32(500000))), "00:00:00.5"
     )
 
 

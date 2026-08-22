@@ -87,7 +87,7 @@ requirements:
     - ninja
 
   host:
-    - duckdb-from-source ==1.5.4
+    - duckdb-from-source ==1.5.5
 
   run:
-    - duckdb-from-source ==1.5.4
+    - duckdb-from-source ==1.5.5

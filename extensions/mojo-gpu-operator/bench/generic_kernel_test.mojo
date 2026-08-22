@@ -11,7 +11,7 @@ Run:
     extensions/mojo-gpu-operator/bench/generic_kernel_test.mojo
 """
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.memory import alloc
 from std.sys import has_accelerator
 from raw_plan_tags import (

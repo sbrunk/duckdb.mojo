@@ -41,18 +41,18 @@ struct DuckDBValue(Movable):
         """
         self._value = value
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor that transfers ownership of the underlying value.
         
         Args:
-            take: The existing DuckDBValue to move from.
+            move: The existing DuckDBValue to move from.
         """
-        self._value = take._value
+        self._value = move._value
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroys the value and deallocates all associated memory."""
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_destroy_value(UnsafePointer(to=self._value))
+        libduckdb.duckdb_destroy_value(Pointer(to=self._value))
 
     # ===--------------------------------------------------------------------===#
     # Factory methods for creating values
@@ -102,7 +102,7 @@ struct DuckDBValue(Movable):
         return Self(libduckdb.duckdb_create_decimal(value))
 
     @staticmethod
-    def from_enum[is_owned: Bool, origin: ImmutOrigin](type: LogicalType[is_owned, origin], value: UInt64) -> Self:
+    def from_enum[is_owned: Bool, origin: ImmOrigin](type: LogicalType[is_owned, origin], value: UInt64) -> Self:
         """Creates a value from an enum (ENUM).
 
         Args:
@@ -321,7 +321,7 @@ struct DuckDBValue(Movable):
             A new DuckDBValue containing the interval.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return Self(libduckdb.duckdb_create_interval(UnsafePointer(to=value).bitcast[duckdb_interval]()[]))
+        return Self(libduckdb.duckdb_create_interval(Pointer(to=value).unsafe_bitcast[duckdb_interval]()[]))
 
     @staticmethod
     def from_blob(data: Span[UInt8, _]) -> Self:
@@ -350,7 +350,7 @@ struct DuckDBValue(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         var bit_val = duckdb_bit(
-            UnsafePointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(data.unsafe_ptr())),
+            Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(data.unsafe_ptr())),
             idx_t(len(data))
         )
         return Self(libduckdb.duckdb_create_bit(bit_val))
@@ -560,7 +560,7 @@ struct DuckDBValue(Movable):
             The interval value, or MinValue if the value cannot be converted.
         """
         ref libduckdb = DuckDB().libduckdb()
-        return UnsafePointer(to=libduckdb.duckdb_get_interval(self._value)).bitcast[Interval]()[]
+        return Pointer(to=libduckdb.duckdb_get_interval(self._value)).unsafe_bitcast[Interval]()[]
 
     def as_blob(self) -> List[UInt8]:
         """Extracts the blob value.
@@ -571,9 +571,9 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         var blob = libduckdb.duckdb_get_blob(self._value)
         var result = List[UInt8](capacity=Int(blob.size))
-        var data_ptr = blob.data.bitcast[UInt8]()
+        var data_ptr = blob.data.unsafe_bitcast[UInt8]()
         for i in range(Int(blob.size)):
-            result.append(data_ptr[i])
+            result.append(data_ptr[unsafe_offset=i])
         libduckdb.duckdb_free(blob.data)
         return result^
 
@@ -587,8 +587,8 @@ struct DuckDBValue(Movable):
         var bit_val = libduckdb.duckdb_get_bit(self._value)
         var result = List[UInt8](capacity=Int(bit_val.size))
         for i in range(Int(bit_val.size)):
-            result.append(bit_val.data[i])
-        libduckdb.duckdb_free(bit_val.data.bitcast[NoneType]())
+            result.append(bit_val.data[unsafe_offset=i])
+        libduckdb.duckdb_free(bit_val.data.unsafe_bitcast[NoneType]())
         return result^
 
     def as_uuid(self) -> UInt128:
@@ -612,7 +612,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         var c_str = libduckdb.duckdb_get_varchar(self._value)
         var result = String(unsafe_from_utf8_ptr=c_str)
-        libduckdb.duckdb_free(c_str.bitcast[NoneType]())
+        libduckdb.duckdb_free(c_str.unsafe_bitcast[NoneType]())
         return result
 
     def to_sql_string(self) -> String:
@@ -627,7 +627,7 @@ struct DuckDBValue(Movable):
         ref libduckdb = DuckDB().libduckdb()
         var c_str = libduckdb.duckdb_value_to_string(self._value)
         var result = String(unsafe_from_utf8_ptr=c_str)
-        libduckdb.duckdb_free(c_str.bitcast[NoneType]())
+        libduckdb.duckdb_free(c_str.unsafe_bitcast[NoneType]())
         return result
 
     def get_type(ref [_]self: Self) -> LogicalType[is_owned=False, origin=origin_of(self)]:

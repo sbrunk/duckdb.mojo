@@ -18,8 +18,8 @@ Run:
 """
 
 from std.gpu import block_idx, thread_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
-from std.gpu.memory import AddressSpace
+from max.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.memory import AddressSpace
 from std.memory import alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal

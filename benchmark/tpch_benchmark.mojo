@@ -37,17 +37,17 @@ from std import benchmark
 # No scale adjustment (division) is needed — exactly matching DuckDB internals.
 
 
-def simd_add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL add: same-scale Int64 addition."""
     return a + b
 
 
-def simd_subtract[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_subtract[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL subtract: same-scale Int64 subtraction."""
     return a - b
 
 
-def simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def simd_multiply[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     """DECIMAL multiply with scale correction.
 
     Both inputs are scale-4, so raw multiply gives scale 8.
@@ -60,7 +60,7 @@ def simd_multiply[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> S
 # we keep DOUBLE since DuckDB itself casts DECIMAL→DOUBLE for '/'.
 
 
-def simd_divide_f64[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def simd_divide_f64[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     """DOUBLE division — DuckDB uses DOUBLE for DECIMAL division too."""
     return a / b
 
@@ -242,7 +242,7 @@ def run_benchmark(
 ) raises:
     """Run a single benchmark comparing standard vs Mojo query."""
     print("\n  " + name)
-    print("  " + "-" * len(name))
+    print("  " + "-" * name.byte_length())
 
     # Warmup
     for _ in range(warmup_iters):

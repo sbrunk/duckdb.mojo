@@ -5,8 +5,8 @@ from std.testing.suite import TestSuite
 
 def test_vector_get_column_type() raises:
     """Test getting the column type from a vector."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 42 as num, 'hello' as text, 3.14 as pi")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 42 as num, 'hello' as text, 3.14 as pi")
 
     var chunk = result.fetch_chunk()
     var vec_int = chunk.get_vector(0)
@@ -18,7 +18,7 @@ def test_vector_get_column_type() raises:
     assert_equal(vec_dbl.get_column_type().get_type_id(), DuckDBType.decimal)
     
     # Validate actual values
-    var int_data = vec_int.get_data().bitcast[Int32]()
+    var int_data = vec_int.get_data().unsafe_bitcast[Int32]()
     assert_equal(int_data[0], 42)
 
 
@@ -66,8 +66,8 @@ def test_vector_assign_string_element_len() raises:
 
 def test_vector_get_data() raises:
     """Test getting the data pointer from a vector."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 1, 2, 3")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 1, 2, 3")
 
     var chunk = result.fetch_chunk()
     var vec = chunk.get_vector(0)
@@ -76,14 +76,14 @@ def test_vector_get_data() raises:
     assert_not_equal(Int(data_ptr), 0)
     
     # Validate actual values
-    var int_data = data_ptr.bitcast[Int32]()
+    var int_data = data_ptr.unsafe_bitcast[Int32]()
     assert_equal(int_data[0], 1)
 
 
 def test_vector_get_validity() raises:
     """Test getting the validity mask from a vector."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
 
     var chunk = result.fetch_chunk()
     var vec = chunk.get_vector(0)
@@ -94,7 +94,7 @@ def test_vector_get_validity() raises:
     var mask = validity.value()
 
     # Validate the actual data and validity
-    var data_ptr = vec.get_data().bitcast[Int32]()
+    var data_ptr = vec.get_data().unsafe_bitcast[Int32]()
     assert_true(Bool((mask[0] >> 0) & 1))  # Row 0: valid
     assert_equal(data_ptr[0], 1)
     assert_false(Bool((mask[0] >> 1) & 1))  # Row 1: NULL
@@ -117,8 +117,8 @@ def test_vector_ensure_validity_writable() raises:
 
 def test_vector_list_operations() raises:
     """Test list vector operations."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT [1, 2, 3] as list_col")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT [1, 2, 3] as list_col")
 
     var chunk = result.fetch_chunk()
     var list_vec = chunk.get_vector(0)
@@ -135,7 +135,7 @@ def test_vector_list_operations() raises:
     assert_equal(size, 3)
     
     # Validate actual values in child
-    var int_data = child_vec.get_data().bitcast[Int32]()
+    var int_data = child_vec.get_data().unsafe_bitcast[Int32]()
     assert_equal(int_data[0], 1)
     assert_equal(int_data[1], 2)
     assert_equal(int_data[2], 3)
@@ -143,8 +143,8 @@ def test_vector_list_operations() raises:
 
 def test_vector_list_nested() raises:
     """Test nested list vector operations."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT [[1, 2], [3, 4, 5]] as nested_list")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT [[1, 2], [3, 4, 5]] as nested_list")
 
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)  # 1 row in chunk
@@ -156,7 +156,7 @@ def test_vector_list_nested() raises:
 
     assert_equal(outer_list.list_get_size(), 2)  # 2 inner lists: [1,2] and [3,4,5]
     # Get the list_entry data to see how many inner lists there are
-    var outer_data = outer_list.get_data().bitcast[duckdb_list_entry]()
+    var outer_data = outer_list.get_data().unsafe_bitcast[duckdb_list_entry]()
     var outer_entry = outer_data[0]  # First (and only) row
     assert_equal(outer_entry.length, 2)  # 2 inner lists: [1,2] and [3,4,5]
 
@@ -170,7 +170,7 @@ def test_vector_list_nested() raises:
     assert_equal(values.get_column_type().get_type_id(), DuckDBType.integer)
 
     # Validate the actual integer values
-    var int_data = values.get_data().bitcast[Int32]()
+    var int_data = values.get_data().unsafe_bitcast[Int32]()
     assert_equal(int_data[0], 1)
     assert_equal(int_data[1], 2)
     assert_equal(int_data[2], 3)
@@ -180,8 +180,8 @@ def test_vector_list_nested() raises:
 
 def test_vector_struct_operations() raises:
     """Test struct vector operations."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT {'a': 1, 'b': 'hello'} as struct_col")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT {'a': 1, 'b': 'hello'} as struct_col")
 
     var chunk = result.fetch_chunk()
     var struct_vec = chunk.get_vector(0)
@@ -199,15 +199,15 @@ def test_vector_struct_operations() raises:
     assert_equal(field1.get_column_type().get_type_id(), DuckDBType.varchar)
     
     # Validate actual values
-    var int_data = field0.get_data().bitcast[Int32]()
+    var int_data = field0.get_data().unsafe_bitcast[Int32]()
     assert_equal(int_data[0], 1)
 
 
 def test_vector_array_operations() raises:
     """Test array vector operations."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     # Create an array with fixed size
-    result = con.execute("SELECT [1, 2, 3]::INT[3] as array_col")
+    var result = con.execute("SELECT [1, 2, 3]::INT[3] as array_col")
 
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 1)  # 1 row
@@ -222,7 +222,7 @@ def test_vector_array_operations() raises:
     assert_equal(child_vec.get_column_type().get_type_id(), DuckDBType.integer)
 
     # Read the actual integer data from the child vector
-    var data_ptr = child_vec.get_data().bitcast[Int32]()
+    var data_ptr = child_vec.get_data().unsafe_bitcast[Int32]()
     assert_equal(data_ptr[0], 1)
     assert_equal(data_ptr[1], 2)
     assert_equal(data_ptr[2], 3)
@@ -230,9 +230,9 @@ def test_vector_array_operations() raises:
 
 def test_vector_array_multiple_rows() raises:
     """Test array vector with multiple rows."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     # Create multiple arrays with fixed size
-    result = con.execute(
+    var result = con.execute(
         "SELECT * FROM (VALUES ([1, 2]::INT[2]), ([3, 4]::INT[2])) AS"
         " t(array_col)"
     )
@@ -248,7 +248,7 @@ def test_vector_array_multiple_rows() raises:
     assert_equal(child_vec.get_column_type().get_type_id(), DuckDBType.integer)
 
     # Validate the actual data: [1, 2, 3, 4]
-    var data_ptr = child_vec.get_data().bitcast[Int32]()
+    var data_ptr = child_vec.get_data().unsafe_bitcast[Int32]()
     assert_equal(data_ptr[0], 1)
     assert_equal(data_ptr[1], 2)
     assert_equal(data_ptr[2], 3)
@@ -257,8 +257,8 @@ def test_vector_array_multiple_rows() raises:
 
 def test_vector_types_boolean() raises:
     """Test vector with boolean type."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT TRUE, FALSE, TRUE")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT TRUE, FALSE, TRUE")
 
     var chunk = result.fetch_chunk()
     var vec = chunk.get_vector(0)
@@ -266,14 +266,14 @@ def test_vector_types_boolean() raises:
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.boolean)
     
     # Validate actual boolean values
-    var bool_data = vec.get_data().bitcast[Bool]()
+    var bool_data = vec.get_data().unsafe_bitcast[Bool]()
     assert_true(bool_data[0])
 
 
 def test_vector_types_integers() raises:
     """Test vector with various integer types."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT 1::TINYINT as ti, 2::SMALLINT as si, 3::INTEGER as i, 4::BIGINT"
         " as bi"
     )
@@ -291,10 +291,10 @@ def test_vector_types_integers() raises:
     assert_equal(vec_bi.get_column_type().get_type_id(), DuckDBType.bigint)
     
     # Validate actual values
-    var ti_data = vec_ti.get_data().bitcast[Int8]()
-    var si_data = vec_si.get_data().bitcast[Int16]()
-    var i_data = vec_i.get_data().bitcast[Int32]()
-    var bi_data = vec_bi.get_data().bitcast[Int64]()
+    var ti_data = vec_ti.get_data().unsafe_bitcast[Int8]()
+    var si_data = vec_si.get_data().unsafe_bitcast[Int16]()
+    var i_data = vec_i.get_data().unsafe_bitcast[Int32]()
+    var bi_data = vec_bi.get_data().unsafe_bitcast[Int64]()
     assert_equal(ti_data[0], 1)
     assert_equal(si_data[0], 2)
     assert_equal(i_data[0], 3)
@@ -303,8 +303,8 @@ def test_vector_types_integers() raises:
 
 def test_vector_types_unsigned_integers() raises:
     """Test vector with unsigned integer types."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT 1::UTINYINT as uti, 2::USMALLINT as usi, 3::UINTEGER as ui,"
         " 4::UBIGINT as ubi"
     )
@@ -322,10 +322,10 @@ def test_vector_types_unsigned_integers() raises:
     assert_equal(vec_ubi.get_column_type().get_type_id(), DuckDBType.ubigint)
     
     # Validate actual values
-    var uti_data = vec_uti.get_data().bitcast[UInt8]()
-    var usi_data = vec_usi.get_data().bitcast[UInt16]()
-    var ui_data = vec_ui.get_data().bitcast[UInt32]()
-    var ubi_data = vec_ubi.get_data().bitcast[UInt64]()
+    var uti_data = vec_uti.get_data().unsafe_bitcast[UInt8]()
+    var usi_data = vec_usi.get_data().unsafe_bitcast[UInt16]()
+    var ui_data = vec_ui.get_data().unsafe_bitcast[UInt32]()
+    var ubi_data = vec_ubi.get_data().unsafe_bitcast[UInt64]()
     assert_equal(uti_data[0], 1)
     assert_equal(usi_data[0], 2)
     assert_equal(ui_data[0], 3)
@@ -334,8 +334,8 @@ def test_vector_types_unsigned_integers() raises:
 
 def test_vector_types_floats() raises:
     """Test vector with float and double types."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 1.5::FLOAT as f, 2.5::DOUBLE as d")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 1.5::FLOAT as f, 2.5::DOUBLE as d")
 
     var chunk = result.fetch_chunk()
 
@@ -346,16 +346,16 @@ def test_vector_types_floats() raises:
     assert_equal(vec_d.get_column_type().get_type_id(), DuckDBType.double)
     
     # Validate actual values
-    var f_data = vec_f.get_data().bitcast[Float32]()
-    var d_data = vec_d.get_data().bitcast[Float64]()
+    var f_data = vec_f.get_data().unsafe_bitcast[Float32]()
+    var d_data = vec_d.get_data().unsafe_bitcast[Float64]()
     assert_equal(f_data[0], 1.5)
     assert_equal(d_data[0], 2.5)
 
 
 def test_vector_types_temporal() raises:
     """Test vector with temporal types."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT DATE '2024-01-01' as d, TIME '12:00:00' as t, TIMESTAMP"
         " '2024-01-01 12:00:00' as ts"
     )
@@ -373,8 +373,8 @@ def test_vector_types_temporal() raises:
 
 def test_vector_null_values() raises:
     """Test vector with NULL values."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT NULL::INTEGER as null_int, NULL::VARCHAR as null_str"
     )
 
@@ -390,8 +390,8 @@ def test_vector_null_values() raises:
 
 def test_vector_mixed_nulls() raises:
     """Test vector with mixed NULL and non-NULL values."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT * FROM (VALUES (1), (NULL), (3)) AS t(col)")
 
     var chunk = result.fetch_chunk()
     assert_equal(len(chunk), 3)  # 3 rows
@@ -400,7 +400,7 @@ def test_vector_mixed_nulls() raises:
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.integer)
 
     # Validate the actual data and validity mask
-    var data_ptr = vec.get_data().bitcast[Int32]()
+    var data_ptr = vec.get_data().unsafe_bitcast[Int32]()
     var validity = vec.get_validity()
     assert_true(validity is not None)
     var mask = validity.value()
@@ -419,8 +419,8 @@ def test_vector_mixed_nulls() raises:
 
 def test_vector_empty_list() raises:
     """Test vector with empty list."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT []::INT[] as empty_list")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT []::INT[] as empty_list")
 
     var chunk = result.fetch_chunk()
     var list_vec = chunk.get_vector(0)
@@ -431,14 +431,14 @@ def test_vector_empty_list() raises:
     assert_equal(size, 0)
     
     # Verify list entry shows empty list
-    var list_data = list_vec.get_data().bitcast[duckdb_list_entry]()
+    var list_data = list_vec.get_data().unsafe_bitcast[duckdb_list_entry]()
     assert_equal(list_data[0].length, 0)
 
 
 def test_vector_map_type() raises:
     """Test vector with map type."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP([1, 2], ['a', 'b']) as map_col")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP([1, 2], ['a', 'b']) as map_col")
 
     var chunk = result.fetch_chunk()
     var map_vec = chunk.get_vector(0)
@@ -449,8 +449,8 @@ def test_vector_map_type() raises:
 
 def test_vector_chunk_size() raises:
     """Test that chunk size is correct for vectors."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT * FROM range(100)")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT * FROM range(100)")
 
     var chunk = result.fetch_chunk()
     # Chunk should have all 100 rows
@@ -462,9 +462,9 @@ def test_vector_chunk_size() raises:
 
 def test_vector_multiple_chunks() raises:
     """Test vectors across multiple chunks."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     # Generate more rows than fit in one chunk (typically 2048)
-    result = con.execute("SELECT * FROM range(5000)")
+    var result = con.execute("SELECT * FROM range(5000)")
 
     var chunk1 = result.fetch_chunk()
     assert_true(len(chunk1) > 0)
@@ -497,8 +497,8 @@ def test_vector_multiple_chunks() raises:
 
 def test_vector_varchar_strings() raises:
     """Test vector with various string values."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT * FROM (VALUES ('short'), ('a much longer string value'), (''))"
         " AS t(str)"
     )
@@ -510,8 +510,8 @@ def test_vector_varchar_strings() raises:
     assert_equal(vec.get_column_type().get_type_id(), DuckDBType.varchar)
 
 def test_vector_lifetime() raises:
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 1, 2, 3")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 1, 2, 3")
 
     var chunk = result.fetch_chunk()
     _ = chunk.get_vector(0)

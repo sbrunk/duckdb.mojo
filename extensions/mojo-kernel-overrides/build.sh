@@ -4,7 +4,7 @@
 #
 # Overridable env:
 #   DUCKDB_INCLUDE  duckdb headers dir   (default: $CONDA_PREFIX/include)
-#   DUCKDB_VERSION  for the CPP footer   (default: v1.5.4)
+#   DUCKDB_VERSION  for the CPP footer   (default: v1.5.5)
 #   CXX             C++ compiler         (default: clang++)
 set -euo pipefail
 
@@ -14,7 +14,7 @@ BUILD="$HERE/build"
 mkdir -p "$BUILD"
 
 DUCKDB_INCLUDE="${DUCKDB_INCLUDE:-${CONDA_PREFIX:?set CONDA_PREFIX or DUCKDB_INCLUDE}/include}"
-DUCKDB_VERSION="${DUCKDB_VERSION:-v1.5.4}"
+DUCKDB_VERSION="${DUCKDB_VERSION:-v1.5.5}"
 CXX="${CXX:-clang++}"
 
 case "$(uname -s)" in
