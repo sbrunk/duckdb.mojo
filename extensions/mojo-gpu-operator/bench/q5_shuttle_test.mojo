@@ -215,12 +215,12 @@ def build_q5_tape(
 def build_string_t(
     strs: List[String],
 ) -> Tuple[
-    UnsafePointer[UInt8, MutAnyOrigin],
-    List[UnsafePointer[UInt8, MutAnyOrigin]],
+    Pointer[UInt8, MutAnyOrigin],
+    List[Pointer[UInt8, MutAnyOrigin]],
 ]:
     var n = len(strs)
     var stbuf = alloc[UInt8]((n * 16) if n > 0 else 1)
-    var owned: List[UnsafePointer[UInt8, MutAnyOrigin]] = []
+    var owned: List[Pointer[UInt8, MutAnyOrigin]] = []
     for r in range(n):
         ref s = strs[r]
         var L = s.byte_length()
@@ -435,7 +435,7 @@ def main() raises:
 
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -562,7 +562,7 @@ def main() raises:
 
 # n_nationkey is an INTEGER column 0..N_NATIONS-1 (dense by row order).
 def _feed_nat_key(
-    h: UnsafePointer[NoneType, MutAnyOrigin], req: Int, j: Int
+    h: Pointer[NoneType, MutAnyOrigin], req: Int, j: Int
 ) raises -> Int:
     var nk = alloc[Int32](N_NATIONS)
     for k in range(N_NATIONS):
@@ -571,10 +571,10 @@ def _feed_nat_key(
 
 
 def _feed_nat_region(
-    h: UnsafePointer[NoneType, MutAnyOrigin],
+    h: Pointer[NoneType, MutAnyOrigin],
     req: Int,
     j: Int,
-    nation_region: UnsafePointer[Int32, MutAnyOrigin],
+    nation_region: Pointer[Int32, MutAnyOrigin],
 ) raises -> Int:
     return mojo_gpu_feed_column(
         h, req, j, nation_region.bitcast[NoneType](), N_NATIONS, TYPE_INTEGER

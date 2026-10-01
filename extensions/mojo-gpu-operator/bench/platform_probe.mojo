@@ -9,7 +9,7 @@ atomics are available).
 Run: pixi run mojo run extensions/mojo-gpu-operator/bench/platform_probe.mojo
 """
 
-from std.gpu import WARP_SIZE, thread_idx, block_idx
+from max.gpu import WARP_SIZE, thread_idx, block_idx
 from max.gpu.host import DeviceContext
 from std.sys import has_accelerator
 from std.sys.info import (
@@ -26,7 +26,7 @@ from std.sys.info import (
 # In-kernel target dispatch: is_* reflects the GPU we are compiled for.
 # Writes a small tag per the target's atomics capability so we can confirm the
 # comptime branch compiles and runs on the actual device.
-def probe_kernel(out_buf: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+def probe_kernel(out_buf: Pointer[Scalar[DType.int32], MutAnyOrigin]):
     if Int(block_idx.x) == 0 and Int(thread_idx.x) == 0:
         comptime has_64 = is_nvidia_gpu() or is_amd_gpu()
         comptime if has_64:

@@ -4,7 +4,7 @@ Improvement #2 for the mojo-gpu-operator: today the segreduce kernels evaluate
 the per-row metric/filter expressions with a runtime stack-machine interpreter
 (`eval_program` in src/expr_vm.mojo). For each row and metric it loops over a
 flat int64 program in global memory, switches on an op tag, and pushes/pops an
-InlineArray stack. This probe asks: if the program structure is a compile-time
+Array stack. This probe asks: if the program structure is a compile-time
 value, does Mojo's comptime machinery unroll it into branch-free, register-only,
 straight-line arithmetic, and is that noticeably faster on this Apple M3 Max?
 
@@ -47,8 +47,8 @@ switch (one comptime-specialized kernel instance per kind), with the interpreter
 as the general fallback. The probe models one such per-kind instance.
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -86,21 +86,21 @@ comptime M_Q6 = 1  # Q6 single-metric case
 # seg_ungrouped_kernel does (filter via a 1-op pass-column program).
 # ===========================================================================
 def interp_kernel(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
-    pass_prog: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    pass_prog: Pointer[Scalar[DType.int64], MutAnyOrigin],
     pass_len: Int,
-    metric_progs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    metric_lens: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_progs: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_offsets: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    metric_lens: Pointer[Scalar[DType.int64], MutAnyOrigin],
     M: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dims: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    dim_offsets: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
 ):
     var lane = Int(thread_idx.x)
     var stride = NBLOCKS * WARP
-    var acc = InlineArray[Int64, M_Q1](fill=0)
+    var acc = Array[Int64, M_Q1](fill=0)
     var i = Int(block_idx.x) * WARP + lane
     while i < n_rows:
         var passes = True
@@ -147,19 +147,19 @@ def interp_kernel(
 
 # Per-metric column slot for the LOAD/count metrics; -1 == count (PUSH 1),
 # -2 marks the two composite metrics handled by direct expressions (m4, m5).
-comptime Q1_SLOT: InlineArray[Int, M_Q1] = [
+comptime Q1_SLOT: Array[Int, M_Q1] = [
     -1, S_QTY, S_EXT, S_DISC, -2, -2, S_QTY, S_EXT
 ]
 
 
 def comptime_kernel_q1(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
 ):
     var lane = Int(thread_idx.x)
     var stride = NBLOCKS * WARP
-    var acc = InlineArray[Int64, M_Q1](fill=0)
+    var acc = Array[Int64, M_Q1](fill=0)
     var i = Int(block_idx.x) * WARP + lane
     while i < n_rows:
         # Filter: precomputed 0/1 pass column (S_PASS), comptime-known slot.
@@ -193,9 +193,9 @@ def comptime_kernel_q1(
 # disc; MUL). The Q6 oracle's range predicates are likewise lowered to the
 # precomputed pass column here (the simplest planner path).
 def comptime_kernel_q6(
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
 ):
     var lane = Int(thread_idx.x)
     var stride = NBLOCKS * WARP
@@ -419,8 +419,8 @@ def main() raises:
             if first_mismatch < 0:
                 first_mismatch = k
     # also reduce both to int128 totals per metric for a human-readable check.
-    var tot_a = InlineArray[Int128, M_Q1](fill=Int128(0))
-    var tot_b = InlineArray[Int128, M_Q1](fill=Int128(0))
+    var tot_a = Array[Int128, M_Q1](fill=Int128(0))
+    var tot_b = Array[Int128, M_Q1](fill=Int128(0))
     for b in range(NBLOCKS):
         for m in range(M_Q1):
             tot_a[m] += Int128(pa[b * M_Q1 + m])

@@ -206,16 +206,16 @@ from duckdb.extension import duckdb_extension_access, Extension
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
-fn add_numbers(a: Int64, b: Int64) -> Int64:
+def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection) raises:
+def init(conn: Connection) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
 
 @export("my_ext_init_c_api")
-fn my_ext_init_c_api(
+def my_ext_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
 ) abi("C") -> Bool:
@@ -455,7 +455,7 @@ var result = conn.execute("SELECT mojo_sqrt(x), mojo_sin(x) FROM my_table")
 Write your own SIMD-vectorized kernels for fused computations:
 
 ```mojo
-fn sin_plus_cos[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def sin_plus_cos[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return math.sin(x) + math.cos(x)
 
 # Register. Data is processed in hardware-optimal SIMD batches automatically
@@ -469,7 +469,7 @@ ScalarFunction.from_simd_function[
 For simple per-row logic without manual SIMD:
 
 ```mojo
-fn add_one(x: Int32) -> Int32:
+def add_one(x: Int32) -> Int32:
     return x + 1
 
 ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
@@ -580,20 +580,20 @@ struct CounterBindData(Copyable, Movable):
     var limit: Int
     var current_row: Int
 
-fn destroy_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
+def destroy_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
     data.bitcast[CounterBindData]().destroy_pointee()
 
-fn counter_bind(info: TableBindInfo):
+def counter_bind(info: TableBindInfo):
     info.add_result_column("i", LogicalType(DuckDBType.integer))
     var limit = Int(info.get_parameter(0).as_int32())
     var bind_data = alloc[CounterBindData](1)
     bind_data.init_pointee_move(CounterBindData(limit=limit, current_row=0))
     info.set_bind_data(bind_data.bitcast[NoneType](), destroy_bind_data)
 
-fn counter_init(info: TableInitInfo):
+def counter_init(info: TableInitInfo):
     pass
 
-fn counter_function(info: TableFunctionInfo, mut output: Chunk):
+def counter_function(info: TableFunctionInfo, mut output: Chunk):
     var bind_data = info.get_bind_data().bitcast[CounterBindData]()
     var current = bind_data[].current_row
     var remaining = bind_data[].limit - current
@@ -607,7 +607,7 @@ fn counter_function(info: TableFunctionInfo, mut output: Chunk):
     bind_data[].current_row = current + batch
     output.set_size(batch)
 
-fn main() raises:
+def main() raises:
     var conn = DuckDB.connect(":memory:")
     var tf = TableFunction()
     tf.set_name("generate_ints")
@@ -649,10 +649,10 @@ var result = conn.execute("SELECT mojo_sum(x), mojo_max(x) FROM my_table")
 Define your own binary SIMD reduce function and identity element:
 
 ```mojo
-fn my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+def my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return a + b
 
-fn zero() -> Scalar[DType.float64]:
+def zero() -> Scalar[DType.float64]:
     return 0.0
 
 AggregateFunction.from_reduce["custom_sum", DType.float64, my_add, zero](conn)
@@ -662,10 +662,10 @@ Another overload takes separate input and output types, so you can accumulate in
 wider type (for example Int32 input and Int64 output):
 
 ```mojo
-fn add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+def add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     return a + b
 
-fn zero() -> Scalar[DType.int64]:
+def zero() -> Scalar[DType.int64]:
     return 0
 
 AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
@@ -682,33 +682,33 @@ from duckdb import *
 from duckdb.aggregate_function import *
 from duckdb._libduckdb import *
 
-fn my_state_size(info: AggregateFunctionInfo) -> idx_t:
+def my_state_size(info: AggregateFunctionInfo) -> idx_t:
     return idx_t(size_of[Int64]())
 
-fn my_state_init(info: AggregateFunctionInfo, state: AggregateState):
+def my_state_init(info: AggregateFunctionInfo, state: AggregateState):
     state.get_data().bitcast[Int64]().init_pointee_move(0)
 
-fn my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
+def my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
     var data = input.get_vector(0).get_data().bitcast[Int32]()
     for i in range(len(input)):
         var s = states.get_state(i).get_data().bitcast[Int64]()
         s[] += Int64(data[i])
 
-fn my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
+def my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
               target: AggregateStateArray, count: Int):
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[Int64]()
         var t = target.get_state(i).get_data().bitcast[Int64]()
         t[] += s[]
 
-fn my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
+def my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
                result: Vector, count: Int, offset: Int):
     var out = result.get_data().bitcast[Int64]()
     for i in range(count):
         var s = source.get_state(i).get_data().bitcast[Int64]()
         out[offset + i] = s[]
 
-fn main() raises:
+def main() raises:
     var conn = DuckDB.connect(":memory:")
     var func = AggregateFunction()
     func.set_name("my_sum")

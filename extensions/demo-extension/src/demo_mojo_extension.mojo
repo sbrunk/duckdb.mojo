@@ -49,7 +49,7 @@ def init(conn: Connection) raises:
 @export("demo_mojo_init_c_api")
 def demo_mojo_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
+    access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     """Entry point called by DuckDB when loading this extension."""
     return Extension.run[init](info, access)

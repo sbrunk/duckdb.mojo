@@ -140,15 +140,14 @@ comptime EXPR_STACK_MAX = 16
 def _col_at[
     USE_COLPTR: Bool
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     slot: Int,
     row: Int,
 ) -> Int64:
-    @parameter
-    if USE_COLPTR:
+    comptime if USE_COLPTR:
         var addr = Int(cols[slot])
-        var p = UnsafePointer[
+        var p = Pointer[
             Scalar[DType.int64],
             MutUntrackedOrigin,
             address_space = AddressSpace.GLOBAL,
@@ -162,13 +161,13 @@ def _col_at[
 def eval_program[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    prog: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dims: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Int64:
     """Evaluate one postfix program for a single row, returning its int64 value.
 
@@ -187,7 +186,7 @@ def eval_program[
     Returns:
         The per-row int64 metric value (at the metric's decimal scale).
     """
-    var stack = InlineArray[Int64, EXPR_STACK_MAX](fill=0)
+    var stack = Array[Int64, EXPR_STACK_MAX](fill=0)
     var sp = 0  # next free slot (stack depth)
     var k = 0
     while k < prog_len:
@@ -365,15 +364,15 @@ def _vm_cos_f64(x: Float64) -> Float64:
 def eval_program_f64[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    prog: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    col_div: Pointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: Pointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Float64:
     """Evaluate one postfix program for a single row on a float64 stack.
 
@@ -381,7 +380,7 @@ def eval_program_f64[
     `col_div` / `const_div`, then applies arithmetic + transcendental ops.
     Returns the per-row float64 metric value. See module note above.
     """
-    var stack = InlineArray[Float64, EXPR_STACK_MAX](fill=0.0)
+    var stack = Array[Float64, EXPR_STACK_MAX](fill=0.0)
     var sp = 0
     var k = 0
     while k < prog_len:

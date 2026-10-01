@@ -11,6 +11,6 @@ not in host context. Kernels gate with a local
 `mojo-gpu-target-introspection`).
 """
 
-from std.gpu import WARP_SIZE
+from max.gpu import WARP_SIZE
 
 comptime WARP = WARP_SIZE

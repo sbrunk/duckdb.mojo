@@ -36,7 +36,7 @@ struct DTypeValue[duckdb_type: DuckDBType](DuckDBKeyElement & TrivialRegisterPas
         writer.write(self.value)
 
     def __hash__[H: Hasher](self, mut hasher: H):
-        hasher.update(self.value)
+        self.value.__hash__(hasher)
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value

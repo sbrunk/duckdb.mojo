@@ -26,8 +26,8 @@ CPU int128-accumulated reference (int128 on the CPU side only as an extra check
 that int64 never overflows).
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -42,13 +42,13 @@ comptime N_PROBE = 6_000_000    # ~ TPC-H SF1 lineitem rows
 # grid_dim = n_seg. Each warp sums revenue over its contiguous row range.
 # ---------------------------------------------------------------------------
 def q3_seg_kernel(
-    seg_offset: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],  # n_seg+1
-    seg_key: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],     # n_seg
-    order_pass: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    ship: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    seg_rev: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],     # n_seg out
+    seg_offset: Pointer[Scalar[DType.int64], MutAnyOrigin],  # n_seg+1
+    seg_key: Pointer[Scalar[DType.int64], MutAnyOrigin],     # n_seg
+    order_pass: Pointer[Scalar[DType.uint8], MutAnyOrigin],
+    ship: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    seg_rev: Pointer[Scalar[DType.int64], MutAnyOrigin],     # n_seg out
     n_seg: Int,
     ship_cutoff: Int32,   # l_shipdate > ship_cutoff (strict)
 ):

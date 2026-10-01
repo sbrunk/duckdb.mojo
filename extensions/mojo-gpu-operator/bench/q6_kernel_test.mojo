@@ -12,8 +12,8 @@ This standalone test runs the kernel over synthetic lineitem-like data and
 checks the GPU result is bit-exact against a CPU int128 reference.
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -24,11 +24,11 @@ comptime NBLOCKS = 4096    # one warp (32 lanes) per block
 
 
 def q6_kernel(
-    ship: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    qty: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    ship: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    qty: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     ship_lo: Int32,
     ship_hi: Int32,

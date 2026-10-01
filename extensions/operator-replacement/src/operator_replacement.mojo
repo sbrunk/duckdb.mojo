@@ -67,8 +67,8 @@ struct OperatorReplacementLib:
             original_name: The function/operator to replace (e.g., "*", "sqrt", "+").
             replacement_name: The name of the replacement function in the catalog.
         """
-        var orig = original_name.as_c_string_slice()
-        var repl = replacement_name.as_c_string_slice()
+        var orig = original_name.as_c_string_span()
+        var repl = replacement_name.as_c_string_span()
         _ = self._register_function_replacement(
             orig.unsafe_ptr().as_unsafe_any_origin(),
             repl.unsafe_ptr().as_unsafe_any_origin(),

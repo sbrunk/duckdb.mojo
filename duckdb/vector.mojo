@@ -134,7 +134,7 @@ struct Vector[is_owned: Bool, origin: Origin]:
         """
         var _str = str.copy()
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_vector_assign_string_element(self._vector, index, _str.as_c_string_slice().unsafe_ptr())
+        return libduckdb.duckdb_vector_assign_string_element(self._vector, index, _str.as_c_string_span().ptr())
 
     def assign_string_element_len(self, index: idx_t, str: String, str_len: idx_t) -> NoneType:
         """Assigns a string element in the vector at the specified location. You may also use this function to assign BLOBs.
@@ -145,7 +145,7 @@ struct Vector[is_owned: Bool, origin: Origin]:
         """
         var _str = str.copy()
         ref libduckdb = DuckDB().libduckdb()
-        return libduckdb.duckdb_vector_assign_string_element_len(self._vector, index, _str.as_c_string_slice().unsafe_ptr(), str_len)
+        return libduckdb.duckdb_vector_assign_string_element_len(self._vector, index, _str.as_c_string_span().ptr(), str_len)
 
     def list_get_child(self) -> Vector[is_owned=False, origin=origin_of(self)]:
         """Retrieves the child vector of a list vector.

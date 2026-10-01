@@ -33,14 +33,14 @@ Two regimes are measured:
 
 FLOPs = 2*M*N*K. Tile sizes chosen by sweep on an RTX 4090 (sm_89)."""
 
-from std.gpu import (
+from max.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
     warp_id as get_warp_id,
 )
 from max.gpu.sync import barrier
-from std.gpu.primitives import warp
+from max.gpu.primitives import warp
 from max.gpu.memory import AddressSpace, async_copy_wait_all
 from max.gpu.host import DeviceContext
 from layout import Layout, LayoutTensor
@@ -100,12 +100,12 @@ def tc_gemm_kernel[
 
     # Warp tiling within the block: (BM/WM) rows x (BN/WN) cols of warps.
     var warp_id = get_warp_id()
-    warp_y, warp_x = udivmod(warp_id, BN // WN)
+    var warp_y, warp_x = udivmod(warp_id, BN // WN)
 
     # This warp's WM x WN slice of the BM x BN output block tile. transpose_b
     # means B rows index N, so C columns index N directly (store_d to a strided
     # global view is fine).
-    C_warp_tile = c.tile[BM, BN](block_idx.y, block_idx.x).tile[WM, WN](
+    var C_warp_tile = c.tile[BM, BN](block_idx.y, block_idx.x).tile[WM, WN](
         warp_y, warp_x
     )
 

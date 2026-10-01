@@ -216,7 +216,7 @@ def register_binary_op[func: def(duckdb_function_info, duckdb_data_chunk, duckdb
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
-    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
+    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_span().ptr())
     
     var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_FLOAT)
     lib.duckdb_scalar_function_add_parameter(function, type)
@@ -237,7 +237,7 @@ def register_unary_op[func: def(duckdb_function_info, duckdb_data_chunk, duckdb_
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
-    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
+    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_span().ptr())
     
     var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_FLOAT)
     lib.duckdb_scalar_function_add_parameter(function, type)
@@ -310,35 +310,35 @@ def main() raises:
     
     print("\n[Standard DuckDB Operators]")
     print("  Addition (x + y):    ", end="")
-    var std_add = benchmark.run[bench_add](max_iters=max_iters)
+    var std_add = benchmark.run(bench_add, max_iters=max_iters)
     std_add.print(unit="ms")
     
     print("  Multiplication:      ", end="")
-    var std_mul = benchmark.run[bench_multiply](max_iters=max_iters)
+    var std_mul = benchmark.run(bench_multiply, max_iters=max_iters)
     std_mul.print(unit="ms")
     
     print("  Complex expr:        ", end="")
-    var std_complex = benchmark.run[bench_complex](max_iters=max_iters)
+    var std_complex = benchmark.run(bench_complex, max_iters=max_iters)
     std_complex.print(unit="ms")
     
     print("  sqrt(x):             ", end="")
-    var std_sqrt = benchmark.run[bench_sqrt](max_iters=max_iters)
+    var std_sqrt = benchmark.run(bench_sqrt, max_iters=max_iters)
     std_sqrt.print(unit="ms")
     
     print("  ln(x+1):             ", end="")
-    var std_log = benchmark.run[bench_log](max_iters=max_iters)
+    var std_log = benchmark.run(bench_log, max_iters=max_iters)
     std_log.print(unit="ms")
     
     print("  cos(x):              ", end="")
-    var std_cos = benchmark.run[bench_cos](max_iters=max_iters)
+    var std_cos = benchmark.run(bench_cos, max_iters=max_iters)
     std_cos.print(unit="ms")
     
     print("  sin(x):              ", end="")
-    var std_sin = benchmark.run[bench_sin](max_iters=max_iters)
+    var std_sin = benchmark.run(bench_sin, max_iters=max_iters)
     std_sin.print(unit="ms")
     
     print("  cos(x)+sin(x):       ", end="")
-    var std_cos_sin = benchmark.run[bench_cos_sin](max_iters=max_iters)
+    var std_cos_sin = benchmark.run(bench_cos_sin, max_iters=max_iters)
     std_cos_sin.print(unit="ms")
     
     print()
@@ -390,35 +390,35 @@ def main() raises:
     
     print("[Mojo Functions - Explicit Calls]")
     print("  mojo_add(x, y):      ", end="")
-    var explicit_add = benchmark.run[bench_mojo_add_explicit](max_iters=max_iters)
+    var explicit_add = benchmark.run(bench_mojo_add_explicit, max_iters=max_iters)
     explicit_add.print(unit="ms")
     
     print("  mojo_multiply(x, y): ", end="")
-    var explicit_mul = benchmark.run[bench_mojo_multiply_explicit](max_iters=max_iters)
+    var explicit_mul = benchmark.run(bench_mojo_multiply_explicit, max_iters=max_iters)
     explicit_mul.print(unit="ms")
     
     print("  mojo_sqrt(x):        ", end="")
-    var explicit_sqrt = benchmark.run[bench_mojo_sqrt_explicit](max_iters=max_iters)
+    var explicit_sqrt = benchmark.run(bench_mojo_sqrt_explicit, max_iters=max_iters)
     explicit_sqrt.print(unit="ms")
     
     print("  mojo_log(x+1):       ", end="")
-    var explicit_log = benchmark.run[bench_mojo_log_explicit](max_iters=max_iters)
+    var explicit_log = benchmark.run(bench_mojo_log_explicit, max_iters=max_iters)
     explicit_log.print(unit="ms")
     
     print("  mojo_cos(x):         ", end="")
-    var explicit_cos = benchmark.run[bench_mojo_cos_explicit](max_iters=max_iters)
+    var explicit_cos = benchmark.run(bench_mojo_cos_explicit, max_iters=max_iters)
     explicit_cos.print(unit="ms")
     
     print("  mojo_sin(x):         ", end="")
-    var explicit_sin = benchmark.run[bench_mojo_sin_explicit](max_iters=max_iters)
+    var explicit_sin = benchmark.run(bench_mojo_sin_explicit, max_iters=max_iters)
     explicit_sin.print(unit="ms")
     
     print("  mojo_add(cos, sin):  ", end="")
-    var explicit_cos_sin = benchmark.run[bench_mojo_cos_sin_explicit](max_iters=max_iters)
+    var explicit_cos_sin = benchmark.run(bench_mojo_cos_sin_explicit, max_iters=max_iters)
     explicit_cos_sin.print(unit="ms")
     
     print("  mojo_cos_sin(x):     ", end="")
-    var explicit_fused = benchmark.run[bench_mojo_cos_sin_fused_explicit](max_iters=max_iters)
+    var explicit_fused = benchmark.run(bench_mojo_cos_sin_fused_explicit, max_iters=max_iters)
     explicit_fused.print(unit="ms")
     
     print()
@@ -461,39 +461,39 @@ def main() raises:
     
     print("\n[Mojo SIMD Operators]")
     print("  Addition (x + y):    ", end="")
-    var mojo_add_time = benchmark.run[bench_add](max_iters=max_iters)
+    var mojo_add_time = benchmark.run(bench_add, max_iters=max_iters)
     mojo_add_time.print(unit="ms")
     
     print("  Multiplication:      ", end="")
-    var mojo_mul_time = benchmark.run[bench_multiply](max_iters=max_iters)
+    var mojo_mul_time = benchmark.run(bench_multiply, max_iters=max_iters)
     mojo_mul_time.print(unit="ms")
     
     print("  Complex expr:        ", end="")
-    var mojo_complex_time = benchmark.run[bench_complex](max_iters=max_iters)
+    var mojo_complex_time = benchmark.run(bench_complex, max_iters=max_iters)
     mojo_complex_time.print(unit="ms")
     
     print("  sqrt(x):             ", end="")
-    var mojo_sqrt_time = benchmark.run[bench_sqrt](max_iters=max_iters)
+    var mojo_sqrt_time = benchmark.run(bench_sqrt, max_iters=max_iters)
     mojo_sqrt_time.print(unit="ms")
     
     print("  ln(x+1):             ", end="")
-    var mojo_log_time = benchmark.run[bench_log](max_iters=max_iters)
+    var mojo_log_time = benchmark.run(bench_log, max_iters=max_iters)
     mojo_log_time.print(unit="ms")
     
     print("  cos(x):              ", end="")
-    var mojo_cos_time = benchmark.run[bench_cos](max_iters=max_iters)
+    var mojo_cos_time = benchmark.run(bench_cos, max_iters=max_iters)
     mojo_cos_time.print(unit="ms")
     
     print("  sin(x):              ", end="")
-    var mojo_sin_time = benchmark.run[bench_sin](max_iters=max_iters)
+    var mojo_sin_time = benchmark.run(bench_sin, max_iters=max_iters)
     mojo_sin_time.print(unit="ms")
     
     print("  cos(x)+sin(x):       ", end="")
-    var mojo_cos_sin_time = benchmark.run[bench_cos_sin](max_iters=max_iters)
+    var mojo_cos_sin_time = benchmark.run(bench_cos_sin, max_iters=max_iters)
     mojo_cos_sin_time.print(unit="ms")
     
     print("  mojo_cos_sin(x):     ", end="")
-    var mojo_cos_sin_fused_time = benchmark.run[bench_cos_sin_fused](max_iters=max_iters)
+    var mojo_cos_sin_fused_time = benchmark.run(bench_cos_sin_fused, max_iters=max_iters)
     mojo_cos_sin_fused_time.print(unit="ms")
     
     # =========================================================================

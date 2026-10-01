@@ -210,12 +210,12 @@ def build_q3_tape(
 def build_string_t(
     strs: List[String],
 ) -> Tuple[
-    UnsafePointer[UInt8, MutAnyOrigin],
-    List[UnsafePointer[UInt8, MutAnyOrigin]],
+    Pointer[UInt8, MutAnyOrigin],
+    List[Pointer[UInt8, MutAnyOrigin]],
 ]:
     var n = len(strs)
     var stbuf = alloc[UInt8]((n * 16) if n > 0 else 1)
-    var owned: List[UnsafePointer[UInt8, MutAnyOrigin]] = []
+    var owned: List[Pointer[UInt8, MutAnyOrigin]] = []
     for r in range(n):
         ref s = strs[r]
         var L = s.byte_length()
@@ -340,7 +340,7 @@ def main() raises:
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
 

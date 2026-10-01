@@ -58,7 +58,7 @@ def query_raw(m: Int, i: Int, c: Int) -> Float32:
     return center_val(c, i) + pert
 
 
-def fill_unit(p: UnsafePointer[Float32, MutAnyOrigin], off: Int):
+def fill_unit(p: Pointer[Float32, MutAnyOrigin], off: Int):
     var nrm = Float32(0)
     for i in range(K):
         nrm += p[off + i] * p[off + i]
@@ -71,10 +71,10 @@ def fill_unit(p: UnsafePointer[Float32, MutAnyOrigin], off: Int):
 
 def check_eq(
     label: String,
-    batch_ids: UnsafePointer[Int64, MutAnyOrigin],
-    batch_dists: UnsafePointer[Float32, MutAnyOrigin],
-    single_ids: UnsafePointer[Int64, MutAnyOrigin],
-    single_dists: UnsafePointer[Float32, MutAnyOrigin],
+    batch_ids: Pointer[Int64, MutAnyOrigin],
+    batch_dists: Pointer[Float32, MutAnyOrigin],
+    single_ids: Pointer[Int64, MutAnyOrigin],
+    single_dists: Pointer[Float32, MutAnyOrigin],
     k: Int,
 ) raises:
     for j in range(k):
@@ -102,9 +102,9 @@ def check_eq(
 
 def run_case[
     is_f16: Bool
-](handle: Int, qs: UnsafePointer[Float32, MutAnyOrigin], M: Int, k: Int) raises:
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
-    var qs_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+](handle: Int, qs: Pointer[Float32, MutAnyOrigin], M: Int, k: Int) raises:
+    var h = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var qs_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(qs)
     )
 
@@ -124,7 +124,7 @@ def run_case[
     var s_ids = alloc[Int64](k)
     var s_dists = alloc[Float32](k)
     for m in range(M):
-        var q_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q_imm = Pointer[Float32, ImmutAnyOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
         )
 
@@ -161,7 +161,7 @@ def main() raises:
         for i in range(K):
             emb[r * K + i] = emb_unit(r, i, c)
         fill_unit(emb, r * K)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
 

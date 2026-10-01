@@ -48,7 +48,7 @@ These kernels live here and are imported by gpu_kernels.mojo (the dylib root,
 where the @export C-ABI wrappers must live per the build).
 """
 
-from std.gpu import block_idx, thread_idx, block_dim, grid_dim
+from max.gpu import block_idx, thread_idx, block_dim, grid_dim
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation, bitcast
@@ -101,7 +101,7 @@ def _tbytes[T: DType]() -> Int:
 # ---------------------------------------------------------------------------
 @always_inline
 def unpack_value(
-    packed: UnsafePointer[Scalar[DType.uint32], MutUntrackedOrigin],
+    packed: Pointer[Scalar[DType.uint32], MutUntrackedOrigin],
     idx: Int,
     width: SIMDLength,
 ) -> UInt64:
@@ -135,7 +135,7 @@ def unpack_value(
 # (memcpy-equivalent; the segment bytes are native little-endian.)
 # ---------------------------------------------------------------------------
 @always_inline
-def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt64:
+def _load_u64(p: Pointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt64:
     var v = UInt64(0)
     comptime for b in range(8):
         v |= UInt64(p[off + b]) << UInt64(8 * b)
@@ -143,7 +143,7 @@ def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: In
 
 
 @always_inline
-def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt32:
+def _load_u32(p: Pointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt32:
     var v = UInt32(0)
     comptime for b in range(4):
         v |= UInt32(p[off + b]) << UInt32(8 * b)
@@ -158,8 +158,8 @@ def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: In
 def uncompressed_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
-    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    seg: Pointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    dst: Pointer[Scalar[T], MutUntrackedOrigin],
     n_rows_dp: Int64,
     data_off_dp: Int64,
     out_row_offset_dp: Int64,
@@ -202,9 +202,9 @@ def uncompressed_decode_kernel[
 def bitpacking_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    seg: Pointer[Scalar[DType.uint8], MutUntrackedOrigin],
     seg_bytes_dp: Int64,
-    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    dst: Pointer[Scalar[T], MutUntrackedOrigin],
     group_idx_dp: Int64,
     group_rows_dp: Int64,
     out_row_offset_dp: Int64,

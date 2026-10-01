@@ -71,7 +71,7 @@ def _center_val(c: Int, i: Int) -> Float32:
 # Each row picks a cluster, copies its center + small jitter, then L2-normalizes.
 # ---------------------------------------------------------------------------
 def build_embeddings(
-    emb: UnsafePointer[Float32, MutAnyOrigin], N: Int, K: Int
+    emb: Pointer[Float32, MutAnyOrigin], N: Int, K: Int
 ):
     for row in range(N):
         var c = row % NCLUST
@@ -95,7 +95,7 @@ def build_embeddings(
 
 
 # Synthesize query m near cluster center (m % NCLUST), unit-normalized.
-def build_query(q: UnsafePointer[Float32, MutAnyOrigin], m: Int, K: Int):
+def build_query(q: Pointer[Float32, MutAnyOrigin], m: Int, K: Int):
     var c = m % NCLUST
     var nrm = Float32(0)
     for i in range(K):
@@ -121,10 +121,10 @@ struct RecallResult(Copyable, Movable):
 
 
 def recall_one(
-    f32_ids: UnsafePointer[Int64, MutAnyOrigin],
-    f32_dists: UnsafePointer[Float32, MutAnyOrigin],
-    f16_ids: UnsafePointer[Int64, MutAnyOrigin],
-    f16_dists: UnsafePointer[Float32, MutAnyOrigin],
+    f32_ids: Pointer[Int64, MutAnyOrigin],
+    f32_dists: Pointer[Float32, MutAnyOrigin],
+    f16_ids: Pointer[Int64, MutAnyOrigin],
+    f16_dists: Pointer[Float32, MutAnyOrigin],
     k: Int,
 ) -> RecallResult:
     # Worst kept distance among the fp16 result (its top-k boundary).
@@ -156,7 +156,7 @@ def recall_one(
 
 
 # Median of an Int64 timing array (in-place insertion sort; n small).
-def _median_ns(times: UnsafePointer[Int64, MutAnyOrigin], n: Int) -> Int64:
+def _median_ns(times: Pointer[Int64, MutAnyOrigin], n: Int) -> Int64:
     for a in range(n):
         for b in range(a + 1, n):
             if times[b] < times[a]:
@@ -172,7 +172,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
 
     var emb = alloc[Float32](N * K)
     build_embeddings(emb, N, K)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
 

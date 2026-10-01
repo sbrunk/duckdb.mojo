@@ -90,7 +90,7 @@ from std.sys.info import size_of
 from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
-from std.builtin.rebind import downcast, rebind_var, trait_downcast
+from std.builtin.rebind import downcast, rebind, rebind_var
 from std.memory.alloc import unsafe_alloc
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
@@ -212,7 +212,7 @@ __extension String(Appendable):
         var copy = String(self)
         appender._check(
             libduckdb.duckdb_append_varchar(
-                appender._appender, copy.as_c_string_slice().unsafe_ptr()
+                appender._appender, copy.as_c_string_span().ptr()
             ),
         )
 
@@ -565,15 +565,15 @@ struct Appender(Movable):
             state = libduckdb.duckdb_appender_create(
                 con._conn,
                 _null_ptr[c_char, ImmutAnyOrigin](),
-                _table.as_c_string_slice().unsafe_ptr(),
+                _table.as_c_string_span().ptr(),
                 Pointer(to=self._appender),
             )
         else:
             var _schema = schema.copy()
             state = libduckdb.duckdb_appender_create(
                 con._conn,
-                _schema.as_c_string_slice().unsafe_ptr(),
-                _table.as_c_string_slice().unsafe_ptr(),
+                _schema.as_c_string_span().ptr(),
+                _table.as_c_string_span().ptr(),
                 Pointer(to=self._appender),
             )
         if state == DuckDBError:
@@ -698,7 +698,7 @@ struct Appender(Movable):
             comptime FieldType = Reflected[T].field_types()[idx]
 
             comptime if conforms_to(FieldType, Appendable):
-                trait_downcast[Appendable](
+                rebind[downcast[FieldType, Appendable]](
                     __struct_field_ref(idx, row)
                 ).append(self)
                 self._current_col += 1
@@ -737,7 +737,7 @@ struct Appender(Movable):
         comptime n = T.__len__()
 
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
 
             comptime if conforms_to(ET, Appendable):
                 row[idx].append(self)

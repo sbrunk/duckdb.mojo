@@ -202,7 +202,7 @@ def main() raises:
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -257,13 +257,13 @@ def main() raises:
 
     # feed each column in the SQL/order indexing.
     def feed(
-        h: UnsafePointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutAnyOrigin],
         col_j: Int,
         name: String,
-        ship: UnsafePointer[Int32, MutAnyOrigin],
-        disc: UnsafePointer[Int64, MutAnyOrigin],
-        ext: UnsafePointer[Int64, MutAnyOrigin],
-        qty: UnsafePointer[Int64, MutAnyOrigin],
+        ship: Pointer[Int32, MutAnyOrigin],
+        disc: Pointer[Int64, MutAnyOrigin],
+        ext: Pointer[Int64, MutAnyOrigin],
+        qty: Pointer[Int64, MutAnyOrigin],
     ) raises:
         var rc: Int
         if name == "l_shipdate":
@@ -307,7 +307,7 @@ def main() raises:
 
     # ---- Warm-path check: a second identical run should hit the pin cache. ----
     var handle2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
-    var h2 = UnsafePointer[NoneType, MutAnyOrigin](
+    var h2 = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle2_int
     )
     _ = mojo_gpu_desc_materialize_sql(h2, 0, sql_buf, cap)

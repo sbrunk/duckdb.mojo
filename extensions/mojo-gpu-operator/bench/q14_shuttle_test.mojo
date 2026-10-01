@@ -241,7 +241,7 @@ def main() raises:
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -319,7 +319,7 @@ def main() raises:
     # 12 chars, so build the 16-byte string_t layout by hand using the pointer
     # variant, pointing at owned UTF-8 buffers.
     var stbuf = alloc[UInt8](P * 16)
-    var owned_strs: List[UnsafePointer[UInt8, MutAnyOrigin]] = []
+    var owned_strs: List[Pointer[UInt8, MutAnyOrigin]] = []
     for r in range(P):
         ref s = ptype_strs[r]
         var L = s.byte_length()

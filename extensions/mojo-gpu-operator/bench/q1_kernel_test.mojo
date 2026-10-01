@@ -22,8 +22,8 @@ accumulators [NGROUPS][6], lane-strided over rows; then warp.sum reduces each
 global memory. No shared-memory atomics (portable to the Apple GPU).
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -36,20 +36,20 @@ comptime NMETRICS = 6      # count, Sqty, Sext, Sdisc, Sdisc_price(s4), Scharge(
 
 
 def q1_kernel(
-    gid: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    qty: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    tax: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ship: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    gid: Pointer[Scalar[DType.uint8], MutAnyOrigin],
+    qty: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    tax: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ship: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     ship_hi: Int32,  # filter: l_shipdate <= ship_hi  (inclusive)
 ):
     var lane = Int(thread_idx.x)
     var stride = NBLOCKS * 32
     # Private per-lane accumulators [NGROUPS][NMETRICS].
-    var acc = InlineArray[Int64, NGROUPS * NMETRICS](fill=0)
+    var acc = Array[Int64, NGROUPS * NMETRICS](fill=0)
     var i = Int(block_idx.x) * 32 + lane
     while i < n_rows:
         var sd = ship[i]
@@ -104,7 +104,7 @@ def main() raises:
 
     # ---- CPU int128 reference ----
     var t0 = perf_counter_ns()
-    var cpu = InlineArray[Int128, NG * NMETRICS](fill=Int128(0))
+    var cpu = Array[Int128, NG * NMETRICS](fill=Int128(0))
     for i in range(N):
         if ship[i] <= ship_hi:
             var g = Int(gid[i])
@@ -151,7 +151,7 @@ def main() raises:
     ctx.enqueue_copy(part_h, part_sub)
     ctx.synchronize()
     # host int128 reduction across blocks
-    var gpu = InlineArray[Int128, NGROUPS * NMETRICS](fill=Int128(0))
+    var gpu = Array[Int128, NGROUPS * NMETRICS](fill=Int128(0))
     for b in range(NBLOCKS):
         for g in range(NGROUPS):
             for m in range(NMETRICS):

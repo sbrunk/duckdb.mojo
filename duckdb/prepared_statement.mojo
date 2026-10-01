@@ -31,7 +31,7 @@ var result = con.execute_named(
 ```
 """
 
-from std.builtin.rebind import trait_downcast, downcast
+from std.builtin.rebind import downcast
 from std.collections import Optional
 from duckdb._libduckdb import *
 from duckdb.api import DuckDB
@@ -76,7 +76,7 @@ struct PreparedStatement(Movable):
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_prepare(
             conn,
-            _query.as_c_string_slice().unsafe_ptr(),
+            _query.as_c_string_span().ptr(),
             Pointer(to=self._stmt),
         )
         if state == DuckDBError:
@@ -140,7 +140,7 @@ struct PreparedStatement(Movable):
         var state = libduckdb.duckdb_bind_parameter_index(
             self._stmt,
             Pointer(to=out_idx),
-            _name.as_c_string_slice().unsafe_ptr(),
+            _name.as_c_string_span().ptr(),
         )
         if state == DuckDBError:
             raise ResultError(

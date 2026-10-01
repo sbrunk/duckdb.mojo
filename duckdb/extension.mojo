@@ -21,16 +21,16 @@ from duckdb.extension import Extension, duckdb_extension_access
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb import Connection, ScalarFunction
 
-fn add_one(x: Int64) -> Int64:
+def add_one(x: Int64) -> Int64:
     return x + 1
 
-fn init(conn: Connection) raises:
+def init(conn: Connection) raises:
     ScalarFunction.from_function[
         "add_one", DType.int64, DType.int64, add_one
     ](conn)
 
 @export("my_extension_init_c_api")
-fn my_extension_init(
+def my_extension_init(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access],
 ) abi("C") -> Bool:
@@ -109,7 +109,7 @@ struct Extension(Movable):
     Example:
     ```mojo
     @export("my_ext_init_c_api")
-    fn my_ext_init(
+    def my_ext_init(
         info: duckdb_extension_info,
         access: UnsafePointer[duckdb_extension_access],
     ) abi("C") -> Bool:
@@ -159,7 +159,7 @@ struct Extension(Movable):
         """Report an error back to DuckDB."""
         var error_copy = error.copy()
         self._access[].set_error(
-            self._info, error_copy.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin()
+            self._info, error_copy.as_c_string_span().ptr().as_unsafe_any_origin()
         )
 
     def get_api(
@@ -179,7 +179,7 @@ struct Extension(Movable):
         """
         var version_copy = version.copy()
         return self._access[].get_api(
-            self._info, version_copy.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin()
+            self._info, version_copy.as_c_string_span().ptr().as_unsafe_any_origin()
         )
 
     def get_api_typed[
@@ -241,13 +241,13 @@ struct Extension(Movable):
 
         Example:
         ```mojo
-        fn init(conn: Connection) raises:
+        def init(conn: Connection) raises:
             ScalarFunction.from_function[
                 "add_one", DType.int64, DType.int64, add_one
             ](conn)
 
         @export("my_ext_init_c_api")
-        fn my_ext_init(
+        def my_ext_init(
             info: duckdb_extension_info,
             access: UnsafePointer[duckdb_extension_access],
         ) abi("C") -> Bool:

@@ -86,7 +86,7 @@ struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_query(
-            self._conn_ptr[], _query.as_c_string_slice().unsafe_ptr(), result_ptr
+            self._conn_ptr[], _query.as_c_string_span().ptr(), result_ptr
         )
         if state == DuckDBError:
             var error_msg = String(

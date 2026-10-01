@@ -11,7 +11,7 @@ from std.utils import Variant
 
 def test_append_dict_map() raises:
     """Append a Dict to a MAP column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
     var appender = Appender(con, "t")
     var d: Dict[String, Int32] = {'a': 1, 'b': 2}
@@ -19,7 +19,7 @@ def test_append_dict_map() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var m = chunk.get[Dict[String, Int32]](col=0, row=0)
     assert_equal(len(m), 2)
@@ -29,7 +29,7 @@ def test_append_dict_map() raises:
 
 def test_append_dict_map_multiple_rows() raises:
     """Append multiple Dict rows to a MAP column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
     var appender = Appender(con, "t")
 
@@ -42,7 +42,7 @@ def test_append_dict_map_multiple_rows() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT m FROM t ORDER BY rowid")
+    var result = con.execute("SELECT m FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var dicts = chunk.get[Dict[String, Int32]](col=0)
     assert_equal(len(dicts), 2)
@@ -59,7 +59,7 @@ def test_append_dict_map_multiple_rows() raises:
 
 def test_append_dict_map_with_id() raises:
     """Append Dict to table with regular column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (id INTEGER, m MAP(VARCHAR, INTEGER))"
     )
@@ -70,7 +70,7 @@ def test_append_dict_map_with_id() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT id, m FROM t")
+    var result = con.execute("SELECT id, m FROM t")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
     var m = chunk.get[Dict[String, Int32]](col=1, row=0)
@@ -79,7 +79,7 @@ def test_append_dict_map_with_id() raises:
 
 def test_append_dict_map_roundtrip() raises:
     """Append Dict values and read them back as Dict (full roundtrip)."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (m MAP(INTEGER, VARCHAR))"
     )
@@ -91,7 +91,7 @@ def test_append_dict_map_roundtrip() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var m = chunk.get[Dict[Int32, String]](col=0, row=0)
     assert_equal(len(m), 2)
@@ -101,7 +101,7 @@ def test_append_dict_map_roundtrip() raises:
 
 def test_append_dict_map_mojo_int() raises:
     """Append Dict[String, Int] using Mojo's native Int type."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, BIGINT))")
     var appender = Appender(con, "t")
     var d: Dict[String, Int] = {'a': 1, 'b': 2}
@@ -109,7 +109,7 @@ def test_append_dict_map_mojo_int() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var m = chunk.get[Dict[String, Int]](col=0, row=0)
     assert_equal(len(m), 2)
@@ -119,7 +119,7 @@ def test_append_dict_map_mojo_int() raises:
 
 def test_append_dict_map_mojo_uint() raises:
     """Append Dict[String, UInt] using Mojo's native UInt type."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, UBIGINT))")
     var appender = Appender(con, "t")
     var d: Dict[String, UInt] = {'x': 10, 'y': 20}
@@ -127,7 +127,7 @@ def test_append_dict_map_mojo_uint() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var m = chunk.get[Dict[String, UInt]](col=0, row=0)
     assert_equal(len(m), 2)
@@ -139,7 +139,7 @@ def test_append_dict_map_mojo_uint() raises:
 
 def test_append_variant_int_member() raises:
     """Append a Variant whose active member is an integer."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
     )
@@ -148,7 +148,7 @@ def test_append_variant_int_member() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var v = chunk.get[Variant[Int32, String]](col=0, row=0)
     assert_true(v.isa[Int32]())
@@ -157,7 +157,7 @@ def test_append_variant_int_member() raises:
 
 def test_append_variant_str_member() raises:
     """Append a Variant whose active member is a string."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
     )
@@ -166,7 +166,7 @@ def test_append_variant_str_member() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var v = chunk.get[Variant[Int32, String]](col=0, row=0)
     assert_true(v.isa[String]())
@@ -175,7 +175,7 @@ def test_append_variant_str_member() raises:
 
 def test_append_variant_multiple_rows() raises:
     """Append several rows with different active Variant members."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
     )
@@ -188,7 +188,7 @@ def test_append_variant_multiple_rows() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT u FROM t ORDER BY rowid")
+    var result = con.execute("SELECT u FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Variant[Int32, String]](col=0)
     assert_equal(len(vals), 3)
@@ -205,7 +205,7 @@ def test_append_variant_multiple_rows() raises:
 
 def test_append_variant_three_members() raises:
     """Append to a UNION with three member types."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(i INTEGER, f FLOAT, s VARCHAR))"
     )
@@ -214,7 +214,7 @@ def test_append_variant_three_members() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var v = chunk.get[Variant[Int32, Float32, String]](col=0, row=0)
     assert_true(v.isa[Float32]())
@@ -222,7 +222,7 @@ def test_append_variant_three_members() raises:
 
 def test_append_variant_with_id_column() raises:
     """Append Variant to a table that also has a regular column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (id INTEGER, u UNION(num INTEGER, str VARCHAR))"
     )
@@ -235,7 +235,7 @@ def test_append_variant_with_id_column() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT id, u FROM t ORDER BY id")
+    var result = con.execute("SELECT id, u FROM t ORDER BY id")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int32](col=0, row=0), Int32(1))
     var v0 = chunk.get[Variant[Int32, String]](col=1, row=0)
@@ -250,7 +250,7 @@ def test_append_variant_with_id_column() raises:
 
 def test_append_variant_roundtrip() raises:
     """Append Variant values and read them back via Variant deserialization."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))"
     )
@@ -261,7 +261,7 @@ def test_append_variant_roundtrip() raises:
     appender.end_row()
     appender.close()
 
-    result = con.execute("SELECT u FROM t ORDER BY rowid")
+    var result = con.execute("SELECT u FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var v0 = chunk.get[Variant[Int32, String]](col=0, row=0)
     assert_true(v0.isa[Int32]())

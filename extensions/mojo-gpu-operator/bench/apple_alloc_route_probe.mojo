@@ -24,7 +24,7 @@ the cost spread across queries. That working pattern is demonstrated below (T_PI
 
 from std.sys import has_accelerator
 from std.sys.info import has_apple_gpu_accelerator
-from std.gpu import global_idx
+from max.gpu import global_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
 from layout import TileTensor, TensorLayout, row_major

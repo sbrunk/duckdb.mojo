@@ -37,7 +37,7 @@ def sum_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 def sum_state_init(info: AggregateFunctionInfo, state: AggregateState):
     """Initializes a SUM state to zero."""
-    state.get_data().bitcast[SumState]().init_pointee_move(SumState(total=0))
+    state.get_data().bitcast[SumState]().unsafe_write(SumState(total=0))
 
 
 def sum_update(
@@ -81,7 +81,7 @@ def sum_finalize(
 def sum_destroy(states: AggregateStateArray):
     """Destroys SUM states."""
     for i in range(len(states)):
-        states.get_state(i).get_data().bitcast[SumState]().destroy_pointee()
+        states.get_state(i).get_data().bitcast[SumState]().unsafe_deinit_pointee()
 
 
 # ===--------------------------------------------------------------------===#
@@ -106,7 +106,7 @@ def count_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def count_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[CountState]().init_pointee_move(
+    state.get_data().bitcast[CountState]().unsafe_write(
         CountState(count=0)
     )
 
@@ -163,7 +163,7 @@ def avg_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def avg_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[AvgState]().init_pointee_move(
+    state.get_data().bitcast[AvgState]().unsafe_write(
         AvgState(sum=0.0, count=0)
     )
 
@@ -223,7 +223,7 @@ def sum_double_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def sum_double_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[SumDoubleState]().init_pointee_move(
+    state.get_data().bitcast[SumDoubleState]().unsafe_write(
         SumDoubleState(total=0.0)
     )
 

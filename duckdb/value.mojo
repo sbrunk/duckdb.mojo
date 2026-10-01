@@ -70,7 +70,7 @@ struct DuckDBValue(Movable):
         """
         ref libduckdb = DuckDB().libduckdb()
         var text_copy = text
-        var c_str = text_copy.as_c_string_slice()
+        var c_str = text_copy.as_c_string_span()
         return Self(libduckdb.duckdb_create_varchar_length(
             c_str.unsafe_ptr(), UInt64(text_copy.byte_length())
         ))

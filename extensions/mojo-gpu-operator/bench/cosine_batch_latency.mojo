@@ -44,8 +44,8 @@ def query_val(m: Int, i: Int) -> Float32:
 
 
 def bench_batch(
-    h: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    h: Pointer[NoneType, MutAnyOrigin],
+    qs: Pointer[Float32, ImmutAnyOrigin],
     M: Int,
     iters: Int,
 ) raises -> Float64:
@@ -70,8 +70,8 @@ def bench_batch(
 
 
 def report(
-    h: UnsafePointer[NoneType, MutAnyOrigin],
-    qs: UnsafePointer[Float32, ImmutAnyOrigin],
+    h: Pointer[NoneType, MutAnyOrigin],
+    qs: Pointer[Float32, ImmutAnyOrigin],
     M: Int,
 ) raises:
     var iters = 30 if M >= 100 else 50
@@ -90,7 +90,7 @@ def main() raises:
     for r in range(N):
         for i in range(K):
             emb[r * K + i] = emb_val(r, i)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
 

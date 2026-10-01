@@ -14,8 +14,8 @@ one-time upload is spread across queries, and the margin grows with K. Run
 single-threaded.
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.math import sqrt
@@ -29,9 +29,9 @@ comptime W = simd_width_of[DType.float32]()
 
 
 def cosine_kernel_warp(
-    emb: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    q: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    res: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    emb: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    q: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    res: Pointer[Scalar[DType.float32], MutAnyOrigin],
     n_rows: Int,
     K: Int,
     qnorm: Float32,
@@ -65,9 +65,9 @@ def query_val(m: Int, i: Int) -> Float32:
 
 
 def cpu_cosine(
-    emb: UnsafePointer[Float32, MutAnyOrigin],
-    q: UnsafePointer[Float32, MutAnyOrigin],
-    out_ptr: UnsafePointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutAnyOrigin],
+    q: Pointer[Float32, MutAnyOrigin],
+    out_ptr: Pointer[Float32, MutAnyOrigin],
     K: Int,
     qnorm: Float32,
 ):

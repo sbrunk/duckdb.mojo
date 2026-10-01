@@ -79,8 +79,8 @@ def _query_raw(m: Int, i: Int) -> Float32:
 
 # Build emb (N*K) + queries (M*K). If `normalize`, each row/query is L2-unit.
 def build_data(
-    emb: UnsafePointer[Float32, MutAnyOrigin],
-    qs: UnsafePointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutAnyOrigin],
+    qs: Pointer[Float32, MutAnyOrigin],
     normalize: Bool,
 ):
     for row in range(N):
@@ -118,11 +118,11 @@ def build_data(
 # before forming dot + norm, so they are bit-identical to the resident matrix. Top-k by
 # smallest distance with the (dist, rowid) tie-break.
 def cpu_topk(
-    emb: UnsafePointer[Float32, MutAnyOrigin],
-    q: UnsafePointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutAnyOrigin],
+    q: Pointer[Float32, MutAnyOrigin],
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutAnyOrigin],
-    out_dists: UnsafePointer[Float32, MutAnyOrigin],
+    out_ids: Pointer[Int64, MutAnyOrigin],
+    out_dists: Pointer[Float32, MutAnyOrigin],
 ):
     # query squared norm in fp32 (matches host qnorm computation).
     var qsq = Float32(0)
@@ -190,10 +190,10 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
     var emb = alloc[Float32](N * K)
     var qs = alloc[Float32](M * K)
     build_data(emb, qs, normalize)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
-    var qs_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var qs_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(qs)
     )
 

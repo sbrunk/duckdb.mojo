@@ -25,8 +25,8 @@ Per-row product ~ 1e7 * 100 = 1e9; per-block partial over ~6M/4096 rows fits int
 Only the cross-block reduction needs int128 (host).
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -47,16 +47,16 @@ def hash_key(k: Int64) -> UInt64:
 
 
 def q14_kernel(
-    ht_keys: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ht_promo: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
+    ht_keys: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ht_promo: Pointer[Scalar[DType.uint8], MutAnyOrigin],
     ht_mask: UInt64,
-    lpartkey: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ship: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    part_total: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    part_promo: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    part_miss: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    lpartkey: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ship: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    part_total: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    part_promo: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    part_miss: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     ship_lo: Int32,
     ship_hi: Int32,

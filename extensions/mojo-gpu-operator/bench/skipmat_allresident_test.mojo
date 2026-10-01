@@ -178,12 +178,12 @@ def _projection_cols(sql: String) raises -> List[String]:
 
 
 def _feed_q6(
-    h: UnsafePointer[NoneType, MutAnyOrigin],
+    h: Pointer[NoneType, MutAnyOrigin],
     order: List[String],
-    ship: UnsafePointer[Int32, MutAnyOrigin],
-    disc: UnsafePointer[Int64, MutAnyOrigin],
-    ext: UnsafePointer[Int64, MutAnyOrigin],
-    qty: UnsafePointer[Int64, MutAnyOrigin],
+    ship: Pointer[Int32, MutAnyOrigin],
+    disc: Pointer[Int64, MutAnyOrigin],
+    ext: Pointer[Int64, MutAnyOrigin],
+    qty: Pointer[Int64, MutAnyOrigin],
 ) raises:
     for j in range(len(order)):
         var nm = order[j]
@@ -259,7 +259,7 @@ def main() raises:
     # ---- run #1: cold, uploads all 4 fact columns into the pool ----
     var h1_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h1_int != 0, "build #1 returned 0")
-    var h1 = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h1_int)
+    var h1 = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=h1_int)
     assert_equal(Int64(mojo_gpu_desc_kind(h1)), KIND_Q6, "kind != Q6")
     assert_equal(mojo_gpu_desc_materialize_count(h1), 1, "mat_count != 1")
     assert_equal(
@@ -287,7 +287,7 @@ def main() raises:
     # materialize must seed n_rows so the C++ side can skip the illegal query. ----
     var h2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h2_int != 0, "build #2 returned 0")
-    var h2 = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h2_int)
+    var h2 = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=h2_int)
     var sql2_len = mojo_gpu_desc_materialize_sql(h2, 0, sql_buf, cap)
     var sql2 = String("")
     for i in range(sql2_len):

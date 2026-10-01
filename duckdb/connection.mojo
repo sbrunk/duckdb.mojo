@@ -126,7 +126,7 @@ struct Connection(Movable):
         var result_ptr = Pointer(to=result)
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
-        var state = libduckdb.duckdb_query(self._conn, _query.as_c_string_slice().unsafe_ptr(), result_ptr)
+        var state = libduckdb.duckdb_query(self._conn, _query.as_c_string_span().ptr(), result_ptr)
         if state == DuckDBError:
             var error_msg = String(unsafe_from_utf8_ptr=libduckdb.duckdb_result_error(result_ptr))
             var error_type_value = libduckdb.duckdb_result_error_type(result_ptr)

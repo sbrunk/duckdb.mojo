@@ -47,7 +47,7 @@ def _center_val(c: Int, i: Int) -> Float32:
     )
 
 
-def build_embeddings(emb: UnsafePointer[Float32, MutAnyOrigin], N: Int, K: Int):
+def build_embeddings(emb: Pointer[Float32, MutAnyOrigin], N: Int, K: Int):
     for row in range(N):
         var c = row % NCLUST
         var base = row * K
@@ -65,7 +65,7 @@ def build_embeddings(emb: UnsafePointer[Float32, MutAnyOrigin], N: Int, K: Int):
             emb[base + i] = emb[base + i] * inv
 
 
-def build_query(q: UnsafePointer[Float32, MutAnyOrigin], m: Int, K: Int):
+def build_query(q: Pointer[Float32, MutAnyOrigin], m: Int, K: Int):
     var c = m % NCLUST
     var nrm = Float32(0)
     for i in range(K):
@@ -87,10 +87,10 @@ struct RecallResult(Copyable, Movable):
 
 
 def recall_one(
-    ref_ids: UnsafePointer[Int64, MutAnyOrigin],
-    ref_dists: UnsafePointer[Float32, MutAnyOrigin],
-    got_ids: UnsafePointer[Int64, MutAnyOrigin],
-    got_dists: UnsafePointer[Float32, MutAnyOrigin],
+    ref_ids: Pointer[Int64, MutAnyOrigin],
+    ref_dists: Pointer[Float32, MutAnyOrigin],
+    got_ids: Pointer[Int64, MutAnyOrigin],
+    got_dists: Pointer[Float32, MutAnyOrigin],
     k: Int,
 ) -> RecallResult:
     var got_worst = Float32(0)
@@ -133,7 +133,7 @@ def run_case(N: Int, K: Int, M: Int) raises:
 
     var emb = alloc[Float32](N * K)
     build_embeddings(emb, N, K)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
 

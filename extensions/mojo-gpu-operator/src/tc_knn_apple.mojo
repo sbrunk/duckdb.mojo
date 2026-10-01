@@ -37,12 +37,11 @@ Tile shape (one simdgroup per block, kept simple, correctness first):
 
 from std.sys import llvm_intrinsic
 from std.sys.info import is_apple_gpu, has_apple_gpu_accelerator
-from std.gpu import lane_id, block_idx, thread_idx
+from max.gpu import lane_id, block_idx, thread_idx
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc, stack_allocation
-from std.collections import InlineArray
 from std.math import sqrt
 
 
@@ -119,12 +118,12 @@ def _mma8x8[
 # Apple-only via the in-kernel `is_apple_gpu()` gate.
 # ===-------------------------------------------------------------------===#
 def tc_apple_fused_knn_kernel(
-    q: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    e: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    q: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    e: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    qnorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     k_dp: Int64,
@@ -181,7 +180,7 @@ def tc_apple_fused_knn_kernel(
             # once per K-step and reused across all query-blocks; only the A
             # (query) fragment differs per block. So the Emb chunk is read once
             # and shared by AP_MM = AP_QSUB*8 queries. ---
-            var acc = InlineArray[SIMD[DType.float32, FRAG8], AP_QSUB](
+            var acc = Array[SIMD[DType.float32, FRAG8], AP_QSUB](
                 fill=SIMD[DType.float32, FRAG8](0)
             )
             var ks = 0
@@ -282,10 +281,10 @@ def tc_apple_fused_knn_kernel(
 # candidate count nblocks*k is small, so a single-lane merge is fine).
 # ===-------------------------------------------------------------------===#
 def tc_apple_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     Mq_dp: Int64,
     nblocks_dp: Int64,
     k_dp: Int64,
@@ -356,8 +355,8 @@ def tc_apple_merge_kernel(
 # (fp16-cast-to-fp32)^2), the same cosine denom as the scalar f16 path.
 # Apple-only via the in-kernel gate.
 def _tc_apple_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
 ):
@@ -400,11 +399,11 @@ def run_tc_knn_apple_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     comptime if has_apple_gpu_accelerator():
         # Host: fp16 query tile (padded to a multiple of MM rows so the kernel's
@@ -432,13 +431,13 @@ def run_tc_knn_apple_batch(
         ctx.synchronize()
         ctx.enqueue_copy(
             qs_dev,
-            UnsafePointer[Float16, ImmUntrackedOrigin](
+            Pointer[Float16, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qh16)
             ),
         )
         ctx.enqueue_copy(
             qnorm_dev,
-            UnsafePointer[Float32, ImmUntrackedOrigin](
+            Pointer[Float32, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qnorm_h)
             ),
         )

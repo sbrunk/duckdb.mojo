@@ -18,7 +18,7 @@ struct AggregateFunctionInfo:
     ```mojo
     from duckdb.aggregate_function import AggregateFunctionInfo
 
-    fn my_update(info: AggregateFunctionInfo, input: Chunk, states: AggregateStateArray):
+    def my_update(info: AggregateFunctionInfo, input: Chunk, states: AggregateStateArray):
         var extra = info.get_extra_info()
         # ... process input and update states
     ```
@@ -58,7 +58,7 @@ struct AggregateFunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_aggregate_function_set_error(
             self._info,
-            error_copy.as_c_string_slice().unsafe_ptr(),
+            error_copy.as_c_string_span().ptr(),
         )
 
 
@@ -72,7 +72,7 @@ struct AggregateState:
     ```mojo
     from duckdb.aggregate_function import AggregateState
 
-    fn my_init(info: AggregateFunctionInfo, state: AggregateState):
+    def my_init(info: AggregateFunctionInfo, state: AggregateState):
         var data = state.get_data().bitcast[Int64]()
         data[] = 0  # Initialize state
     ```
@@ -117,7 +117,7 @@ struct AggregateStateArray(Sized):
     from duckdb import Chunk
     from duckdb.aggregate_function import AggregateFunctionInfo, AggregateStateArray
 
-    fn my_update(info: AggregateFunctionInfo, input: Chunk, states: AggregateStateArray):
+    def my_update(info: AggregateFunctionInfo, input: Chunk, states: AggregateStateArray):
         var size = len(input)
         for i in range(size):
             var state_data = states.get_state(i).get_data().bitcast[Int64]()
@@ -201,27 +201,27 @@ struct AggregateFunction(Movable):
     from duckdb.vector import Vector
 
     # Simple SUM aggregate for integers
-    fn my_state_size(info: AggregateFunctionInfo) -> idx_t:
+    def my_state_size(info: AggregateFunctionInfo) -> idx_t:
         return size_of[Int64]()
 
-    fn my_state_init(info: AggregateFunctionInfo, state: AggregateState):
-        state.get_data().bitcast[Int64]().init_pointee_move(0)
+    def my_state_init(info: AggregateFunctionInfo, state: AggregateState):
+        state.get_data().bitcast[Int64]().unsafe_write(0)
 
-    fn my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
+    def my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
         var size = len(input)
         var data = input.get_vector(0).get_data().bitcast[Int32]()
         for i in range(size):
             var s = states.get_state(i).get_data().bitcast[Int64]()
             s[] += Int64(data[i])
 
-    fn my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
+    def my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
                   target: AggregateStateArray, count: Int):
         for i in range(count):
             var s = source.get_state(i).get_data().bitcast[Int64]()
             var t = target.get_state(i).get_data().bitcast[Int64]()
             t[] += s[]
 
-    fn my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
+    def my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
                    result: Vector, count: Int, offset: Int):
         var out = result.get_data().bitcast[Int64]()
         for i in range(count):
@@ -269,7 +269,7 @@ struct AggregateFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_aggregate_function_set_name(
             self._function,
-            name_copy.as_c_string_slice().unsafe_ptr(),
+            name_copy.as_c_string_span().ptr(),
         )
 
     def add_parameter(self, type: LogicalType):
@@ -350,27 +350,27 @@ struct AggregateFunction(Movable):
         from duckdb import Chunk
         from duckdb.vector import Vector
 
-        fn size(info: AggregateFunctionInfo) -> idx_t:
+        def size(info: AggregateFunctionInfo) -> idx_t:
             return size_of[Int64]()
 
-        fn init(info: AggregateFunctionInfo, state: AggregateState):
-            state.get_data().bitcast[Int64]().init_pointee_move(0)
+        def init(info: AggregateFunctionInfo, state: AggregateState):
+            state.get_data().bitcast[Int64]().unsafe_write(0)
 
-        fn update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
+        def update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
             var n = len(input)
             var data = input.get_vector(0).get_data().bitcast[Int32]()
             for i in range(n):
                 var s = states.get_state(i).get_data().bitcast[Int64]()
                 s[] += Int64(data[i])
 
-        fn combine(info: AggregateFunctionInfo, source: AggregateStateArray,
+        def combine(info: AggregateFunctionInfo, source: AggregateStateArray,
                    target: AggregateStateArray, count: Int):
             for i in range(count):
                 var s = source.get_state(i).get_data().bitcast[Int64]()
                 var t = target.get_state(i).get_data().bitcast[Int64]()
                 t[] += s[]
 
-        fn finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
+        def finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
                     result: Vector, count: Int, offset: Int):
             var out = result.get_data().bitcast[Int64]()
             for i in range(count):
@@ -457,10 +457,10 @@ struct AggregateFunction(Movable):
         ```mojo
         from duckdb.aggregate_function import AggregateFunction, AggregateStateArray
 
-        fn my_destroy(states: AggregateStateArray):
+        def my_destroy(states: AggregateStateArray):
             for i in range(len(states)):
                 var s = states.get_state(i).get_data().bitcast[Int64]()
-                s.destroy_pointee()
+                s.unsafe_deinit_pointee()
 
         var func = AggregateFunction()
         func.set_destructor[my_destroy]()
@@ -534,9 +534,9 @@ struct AggregateFunction(Movable):
 
         Example:
         ```mojo
-        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        def my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
-        fn zero() -> Scalar[DType.float64]: return 0.0
+        def zero() -> Scalar[DType.float64]: return 0.0
 
         AggregateFunction.from_reduce["my_sum", DType.float64, my_add, zero](conn)
         ```
@@ -635,9 +635,9 @@ struct AggregateFunction(Movable):
 
         Example:
         ```mojo
-        fn add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        def add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return a + b
-        fn zero() -> Scalar[DType.int64]: return 0
+        def zero() -> Scalar[DType.int64]: return 0
 
         # Sum int32 values into a int64 accumulator
         AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
@@ -725,7 +725,7 @@ struct AggregateFunction(Movable):
         """Create and register a unary aggregate from a stdlib-compatible function.
 
         Accepts functions with the standard library signature
-        ``fn[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]``
+        ``def[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]``
         so you can pass stdlib math helpers directly.
 
         Parameters:
@@ -737,7 +737,7 @@ struct AggregateFunction(Movable):
         Example:
         ```mojo
         import math
-        fn zero() -> Scalar[DType.float64]: return 0.0
+        def zero() -> Scalar[DType.float64]: return 0.0
         AggregateFunction.from_reduce["my_sum", DType.float64, math.add, zero](conn)
         ```
         """
@@ -1040,7 +1040,7 @@ struct AggregateFunctionSet(Movable):
         var name_copy = name.copy()
         ref libduckdb = DuckDB().libduckdb()
         self._function_set = libduckdb.duckdb_create_aggregate_function_set(
-            name_copy.as_c_string_slice().unsafe_ptr()
+            name_copy.as_c_string_span().ptr()
         )
 
     def __init__(out self, *, deinit move: Self):

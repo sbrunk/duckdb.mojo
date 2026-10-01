@@ -25,7 +25,7 @@ Run (on frederick, after the COPY produces /tmp/lext_scaled.bin):
         extensions/mojo-gpu-operator/bench/transcendental_scale_probe.mojo
 """
 
-from std.gpu import block_idx, thread_idx
+from max.gpu import block_idx, thread_idx
 from max.gpu.sync import barrier
 from max.gpu.host import DeviceContext
 from max.gpu.memory import AddressSpace
@@ -67,9 +67,9 @@ def _apply[F: Int](x: Float64) -> Float64:
 # Reconstruct the real double from the scaled int64 (v / 10^scale), apply f, sum.
 # This is the exact per-row float eval the operator's transcendental path needs.
 def trans_scaled_kernel[F: Int](
-    v: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    v: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n: Int,
-    dst: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dst: Pointer[Scalar[DType.float64], MutAnyOrigin],
 ):
     var smem = stack_allocation[
         BLOCK, Scalar[DType.float64], address_space = AddressSpace.SHARED
@@ -96,7 +96,7 @@ def trans_scaled_kernel[F: Int](
 
 def _gpu_sum[
     F: Int
-](ctx: DeviceContext, v_d_ptr: UnsafePointer[Scalar[DType.int64], MutAnyOrigin], n: Int) raises -> Float64:
+](ctx: DeviceContext, v_d_ptr: Pointer[Scalar[DType.int64], MutAnyOrigin], n: Int) raises -> Float64:
     var out_d = ctx.enqueue_create_buffer[DType.float64](1)
     out_d.enqueue_fill(0.0)
     comptime k = trans_scaled_kernel[F]

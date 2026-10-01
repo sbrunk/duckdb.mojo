@@ -51,7 +51,7 @@ def build_prog(ops: List[Int64], aa: List[Int64]) -> List[Int64]:
     return p^
 
 
-def to_buf(src: List[Int64]) -> UnsafePointer[Scalar[DType.int64], MutAnyOrigin]:
+def to_buf(src: List[Int64]) -> Pointer[Scalar[DType.int64], MutAnyOrigin]:
     var n = len(src) if len(src) > 0 else 1
     var p = alloc[Int64](n)
     for i in range(len(src)):

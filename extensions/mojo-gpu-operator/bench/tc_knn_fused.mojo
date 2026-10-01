@@ -38,7 +38,7 @@ Result on an RTX 4090 (BM=128 BN=64 BK=32, WM=64 WN=32, so 4 warps, NBLOCKS=256)
     per-chunk streaming top-k.
 """
 
-from std.gpu import (
+from max.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
@@ -115,10 +115,10 @@ def fused_knn_kernel[
 ](
     q: LayoutTensor[DType.float16, q_layout, MutAnyOrigin],
     e: LayoutTensor[DType.float16, e_layout, MutAnyOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    qnorm: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     k: Int,
     nblocks: Int,
@@ -129,7 +129,7 @@ def fused_knn_kernel[
     ]()
 
     var warp_id = get_warp_id()
-    warp_y, warp_x = udivmod(warp_id, BN // WN)
+    var warp_y, warp_x = udivmod(warp_id, BN // WN)
 
     # Shared staging tiles for Q (BM x BK) and Emb-slab (BN x BK).
     var a_smem = LayoutTensor[
@@ -280,10 +280,10 @@ def fused_knn_kernel[
 # Mirrors topk_batch_merge_kernel but candidate layout is [block*BM*k + m*k + j].
 # ===-------------------------------------------------------------------===#
 def merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutAnyOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutAnyOrigin],
     Mq: Int,
     nblocks: Int,
     k: Int,
@@ -441,7 +441,7 @@ def main() raises:
     ctx.synchronize()
 
     # ---- reference: scalar batched path on identical data ----
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(eh)
     )
     var handle = mojo_gpu_pin_f16(emb_imm, N, KD)

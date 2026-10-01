@@ -104,7 +104,7 @@ The entry point function must be named `{extension_name}_init_c_api` and have th
 
 ```mojo
 @export("my_extension_init_c_api")
-fn my_extension_init_c_api(
+def my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
@@ -124,16 +124,16 @@ from duckdb.extension import duckdb_extension_access, Extension
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
-fn add_numbers(a: Int64, b: Int64) -> Int64:
+def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection) raises:
+def init(conn: Connection) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
 
 @export("my_extension_init_c_api")
-fn my_extension_init_c_api(
+def my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
@@ -153,7 +153,7 @@ create an `Extension` manually:
 
 ```mojo
 @export("my_extension_init_c_api")
-fn my_extension_init_c_api(
+def my_extension_init_c_api(
     info: duckdb_extension_info,
     access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:

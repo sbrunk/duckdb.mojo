@@ -39,15 +39,15 @@ struct MultiColBindData(Copyable, Movable):
 # ===--------------------------------------------------------------------===#
 
 
-def destroy_counter_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
+def destroy_counter_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for CounterBindData."""
-    data.bitcast[CounterBindData]().destroy_pointee()
+    data.bitcast[CounterBindData]().unsafe_deinit_pointee()
     data.bitcast[CounterBindData]().free()
 
 
-def destroy_multi_col_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
+def destroy_multi_col_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for MultiColBindData."""
-    data.bitcast[MultiColBindData]().destroy_pointee()
+    data.bitcast[MultiColBindData]().unsafe_deinit_pointee()
     data.bitcast[MultiColBindData]().free()
 
 
@@ -63,7 +63,7 @@ def counter_bind(info: TableBindInfo):
     var limit_val = info.get_parameter(0)
     var limit = Int(limit_val.as_int32())
     var bind_data = alloc[CounterBindData](1)
-    bind_data.init_pointee_move(CounterBindData(limit=limit, current_row=0))
+    bind_data.unsafe_write(CounterBindData(limit=limit, current_row=0))
     info.set_bind_data(
         bind_data.bitcast[NoneType](),
         destroy_counter_bind_data,
@@ -109,7 +109,7 @@ def multi_col_bind(info: TableBindInfo):
     info.add_result_column("name", LogicalType(DuckDBType.varchar))
     info.add_result_column("score", LogicalType(DuckDBType.double))
     var bind_data = alloc[MultiColBindData](1)
-    bind_data.init_pointee_move(MultiColBindData(num_rows=3, current_row=0))
+    bind_data.unsafe_write(MultiColBindData(num_rows=3, current_row=0))
     info.set_bind_data(
         bind_data.bitcast[NoneType](),
         destroy_multi_col_bind_data,
@@ -163,8 +163,8 @@ struct StaticBindData(Copyable, Movable):
     var done: Bool
 
 
-def destroy_static_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi("C"):
-    data.bitcast[StaticBindData]().destroy_pointee()
+def destroy_static_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
+    data.bitcast[StaticBindData]().unsafe_deinit_pointee()
     data.bitcast[StaticBindData]().free()
 
 
@@ -172,7 +172,7 @@ def static_bind(info: TableBindInfo):
     """Bind function for a parameterless table function."""
     info.add_result_column("value", LogicalType(DuckDBType.integer))
     var bind_data = alloc[StaticBindData](1)
-    bind_data.init_pointee_move(StaticBindData(done=False))
+    bind_data.unsafe_write(StaticBindData(done=False))
     info.set_bind_data(
         bind_data.bitcast[NoneType](),
         destroy_static_bind_data,
@@ -494,7 +494,7 @@ def test_table_function_set_cardinality() raises:
         info.add_result_column("value", LogicalType(DuckDBType.integer))
         info.set_cardinality(2, True)
         var bind_data = alloc[StaticBindData](1)
-        bind_data.init_pointee_move(StaticBindData(done=False))
+        bind_data.unsafe_write(StaticBindData(done=False))
         info.set_bind_data(
             bind_data.bitcast[NoneType](),
             destroy_static_bind_data,

@@ -156,7 +156,7 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
     elif T == String:
         var s = String(vp.unsafe_bitcast[String]()[])
         return libduckdb.duckdb_create_varchar_length(
-            s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
+            s.as_c_string_span().ptr(), idx_t(s.byte_length())
         )
     elif T == Date:
         return libduckdb.duckdb_create_date(vp.unsafe_bitcast[Date]()[])
@@ -638,7 +638,7 @@ def mojo_logical_type[T: Copyable & Deinitable]() -> MojoType:
 
             comptime for idx in range(field_count):
                 # Extract individual field name at compile time (avoids
-                # materialising the whole InlineArray[StaticString, N])
+                # materialising the whole Array[StaticString, N])
                 comptime field_name = Reflected[T].field_names()[idx]
                 names.append(String(field_name))
                 comptime ft = field_type_arr[idx]
@@ -1235,12 +1235,13 @@ __extension List(_VectorListConstructible):
                         "NULL in DuckDB list but target element type is not"
                         " Optional. Use List[Optional[...]] to handle NULLs."
                     )
-            var result = Self(capacity=length)
+            # Build the list over the downcast element type, then rebind the
+            # whole list: `List` itself is always movable, while `Self.T` is
+            # only known to be `AnyType` here.
+            var result = List[downcast[Self.T, _DBase]](capacity=length)
             for i in range(len(deserialized)):
-                result.append(
-                    rebind_var[Self.T](deserialized[i].value().copy())
-                )
-            return result^
+                result.append(deserialized[i].value().copy())
+            return rebind_var[Self](result^)
 
 
 # ──────────────────────────────────────────────────────────────────

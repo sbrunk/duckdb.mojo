@@ -57,7 +57,7 @@ def main() raises:
     for r in range(N):
         for i in range(K):
             emb[r * K + i] = emb_val(r, i)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
         unsafe_from_address=Int(emb)
     )
 

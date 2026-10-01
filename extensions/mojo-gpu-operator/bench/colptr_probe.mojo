@@ -17,7 +17,7 @@ Run:
         extensions/mojo-gpu-operator/bench/colptr_probe.mojo
 """
 
-from std.gpu import block_idx, thread_idx
+from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.memory import AddressSpace
 from std.memory import alloc
@@ -37,11 +37,11 @@ comptime S = 2  # number of columns (slots)
 # working while `enqueue_function[k[True]]` selects the pointer path. Production
 # Phase 3 relies on this to leave the packed kernels untouched.
 def gather[USE_PTR: Bool = False](
-    cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    col_ptrs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    cols: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    col_ptrs: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_slots: Int,
     n_rows: Int,
-    dst: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    dst: Pointer[Scalar[DType.int64], MutAnyOrigin],
 ):
     var idx = Int(block_idx.x) * 32 + Int(thread_idx.x)
     var total = n_slots * n_rows
@@ -50,10 +50,9 @@ def gather[USE_PTR: Bool = False](
     var slot = idx // n_rows
     var row = idx % n_rows
 
-    @parameter
-    if USE_PTR:
+    comptime if USE_PTR:
         var addr = Int(col_ptrs[slot])
-        var col = UnsafePointer[
+        var col = Pointer[
             Scalar[DType.int64], MutAnyOrigin, address_space = AddressSpace.GLOBAL
         ](unsafe_from_address=addr)
         dst[slot * n_rows + row] = col[row]

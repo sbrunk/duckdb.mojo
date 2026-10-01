@@ -79,8 +79,8 @@ struct Config(Movable):
         if (
             libduckdb.duckdb_set_config(
                 self._config,
-                _name.as_c_string_slice().unsafe_ptr(),
-                _value.as_c_string_slice().unsafe_ptr(),
+                _name.as_c_string_span().ptr(),
+                _value.as_c_string_span().ptr(),
             )
         ) == DuckDBError:
             raise Error(

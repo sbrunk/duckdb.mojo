@@ -217,18 +217,18 @@ def build_or_range_tape(mut b: TapeBuilder, lo: Int, hi: Int):
 # and OR-of-range tapes (both KIND_Q6 UNGROUPED) reuse this. Asserts bit-exact.
 def run_shuttle(
     label: String,
-    tptr: UnsafePointer[Int64, MutAnyOrigin],
+    tptr: Pointer[Int64, MutAnyOrigin],
     tlen: Int,
-    bptr: UnsafePointer[UInt8, MutAnyOrigin],
+    bptr: Pointer[UInt8, MutAnyOrigin],
     blen: Int,
-    a: UnsafePointer[Int32, MutAnyOrigin],
-    x: UnsafePointer[Int64, MutAnyOrigin],
+    a: Pointer[Int32, MutAnyOrigin],
+    x: Pointer[Int64, MutAnyOrigin],
     cpu: Int128,
 ) raises:
     print("--- shuttle:", label, "---")
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, label + ": build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
     assert_equal(Int64(mojo_gpu_desc_kind(h)), KIND_Q6, label + ": kind != Q6")
@@ -313,7 +313,7 @@ def main() raises:
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -353,11 +353,11 @@ def main() raises:
     print("pin_begin:", pb, "(0=WARM, 1=COLD)")
 
     def feed(
-        h: UnsafePointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutAnyOrigin],
         col_j: Int,
         name: String,
-        a: UnsafePointer[Int32, MutAnyOrigin],
-        x: UnsafePointer[Int64, MutAnyOrigin],
+        a: Pointer[Int32, MutAnyOrigin],
+        x: Pointer[Int64, MutAnyOrigin],
     ) raises:
         var rc: Int
         if name == "a":
@@ -392,7 +392,7 @@ def main() raises:
 
     # ---- Warm-path check: a second identical run should hit the pin cache. ----
     var handle2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
-    var h2 = UnsafePointer[NoneType, MutAnyOrigin](
+    var h2 = Pointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle2_int
     )
     _ = mojo_gpu_desc_materialize_sql(h2, 0, sql_buf, cap)

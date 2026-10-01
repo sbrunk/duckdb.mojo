@@ -27,7 +27,7 @@ Run (Apple or NVIDIA, must pass on both):
         extensions/mojo-gpu-operator/bench/transcendental_agg_probe.mojo
 """
 
-from std.gpu import block_idx, thread_idx
+from max.gpu import block_idx, thread_idx
 from max.gpu.sync import barrier
 from max.gpu.host import DeviceContext
 from max.gpu.memory import AddressSpace
@@ -84,9 +84,9 @@ def _apply[F: Int](x: Float64) -> Float64:
 # output. This is the float64 analogue of seg_ungrouped_kernel_q6 (the int64 path
 # uses warp.sum, which has no f64 dtype here, so this uses a shared-memory reduction).
 def trans_sum_kernel[F: Int](
-    x: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    x: Pointer[Scalar[DType.float64], MutAnyOrigin],
     n: Int,
-    dst: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    dst: Pointer[Scalar[DType.float64], MutAnyOrigin],
 ):
     var smem = stack_allocation[
         BLOCK, Scalar[DType.float64], address_space = AddressSpace.SHARED
@@ -114,7 +114,7 @@ def trans_sum_kernel[F: Int](
 @always_inline
 def _cpu_sum[
     F: Int
-](x: UnsafePointer[Scalar[DType.float64], MutAnyOrigin], n: Int) -> Float64:
+](x: Pointer[Scalar[DType.float64], MutAnyOrigin], n: Int) -> Float64:
     var acc = Float64(0.0)
     for i in range(n):
         acc += _apply[F](x[i])
@@ -126,8 +126,8 @@ def _run_one[
 ](
     ctx: DeviceContext,
     name: String,
-    x_h: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
-    x_d_ptr: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
+    x_h: Pointer[Scalar[DType.float64], MutAnyOrigin],
+    x_d_ptr: Pointer[Scalar[DType.float64], MutAnyOrigin],
     n: Int,
 ) raises:
     # ---- CPU reference + timing ----

@@ -126,10 +126,10 @@ def run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_standard)
 
-    def bench_standard() capturing raises:
+    def bench_standard() raises {imm}:
         _ = conn.execute(query_standard)
 
-    var std_report = benchmark.run[bench_standard](max_iters=max_iters)
+    var std_report = benchmark.run(bench_standard, max_iters=max_iters)
     var std_ms = std_report.mean("ms")
     print("    Standard DuckDB:  " + String(std_ms) + " ms")
 
@@ -137,10 +137,10 @@ def run_benchmark(
     for _ in range(warmup_iters):
         _ = conn.execute(query_mojo)
 
-    def bench_mojo() capturing raises:
+    def bench_mojo() raises {imm}:
         _ = conn.execute(query_mojo)
 
-    var mojo_report = benchmark.run[bench_mojo](max_iters=max_iters)
+    var mojo_report = benchmark.run(bench_mojo, max_iters=max_iters)
     var mojo_ms = mojo_report.mean("ms")
     print("    Mojo SIMD:        " + String(mojo_ms) + " ms")
 

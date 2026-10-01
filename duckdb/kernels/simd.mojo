@@ -8,7 +8,6 @@ Two shapes from the same math:
   C++ for transparent built-in replacement.
 """
 
-from std.collections import InlineArray
 from std.math import sqrt, sin, cos, log, exp, min, max, iota
 from std.bit import pop_count
 
@@ -113,7 +112,7 @@ def reduce_sum_i128(
     the same total as stock regardless of accumulator partitioning.
     """
     comptime K = 4
-    var acc = InlineArray[Int128, K](fill=Int128(0))
+    var acc = Array[Int128, K](fill=Int128(0))
     var ovf = Int128(0)
     var i = 0
     while i + K <= n:
@@ -457,7 +456,7 @@ def knn_topk[
     while qg + QT <= m:
         for ni in range(n):
             var ep = e.unsafe_offset(ni * d_dim)
-            var acc = InlineArray[SIMD[DType.float32, W], QT](fill=SIMD[DType.float32, W](0))
+            var acc = Array[SIMD[DType.float32, W], QT](fill=SIMD[DType.float32, W](0))
             var dd = 0
             while dd + W <= d_dim:
                 var ev = (ep.unsafe_offset(dd)).unsafe_load[width=W]()

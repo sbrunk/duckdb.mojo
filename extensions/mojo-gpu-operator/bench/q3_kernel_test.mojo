@@ -36,7 +36,7 @@ int128 reduction (unlike Q1/Q6/Q14's cross-block sum): each order's bucket is a
 single exact int64. We still compare the full accumulator bit-for-bit.
 """
 
-from std.gpu import block_idx, thread_idx
+from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.memory import alloc
@@ -58,13 +58,13 @@ comptime NBLOCKS = 4096         # one warp (32 lanes) per block
 #     the join probe, filter and exact decimal product on the GPU, which is the
 #     expensive part) and the host sums per order (one O(n_rows) scan, ~ms).
 # ---------------------------------------------------------------------------
-def atomic_probe32(acc: UnsafePointer[Scalar[DType.uint32], MutAnyOrigin], n: Int):
+def atomic_probe32(acc: Pointer[Scalar[DType.uint32], MutAnyOrigin], n: Int):
     var tid = Int(block_idx.x) * 32 + Int(thread_idx.x)
     if tid < n:
         _ = Atomic.fetch_add(acc, UInt32(1))
 
 
-def atomic_probe64(acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin], n: Int):
+def atomic_probe64(acc: Pointer[Scalar[DType.int64], MutAnyOrigin], n: Int):
     var tid = Int(block_idx.x) * 32 + Int(thread_idx.x)
     if tid < n:
         _ = Atomic.fetch_add(acc, Int64(1))
@@ -80,12 +80,12 @@ def atomic_probe64(acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin], n: Int
 # accumulator (exact int64; an order has <=7 lines so the per-order sum fits).
 # ---------------------------------------------------------------------------
 def q3_kernel(
-    order_pass: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    lorderkey: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ship: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    rev_out: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    order_pass: Pointer[Scalar[DType.uint8], MutAnyOrigin],
+    lorderkey: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ship: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    rev_out: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
     ship_cutoff: Int32,   # l_shipdate > ship_cutoff (strict)
 ):
@@ -105,14 +105,14 @@ def q3_kernel(
 
 # Host top-10 selection by (revenue desc, orderdate asc) over nonzero orders.
 def topn(
-    rev: UnsafePointer[Int64, MutAnyOrigin],
-    order_date: UnsafePointer[Int32, MutAnyOrigin],
+    rev: Pointer[Int64, MutAnyOrigin],
+    order_date: Pointer[Int32, MutAnyOrigin],
     n_slots: Int,
     label: String,
 ):
-    var best_key = InlineArray[Int, 10](fill=0)
-    var best_rev = InlineArray[Int64, 10](fill=0)
-    var best_date = InlineArray[Int32, 10](fill=0)
+    var best_key = Array[Int, 10](fill=0)
+    var best_rev = Array[Int64, 10](fill=0)
+    var best_date = Array[Int32, 10](fill=0)
     var n_best = 0
     for k in range(1, n_slots):
         var r = rev[k]

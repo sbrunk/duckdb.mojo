@@ -95,7 +95,7 @@ Mojo's `abi("C")` lowering on Linux x86_64 still miscompiles by-value struct arg
 
 ## Updating Mojo
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.1.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
 
 1. Check available versions: query `https://conda.modular.com/max/osx-arm64/repodata.json` (stable releases) or `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (nightlies) for `mojo-compiler` packages. Check `linux-64` and `linux-aarch64` too. `curl` must follow redirects (`-L`).
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`); when moving between stable and nightly also update the channel in `[workspace] channels` (stable = `.../max/`, nightly = `.../max-nightly/`)

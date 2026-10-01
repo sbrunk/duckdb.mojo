@@ -39,8 +39,8 @@ any scale. This test asserts the GPU per-nation revenue is bit-exact vs a CPU
 int128 reference across all 25 groups.
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import alloc
 from std.sys import has_accelerator
@@ -54,21 +54,21 @@ comptime NGROUPS = 25           # n_nationkey range 0..24
 
 
 def q5_kernel(
-    order_pass: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    order_cust_nation: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    supp_nation: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],
-    nation_in_asia: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    lorderkey: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    lsuppkey: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    ext: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    disc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
-    partials: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
+    order_pass: Pointer[Scalar[DType.uint8], MutAnyOrigin],
+    order_cust_nation: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    supp_nation: Pointer[Scalar[DType.int32], MutAnyOrigin],
+    nation_in_asia: Pointer[Scalar[DType.uint8], MutAnyOrigin],
+    lorderkey: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    lsuppkey: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    ext: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    disc: Pointer[Scalar[DType.int64], MutAnyOrigin],
+    partials: Pointer[Scalar[DType.int64], MutAnyOrigin],
     n_rows: Int,
 ):
     var lane = Int(thread_idx.x)
     var stride = NBLOCKS * 32
     # Private per-lane per-group (nation) revenue accumulators.
-    var acc = InlineArray[Int64, NGROUPS](fill=0)
+    var acc = Array[Int64, NGROUPS](fill=0)
     var i = Int(block_idx.x) * 32 + lane
     while i < n_rows:
         var ok = lorderkey[i]
@@ -152,7 +152,7 @@ def main() raises:
 
     # ===== 3. CPU int128 reference (per-nation revenue) =====
     var t0 = perf_counter_ns()
-    var cpu = InlineArray[Int128, NGROUPS](fill=Int128(0))
+    var cpu = Array[Int128, NGROUPS](fill=Int128(0))
     for i in range(N_PROBE):
         var ok = Int(lorderkey[i])
         if order_pass[ok] != 0:
@@ -195,7 +195,7 @@ def main() raises:
     ctx.enqueue_copy(part_h, part_sub)
     ctx.synchronize()
     # host int128 reduction across blocks, per group (nation).
-    var gpu = InlineArray[Int128, NGROUPS](fill=Int128(0))
+    var gpu = Array[Int128, NGROUPS](fill=Int128(0))
     for b in range(NBLOCKS):
         for g in range(NGROUPS):
             gpu[g] += Int128(part_h[b * NGROUPS + g])

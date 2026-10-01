@@ -46,7 +46,7 @@ struct LabeledPoint(Copyable, Movable):
 
 def test_table_struct_single_row() raises:
     """Deserialize a single table row into a struct."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -68,7 +68,7 @@ def test_table_struct_single_row() raises:
 
 def test_table_struct_all_rows() raises:
     """Deserialize all table rows into structs."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -94,7 +94,7 @@ def test_table_struct_all_rows() raises:
 
 def test_table_struct_with_nulls() raises:
     """Rows with any NULL column value raise an error."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -119,7 +119,7 @@ def test_table_struct_with_nulls() raises:
 
 def test_table_struct_all_rows_with_nulls() raises:
     """All-rows get raises when a non-Optional field is NULL."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -135,7 +135,7 @@ def test_table_struct_all_rows_with_nulls() raises:
 
 def test_table_struct_column_count_mismatch() raises:
     """Error when column count doesn't match struct field count."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT)")
     _ = con.execute("INSERT INTO t VALUES ('Alice', 30)")
     var result = con.execute("SELECT name, age FROM t")
@@ -148,7 +148,7 @@ def test_table_struct_column_count_mismatch() raises:
 
 def test_table_struct_type_mismatch() raises:
     """Error when a column type doesn't match the struct field type."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     # age should be BIGINT but we use VARCHAR
     _ = con.execute(
         "CREATE TABLE t (name VARCHAR, age VARCHAR, active BOOLEAN)"
@@ -163,7 +163,7 @@ def test_table_struct_type_mismatch() raises:
 
 def test_table_struct_row_out_of_bounds() raises:
     """Error when row index is out of bounds."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -177,7 +177,7 @@ def test_table_struct_row_out_of_bounds() raises:
 
 def test_table_struct_with_list_field() raises:
     """Deserialize a table row with a List field."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
     _ = con.execute(
         "INSERT INTO t VALUES ('Alice', [90.0, 95.0, 100.0])"
@@ -200,7 +200,7 @@ def test_table_struct_with_list_field() raises:
 
 def test_table_struct_with_nested_struct() raises:
     """Deserialize a table row where a column is a DuckDB STRUCT."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (label VARCHAR, pt STRUCT(x DOUBLE, y DOUBLE))"
     )
@@ -229,7 +229,7 @@ def test_table_struct_with_nested_struct() raises:
 
 def test_materialized_struct_single_row() raises:
     """Deserialize a single row from a MaterializedResult into a struct."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -250,7 +250,7 @@ def test_materialized_struct_single_row() raises:
 
 def test_materialized_struct_all_rows() raises:
     """Deserialize all rows from a MaterializedResult into structs."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -277,7 +277,7 @@ def test_materialized_struct_all_rows() raises:
 
 def test_materialized_struct_with_nulls_raises() raises:
     """MaterializedResult.get[T]() raises when non-Optional field is NULL."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE users (name VARCHAR, age BIGINT, active BOOLEAN)"
     )
@@ -300,7 +300,7 @@ def test_materialized_struct_with_nulls_raises() raises:
 
 def test_materialized_struct_row_out_of_bounds() raises:
     """MaterializedResult.get[T](row=) raises on out-of-bounds row."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, age BIGINT, active BOOLEAN)")
     _ = con.execute("INSERT INTO t VALUES ('Alice', 30, true)")
     var result = con.execute("SELECT * FROM t").fetchall()
@@ -311,7 +311,7 @@ def test_materialized_struct_row_out_of_bounds() raises:
 
 def test_materialized_struct_with_list_field() raises:
     """MaterializedResult struct deserialization with a List field."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (name VARCHAR, scores DOUBLE[])")
     _ = con.execute("INSERT INTO t VALUES ('Alice', [90.0, 95.0])")
     _ = con.execute("INSERT INTO t VALUES ('Bob', [80.0])")

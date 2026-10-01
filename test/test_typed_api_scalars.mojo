@@ -9,10 +9,10 @@ from std.testing.suite import TestSuite
 
 def test_scalar_types_new_api() raises:
     """Test scalar types with the new get[T] API."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
     # Boolean
-    result = con.execute("SELECT true")
+    var result = con.execute("SELECT true")
     var chunk = result.fetch_chunk()
     var bool_val = chunk.get[Bool](col=0, row=0)
     assert_true(bool_val)
@@ -96,10 +96,10 @@ def test_scalar_types_new_api() raises:
 
 def test_date_time_types_new_api() raises:
     """Test date/time types with the new API."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
     # Timestamp
-    result = con.execute("SELECT TIMESTAMP '1992-09-20 11:30:00.123456789'")
+    var result = con.execute("SELECT TIMESTAMP '1992-09-20 11:30:00.123456789'")
     var chunk = result.fetch_chunk()
     var ts_val = chunk.get[Timestamp](col=0, row=0)
     assert_equal(ts_val, Timestamp(716988600123456))
@@ -119,10 +119,10 @@ def test_date_time_types_new_api() raises:
 
 def test_timestamp_variants_typed_api() raises:
     """Test TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
     # TIMESTAMP_S
-    result = con.execute("SELECT TIMESTAMP_S '2021-01-01 00:00:00'")
+    var result = con.execute("SELECT TIMESTAMP_S '2021-01-01 00:00:00'")
     var chunk = result.fetch_chunk()
     var ts_s = chunk.get[TimestampS](col=0, row=0)
     assert_equal(ts_s, TimestampS(1609459200))
@@ -142,10 +142,10 @@ def test_timestamp_variants_typed_api() raises:
 
 def test_timestamp_tz_typed_api() raises:
     """Test TIMESTAMPTZ with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("SET TimeZone = 'UTC'")
 
-    result = con.execute("SELECT TIMESTAMPTZ '2021-01-01 00:00:00+00'")
+    var result = con.execute("SELECT TIMESTAMPTZ '2021-01-01 00:00:00+00'")
     var chunk = result.fetch_chunk()
     var ts_tz = chunk.get[TimestampTZ](col=0, row=0)
     assert_equal(ts_tz, TimestampTZ(1609459200000000))
@@ -153,9 +153,9 @@ def test_timestamp_tz_typed_api() raises:
 
 def test_time_tz_typed_api() raises:
     """Test TIMETZ with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT TIMETZ '12:30:00+02:00'")
+    var result = con.execute("SELECT TIMETZ '12:30:00+02:00'")
     var chunk = result.fetch_chunk()
     var ttz = chunk.get[TimeTZ](col=0, row=0)
 
@@ -169,9 +169,9 @@ def test_time_tz_typed_api() raises:
 
 def test_uuid_typed_api() raises:
     """Test UUID with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID")
+    var result = con.execute("SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID")
     var chunk = result.fetch_chunk()
     var uuid = chunk.get[UUID](col=0, row=0)
 
@@ -192,9 +192,9 @@ def test_uuid_typed_api() raises:
 
 def test_uuid_zero_typed_api() raises:
     """Test UUID zero value with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT '00000000-0000-0000-0000-000000000000'::UUID")
+    var result = con.execute("SELECT '00000000-0000-0000-0000-000000000000'::UUID")
     var chunk = result.fetch_chunk()
     var uuid = chunk.get[UUID](col=0, row=0)
     assert_equal(uuid, UUID(UInt128(0)))
@@ -202,9 +202,9 @@ def test_uuid_zero_typed_api() raises:
 
 def test_hugeint_typed_api() raises:
     """Test HUGEINT (Int128) with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT 123456789012345::HUGEINT")
+    var result = con.execute("SELECT 123456789012345::HUGEINT")
     var chunk = result.fetch_chunk()
     var val = chunk.get[Int128](col=0, row=0)
     assert_equal(val, Int128(123456789012345))
@@ -223,9 +223,9 @@ def test_hugeint_typed_api() raises:
 
 def test_uhugeint_typed_api() raises:
     """Test UHUGEINT (UInt128) with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT 999999999999999::UHUGEINT")
+    var result = con.execute("SELECT 999999999999999::UHUGEINT")
     var chunk = result.fetch_chunk()
     var val = chunk.get[UInt128](col=0, row=0)
     assert_equal(val, UInt128(999999999999999))
@@ -238,12 +238,12 @@ def test_uhugeint_typed_api() raises:
 
 def test_decimal_typed_api() raises:
     """Test DECIMAL with get[T]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE d (val DECIMAL(10, 2))")
     _ = con.execute("INSERT INTO d VALUES (123.45)")
     _ = con.execute("INSERT INTO d VALUES (-99.99)")
 
-    result = con.execute("SELECT val FROM d ORDER BY rowid")
+    var result = con.execute("SELECT val FROM d ORDER BY rowid")
     var chunk = result.fetch_chunk()
 
     var d1 = chunk.get[Decimal](col=0, row=0)
@@ -257,12 +257,12 @@ def test_decimal_typed_api() raises:
 
 def test_timestamp_variants_column_api() raises:
     """Test fetching a full column of timestamp variants."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE ts (a TIMESTAMP_S, b TIMESTAMP_MS, c TIMESTAMP_NS)")
     _ = con.execute("INSERT INTO ts VALUES (TIMESTAMP_S '2021-01-01', TIMESTAMP_MS '2021-01-01', TIMESTAMP_NS '2021-01-01')")
     _ = con.execute("INSERT INTO ts VALUES (TIMESTAMP_S '1970-01-01', TIMESTAMP_MS '1970-01-01', TIMESTAMP_NS '1970-01-01')")
 
-    result = con.execute("SELECT a, b, c FROM ts ORDER BY rowid")
+    var result = con.execute("SELECT a, b, c FROM ts ORDER BY rowid")
     var chunk = result.fetch_chunk()
 
     var col_s = chunk.get[TimestampS](col=0)
@@ -283,10 +283,10 @@ def test_timestamp_variants_column_api() raises:
 
 def test_null_handling_new_api() raises:
     """Test NULL handling with the new API."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
     # NULL integer
-    result = con.execute("SELECT null::INT")
+    var result = con.execute("SELECT null::INT")
     var chunk = result.fetch_chunk()
     var null_val = chunk.get[Optional[Int32]](col=0, row=0)
     assert_false(null_val)
@@ -307,9 +307,9 @@ def test_null_handling_new_api() raises:
 
 def test_column_retrieval_new_api() raises:
     """Test getting all values from a column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)")
+    var result = con.execute("SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)")
     var chunk = result.fetch_chunk()
     var values = chunk.get[Int32](col=0)
 
@@ -320,9 +320,9 @@ def test_column_retrieval_new_api() raises:
 
 def test_multiple_columns_new_api() raises:
     """Test retrieving multiple columns with different types."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("""
+    var result = con.execute("""
         SELECT * FROM (VALUES
             (1, 'alice', 25.5::DOUBLE),
             (2, 'bob', 30.0::DOUBLE),
@@ -350,9 +350,9 @@ def test_multiple_columns_new_api() raises:
 
 def test_type_mismatch_new_api() raises:
     """Test that type mismatches raise errors."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("SELECT 'hello'")
+    var result = con.execute("SELECT 'hello'")
     var chunk = result.fetch_chunk()
 
     # Try to get a string as an int
@@ -362,10 +362,10 @@ def test_type_mismatch_new_api() raises:
 
 def test_blob_deserialize() raises:
     """Read BLOB column as List[UInt8] via typed API."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BLOB)")
     _ = con.execute("INSERT INTO t VALUES ('\\x01\\x02\\x03'::BLOB), ('\\xDE\\xAD'::BLOB)")
-    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var result = con.execute("SELECT b FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var row0 = chunk.get[List[UInt8]](col=0, row=0)
     assert_equal(len(row0), 3)
@@ -380,10 +380,10 @@ def test_blob_deserialize() raises:
 
 def test_blob_deserialize_column() raises:
     """Read BLOB column as full column of List[UInt8]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BLOB)")
     _ = con.execute("INSERT INTO t VALUES ('\\x01\\x02'::BLOB), (NULL)")
-    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var result = con.execute("SELECT b FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Optional[List[UInt8]]](col=0)
     assert_equal(len(vals), 2)
@@ -394,11 +394,11 @@ def test_blob_deserialize_column() raises:
 
 def test_enum_deserialize() raises:
     """Read ENUM column as String via typed API."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral')")
     _ = con.execute("CREATE TABLE t (m mood)")
     _ = con.execute("INSERT INTO t VALUES ('happy'), ('sad'), ('neutral')")
-    result = con.execute("SELECT m FROM t ORDER BY rowid")
+    var result = con.execute("SELECT m FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[String](col=0, row=0), "happy")
     assert_equal(chunk.get[String](col=0, row=1), "sad")
@@ -407,11 +407,11 @@ def test_enum_deserialize() raises:
 
 def test_enum_deserialize_with_null() raises:
     """Read ENUM column with NULL values as Optional[String]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
     _ = con.execute("CREATE TABLE t (c color)")
     _ = con.execute("INSERT INTO t VALUES ('red'), (NULL), ('blue')")
-    result = con.execute("SELECT c FROM t ORDER BY rowid")
+    var result = con.execute("SELECT c FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Optional[String]](col=0)
     assert_equal(len(vals), 3)
@@ -424,10 +424,10 @@ def test_enum_deserialize_with_null() raises:
 
 def test_bit_deserialize() raises:
     """Read BIT column as Bit."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BIT)")
     _ = con.execute("INSERT INTO t VALUES ('10110'::BIT), ('0'::BIT), ('11111111'::BIT)")
-    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var result = con.execute("SELECT b FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var b0 = chunk.get[Bit](col=0, row=0)
     assert_equal(String(b0), "10110")
@@ -441,10 +441,10 @@ def test_bit_deserialize() raises:
 
 def test_bit_deserialize_column() raises:
     """Read entire BIT column as List[Optional[Bit]]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (b BIT)")
     _ = con.execute("INSERT INTO t VALUES ('101'::BIT), (NULL), ('0'::BIT)")
-    result = con.execute("SELECT b FROM t ORDER BY rowid")
+    var result = con.execute("SELECT b FROM t ORDER BY rowid")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Optional[Bit]](col=0)
     assert_equal(len(vals), 3)

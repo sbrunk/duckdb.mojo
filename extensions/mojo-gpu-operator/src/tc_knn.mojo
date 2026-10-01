@@ -32,7 +32,7 @@ unsupported K falls back to the scalar path (the caller keeps the scalar driver)
 """
 
 from std.sys.info import is_nvidia_gpu, has_nvidia_gpu_accelerator
-from std.gpu import (
+from max.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
@@ -117,10 +117,10 @@ def tc_fused_knn_kernel[
 ](
     q: LayoutTensor[DType.float16, q_layout, MutUntrackedOrigin],
     e: LayoutTensor[DType.float16, e_layout, MutUntrackedOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    qnorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     k_dp: Int64,
     nblocks_dp: Int64,
@@ -136,7 +136,7 @@ def tc_fused_knn_kernel[
         ]()
 
         var warp_id = get_warp_id()
-        warp_y, warp_x = udivmod(warp_id, TC_BN // TC_WN)
+        var warp_y, warp_x = udivmod(warp_id, TC_BN // TC_WN)
 
         var a_smem = LayoutTensor[
             DType.float16, Layout.row_major(TC_BM, TC_BK), MutUntrackedOrigin,
@@ -296,10 +296,10 @@ def tc_fused_knn_kernel[
 # `(block_idx.x*TC_BM + m)*k` emit). NVIDIA-only via the comptime gate.
 # ===-------------------------------------------------------------------===#
 def tc_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     Mq_dp: Int64,
     nblocks_dp: Int64,
     k_dp: Int64,
@@ -403,8 +403,8 @@ def _run_tc_knn_for_kd[
     n_rows: Int,
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     # Host gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
     # is False in host context). On Apple this is comptime-False, so the body
@@ -537,12 +537,12 @@ def run_tc_knn_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     # Host gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
     # host-side comptime query; Apple never compiles this body.
@@ -586,7 +586,7 @@ def run_tc_knn_batch(
         var enorm_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
         ctx.synchronize()
         ctx.enqueue_copy(qs_dev, qh16)
-        var qnorm_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var qnorm_imm = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qnorm_h)
         )
         ctx.enqueue_copy(qnorm_dev, qnorm_imm)
@@ -689,8 +689,8 @@ def run_tc_knn_batch(
 # squared norm (sum of squares, no sqrt) for the L2-distance epilogue.
 # NVIDIA-only via the comptime gate.
 def _tc_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     squared_dp: Int64,
@@ -699,7 +699,7 @@ def _tc_enorm_kernel(
     var K = Int(K_dp)
     var squared = Int(squared_dp)
     comptime if is_nvidia_gpu():
-        from std.gpu.primitives import warp
+        from max.gpu.primitives import warp
 
         var row = Int(block_idx.x)
         if row >= n_rows:

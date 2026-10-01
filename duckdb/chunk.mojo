@@ -770,7 +770,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         # Validate types and NULL constraints
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
             comptime ETC = downcast[ET, Copyable & Deinitable]
             var actual_type = self.type(idx)
 
@@ -873,7 +873,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         )
 
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
             comptime ETC = downcast[ET, Copyable & Deinitable]
             var vector = self.get_vector(idx)
 

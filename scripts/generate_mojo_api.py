@@ -728,7 +728,6 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 def _generate_header() -> str:
     return """from std.ffi import c_char
 from std.utils import StaticTuple
-from std.collections import InlineArray
 from duckdb.duckdb_type import *
 from std.sys.info import CompilationTarget
 from std.os import abort
@@ -923,13 +922,13 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_string_t_pointer(Copyable, Movable):")
     lines.append("    var length: UInt32")
-    lines.append("    var prefix: InlineArray[c_char, 4]")
+    lines.append("    var prefix: Array[c_char, 4]")
     lines.append("    var ptr: Pointer[c_char, MutUntrackedOrigin]")
     lines.append("")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_string_t_inlined(Copyable, Movable):")
     lines.append("    var length: UInt32")
-    lines.append("    var inlined: InlineArray[c_char, 12]")
+    lines.append("    var inlined: Array[c_char, 12]")
     lines.append("")
     lines.append("comptime duckdb_string_t = UnsafeUnion[duckdb_string_t_pointer, duckdb_string_t_inlined]")
     lines.append("")
