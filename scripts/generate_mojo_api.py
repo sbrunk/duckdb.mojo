@@ -998,16 +998,7 @@ def _generate_types(duckdb_dir: str) -> str:
 
     # duckdb_result
     lines.append("@fieldwise_init")
-    # WORKAROUND: a register-passable marker is required for `abi("C")` to
-    # lower the by-value struct ABI correctly on Linux x86_64 (verified through
-    # Mojo 1.0.0b2 stable). Without it, calls like
-    # `duckdb_fetch_chunk(result)` either return NULL or crash. The fix for the
-    # abi("C") lowering bug (https://github.com/modular/modular/issues/6511)
-    # only covers structs that carry a register-passable marker; plain
-    # (unmarked) structs still miscompile, so an upstream follow-up is still
-    # needed. `RegisterPassable` and `TrivialRegisterPassable` both select the
-    # working path.
-    lines.append("struct duckdb_result(RegisterPassable, ImplicitlyCopyable):")
+    lines.append("struct duckdb_result(ImplicitlyCopyable):")
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")

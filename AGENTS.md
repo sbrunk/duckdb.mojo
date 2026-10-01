@@ -89,10 +89,6 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
   (`benchmark/drivers/runner_load_extension.patch`) that `LOAD`s the extension via the
   `DUCKDB_BENCH_EXTENSION` environment variable, so no libduckdb fork is needed.
 
-## FFI Struct ABI Workaround
-
-Mojo's `abi("C")` lowering on Linux x86_64 still miscompiles by-value struct arguments larger than 16 bytes when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list, which routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
-
 ## Updating Mojo
 
 The Mojo compiler version is pinned in `pixi.toml` (currently `1.1.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:

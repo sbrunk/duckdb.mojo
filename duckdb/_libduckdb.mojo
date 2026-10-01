@@ -421,7 +421,7 @@ struct duckdb_bignum(ImplicitlyCopyable, Movable):
     var is_negative: Bool
 
 @fieldwise_init
-struct duckdb_result(RegisterPassable, ImplicitlyCopyable):
+struct duckdb_result(ImplicitlyCopyable):
     var __deprecated_column_count: idx_t
     var __deprecated_row_count: idx_t
     var __deprecated_rows_changed: idx_t
