@@ -3,19 +3,20 @@
 Q14 is an ungrouped 2-aggregate sum over a lineitem |><| part FK join:
     promo = sum(CASE WHEN p_type LIKE 'PROMO%' THEN ext*(1-disc) ELSE 0 END)
     total = sum(ext*(1-disc))
-(the surrounding 100*promo/total ratio is a projection ABOVE the GPU op).
+(the surrounding 100*promo/total ratio is a projection above the GPU op).
 
 This synthesizes a small fact (lineitem-like) + dim (part-like) dataset in host
 memory, hand-builds the Q14 RawPlan tape (1 fact GET with a shipdate range, 1 dim
 GET, an INNER join l_partkey=p_partkey, 0 group keys, 2 SUM aggregates), then
-drives the FULL C-ABI shuttle by calling the @export functions directly:
+drives the full C-ABI shuttle by calling the @export functions directly:
 
     build_descriptor -> materialize_count(=2) -> materialize_sql(0)=fact /
         materialize_sql(1)=part -> pin_begin -> feed_column(req 0)=fact cols /
         feed_column(req 1)=part cols -> pin_finalize -> result_i128 x2
 
 It computes a CPU int128 reference for both sums (using the same promo test and
-the same ext*(100-disc) revenue), and asserts BIT-EXACT equality. Prints ALL PASS.
+the same ext*(100-disc) revenue), and asserts bit-exact equality. Prints
+"ALL PASS" on success.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -281,7 +282,7 @@ def main() raises:
     var fact_order = _parse_order(sql0)
     var dim_order = _parse_order(sql1)
 
-    # pin_begin (COLD first call).
+    # pin_begin (cold on first call).
     var pb = mojo_gpu_pin_begin(h)
     print("pin_begin:", pb, "(0=WARM, 1=COLD)")
 
@@ -314,9 +315,9 @@ def main() raises:
     var ppk_buf = alloc[Int64](P)
     for r in range(P):
         ppk_buf[r] = ppk_vals[r]
-    # Build a contiguous string_t array for p_type (1..>12 chars -> use pointer
-    # form). Simpler: build the 16-byte string_t layout by hand with the pointer
-    # variant (length > 12), pointing at owned UTF-8 buffers.
+    # Build a contiguous string_t array for p_type. The strings are longer than
+    # 12 chars, so build the 16-byte string_t layout by hand using the pointer
+    # variant, pointing at owned UTF-8 buffers.
     var stbuf = alloc[UInt8](P * 16)
     var owned_strs: List[UnsafePointer[UInt8, MutAnyOrigin]] = []
     for r in range(P):
@@ -333,7 +334,7 @@ def main() raises:
         stbuf[base + 1] = UInt8((L >> 8) & 0xFF)
         stbuf[base + 2] = UInt8((L >> 16) & 0xFF)
         stbuf[base + 3] = UInt8((L >> 24) & 0xFF)
-        # all our p_type strings are > 12 chars -> pointer form: bytes 8..15.
+        # all our p_type strings are > 12 chars, so use the pointer form: bytes 8..15.
         var addr = Int(sp)
         for kb in range(8):
             stbuf[base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)

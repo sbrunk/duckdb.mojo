@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Regression test for the array distance/similarity SIMD overrides.
-# Runs the same deterministic queries twice — stock DuckDB vs the extension —
-# and asserts the results match within ~1 ULP, plus NULL-semantics and
-# known-value checks. Exits non-zero on any mismatch.
+# Runs the same deterministic queries twice, once on stock DuckDB and once with
+# the extension loaded, and checks that the results match within about 1 ULP.
+# Also checks NULL handling and a few known values. Exits non-zero on any
+# mismatch.
 #
 # Run via `pixi run overrides-test` (builds the extension first).
 set -euo pipefail
@@ -10,12 +11,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT="$HERE/../build/mojo_overrides.duckdb_extension"
 DUCKDB="${DUCKDB:-duckdb}"
-[ -f "$EXT" ] || { echo "missing $EXT — run 'pixi run overrides-build' first"; exit 1; }
+[ -f "$EXT" ] || { echo "missing $EXT: run 'pixi run overrides-build' first"; exit 1; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Deterministic random arrays of several sizes/types; dump per-row metrics to CSV.
+# Deterministic random arrays of several sizes and types. Per-row metrics are written to CSV.
 # OUTFILE is substituted per run.
 read -r -d '' BODY <<'SQL' || true
 SET lambda_syntax='ENABLE_SINGLE_ARROW';
@@ -73,7 +74,7 @@ fail=0
 chk() { # chk "label" "expected" "sql"
   local got
   got=$("$DUCKDB" -unsigned -noheader -list -c "LOAD '$EXT'; $3" 2>&1) || true
-  if [[ "$got" == *"$2"* ]]; then echo "   ok: $1"; else echo "   FAIL: $1 — expected '$2' got '$got'"; fail=1; fi
+  if [[ "$got" == *"$2"* ]]; then echo "   ok: $1"; else echo "   FAIL: $1: expected '$2' got '$got'"; fail=1; fi
 }
 chk "NULL row -> NULL"        "NULL"   "SELECT array_distance(NULL::FLOAT[3], [1,2,3]::FLOAT[3]);"
 chk "NULL element -> error"   "can not contain NULL values" "SELECT array_distance([1,NULL,3]::FLOAT[3], [1,2,3]::FLOAT[3]);"
@@ -83,7 +84,7 @@ chk "dot([1,2,3],[4,5,6])=32" "32.0"   "SELECT array_inner_product([1,2,3]::DOUB
 
 [ "$fail" -eq 0 ] && echo "PASS: array-distance override checks" || { echo "FAILED"; exit 1; }
 
-# ---- nullable aggregates (A1 mask-multiply): sum/avg/min/max over NULL-containing columns ----
+# ---- nullable aggregates: sum/avg/min/max over columns that contain NULLs ----
 echo "==> nullable aggregates (stock vs override)"
 read -r -d '' NBODY <<'SQL' || true
 SELECT setseed(0.77);
@@ -124,7 +125,7 @@ print(f"   nullable max rel diff = {mx:.3e}")
 print("   PASS")
 PY
 
-# ---- mojo_knn table function (item 4): recall@k + self-match vs exact stock ----
+# ---- mojo_knn table function: recall@k and self-match against exact stock results ----
 echo "==> mojo_knn batch kNN (recall vs exact stock)"
 KDB="$TMP/knn.db"; K=10; KN=3000; KM=24; KD=128
 "$DUCKDB" "$KDB" -c "SET lambda_syntax='ENABLE_SINGLE_ARROW'; SELECT setseed(0.33);
@@ -155,7 +156,7 @@ for metric in ("cosine","l2","ip"):
 print("   PASS" if ok else "   FAIL"); sys.exit(0 if ok else 1)
 PY
 
-# ---- fused sum/avg(transcendental) (item 2): optimizer rewrite vs stock ----
+# ---- fused sum/avg(transcendental): optimizer rewrite compared with stock ----
 echo "==> fused sum/avg(transcendental) (stock vs override)"
 read -r -d '' FBODY <<'SQL' || true
 SELECT setseed(0.9);

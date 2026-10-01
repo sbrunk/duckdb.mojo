@@ -1,13 +1,13 @@
 """Prepared statements and parameter binding for DuckDB.
 
 A `PreparedStatement` wraps a parsed-and-planned SQL statement that can be
-executed repeatedly with different parameter bindings.  This mirrors DuckDB's
-Python ``con.execute(sql, params)`` / ``con.executemany(sql, seq)`` ergonomics,
-but with statically-typed Mojo values.
+executed repeatedly with different parameter bindings.  It works like DuckDB's
+Python ``con.execute(sql, params)`` / ``con.executemany(sql, seq)``, but with
+statically-typed Mojo values.
 
 Parameters can be bound positionally (``?`` or ``$1``) or by name (``$name``).
 
-Example — positional binding via the connection convenience API:
+Example: positional binding via the connection convenience API:
 ```mojo
 var con = DuckDB.connect(":memory:")
 _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
@@ -15,7 +15,7 @@ _ = con.execute("INSERT INTO t VALUES (?, ?)", 1, String("Mark"))
 var result = con.execute("SELECT name FROM t WHERE id = ?", 1)
 ```
 
-Example — preparing once and binding manually:
+Example: preparing once and binding manually:
 ```mojo
 var stmt = con.prepare("SELECT $1 + $2")
 stmt.bind(1, Int32(40))
@@ -23,7 +23,7 @@ stmt.bind(2, Int32(2))
 var result = stmt.execute()
 ```
 
-Example — named parameters:
+Example: named parameters:
 ```mojo
 var result = con.execute_named(
     "SELECT $x + $y", {"x": Int32(40), "y": Int32(2)}
@@ -44,8 +44,8 @@ trait Bindable:
     """Trait for types needing custom prepared-statement binding logic.
 
     Most scalar types are bound generically via `_to_duckdb_value`.  This trait
-    exists for types that need special handling — currently `Optional[T]`, which
-    binds NULL for `None` and its inner value otherwise.
+    exists for types that need special handling. Currently that is only
+    `Optional[T]`, which binds NULL for `None` and its inner value otherwise.
     """
 
     def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
@@ -231,7 +231,7 @@ __extension Optional(Bindable):
     def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
         if self:
             # Refine Self.T to Copyable & Deinitable so the inner value can be
-            # bound — only Copyable values can be converted to a duckdb_value.
+            # bound. Only Copyable values can be converted to a duckdb_value.
             comptime CT = downcast[Self.T, Copyable & Deinitable]
             var vp = Pointer(to=self).unsafe_bitcast[Optional[CT]]()
             stmt.bind(index, vp[].value())

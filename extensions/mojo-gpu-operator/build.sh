@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build the Mojo GPU kernels + the mojo_gpu_operator DuckDB extension.
-# Run via `pixi run gpu-op-build` (so mojo + the conda libduckdb headers are on PATH).
+# Build the Mojo GPU kernels and the mojo_gpu_operator DuckDB extension.
+# Run via `pixi run gpu-op-build` (so mojo and the conda libduckdb headers are on PATH).
 #
 # Overridable env:
 #   DUCKDB_INCLUDE  duckdb headers dir   (default: $CONDA_PREFIX/include)
-#   DUCKDB_VERSION  for the CPP footer   (default: v1.5.5)
+#   DUCKDB_VERSION  for the CPP footer   (default: v1.5.6)
 #   CXX             C++ compiler         (default: clang++)
 set -euo pipefail
 
@@ -14,12 +14,12 @@ BUILD="$HERE/build"
 mkdir -p "$BUILD"
 
 DUCKDB_INCLUDE="${DUCKDB_INCLUDE:-${CONDA_PREFIX:?set CONDA_PREFIX or DUCKDB_INCLUDE}/include}"
-DUCKDB_VERSION="${DUCKDB_VERSION:-v1.5.5}"
+DUCKDB_VERSION="${DUCKDB_VERSION:-v1.5.6}"
 CXX="${CXX:-clang++}"
 
 MOJO_LIB="${MOJO_LIB:-${CONDA_PREFIX:?}/lib}"
 
-# Platform-conditional link flags + shared-lib extension + self-relative rpath.
+# Per-platform link flags, shared library extension and self-relative rpath.
 # macOS: .dylib + @loader_path; Linux (incl. the NVIDIA CI targets): .so + $ORIGIN.
 case "$(uname -s)" in
 Darwin) SOFLAGS=(-undefined dynamic_lookup); SO=dylib; ORIGIN='@loader_path' ;;
@@ -35,19 +35,20 @@ esac
 echo "==> Mojo GPU kernels -> build/libmojo_gpu_kernels.$SO (shared-lib, runtime linked)"
 mojo build --emit shared-lib "$HERE/src/gpu_kernels.mojo" -o "$BUILD/libmojo_gpu_kernels.$SO"
 
-# NOTE: descriptor.mojo is no longer built/linked separately. Its pure
-# RawPlan->descriptor logic is `import`ed by gpu_kernels.mojo, and ALL the
-# mojo_gpu_build_descriptor / mojo_gpu_desc_* C-ABI @export wrappers now live in
-# gpu_kernels.mojo (the root build file), so they ship in the kernel dylib in the
-# SAME compilation unit as the GPU kernels -- required for the Stage-2 shuttle,
-# whose pin_finalize must read the descriptor AND run kernels.
+# descriptor.mojo is no longer built or linked separately. gpu_kernels.mojo imports
+# its RawPlan-to-descriptor logic, and all the mojo_gpu_build_descriptor /
+# mojo_gpu_desc_* C-ABI @export wrappers now live in gpu_kernels.mojo (the root
+# build file). They ship in the kernel dylib in the same compilation unit as the
+# GPU kernels. The Stage-2 shuttle needs this, because its pin_finalize must both
+# read the descriptor and run kernels.
 
-# NR1 (decline -> SIMD overrides): compile the mojo-kernel-overrides SIMD kernels
-# + their catalog-mutation glue and link them straight into this extension, so a
-# single LOAD of the GPU operator can also install the built-in overrides (gated at
-# runtime by GPU_OP_OVERRIDES; see gpu_operator.cpp). The override kernels are a
-# plain object with no Mojo-runtime deps (CPU SIMD only), exactly as in
-# extensions/mojo-kernel-overrides/build.sh -- so no extra rpath is needed for them.
+# NR1 (when the GPU declines, fall back to the SIMD overrides): compile the
+# mojo-kernel-overrides SIMD kernels and their catalog-mutation glue and link them
+# into this extension, so a single LOAD of the GPU operator can also install the
+# built-in overrides (gated at runtime by GPU_OP_OVERRIDES; see gpu_operator.cpp).
+# The override kernels are a plain object with no Mojo runtime dependencies (CPU
+# SIMD only), as in extensions/mojo-kernel-overrides/build.sh, so they need no
+# extra rpath.
 OVR="$ROOT/extensions/mojo-kernel-overrides/src"
 echo "==> Mojo SIMD override kernels -> build/overrides_capi.o (NR1 decline->overrides)"
 mojo build --emit object "$OVR/capi_shim.mojo" -o "$BUILD/overrides_capi.o"

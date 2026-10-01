@@ -1,4 +1,4 @@
-"""Tests for the Appender API — Map (Dict) and Variant (UNION) types."""
+"""Tests for the Appender API: Map (Dict) and Variant (UNION) types."""
 
 from duckdb import *
 from std.collections import Dict
@@ -78,7 +78,7 @@ def test_append_dict_map_with_id() raises:
 
 
 def test_append_dict_map_roundtrip() raises:
-    """Append Dict values and read back as Dict — full roundtrip."""
+    """Append Dict values and read them back as Dict (full roundtrip)."""
     con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (m MAP(INTEGER, VARCHAR))"

@@ -1,16 +1,16 @@
-"""Q1-shaped DENSE grouped + selective-filter phantom-group probe.
+"""Probe for phantom groups in a Q1-shaped dense grouped query with a selective filter.
 
-The generic engine only ROUTES a DENSE_GROUP int128 aggregate when the descriptor
+The generic engine only handles a DENSE_GROUP int128 aggregate when the descriptor
 classifies KIND_Q1 (exactly 2 VARCHAR fact group keys + 8 aggregates, descriptor.mojo
-~699). A 1-key/1-agg grouped sum stays KIND_UNKNOWN and declines to stock. So to
-exercise the DENSE assembly path we mimic TPC-H Q1's shape: group by
+~699). A 1-key/1-agg grouped sum stays KIND_UNKNOWN and falls back to stock. So to
+exercise the dense assembly path we mimic TPC-H Q1's shape: group by
 (l_returnflag, l_linestatus) with 8 aggregates and a `WHERE l_shipdate <= D` filter.
 
-We arrange the data so the group ('N','O') has l_shipdate AFTER the filter cutoff for
-EVERY row -- the filter fully excludes it. Stock omits ('N','O'); if the operator
+We arrange the data so the group ('N','O') has l_shipdate after the filter cutoff for
+every row, so the filter excludes it completely. Stock omits ('N','O'); if the operator
 emits a phantom ('N','O') row (all-zero aggregates), that is a wrong result.
 
-All columns are NOT NULL so the nullable gate is irrelevant.
+All columns are NOT NULL, so the nullable gate does not apply.
 
 Run: pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/q1_dense_filter_phantom_probe.mojo
@@ -36,7 +36,7 @@ comptime DDL = (
 # Three (flag,status) groups:
 #   ('A','F'): shipdate 1994 (kept by <= 1998-09-02)
 #   ('R','F'): shipdate 1995 (kept)
-#   ('N','O'): shipdate 1999 (EXCLUDED by the cutoff) -> fully filtered group
+#   ('N','O'): shipdate 1999 (excluded by the cutoff), so the whole group is filtered
 comptime DML = (
     "INSERT INTO lineitem SELECT"
     " CASE WHEN i%3=0 THEN 'A' WHEN i%3=1 THEN 'R' ELSE 'N' END,"

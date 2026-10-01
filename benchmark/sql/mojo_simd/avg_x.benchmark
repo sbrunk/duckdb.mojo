@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/avg_x.benchmark
-# description: ungrouped aggregate — AVG(x)
+# description: ungrouped aggregate: AVG(x)
 # group: [mojo_simd]
 
 name AVG(x)

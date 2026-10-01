@@ -1,28 +1,29 @@
 """NR3 (GPU_OP_FILTER_OR) execution-shuttle test (Mojo-only, needs GPU).
 
 Clone of q6_shuttle_test.mojo for the OR-of-equalities residual-filter slice:
-synthesizes a small single-fact dataset, hand-builds an UNGROUPED `sum(x)` tape
+synthesizes a small single-fact dataset, hand-builds an ungrouped `sum(x)` tape
 with a PASS_PROGRAMS section encoding `WHERE a = 2 OR a = 9 OR a = 40` (== `a IN
 (2,9,40)`, which DuckDB lowers to an OR-of-equalities residual filter), then drives
-the FULL C-ABI shuttle:
+the full C-ABI shuttle:
 
     build_descriptor -> materialize_count/sql -> pin_begin -> feed_column x2
                      -> pin_finalize -> result_i128
 
-It computes a CPU int128 reference applying the SAME OR predicate and asserts
-bit-exact equality with the GPU result. Also checks the WARM path. Prints ALL PASS.
+It computes a CPU int128 reference applying the same OR predicate and asserts
+bit-exact equality with the GPU result. It also checks the warm path. Prints
+"ALL PASS" on success.
 
-The OR program is (postfix, EXISTING opcodes only):
+The OR program is (postfix, existing opcodes only):
     LOAD a; PUSH 2; EQ; LOAD a; PUSH 9; EQ; ADD; LOAD a; PUSH 40; EQ; ADD
 A row passes iff eval_program(...) != 0 (every EQ leaf is 0/1; ADD chains the OR).
-There are NO pushed range filters, so the host pass column is all-1 and the OR
-program alone gates (AND-composed via OP_MUL inside _pin_finalize_generic).
+There are no pushed range filters, so the host pass column is all 1 and the OR
+program alone decides (combined with AND via OP_MUL inside _pin_finalize_generic).
 
-It then drives a SECOND tape exercising the GPU_OP_FILTER_OR *widening* to
-OR-of-RANGE / inequality filters: ungrouped sum(x) WHERE a < LO OR a > HI, whose
+It then drives a second tape that exercises the extension of GPU_OP_FILTER_OR to
+OR-of-range / inequality filters: ungrouped sum(x) WHERE a < LO OR a > HI, whose
 PASS_PROGRAM uses the new comparison opcodes:
     LOAD a; PUSH LO; OP_LT; LOAD a; PUSH HI; OP_GT; OP_ADD
-again asserting GPU == CPU int128 reference (COLD + WARM) with the SAME predicate.
+again asserting GPU == CPU int128 reference (cold and warm) with the same predicate.
 
 Run from the repo root:
     GPU_OP_FILTER_OR=1 pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -162,7 +163,7 @@ def build_or_tape(mut b: TapeBuilder, k0: Int, k1: Int, k2: Int):
     b.put(OP_ADD); b.puti(0); b.puti(0)
 
 
-# OR-of-RANGE tape (GPU_OP_FILTER_OR widening): identical structure to build_or_tape
+# OR-of-range tape (GPU_OP_FILTER_OR extension): same structure as build_or_tape
 # but the PASS_PROGRAM encodes `WHERE a < LO OR a > HI` using the new comparison
 # opcodes OP_LT / OP_GT (each a 0/1 leaf, ORed via OP_ADD):
 #   LOAD a; PUSH LO; OP_LT; LOAD a; PUSH HI; OP_GT; OP_ADD
@@ -211,8 +212,8 @@ def build_or_range_tape(mut b: TapeBuilder, lo: Int, hi: Int):
     b.put(OP_ADD); b.puti(0); b.puti(0)
 
 
-# Drive the FULL C-ABI shuttle for ONE hand-built tape against a precomputed CPU
-# int128 reference, checking COLD + WARM paths. `expect_kind` lets both the OR-of-eq
+# Drive the full C-ABI shuttle for one hand-built tape against a precomputed CPU
+# int128 reference, checking the cold and warm paths. `expect_kind` lets both the OR-of-eq
 # and OR-of-range tapes (both KIND_Q6 UNGROUPED) reuse this. Asserts bit-exact.
 def run_shuttle(
     label: String,
@@ -347,7 +348,7 @@ def main() raises:
     expect_sql += " FROM facts"
     assert_equal(sql, expect_sql, "materialize_sql order mismatch")
 
-    # pin_begin (COLD on first call).
+    # pin_begin (cold on first call).
     var pb = mojo_gpu_pin_begin(h)
     print("pin_begin:", pb, "(0=WARM, 1=COLD)")
 
@@ -389,7 +390,7 @@ def main() raises:
     print("CPU ref =", cpu, "  GPU =", gpu)
     assert_equal(gpu, cpu, "GPU OR-filter sum != CPU reference (not bit-exact)")
 
-    # ---- WARM-path check: a second identical run should hit the pin cache. ----
+    # ---- Warm-path check: a second identical run should hit the pin cache. ----
     var handle2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     var h2 = UnsafePointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle2_int
@@ -410,10 +411,10 @@ def main() raises:
     mojo_gpu_desc_free(h)
 
     # ====================================================================
-    # OR-of-RANGE slice (GPU_OP_FILTER_OR widening): sum(x) WHERE a < LO OR a > HI
-    # over the SAME synthetic columns, using the new OP_LT / OP_GT comparison
-    # opcodes. Compute the CPU int128 reference with the SAME predicate and assert
-    # the GPU result is bit-exact (COLD + WARM).
+    # OR-of-range slice (GPU_OP_FILTER_OR extension): sum(x) WHERE a < LO OR a > HI
+    # over the same synthetic columns, using the new OP_LT / OP_GT comparison
+    # opcodes. Compute the CPU int128 reference with the same predicate and assert
+    # the GPU result is bit-exact (cold and warm).
     # ====================================================================
     var lo_k = 8   # a < 8
     var hi_k = 42  # a > 42  (a is in 0..49)
@@ -434,11 +435,11 @@ def main() raises:
     for i in range(rblen):
         rbptr[i] = br.blob[i]
 
-    # COLD run.
+    # Cold run.
     run_shuttle(
         "OR-range COLD", rtptr, rtlen, rbptr, rblen, a, x, cpu_range
     )
-    # WARM run (rebuild identical descriptor -> should hit the pin cache).
+    # Warm run (rebuilding the same descriptor should hit the pin cache).
     run_shuttle(
         "OR-range WARM", rtptr, rtlen, rbptr, rblen, a, x, cpu_range
     )

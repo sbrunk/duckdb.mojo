@@ -307,7 +307,7 @@ def test_interval_values() raises:
 def test_decimal_values() raises:
     """Test creating and extracting decimal values."""
     # Create a decimal with width 18, scale 3.
-    # Value is (internal) 123456 -> 123.456
+    # The internal value 123456 represents 123.456
     var h: Int128 = Int128(123456)
     var dec = Decimal(width=18, scale=3, value=h)
     var val = DuckDBValue.from_decimal(dec)
@@ -368,8 +368,8 @@ def test_type_information() raises:
     var val_str = DuckDBValue.from_string("test")
     var val_bool = DuckDBValue.from_bool(True)
 
-    # Note: get_type() has ownership issues (the returned LogicalType shouldn't be destroyed)
-    # For now, just verify the values aren't null
+    # get_type() has ownership issues (the returned LogicalType shouldn't be destroyed).
+    # For now, only verify that the values aren't null.
     assert_false(val_int.is_null(), "Int value should not be null")
     assert_false(val_str.is_null(), "String value should not be null")
     assert_false(val_bool.is_null(), "Bool value should not be null")

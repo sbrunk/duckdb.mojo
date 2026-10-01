@@ -11,17 +11,17 @@ DENSE_GROUP aggregate over a dim-carried VARCHAR group key (n_name):
       AND o_orderdate>=DATE '1994-01-01' AND o_orderdate<DATE '1995-01-01'
     GROUP BY n_name;
 
-This exercises the NEW capabilities the generic path needed for Q5:
-  * a correlated dim<->dim equality cust_nation==supp_nation on the SAME fact row
+This exercises the new capabilities the generic path needed for Q5:
+  * a correlated dim<->dim equality cust_nation==supp_nation on the same fact row
     (lowered to OP_EQ over two single-level dim gathers),
   * a VARCHAR group key carried from the nation dim (res_str),
   * DENSE_GROUP over that dim-carried key (gid = supplier's ASIA-nation dense
     rank, gathered per fact row on host into the gid column).
 
 It synthesizes a small 6-table dataset, hand-builds the Q5 RawPlan tape, drives
-the FULL C-ABI shuttle directly, and asserts BIT-EXACT per-nation revenue vs a
+the full C-ABI shuttle directly, and asserts bit-exact per-nation revenue vs a
 CPU int128 reference (emitting exactly the ASIA nations with revenue>0). Prints
-ALL PASS.
+"ALL PASS" on success.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \

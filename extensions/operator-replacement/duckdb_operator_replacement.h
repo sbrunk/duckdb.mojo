@@ -12,7 +12,7 @@ extern "C" {
 // replacement_name: the name of the replacement function in the catalog
 void register_function_replacement(const char *original_name, const char *replacement_name);
 
-// Register the operator replacement extension - activates all registered replacements
+// Register the operator replacement extension. This activates all registered replacements.
 void register_operator_replacement(duckdb_connection con);
 
 #ifdef __cplusplus

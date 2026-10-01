@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build everything, then run the stock-vs-Mojo benchmark with the extension loaded.
+# Build everything, then run the benchmark comparing stock DuckDB with the extension loaded.
 # Run via `pixi run overrides-bench [-- --threads=N --rows=N]`.
 #
 # Overridable env:
 #   DUCKDB_INCLUDE  (default: $CONDA_PREFIX/include)
-#   DUCKDB_LIB      (default: $CONDA_PREFIX/lib)   — libduckdb to link the driver against
+#   DUCKDB_LIB      (default: $CONDA_PREFIX/lib)   libduckdb to link the driver against
 #   CXX             (default: clang++)
 set -euo pipefail
 
@@ -21,6 +21,6 @@ echo "==> benchmark driver"
 "$CXX" -std=c++17 -O2 "$HERE/bench/benchmark.cpp" -I "$DUCKDB_INCLUDE" \
 	-L "$DUCKDB_LIB" -lduckdb -Wl,-rpath,"$DUCKDB_LIB" -o "$BUILD/benchmark"
 
-# The extension is self-contained (kernels linked in); no DUCKDB_MOJO_LIB needed.
+# The extension is self-contained (the kernels are linked in), so nothing else needs to be set up.
 echo "==> running"
 "$BUILD/benchmark" "$BUILD/mojo_overrides.duckdb_extension" "$@"

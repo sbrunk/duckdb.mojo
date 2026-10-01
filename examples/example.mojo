@@ -1,6 +1,6 @@
 from duckdb import *
 
-# Define a struct matching the query columns — fields map to columns by position.
+# Define a struct matching the query columns. Fields map to columns by position.
 @fieldwise_init
 struct StationCount(Writable, Copyable, Movable):
     var station: String

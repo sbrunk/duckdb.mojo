@@ -1,17 +1,17 @@
 """Batched-vs-single-query exact correctness test for the GPU cosine top-k path.
 
-The whole point of the batched kernel (`mojo_gpu_pin_query_topk_batch[_f16]`) is
-that it reads the resident N x K matrix ONCE per query-tile instead of once per
-query -- but it must still return EXACTLY what M separate single-query calls
-return. This test asserts precisely that:
+The batched kernel (`mojo_gpu_pin_query_topk_batch[_f16]`) exists so that the
+resident N x K matrix is read once per query tile instead of once per query, but
+it must still return exactly what M separate single-query calls return. This test
+asserts that:
 
   for each of M queries j, the batched top-k (ids + dists) for query j ==
   the single-query `mojo_gpu_pin_query_topk[_f16]` result for query j,
 
-bit-for-bit on the ids and within ~1e-6 on the dists, for BOTH precisions
-(fp32 + fp16), for M in {8, 64} and a couple of k values, on synthetic
-*clustered* unit-norm data (so many rows are genuinely close to each query and
-the top-k selection / tie-break is exercised, not just trivially separated).
+bit-for-bit on the ids and within ~1e-6 on the dists, for both precisions
+(fp32 + fp16), for M in {8, 64} and a couple of k values, on synthetic clustered
+unit-norm data (so many rows are close to each query and the top-k selection and
+tie-break are exercised, rather than the rows being trivially separated).
 
 Run (local Apple GPU or frederick):
   pixi run mojo run -I extensions/mojo-gpu-operator/src \

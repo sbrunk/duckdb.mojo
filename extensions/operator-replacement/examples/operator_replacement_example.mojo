@@ -18,7 +18,7 @@ import std.benchmark
 # SIMD-accelerated operator implementations
 # ===--------------------------------------------------------------------===#
 
-# NOTE: SIMD width can be tuned - benchmarks show optimal width varies by operation
+# The SIMD width can be tuned. Benchmarks show the best width varies by operation.
 comptime simd_width = 1
 
 def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector):
@@ -270,8 +270,8 @@ def main() raises:
     var db = DuckDB()
     var conn = db.connect(":memory:")
     
-    # IMPORTANT: Create test table BEFORE activating operator replacement
-    # This ensures table creation uses standard DuckDB operators
+    # Create the test table before activating operator replacement, so that
+    # table creation uses the standard DuckDB operators.
     print("Creating test table with 100M rows...")
     _ = conn.execute("CREATE TABLE numbers AS SELECT (random() * 100)::FLOAT AS x, (random() * 100)::FLOAT AS y FROM range(100_000_000)")
     print("✓ Table created\n")
@@ -344,7 +344,7 @@ def main() raises:
     print()
     
     # =========================================================================
-    # PHASE 2: Register Mojo functions and benchmark explicit calls (NO operator replacement)
+    # PHASE 2: Register Mojo functions and benchmark explicit calls (without operator replacement)
     # =========================================================================
     print("=" * 70)
     print("PHASE 2: Benchmarking Mojo functions (explicit calls, no replacement)")

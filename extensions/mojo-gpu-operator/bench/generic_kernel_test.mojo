@@ -257,7 +257,7 @@ def main() raises:
     print("[SORT_SEGREDUCE M=1] seg0 cpu=", c0)
 
     # =====================================================================
-    # Shape 4: FK-JOIN dimension lookup via OP_LOAD_DIM (on-GPU gather).
+    # Shape 4: FK join dimension lookup via OP_LOAD_DIM (on-GPU gather).
     #
     # Models a TPC-H style FK join (e.g. Q14 lineitem->part): the fact has a FK
     # column `partkey` in [0, P); two dense dim arrays sized to P index it:
@@ -272,7 +272,7 @@ def main() raises:
     # combined with ext via MUL, so metric = ext * (promo ? revenue : 0).
     #
     # Row filter (a dim pass-filter): 1-op LOAD_DIM(promo_dim, partkey) ANDed via
-    # the VM, i.e. only promo parts pass. We test BOTH a metric-side gather AND a
+    # the VM, i.e. only promo parts pass. We test both a metric-side gather and a
     # filter-side gather.
     # =====================================================================
     comptime P = 1000  # distinct partkeys (dense dim index space)

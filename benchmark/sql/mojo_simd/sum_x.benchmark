@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/sum_x.benchmark
-# description: ungrouped aggregate — SUM(x)
+# description: ungrouped aggregate: SUM(x)
 # group: [mojo_simd]
 
 name SUM(x)

@@ -1,4 +1,4 @@
-"""De-risk the TPC-H Q3 GPU multi-way-join kernel (bit-exact vs CPU int128).
+"""Validate the TPC-H Q3 GPU multi-way-join kernel (bit-exact vs CPU int128).
 
 Q3 is a 3-way FK join customer <- orders <- lineitem + a high-cardinality
 group-by on l_orderkey + top-10:
@@ -13,26 +13,27 @@ group-by on l_orderkey + top-10:
     ORDER BY revenue DESC, o_orderdate
     LIMIT 10;
 
-Design (mirrors the verified Q14 hash-probe pattern but with a DENSE array for
+Design (mirrors the verified Q14 hash-probe pattern but with a dense array for
 the dimension lookup, because TPC-H keys are dense and bounded):
-  * HOST builds, per order, a 1-byte `order_pass[o_orderkey]` flag =
+  * The host builds, per order, a 1-byte `order_pass[o_orderkey]` flag =
     is_building[o_custkey] AND (o_orderdate < o_cutoff). Dense array indexed by
     o_orderkey (size max_orderkey+1). o_orderdate / o_shippriority stay on host
     for the final attach.
   * GPU probe over lineitem: for each row with l_shipdate > l_cutoff and
     order_pass[l_orderkey], compute rev = ext_raw*(100 - disc_raw) (scale-4
-    int64) and ACCUMULATE into a dense int64 accumulator indexed by l_orderkey
+    int64) and accumulate it into a dense int64 accumulator indexed by l_orderkey
     via Atomic.fetch_add (global atomics).
-  * HOST reads back the dense accumulator, attaches date/priority, sorts, top-10.
+  * The host reads back the dense accumulator, attaches date/priority, sorts, and
+    takes the top 10.
 
-This file also probes whether global int64 Atomic.fetch_add works on this GPU
-(a tiny standalone kernel) BEFORE relying on it for the join.
+This file also checks whether global int64 Atomic.fetch_add works on this GPU
+(a tiny standalone kernel) before relying on it for the join.
 
 Exactness: ext is DECIMAL(15,2)=int64 scale2; (1-disc) = (100-disc_raw) scale2;
 per-row product is scale4 int64 (~1e9). An order has <=7 lines, so per-order
 revenue fits int64 comfortably. The dense accumulator therefore needs no host
-int128 reduction (unlike Q1/Q6/Q14's cross-block sum) -- each order's bucket is
-a single exact int64. We still compare the full accumulator bit-for-bit.
+int128 reduction (unlike Q1/Q6/Q14's cross-block sum): each order's bucket is a
+single exact int64. We still compare the full accumulator bit-for-bit.
 """
 
 from std.gpu import block_idx, thread_idx
@@ -48,14 +49,14 @@ comptime NBLOCKS = 4096         # one warp (32 lanes) per block
 
 
 # ---------------------------------------------------------------------------
-# Atomic-width probes. Apple GPU (Metal) supports 32-bit atomics but NOT 64-bit
+# Atomic-width probes. Apple GPU (Metal) supports 32-bit atomics but not 64-bit
 # atomics: a global int64 Atomic.fetch_add fails at GPU pipeline-state creation
 # (XPC_ERROR_CONNECTION_INTERRUPTED). So per-order accumulation via int64
-# atomics is NOT available here. We verify both widths and select the design:
-#   - int64 atomics work -> accumulate per-order on the GPU directly.
-#   - else (Apple) -> the q3_kernel below writes per-row revenue (still doing the
-#     join-probe + filter + exact decimal product on the GPU, the expensive
-#     part); the HOST sums per order (one O(n_rows) scan, ~ms).
+# atomics is not available there. We check both widths and select the design:
+#   - if int64 atomics work, accumulate per order on the GPU directly.
+#   - otherwise (Apple), the q3_kernel below writes per-row revenue (still doing
+#     the join probe, filter and exact decimal product on the GPU, which is the
+#     expensive part) and the host sums per order (one O(n_rows) scan, ~ms).
 # ---------------------------------------------------------------------------
 def atomic_probe32(acc: UnsafePointer[Scalar[DType.uint32], MutAnyOrigin], n: Int):
     var tid = Int(block_idx.x) * 32 + Int(thread_idx.x)
@@ -74,8 +75,8 @@ def atomic_probe64(acc: UnsafePointer[Scalar[DType.int64], MutAnyOrigin], n: Int
 # lineitem rows; for a passing row (l_shipdate > ship_cutoff AND
 # order_pass[l_orderkey]) it computes rev = ext*(100-disc) (scale-4 int64) and
 # writes it to rev_out[i]; otherwise writes 0. The GPU does the join-probe (dense
-# dimension lookup), the shipdate filter, and the exact decimal product -- the
-# expensive part. The host then sums rev_out per l_orderkey into the dense
+# dimension lookup), the shipdate filter, and the exact decimal product, which
+# is the expensive part. The host then sums rev_out per l_orderkey into the dense
 # accumulator (exact int64; an order has <=7 lines so the per-order sum fits).
 # ---------------------------------------------------------------------------
 def q3_kernel(

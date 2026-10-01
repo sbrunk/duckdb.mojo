@@ -34,8 +34,8 @@ comptime SIMD_WIDTH = 8
 # ===--------------------------------------------------------------------===#
 # These use the low-level FFI signature required by operator replacement.
 # DECIMAL(18,4) is stored as Int64 internally (width 18 ≤ 18).
-# For add/sub the raw integers share the same scale, so we just add/sub.
-# For multiply we need scale correction: (scale4 × scale4) / 10000 → scale4.
+# For add/sub the raw integers share the same scale, so we add/sub them directly.
+# For multiply we need a scale correction: (scale 4 * scale 4) / 10000 gives scale 4.
 
 def mojo_add(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD addition on scaled Int64 DECIMAL values."""
@@ -84,7 +84,7 @@ def mojo_subtract(info: duckdb_function_info, input: duckdb_data_chunk, output: 
 def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
     """SIMD multiplication on scaled Int64 DECIMAL values.
 
-    Both inputs are DECIMAL(18,4) — scale 4 each. Raw multiply gives scale 8.
+    Both inputs are DECIMAL(18,4), scale 4 each. Raw multiply gives scale 8.
     We divide by 10^4 = 10000 to bring result back to scale 4.
     """
     ref lib = DuckDB().libduckdb()
@@ -110,7 +110,7 @@ def mojo_multiply(info: duckdb_function_info, input: duckdb_data_chunk, output: 
 
 
 def mojo_divide(info: duckdb_function_info, input: duckdb_data_chunk, output: duckdb_vector) abi("C"):
-    """SIMD division (DOUBLE) — DuckDB uses DOUBLE for DECIMAL division too."""
+    """SIMD division (DOUBLE). DuckDB uses DOUBLE for DECIMAL division too."""
     ref lib = DuckDB().libduckdb()
     var size = lib.duckdb_data_chunk_get_size(input)
 
@@ -254,7 +254,7 @@ def main() raises:
     tpch_queries.append(14)
 
     # =========================================================================
-    # PHASE 1: Benchmark standard DuckDB operators (baseline)
+    # Phase 1: Benchmark standard DuckDB operators (baseline)
     # =========================================================================
     print("\n" + "=" * 70)
     print("PHASE 1: Standard DuckDB operators (baseline)")
@@ -271,7 +271,7 @@ def main() raises:
         baseline_times.append(report.mean("ms"))
 
     # =========================================================================
-    # PHASE 2: Register Mojo DECIMAL functions and activate op replacement
+    # Phase 2: Register Mojo DECIMAL functions and activate op replacement
     # =========================================================================
     print("\n" + "=" * 70)
     print("PHASE 2: Registering Mojo functions & activating op replacement")
@@ -301,7 +301,7 @@ def main() raises:
     print("  Optimizer extension activated ✓")
 
     # =========================================================================
-    # PHASE 3: Benchmark with DECIMAL operator replacement active
+    # Phase 3: Benchmark with DECIMAL operator replacement active
     # =========================================================================
     print("\n" + "=" * 70)
     print("PHASE 3: Same TPC-H queries with Mojo operator replacement")
@@ -318,7 +318,7 @@ def main() raises:
         mojo_times.append(report.mean("ms"))
 
     # =========================================================================
-    # PHASE 4: Performance comparison
+    # Phase 4: Performance comparison
     # =========================================================================
     print("\n" + "=" * 70)
     print("PERFORMANCE COMPARISON")

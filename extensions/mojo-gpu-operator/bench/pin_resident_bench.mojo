@@ -1,16 +1,17 @@
-"""Benchmark: the pin-resident win.
+"""Benchmark: the speedup from keeping a column resident on the GPU.
 
-A DB-wide unified allocator isn't buildable (see apple_alloc_route_probe.mojo), so
-the amortized win comes from KEEPING THE COLUMN GPU-RESIDENT and running many queries
-against it. This benchmark compares, sweeping K (per-row work):
+A DB-wide unified allocator can't be built (see apple_alloc_route_probe.mojo), so
+the speedup over many queries comes from keeping the column resident on the GPU and
+running many queries against it. This benchmark compares, sweeping K (per-row work):
 
   CPU SIMD            - M queries, SIMD over the host-resident column.
-  GPU re-upload       - M queries, each re-copies the whole column H->D.
-  GPU pin-resident    - copy the column H->D ONCE (the "pin"), then M queries are
-                        pure kernel launches over the resident buffer.
+  GPU re-upload       - M queries, each copies the whole column host to device again.
+  GPU pin-resident    - copy the column host to device once (the "pin"), then M
+                        queries are only kernel launches over the resident buffer.
 
-The thesis: pin-resident GPU per-query collapses once the one-time upload is
-amortized across queries, and the margin widens with K. Run single-threaded.
+The expectation: the pin-resident GPU cost per query drops sharply once the
+one-time upload is spread across queries, and the margin grows with K. Run
+single-threaded.
 """
 
 from std.gpu import block_idx, thread_idx
@@ -134,7 +135,7 @@ def run_k(ctx: DeviceContext, K: Int) raises:
     ctx.enqueue_copy(gpu_out, out_dev)
     ctx.synchronize()
 
-    # ---- GPU pin-resident: M queries are pure launches over the resident buffer ----
+    # ---- GPU pin-resident: M queries are only launches over the resident buffer ----
     var tg = perf_counter_ns()
     for m in range(M):
         ctx.enqueue_copy(q_dev, queries + m * K)  # small: K floats

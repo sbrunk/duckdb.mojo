@@ -9,18 +9,20 @@ grouped aggregate:
       AND o_orderdate < DATE '1995-03-15' AND l_shipdate > DATE '1995-03-15'
     GROUP BY l_orderkey, o_orderdate, o_shippriority;
 
-This exercises the NEW capabilities the generic path needed for Q3:
+This exercises the new capabilities the generic path needed for Q3:
   * SORT_SEGREDUCE grouped output (one warp per order segment),
-  * a transitive dim->dim fold: customer joins ORDERS (not the fact), folded on
-    host into order_pass[o_orderkey] = (o_orderdate<cutoff) AND is_building[o_custkey],
-  * DIM-CARRIED group keys (o_orderdate / o_shippriority gathered per segment),
+  * a transitive dim->dim fold: customer joins orders (not the fact table), folded
+    on host into order_pass[o_orderkey] = (o_orderdate<cutoff) AND is_building[o_custkey],
+  * group keys carried from a dimension table (o_orderdate / o_shippriority
+    gathered per segment),
   * multi-row emission (one row per qualifying order).
 
-It synthesizes a small customer/orders/lineitem dataset (lineitem ORDERED BY
+It synthesizes a small customer/orders/lineitem dataset (lineitem ordered by
 l_orderkey, as the materialize SQL requires), hand-builds the Q3 RawPlan tape,
-drives the FULL C-ABI shuttle directly, and asserts BIT-EXACT per-segment revenue
-+ that EXACTLY the orders stock would emit (>=1 passing lineitem under the folded
-order_pass) appear, vs a CPU int128 reference. Prints ALL PASS.
+drives the full C-ABI shuttle directly, and checks against a CPU int128
+reference that the per-segment revenue is bit-exact and that exactly the orders
+stock would emit (>=1 passing lineitem under the folded order_pass) appear.
+Prints "ALL PASS" on success.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -241,7 +243,7 @@ def main() raises:
     comptime assert has_accelerator(), "q3_shuttle_test requires a GPU"
 
     # The cost heuristic declines high-cardinality group-by (Q3's shape) by
-    # default so it stays on the CPU. This test validates the Q3 GPU EXECUTION
+    # default so it stays on the CPU. This test checks the Q3 GPU execution
     # path, so force-enable it.
     _ = setenv("GPU_OP_FORCE_HIGHCARD", "1", True)
 
@@ -289,7 +291,7 @@ def main() raises:
         odate_vals[r] = od
         oprio_vals[r] = sp
 
-    # ---- synthetic lineitem (fact), SORTED BY l_orderkey (contiguous segs) ----
+    # ---- synthetic lineitem (fact), sorted by l_orderkey (contiguous segs) ----
     var lok = alloc[Int64](N)
     var ship = alloc[Int32](N)
     var ext = alloc[Int64](N)
@@ -359,7 +361,7 @@ def main() raises:
     print("strategy:", strat, "(2=SORT_SEGREDUCE, 3=HASH_GROUP)")
 
     # request 0: fact SQL. SORT_SEGREDUCE must ORDER BY l_orderkey; HASH_GROUP
-    # must NOT inject an ORDER BY (no sorted input needed).
+    # must not inject an ORDER BY (no sorted input needed).
     var sql0_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     var sql0 = String("")
     for k in range(sql0_len):

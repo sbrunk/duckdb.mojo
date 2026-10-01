@@ -2,13 +2,13 @@
 
 [![CodeQL](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml)
 
-[Mojo](https://www.modular.com/mojo) bindings for [DuckDB](https://duckdb.org/).
+[Mojo](https://mojolang.org/) bindings for [DuckDB](https://duckdb.org/).
 
 duckdb.mojo can be used in multiple ways:
 
 1. Client API: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
 2. Extension development: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
-3. Accelerate DuckDB: drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
+3. Accelerate DuckDB (experimental): drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
 
 ## 10 minute presentation at the MAX & Mojo community meeting
 
@@ -203,14 +203,13 @@ that receives a `Connection` and registers your functions, then pass it to
 ```mojo
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
 fn add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+fn init(conn: Connection) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
@@ -223,40 +222,17 @@ fn my_ext_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb/main/capi/header_generation/README.md)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.5/src/include/duckdb_extension.h)
-instead of relying on dynamic symbol lookup. The struct is split into a
-**stable** and an **unstable** part (see [duckdb/duckdb#14992](https://github.com/duckdb/duckdb/pull/14992)
-for the full design):
+DuckDB's [Extension C API](https://github.com/duckdb/duckdb/tree/v1.5.6/api_spec/v1)
+provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb_extension.h)
+instead of relying on dynamic symbol lookup. An extension asks for the struct
+of a given API version, and DuckDB loads it only if its own C API version is
+at least that one. The struct is append-only, so a compiled extension keeps
+working with later DuckDB releases that share the API major version, without
+a rebuild.
 
-- **Stable** (`Extension.run`): uses only functions stabilized since DuckDB
-  v1.2.0.  Because the stable struct is append-only and never modified, the
-  compiled extension binary is forward-compatible with all future DuckDB
-  releases that share the same API major version.
-- **Unstable** (`Extension.run_unstable`): additionally exposes recently added
-  functions that are candidates for future stabilization.  Unstable extensions
-  are tied to the exact DuckDB version they were compiled against, since
-  unstable entries may be reordered or removed between releases.
-
-`Extension.run` resolves functions from `duckdb_ext_api_v1` (stable part).
-The `Connection` is parameterized with an `ApiLevel` that gates access to
-unstable functions at **compile time**, so calling an unstable method from a
-stable-only extension is a compile error, not a runtime crash.
-
-If you need access to unstable C API functions, use `Extension.run_unstable` instead:
-
-```mojo
-fn init_unstable(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
-    # Unstable methods like ScalarFunction.set_bind() are available here
-    ...
-
-@export("my_ext_init_c_api")
-fn my_ext_init_c_api(
-    info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
-) abi("C") -> Bool:
-    return Extension.run_unstable[init_unstable](info, access)
-```
+`Extension.run` requests API version v1.5.6, which DuckDB 1.5.6 introduced by
+stabilizing every function that used to be unstable. The whole C API is
+therefore available to extensions, and they need DuckDB 1.5.6 or newer.
 
 ```sh
 mojo build my_ext.mojo --emit shared-lib -o my_ext.duckdb_extension
@@ -273,15 +249,15 @@ See the [demo extension](extensions/demo-extension/) for a full working example.
 
 The C API above is enough for scalar/aggregate/table UDFs, but it cannot reach
 DuckDB internals such as mutating catalog entries, adding an `OptimizerExtension`,
-or registering a custom logical operator. For those you need DuckDB's **CPP ABI**.
+or registering a custom logical operator. For those you need DuckDB's CPP ABI.
 This is how the [mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md)
 and [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extensions are built.
 
-A CPP-ABI extension here is really a **C++ extension that calls Mojo-compiled
-kernels over a C ABI**. No DuckDB C++ type crosses into Mojo:
+In this repo, a CPP-ABI extension is a C++ extension that calls Mojo-compiled
+kernels over a C ABI. No DuckDB C++ type crosses into Mojo:
 
-- **Mojo** exports kernels over raw pointers with `@export(...) ... abi("C")`.
-- **C++** declares those symbols in an `extern "C"` block and calls them, and does
+- Mojo exports kernels over raw pointers with `@export(...) ... abi("C")`.
+- C++ declares those symbols in an `extern "C"` block and calls them, and does
   all the DuckDB-internal work (catalog, optimizer, operators) against the internal
   C++ headers.
 
@@ -325,7 +301,7 @@ Build it in two steps: compile the Mojo kernels, then link them into a C++ share
 object and append the `CPP` metadata footer.
 
 ```sh
-# 1. Mojo kernels. --emit object gives a plain .o with NO Mojo runtime deps (CPU/SIMD
+# 1. Mojo kernels. --emit object gives a plain .o with no Mojo runtime deps (CPU/SIMD
 #    only), so the final .so is self-contained (links only libm). If the kernels need
 #    the Mojo GPU/AsyncRT runtime, use --emit shared-lib instead and link + rpath the
 #    resulting companion dylib (see extensions/mojo-gpu-operator/build.sh).
@@ -341,17 +317,17 @@ clang++ -std=c++17 -O2 -fPIC -shared -undefined dynamic_lookup \
 # 3. Append the footer. CPP is version-locked, so the version field is the DuckDB
 #    version (not the C API version).
 python3 scripts/append_extension_metadata.py myext.duckdb_extension \
-    --abi-type CPP --duckdb-version v1.5.5
+    --abi-type CPP --duckdb-version v1.5.6
 ```
 
 Caveats specific to the CPP ABI:
 
-- **Version-locked.** The footer carries the exact DuckDB version and `LOAD` rejects
-  any mismatch. Rebuild per DuckDB version. (The stable C API, by contrast, is
-  forward-compatible.)
-- **Needs the internal C++ headers** and an ABI-matched libduckdb, from conda
+- Version-locked: the footer carries the exact DuckDB version and `LOAD` rejects
+  any mismatch. Rebuild for each DuckDB version. The stable C API, in contrast, is
+  forward-compatible.
+- It needs the internal C++ headers and an ABI-matched libduckdb from conda
   `libduckdb-devel`, not the stable C extension API.
-- **Unsigned**, so load with `-unsigned` / `allow_unsigned_extensions`.
+- It is unsigned, so load it with `-unsigned` / `allow_unsigned_extensions`.
 - A host that statically links DuckDB and `dlopen`s a CPP extension must link with
   `-rdynamic` so DuckDB's symbols resolve in the loaded extension.
 
@@ -391,7 +367,7 @@ from duckdb import *
 1. [Install Pixi](https://pixi.sh/latest/installation/).
 2. Checkout this repo
 3. Run `pixi shell`
-4. Run `mojo example.mojo`
+4. Run `mojo examples/example.mojo`
 
 ### Run Tests
 
@@ -404,16 +380,16 @@ pixi run test
 There are two ways to build a conda package of the bindings, for two different
 purposes:
 
-**`pixi build`** uses the `[package]` block in `pixi.toml` (the
+`pixi build` uses the `[package]` block in `pixi.toml` (the
 `pixi-build-mojo` backend, which infers the build steps from the project
-layout). Produces a local `.conda` and lets other Pixi workspaces depend on
+layout). It produces a local `.conda` and lets other Pixi workspaces depend on
 duckdb.mojo as a source dependency. No recipe needed:
 
 ```shell
 pixi build
 ```
 
-**`rattler-build`** builds from the explicit recipe in `conda.recipe/`. This
+`rattler-build` builds from the explicit recipe in `conda.recipe/`. This
 is the path used to publish to the
 [modular-community](https://prefix.dev/channels/modular-community) channel,
 whose CI runs `rattler-build` on the submitted `conda.recipe/recipe.yaml`. To
@@ -430,14 +406,14 @@ rattler-build build \
 
 A successful build runs the in-package smoke test and writes the `.conda` under
 `output/<platform>/`. `conda.recipe/recipe.yaml` is the file submitted to
-modular-community; bump its `mojo-compiler` pin together with `pixi.toml` on
+modular-community. Bump its `mojo-compiler` pin together with `pixi.toml` on
 every compiler update.
 
 ### (Re-)generate the C API bindings
 
 The low-level bindings in `duckdb/_libduckdb.mojo` are auto-generated from DuckDB's
-declarative JSON schemata (the same source used to generate `duckdb.h`).
-To regenerate them (e.g. after bumping the DuckDB version in `pixi.toml`):
+YAML API spec (the same source used to generate `duckdb.h`).
+To regenerate them (for example after bumping the DuckDB version in `pixi.toml`):
 
 ```shell
 pixi run generate-api
@@ -516,12 +492,14 @@ pixi run mojo run benchmark/math_benchmark.mojo
 Three ways to run Mojo compute inside DuckDB: named SIMD UDFs (part of this package),
 the CPU/SIMD built-in overrides extension, and the GPU offload extension.
 
-**1. Named UDFs (part of this package).** `duckdb.kernels.register_simd_math(conn)`
+#### 1. Named UDFs (part of this package)
+
+`duckdb.kernels.register_simd_math(conn)`
 registers `mojo_sqrt`, `mojo_sin`, ... as scalar functions you call by name. The
 kernels and this helper are part of the `duckdb` package itself: the conda
 `duckdb-mojo` package precompiles all of `duckdb/` (including `duckdb/kernels`),
-so there is nothing extra to build, ship, or `LOAD`. Install the package, import,
-call:
+so there is nothing extra to build, ship, or `LOAD`. Install the package, import it,
+and call it:
 
 ```mojo
 from duckdb.kernels import register_simd_math
@@ -531,8 +509,9 @@ _ = conn.execute("SELECT mojo_sqrt(x) FROM t")
 
 You can also use the kernels (`duckdb.kernels.simd`) directly in your own UDFs.
 
-**2. Built-in overrides (CPU/SIMD, a separate dependency-free extension).** To
-speed up existing queries without renaming functions, the
+#### 2. Built-in overrides (CPU/SIMD, a separate dependency-free extension)
+
+To speed up existing queries without renaming functions, the
 [mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md) extension rewrites
 selected built-ins in place, without forking DuckDB:
 
@@ -540,13 +519,13 @@ selected built-ins in place, without forking DuckDB:
 - aggregates `sum`/`avg` (DOUBLE plus INT128-backed HUGEINT/DECIMAL) and `min`/`max`;
 - vector distance: `array_distance`, `array_cosine_distance`,
   `array_cosine_similarity`, `array_inner_product`, `array_negative_inner_product`;
-- nullable columns (validity-masked, not just all-valid), and a transparent optimizer
-  rewrite of `sum/avg(sqrt|exp|ln|…)` into a fused one-pass kernel.
+- nullable columns (using a validity mask, so columns with NULLs are covered too), and an
+  optimizer rewrite of `sum/avg(sqrt|exp|ln|…)` into a fused one-pass kernel.
 
 It also adds `mojo_knn(...)`, a batch (multi-query) brute-force top-k table function
 for vector search. The kernels are linked straight in, so the `.so` is self-contained
-(only libm), with no Mojo runtime dependency. It is **not** part of the conda package;
-build with `pixi run overrides-build`, then `LOAD` it (allow unsigned extensions):
+(only libm), with no Mojo runtime dependency. It is not part of the conda package.
+Build it with `pixi run overrides-build`, then `LOAD` it (allow unsigned extensions):
 
 ```mojo
 from duckdb.config import Config
@@ -556,11 +535,12 @@ var conn = DuckDB.connect(":memory:", config)
 _ = conn.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
 ```
 
-**3. GPU offload (a separate extension).** The
-[mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extension transparently
+#### 3. GPU offload (a separate extension)
+
+The [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extension
 offloads supported query plans to the GPU via an `OptimizerExtension`, with the
-compute kernels written in Mojo. It is general-purpose: it handles a class of
-aggregation-over-filter/join plans, plus vector-search top-k (`gpu_cosine_topk` and
+compute kernels written in Mojo. It is general-purpose: it handles aggregations
+over filters and joins, plus vector-search top-k (`gpu_cosine_topk` and
 `gpu_cosine_topk_batch`). Matching queries route to the GPU with no syntax change.
 Anything it can't translate, or any runtime GPU error, falls back to stock DuckDB,
 with decimal-exact results. Runs on NVIDIA and Apple GPUs. Build with `pixi run gpu-op-build`.
@@ -569,7 +549,7 @@ self-contained `.so`.)
 
 ### Benchmarks
 
-A consolidated harness lives in [benchmark/](benchmark/README.md):
+A shared benchmark harness lives in [benchmark/](benchmark/README.md):
 
 ```shell
 pixi run bench-build                                  # build DuckDB's benchmark_runner (once)
@@ -577,16 +557,16 @@ pixi run bench-sql <group> --engines=stock,cpu,gpu    # warm stock vs CPU-SIMD v
 pixi run bench-knn                                    # vector-search: single + batch cosine top-k
 ```
 
-`bench-knn` compares stock / CPU-SIMD / vss-HNSW / GPU with latency and recall. The
-standalone POC microbenchmarks above (`benchmark/math_benchmark.mojo`,
-`benchmark/reduction_benchmark.mojo`, `pixi run overrides-bench`) remain for quick
-kernel-level checks.
+`bench-knn` compares stock, CPU-SIMD, vss-HNSW and GPU on latency and recall. The
+older standalone microbenchmarks (`benchmark/math_benchmark.mojo`,
+`benchmark/reduction_benchmark.mojo`, `pixi run overrides-bench`) are still there for
+quick checks of single kernels.
 
 ## Table Functions
 
 Register Mojo functions as DuckDB table functions that generate rows.
-A table function needs three callbacks: **bind** (declare output columns and
-store parameters), **init** (optional per-scan setup), and the **main function**
+A table function needs three callbacks: bind (declare output columns and
+store parameters), init (optional per-scan setup), and the main function
 (produce output batches).
 
 ```mojo
@@ -678,8 +658,8 @@ fn zero() -> Scalar[DType.float64]:
 AggregateFunction.from_reduce["custom_sum", DType.float64, my_add, zero](conn)
 ```
 
-A separate-type overload allows accumulating into a wider type (e.g. Int32 input
-→ Int64 output):
+Another overload takes separate input and output types, so you can accumulate into a
+wider type (for example Int32 input and Int64 output):
 
 ```mojo
 fn add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
@@ -750,12 +730,12 @@ pixi run mojo run benchmark/reduction_benchmark.mojo
 
 ### Note on SIMD utilization and the DuckDB C API
 
-Mojo's `algorithm.reduction` module provides highly optimized SIMD-vectorized
-and parallelized reduction functions (`sum`, `max`, `min`, `mean`, etc.) that
+Mojo's `algorithm.reduction` module provides SIMD-vectorized and parallelized
+reduction functions (`sum`, `max`, `min`, `mean`, etc.) that
 operate on contiguous `Span` data. However, these cannot be used directly in
 DuckDB aggregate callbacks because the C API `update` function receives one
-state pointer **per row** (`duckdb_aggregate_state *states`), where each pointer
-may reference a different group's state, so there is no contiguous buffer-to-single-accumulator path.
+state pointer per row (`duckdb_aggregate_state *states`), and each pointer
+may point to a different group's state. So there is no way to reduce a contiguous buffer into a single accumulator.
 
 DuckDB's internal aggregates use a separate `simple_update` callback for
 ungrouped aggregates that passes the entire vector plus a single state pointer,
@@ -766,5 +746,5 @@ functions.
 Exposing a `duckdb_aggregate_function_set_simple_update(fn(info, vector, state, count))`
 callback in the C API would allow Mojo bindings to call
 `algorithm.reduction.sum(Span(vector_data, count))` directly on the input
-vector, leveraging full SIMD vectorization and parallel execution for ungrouped
-aggregates instead of the current scalar per-row accumulation loop.
+vector. Ungrouped aggregates would then get full SIMD vectorization and parallel
+execution instead of the current scalar per-row loop.

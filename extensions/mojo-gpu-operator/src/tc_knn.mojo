@@ -1,28 +1,28 @@
-"""FUSED tensor-core kNN for the batched fp16 top-k path (NVIDIA-only).
+"""Fused tensor-core kNN for the batched fp16 top-k path (NVIDIA-only).
 
-Ported from `bench/tc_knn_fused.mojo` (proven: recall@10 = 1.0, 0 genuine misses
+Ported from `bench/tc_knn_fused.mojo` (measured: recall@10 = 1.0, 0 genuine misses
 at N=1M K=768 M=128 k=10; ~67x the scalar batched path on an RTX 4090). It
 computes per-query top-k via a tiled MMA `Q.Emb^T` (m16n8k8, transpose_b) fused
-with a streaming per-query top-k, so the M x N similarity matrix is NEVER
-materialized -- only Emb is read, only M x k results are written.
+with a streaming per-query top-k, so the M x N similarity matrix is never
+materialized: only Emb is read, and only M x k results are written.
 
 This module is wired into `_run_topk_batch` in `gpu_kernels.mojo` behind the
-`GPU_OP_TENSORCORE` env flag (default OFF) AND a comptime NVIDIA gate. The gate
-uses TWO different comptime queries depending on context (see memory
+`GPU_OP_TENSORCORE` env flag (default off) and a comptime NVIDIA gate. The gate
+uses two different comptime queries depending on context (see memory
 `mojo-gpu-target-introspection`):
-  * HOST functions (`run_tc_knn_batch`, `_run_tc_knn_for_kd`, and the routing
-    branch in gpu_kernels) gate on `has_nvidia_gpu_accelerator()` -- the
-    host-context query. The in-kernel `is_nvidia_gpu()` triple check is ALWAYS
+  * Host functions (`run_tc_knn_batch`, `_run_tc_knn_for_kd`, and the routing
+    branch in gpu_kernels) gate on `has_nvidia_gpu_accelerator()`, the
+    host-context query. The in-kernel `is_nvidia_gpu()` triple check is always
     False in host context, so it cannot gate a host branch.
-  * KERNEL bodies (`tc_fused_knn_kernel`, `tc_merge_kernel`, `_tc_enorm_kernel`)
-    gate on `is_nvidia_gpu()` -- evaluated for the GPU compilation target.
-On Apple both queries are comptime-False, so NOTHING that touches the `layout`
+  * Kernel bodies (`tc_fused_knn_kernel`, `tc_merge_kernel`, `_tc_enorm_kernel`)
+    gate on `is_nvidia_gpu()`, which is evaluated for the GPU compilation target.
+On Apple both queries are comptime-False, so nothing that touches the `layout`
 package's `TensorCore` is ever instantiated for the Metal target. The
 module-level `from layout... import ...` lines are pure host-side imports that
 type-check on every target (verified: a gated TensorCore kernel built with
 `--emit shared-lib` for the Apple target compiles clean).
 
-Shape (matches the proven reference): per M-tile of BM=128 queries, the fused
+Shape (matches the reference): per M-tile of BM=128 queries, the fused
 kernel grid-strides NBLOCKS=256 one-warp-grid-tile blocks over N in BN=64 chunks,
 MMAs the BM x BN S-tile into fp32 registers, and updates a persistent per-thread
 register top-k. Stage 2 (`merge_kernel`) reduces each query's NBLOCKS*k
@@ -52,11 +52,11 @@ from std.math import sqrt
 
 
 # ===-------------------------------------------------------------------===#
-# Fused-kernel tile (identical to the proven reference). BM=128 queries per
+# Fused-kernel tile (identical to the reference). BM=128 queries per
 # launch; small BN so the BM x BN fp32 S-tile fits shared (128*64*4 = 32 KB +
-# a/b stages). Each block GRID-STRIDES over N in BN-chunks, so the grid dim
+# a/b stages). Each block grid-strides over N in BN-chunks, so the grid dim
 # (NBLOCKS) is fixed and the merge cost (NBLOCKS*k per query) stays bounded as N
-# scales -- the flash-attention streaming shape.
+# scales. This is the same streaming shape flash attention uses.
 # ===-------------------------------------------------------------------===#
 comptime TC_MMA_M = 16
 comptime TC_MMA_N = 8
@@ -78,13 +78,13 @@ comptime TC_NBLOCKS = 256
 comptime TC_K_CAP = 64
 
 # ===-------------------------------------------------------------------===#
-# Metric selector. The MMA core (Q.Emb^T dot) is IDENTICAL for all three; only
-# the per-candidate distance EPILOGUE and the norm-buffer semantics change:
+# Metric selector. The MMA core (Q.Emb^T dot) is identical for all three; only
+# the per-candidate distance epilogue and the norm-buffer semantics change:
 #   COSINE (0): cd = 1 - dot/(|q|*|e|)         norms = L2 norm (sqrt of sum sq)
-#   L2     (1): cd = |q|^2 + |e|^2 - 2*dot     norms = SQUARED L2 norm (no sqrt)
+#   L2     (1): cd = |q|^2 + |e|^2 - 2*dot     norms = squared L2 norm (no sqrt)
 #   IP     (2): cd = -dot                       norms = unused
-# In every case top-k is by SMALLEST cd with the SAME (cd, rowid) tie-break, so
-# only the ~3-line `cd` computation differs. The metric is a COMPTIME parameter
+# In every case top-k is by smallest cd with the same (cd, rowid) tie-break, so
+# only the ~3-line `cd` computation differs. The metric is a comptime parameter
 # of the kernel/driver so the switch is resolved at compile time (no runtime
 # branch in the streaming top-k inner loop); the host entry maps a runtime enum
 # to the comptime instantiation.
@@ -229,14 +229,14 @@ def tc_fused_knn_kernel[
                         break
                     var dotv = rebind[Scalar[DType.float32]](s_smem[m, nn])
                     # Distance epilogue: only this varies by metric (comptime
-                    # switch -> no runtime branch). The MMA `dotv` above is
+                    # switch, so no runtime branch). The MMA `dotv` above is
                     # shared by all three; top-k is by smallest `cd` for each.
                     var cd: Float32
                     comptime if metric == TC_METRIC_L2:
                         # Squared euclidean: |q|^2 + |e|^2 - 2*dot. qn / enorm
-                        # carry SQUARED norms here (host/enorm-kernel skip sqrt
-                        # for L2). NB: catastrophic cancellation for
-                        # non-normalized data + fp16 dot -- see run_tc_knn_batch.
+                        # carry squared norms here (host/enorm-kernel skip sqrt
+                        # for L2). Beware of catastrophic cancellation for
+                        # non-normalized data + fp16 dot; see run_tc_knn_batch.
                         cd = qn + enorm[row] - Float32(2) * dotv
                     elif metric == TC_METRIC_IP:
                         # Negative inner product (top-k by largest dot = smallest
@@ -291,7 +291,7 @@ def tc_fused_knn_kernel[
 
 
 # ===-------------------------------------------------------------------===#
-# Stage 2: per-query merge of nblocks*k candidates -> final k (one warp/query).
+# Stage 2: per-query merge of nblocks*k candidates into the final k (one warp/query).
 # Candidate layout is [block*BM*k + m*k + j] (the BM stride matches stage 1's
 # `(block_idx.x*TC_BM + m)*k` emit). NVIDIA-only via the comptime gate.
 # ===-------------------------------------------------------------------===#
@@ -382,14 +382,14 @@ def tc_merge_kernel(
 
 
 # ===-------------------------------------------------------------------===#
-# Host driver for ONE supported embedding dim KD (comptime). Tiles over M in
+# Host driver for one supported embedding dim KD (comptime). Tiles over M in
 # BM-chunks; each M-tile launches the fused stage-1 kernel (reads the full N
 # matrix once) + the stage-2 merge, and writes that tile's BM*k results into the
 # caller's row-major M*k output. NVIDIA-only via the comptime gate.
 #
 # emb16 is the resident N x KD fp16 matrix; qs_dev holds the M x KD fp16 queries;
 # qnorm_dev/enorm_dev hold the host-precomputed fp32 norms (qnorm = sqrt(sum
-# q^2); enorm = sqrt(sum (fp16-cast emb)^2) -- the SAME denom the scalar f16 path
+# q^2); enorm = sqrt(sum (fp16-cast emb)^2), the same denom the scalar f16 path
 # forms). cand_* / merged_* are reused per tile.
 # ===-------------------------------------------------------------------===#
 def _run_tc_knn_for_kd[
@@ -406,9 +406,9 @@ def _run_tc_knn_for_kd[
     out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
     out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
-    # HOST gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
-    # is False in host context). On Apple this is comptime-False so the body --
-    # which instantiates the tensor-core kernels via enqueue_function -- never
+    # Host gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
+    # is False in host context). On Apple this is comptime-False, so the body
+    # (which instantiates the tensor-core kernels via enqueue_function) never
     # compiles.
     comptime if has_nvidia_gpu_accelerator():
         comptime e_layout = Layout.row_major(UNKNOWN_VALUE, KD)
@@ -507,7 +507,7 @@ def _run_tc_knn_for_kd[
 # ===-------------------------------------------------------------------===#
 # Top-level fused batched fp16 driver. Builds the fp16 query tile + the fp32
 # query/embedding norms on the host, uploads them once, then dispatches to the
-# comptime-specialized per-(KD, metric) driver. For cosine it returns the SAME
+# comptime-specialized per-(KD, metric) driver. For cosine it returns the same
 # exact (ids, dists) as the scalar batched path for the supported (K, k).
 # NVIDIA-only via the gate; the caller guards with `tc_knn_supported(K, k)` +
 # the env flag.
@@ -517,18 +517,18 @@ def _run_tc_knn_for_kd[
 # byte-for-byte identical across metrics; only the per-candidate distance
 # epilogue (in tc_fused_knn_kernel) and the norm-buffer contents differ.
 #
-# NUMERICAL NOTE for L2 (validated): the kernel forms squared euclidean as
-# |q|^2 + |e|^2 - 2*dot, where `dot` comes from the fp16-INPUT MMA. For
-# UNIT-NORMALIZED data this is exact (|q|^2 = |e|^2 = 1, the subtraction is
+# Numerical note for L2 (validated): the kernel forms squared euclidean as
+# |q|^2 + |e|^2 - 2*dot, where `dot` comes from the MMA with fp16 inputs. For
+# unit-normalized data this is exact (|q|^2 = |e|^2 = 1, the subtraction is
 # well-conditioned and the top-k matches a scalar reference exactly). For
-# NON-NORMALIZED data with large/similar |q|^2, |e|^2 the subtraction suffers
-# CATASTROPHIC CANCELLATION against the lower-precision fp16-product dot -> the
-# ranking degrades (genuine misses). DECISION: ship L2 for normalized inputs
-# (the dominant real-embedding case -- array_distance over normalized vectors is
-# equivalent to a monotonic transform of cosine) and DOCUMENT the non-normalized
-# limitation here + in the metric bench. A numerically robust non-normalized L2
-# would need fp32/tf32 MMA inputs (≈2x the Emb-read bandwidth, the kernel's
-# bound) or a fused stable form; not implemented (cost noted). Cosine and IP are
+# non-normalized data with large or similar |q|^2, |e|^2 the subtraction suffers
+# catastrophic cancellation against the lower-precision fp16-product dot, and the
+# ranking degrades (genuine misses). Decision: ship L2 for normalized inputs
+# (the common case for real embeddings; array_distance over normalized vectors is
+# a monotonic transform of cosine) and document the non-normalized limitation
+# here and in the metric bench. A numerically robust non-normalized L2 would need
+# fp32/tf32 MMA inputs (about 2x the Emb-read bandwidth, which bounds the kernel)
+# or a fused stable form. This is not implemented. Cosine and IP are
 # unaffected (IP is a pure dot; cosine divides by the norm rather than
 # subtracting it).
 # ===-------------------------------------------------------------------===#
@@ -544,15 +544,15 @@ def run_tc_knn_batch(
     out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
     out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
-    # HOST gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
+    # Host gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
     # host-side comptime query; Apple never compiles this body.
     #
-    # `metric` is a RUNTIME enum here (TC_METRIC_*) dispatched to the comptime
+    # `metric` is a runtime enum here (TC_METRIC_*) dispatched to the comptime
     # instantiation below. Norm-buffer semantics depend on it:
     #   COSINE: qnorm/enorm = L2 norm  (sqrt of sum of squares)
-    #   L2    : qnorm/enorm = SQUARED L2 norm (skip the sqrt) -- the epilogue
-    #           forms |q|^2 + |e|^2 - 2*dot.
-    #   IP    : norms unused (epilogue is just -dot); we still fill them with a
+    #   L2    : qnorm/enorm = squared L2 norm (skip the sqrt), because the
+    #           epilogue forms |q|^2 + |e|^2 - 2*dot.
+    #   IP    : norms unused (epilogue is only -dot); we still fill them with a
     #           harmless value so the kernel's reads are defined.
     comptime if has_nvidia_gpu_accelerator():
         # Host: fp16 query tile (padded to a multiple of BM rows so the kernel's
@@ -567,7 +567,7 @@ def run_tc_knn_batch(
                 var v = qs[qoff + i]
                 qh16[qoff + i] = v.cast[DType.float16]()
                 s += v * v
-            # COSINE wants the L2 norm; L2/IP want the squared norm (L2) or do
+            # Cosine wants the L2 norm; L2/IP want the squared norm (L2) or do
             # not read it (IP). For L2 we keep s (= |q|^2); for cosine sqrt(s).
             if metric == TC_METRIC_COSINE:
                 qnorm_h[m] = sqrt(s)
@@ -591,9 +591,9 @@ def run_tc_knn_batch(
         )
         ctx.enqueue_copy(qnorm_dev, qnorm_imm)
 
-        # Emb norms: for COSINE, sqrt(sum of squares of the fp16-stored values)
-        # -- bit-identical to the scalar f16 path's denom (na += av*av, av =
-        # emb_half.cast[fp32]()). For L2 we want the SQUARED norm (skip the
+        # Emb norms: for cosine, sqrt(sum of squares of the fp16-stored values),
+        # bit-identical to the scalar f16 path's denom (na += av*av, av =
+        # emb_half.cast[fp32]()). For L2 we want the squared norm (skip the
         # sqrt). IP does not read enorm. The kernel takes a `squared` flag.
         var enorm_squared = Int(1) if metric != TC_METRIC_COSINE else Int(0)
         ctx.enqueue_function[_tc_enorm_kernel](
@@ -684,10 +684,10 @@ def run_tc_knn_batch(
 
 
 # Per-row norm of the fp16-resident matrix (one warp per row, warp-strided).
-# `squared == 0` returns the L2 norm (sqrt of sum of (fp16-cast-to-fp32)^2) --
+# `squared == 0` returns the L2 norm (sqrt of sum of (fp16-cast-to-fp32)^2),
 # matching the scalar f16 cosine denom exactly. `squared != 0` returns the
-# SQUARED norm (sum of squares, no sqrt) for the L2-distance epilogue. NVIDIA
-# -only via the comptime gate.
+# squared norm (sum of squares, no sqrt) for the L2-distance epilogue.
+# NVIDIA-only via the comptime gate.
 def _tc_enorm_kernel(
     emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
     enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],

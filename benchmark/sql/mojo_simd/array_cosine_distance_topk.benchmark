@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/array_cosine_distance_topk.benchmark
-# description: brute-force kNN scan — ORDER BY array_cosine_distance LIMIT 10 (200k x 768 f32)
+# description: brute-force kNN scan: ORDER BY array_cosine_distance LIMIT 10 (200k x 768 f32)
 # group: [mojo_simd]
 
 name array_cosine_distance topk

@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/exp.benchmark
-# description: Mojo SIMD patch target — exp(x*0.01)
+# description: Mojo SIMD patch target: exp(x*0.01)
 # group: [mojo_simd]
 
 name exp(x*0.01)

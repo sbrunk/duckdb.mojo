@@ -1,6 +1,6 @@
 """RawPlan C-ABI contract tag constants (v1). See RAW_PLAN_CONTRACT.md.
 
-MUST stay in lockstep with raw_plan.h (identical integer values).
+Must stay in lockstep with raw_plan.h (identical integer values).
 """
 
 comptime RP_MAGIC: Int64 = 0x4750504C414E0001  # "GPPLAN" + v1
@@ -18,8 +18,8 @@ comptime TYPE_DOUBLE: Int64 = 8
 comptime TYPE_DECIMAL: Int64 = 9
 comptime TYPE_DATE: Int64 = 10
 comptime TYPE_VARCHAR: Int64 = 11
-# Unsigned integer RESULT types (GPU_OP_STATS; see raw_plan.h). Additive vocabulary
-# -- only ever an aggregate OUT_TYPE / ret_type tag (regr_count -> UINTEGER/UBIGINT),
+# Unsigned integer result types (GPU_OP_STATS; see raw_plan.h). Additive vocabulary:
+# only ever an aggregate OUT_TYPE / ret_type tag (regr_count returns UINTEGER/UBIGINT),
 # never a tape-section field-count, so the fixed header + shuttle tapes are unaffected.
 comptime TYPE_UTINYINT: Int64 = 12
 comptime TYPE_USMALLINT: Int64 = 13
@@ -40,7 +40,7 @@ comptime AGG_COUNT_STAR: Int64 = 2
 comptime AGG_AVG: Int64 = 3
 comptime AGG_MIN: Int64 = 4
 comptime AGG_MAX: Int64 = 5
-# Statistical aggregates (GPU_OP_STATS). DOUBLE result, derived CLOSED-FORM on the
+# Statistical aggregates (GPU_OP_STATS). DOUBLE result, derived in closed form on the
 # host from the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the f64 seg kernels already
 # accumulate. 1-arg: stddev/var (over x). 2-arg: covar/corr/regr_* (regr arg order
 # is (y_dependent, x_independent), matching DuckDB). regr_count returns BIGINT.
@@ -88,9 +88,9 @@ comptime OP_COS: Int64 = 15
 # program, into the single Agg.program field. Split out on the Mojo side; never
 # reaches any expr-VM (it lives only in the un-lowered Agg.program tape).
 comptime OP_ARGSEP: Int64 = 16
-# Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). BINARY: pop exp, pop base ->
+# Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Binary: pop exp, pop base ->
 # push base**exp. Only integer-valued constant exponents are emitted (the f64 const
-# tape rounds doubles to int — fractional exponents fail-closed on the C++ side);
+# tape rounds doubles to int, so fractional exponents fail closed on the C++ side).
 # eval_program_f64 computes it via exact binary exponentiation (pure multiplies).
 comptime OP_POW: Int64 = 17
 # log2 (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Unary: pop a -> push log2(a),
@@ -101,7 +101,7 @@ comptime OP_LOG2: Int64 = 18
 # each pops rhs=stack[sp-1], lhs=stack[sp-2], sp-=1, pushes 1 if (lhs <op> rhs) else 0.
 # Used to lower OR-of-RANGE / inequality residual LogicalFilters (e.g. a<10 OR a>95,
 # BETWEEN, a!=5) over INTEGER/DATE columns, chained with OP_ADD (OR) / OP_MUL (AND)
-# just like the OR-of-equalities path. See raw_plan.h lockstep + RAW_PLAN_CONTRACT.md.
+# like the OR-of-equalities path. See raw_plan.h lockstep + RAW_PLAN_CONTRACT.md.
 comptime OP_LT: Int64 = 19  # pop b, a -> push (a <  b) ? 1 : 0
 comptime OP_LE: Int64 = 20  # pop b, a -> push (a <= b) ? 1 : 0
 comptime OP_GT: Int64 = 21  # pop b, a -> push (a >  b) ? 1 : 0

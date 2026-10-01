@@ -19,16 +19,17 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
   - `_libduckdb.mojo` - Auto-generated low-level C API bindings (do not edit manually)
   - `connection.mojo`, `database.mojo`, `result.mojo` - Core client API
   - `scalar_function.mojo`, `aggregate_function.mojo`, `table_function.mojo` - UDF registration
-  - `extension.mojo`, `api_level.mojo` - Extension development support
+  - `extension.mojo` - Extension development support
   - `chunk.mojo`, `vector.mojo`, `value.mojo`, `logical_type.mojo` - Data types
   - `kernels/` - reusable Mojo SIMD kernels (`simd.mojo`) + `register_simd_math` scalar UDF helpers
 - `test/` - Test files (one per module, named `test_*.mojo`)
 - `extensions/demo-extension/` - Working example DuckDB extension in Mojo
 - `extensions/test-extension/` - Extension used for testing
+- `examples/` - Standalone example programs (`example.mojo` is run in CI as a smoke test; `gpu_knn.mojo` needs a GPU and the `gpu` environment: `pixi run -e gpu mojo run examples/gpu_knn.mojo`)
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
 - `extensions/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
-- `third_party/duckdb/` - DuckDB source as a **git submodule**, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.5`, shallow). Single source of truth for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
+- `third_party/duckdb/` - DuckDB source as a git submodule, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.6`, shallow). It is the only DuckDB source used for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
 
 ## Development Commands
 
@@ -38,7 +39,7 @@ All commands run inside `pixi shell` or via `pixi run`:
 pixi shell                    # Enter dev environment
 pixi run test                 # Run all tests (library + extensions)
 pixi run test-library         # Run library tests only
-pixi run mojo run example.mojo  # Run example
+pixi run mojo run examples/example.mojo  # Run example
 pixi run generate-api         # Regenerate C API bindings from DuckDB source
 pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with DuckDB
 pixi build                    # Build conda package
@@ -59,9 +60,8 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 
 ## Key Patterns
 
-- The `Connection` type is parameterized with `ApiLevel` (CLIENT, EXT_STABLE, EXT_UNSTABLE) to gate API access at compile time
-- `_libduckdb.mojo` is auto-generated from the `third_party/duckdb` submodule - regenerate with `pixi run generate-api` after bumping DuckDB version (which means **moving the submodule pin first**, see "Updating DuckDB" below). CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main. `pixi run clone-duckdb` initializes the submodule and warns if its tag doesn't match the installed `duckdb`.
-- Extensions use the DuckDB Extension C API with stable/unstable split
+- `_libduckdb.mojo` is auto-generated from DuckDB's YAML API spec in the `third_party/duckdb` submodule (`api_spec/v1/`, which replaced the JSON files under `header_generation/` in DuckDB 1.5.6). The generator also checks its extension API struct layout against the submodule's `duckdb_extension.h`. Regenerate with `pixi run generate-api` after bumping the DuckDB version. Move the submodule pin first (see "Updating DuckDB" below). CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main. `pixi run clone-duckdb` initializes the submodule and warns if its tag doesn't match the installed `duckdb`.
+- Extensions use the DuckDB Extension C API and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`.
 
 ## SIMD kernels and the override extension
 
@@ -74,35 +74,35 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
   extension that rewrites the built-in `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` and
   `sum`/`avg`/`min`/`max` in place via catalog mutation, with stock fallback for non-FLAT /
   null / grouped input. `sum`/`avg` cover `DOUBLE` plus the INT128-backed `HUGEINT` /
-  `DECIMAL(19..38)` path — the one decimal aggregate with real headroom (stock uses an
-  overflow-checked per-element `Hugeint::Add`; the kernel inlines it with multi-accumulators
-  + overflow-fallback, ~7.5× single-threaded). The int64-backed `DECIMAL`/`BIGINT` sum is
+  `DECIMAL(19..38)` path. This is the one decimal aggregate with real room for speedup: stock
+  DuckDB calls an overflow-checked `Hugeint::Add` per element, while the kernel inlines it with
+  several accumulators and falls back on overflow (about 7.5× faster single-threaded). The int64-backed `DECIMAL`/`BIGINT` sum is
   left untouched (already memory-bound). The kernels are emitted as an object (`src/capi_shim.mojo`) and linked
   straight into the one `.so`, so there is no separate kernel lib and no `dlopen`. Build with
   `pixi run overrides-build`; activate via `LOAD` (it is unsigned, so allow unsigned extensions)
-  or the exported `register_mojo_overrides(duckdb_connection)`. It is **not** part of the conda
-  package and is **version-locked** to the exact DuckDB it was built against (CPP ABI + internal
+  or the exported `register_mojo_overrides(duckdb_connection)`. It is not part of the conda
+  package and is version-locked to the exact DuckDB it was built against (CPP ABI + internal
   headers). It can be driven through DuckDB's own benchmark suite via the consolidated
   harness (`pixi run bench-build` then `pixi run bench-sql mojo_simd --engines=stock,cpu`;
   see `benchmark/README.md`): a stock `benchmark_runner` built from the `third_party/duckdb`
   submodule with a ~13-line `interpreted_benchmark.cpp` hook
   (`benchmark/drivers/runner_load_extension.patch`) that `LOAD`s the extension via the
-  `DUCKDB_BENCH_EXTENSION` env-var toggle — no libduckdb fork.
+  `DUCKDB_BENCH_EXTENSION` environment variable, so no libduckdb fork is needed.
 
 ## FFI Struct ABI Workaround
 
-Mojo's `abi("C")` lowering on Linux x86_64 has a remaining miscompilation for >16-byte by-value struct arguments when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list — this routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
+Mojo's `abi("C")` lowering on Linux x86_64 still miscompiles by-value struct arguments larger than 16 bytes when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list, which routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
 
 ## Updating Mojo
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) **and** in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
 
-1. Check available versions: query `https://conda.modular.com/max/osx-arm64/repodata.json` (stable releases) or `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (nightlies) — also `linux-64`/`linux-aarch64` — for `mojo-compiler` packages. Note `curl` must follow redirects (`-L`).
+1. Check available versions: query `https://conda.modular.com/max/osx-arm64/repodata.json` (stable releases) or `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (nightlies) for `mojo-compiler` packages. Check `linux-64` and `linux-aarch64` too. `curl` must follow redirects (`-L`).
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`); when moving between stable and nightly also update the channel in `[workspace] channels` (stable = `.../max/`, nightly = `.../max-nightly/`)
-3. Update the same pin in `conda.recipe/recipe.yaml` and `conda.recipe/recipe.local.yaml` (all three of `build`/`host`/`run`) — otherwise `pixi build` and the published conda package will disagree; the CI `conda-recipe` job's `-c https://conda.modular.com/max...` channel must match too
+3. Update the same pin in `conda.recipe/recipe.yaml` and `conda.recipe/recipe.local.yaml` (all three of `build`/`host`/`run`). Otherwise `pixi build` and the published conda package will disagree. The CI `conda-recipe` job's `-c https://conda.modular.com/max...` channel must match too
 4. Run `pixi install` to update the lockfile
 5. Run `pixi run test-library` to verify compatibility
-6. Releases can have breaking changes — check the release notes; if a nightly fails, try earlier nightlies
+6. Releases can have breaking changes, so check the release notes. If a nightly fails, try earlier nightlies
 
 ## Updating DuckDB
 
@@ -110,15 +110,15 @@ DuckDB source lives in the `third_party/duckdb` git submodule, pinned (via the
 gitlink in the index, with `branch`/`shallow` recorded in `.gitmodules`) to the
 release tag the FFI bindings were generated against. The `libduckdb`/`duckdb-cli`
 conda pins and the submodule pin must stay in lockstep; `pixi run clone-duckdb`
-warns when they drift. To bump (e.g. `1.5.5` → `1.5.6`):
+warns when they drift. To bump (for example from `1.5.6` to `1.5.7`):
 
 1. Move the submodule pin to the new tag and stage it:
    ```shell
-   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.6
-   git -C third_party/duckdb checkout tags/v1.5.6
+   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.7
+   git -C third_party/duckdb checkout tags/v1.5.7
    git add third_party/duckdb
    ```
-   Optionally bump `branch = v1.5.6` in `.gitmodules`.
+   Optionally bump `branch = v1.5.7` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
    the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
    `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +
@@ -134,10 +134,10 @@ warns when they drift. To bump (e.g. `1.5.5` → `1.5.6`):
 
 Two independent paths build a conda package of the bindings, and they must be kept in sync (see the pin checklist above):
 
-- **`pixi build`** — the `[package]` block + `pixi-build-mojo` backend in `pixi.toml`. The backend infers the build steps (no recipe). Used for local builds and for consuming duckdb.mojo as a source dependency from other Pixi workspaces.
-- **`conda.recipe/recipe.yaml`** (rattler-build) — an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. Key points: the `run` dependency pins `mojo-compiler` **exactly** (a precompiled `.mojoc` only loads under the exact compiler it was built with — `pin_compatible` would let a newer nightly fail at import); `libduckdb` is a `run` dependency (the bindings `dlopen` it). Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
+- `pixi build`: the `[package]` block and the `pixi-build-mojo` backend in `pixi.toml`. The backend infers the build steps (no recipe). Used for local builds and for consuming duckdb.mojo as a source dependency from other Pixi workspaces.
+- `conda.recipe/recipe.yaml` (rattler-build): an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. The `run` dependency pins `mojo-compiler` exactly, because a precompiled `.mojoc` only loads under the exact compiler it was built with (`pin_compatible` would let a newer nightly fail at import). `libduckdb` is a `run` dependency because the bindings `dlopen` it. Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
 
-The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`) — unrelated to publishing the `duckdb-mojo` package.
+The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`). It is unrelated to publishing the `duckdb-mojo` package.
 
 ## Environments
 
@@ -147,4 +147,4 @@ The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler
   `pixi run -e gpu gpu-op-build`. On macOS the GPU kernels compile to Metal, which
   needs Xcode's separately-downloaded Metal Toolchain component
   (`xcodebuild -downloadComponent MetalToolchain`).
-- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now a **reference implementation** — superseded by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload) — but is kept wired here. See `extensions/operator-replacement/README.md`.
+- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now only a reference implementation. It has been replaced by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload), but it is still set up here. See `extensions/operator-replacement/README.md`.

@@ -1,19 +1,19 @@
-"""Recall of the FUSED tensor-core batched kNN for L2 + inner-product metrics.
+"""Recall of the fused tensor-core batched kNN for L2 + inner-product metrics.
 
-Validates the new metric path (mojo_gpu_pin_query_topk_batch_f16_metric) added
+Checks the new metric path (mojo_gpu_pin_query_topk_batch_f16_metric) added
 to the fused tensor-core kNN (tc_knn.mojo). The fused MMA core is shared with
 cosine; only the distance epilogue + norm-buffer semantics change per metric:
   COSINE (0): 1 - dot/(|q||e|)
   L2     (1): |q|^2 + |e|^2 - 2*dot   (array_distance; squared euclidean)
   IP     (2): -dot                     (array_negative_inner_product)
 
-For each metric we compute a SCALAR fp32 CPU ground truth on the SAME host data
-(top-k by smallest distance, (dist,rowid) tie-break) and compare against the GPU
-fused result, reporting recall@10 + genuine misses (a ref id absent from the GPU
-set whose ref distance is NOT within TIE_EPS of the GPU boundary -- the same
-genuine-miss methodology as cosine_f16_test.mojo).
+For each metric we compute a scalar fp32 CPU ground truth on the same host data
+(top-k by smallest distance, (dist,rowid) tie-break) and compare it against the
+fused GPU result, reporting recall@10 and genuine misses (a ref id absent from
+the GPU set whose ref distance is not within TIE_EPS of the GPU boundary; the
+same genuine-miss method as cosine_f16_test.mojo).
 
-Run on frederick with GPU_OP_TENSORCORE=1 (the metric path REQUIRES the fused
+Run on frederick with GPU_OP_TENSORCORE=1 (the metric path requires the fused
 kernel; without the flag the entry returns rc != 0):
   GPU_OP_TENSORCORE=1 LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH \
   pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -22,7 +22,7 @@ kernel; without the flag the entry returns rc != 0):
 Datasets:
   * NORMALIZED   (unit-norm rows+queries): exact for all three metrics.
   * UNNORMALIZED (raw rows): L2 via |q|^2+|e|^2-2*dot with the fp16-product dot
-    suffers catastrophic cancellation -- this run DOCUMENTS that behavior (it is
+    suffers catastrophic cancellation. This run records that behavior (it is
     expected to show genuine misses for L2; IP is unaffected).
 """
 
@@ -52,7 +52,7 @@ comptime METRIC_IP = 2
 
 
 # Deterministic value generators (clustered, like cosine_f16_test.mojo so the
-# top-k distances are well-separated rather than a dense tie thicket).
+# top-k distances are well separated rather than a dense cluster of ties).
 def _hash01(a: Int, b: Int) -> Float32:
     var x = (a * 2654435761 + b * 40503 + 12345) & 0x7FFFFFFF
     return Float32(x % 20011) * (Float32(2) / 20011.0) - Float32(1)
@@ -113,9 +113,9 @@ def build_data(
                 qs[base + i] = qs[base + i] * inv
 
 
-# Scalar fp32 CPU ground truth for one query, one metric. To MATCH the GPU
+# Scalar fp32 CPU ground truth for one query, one metric. To match the GPU
 # (which reads fp16-stored emb), the embedding values are cast through fp16
-# before forming dot + norm -- bit-faithful to the resident matrix. Top-k by
+# before forming dot + norm, so they are bit-identical to the resident matrix. Top-k by
 # smallest distance with the (dist, rowid) tie-break.
 def cpu_topk(
     emb: UnsafePointer[Float32, MutAnyOrigin],
@@ -140,7 +140,7 @@ def cpu_topk(
         var esq = Float32(0)
         for i in range(K):
             var ev = emb[base + i].cast[DType.float16]().cast[DType.float32]()
-            dot += q[i] * ev  # NB: scalar uses fp32 product (ref ground truth)
+            dot += q[i] * ev  # scalar uses fp32 product (ref ground truth)
             esq += ev * ev
         var cd: Float32
         if metric == METRIC_L2:

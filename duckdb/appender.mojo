@@ -7,7 +7,7 @@ prepared statements or individual ``INSERT INTO`` statements.
 This module provides a type-safe, idiomatic Mojo API that uses compile-time
 reflection to map Mojo structs and tuples to DuckDB rows automatically.
 
-Example — appending individual values:
+Example: appending individual values:
 ```mojo
 var con = DuckDB.connect(":memory:")
 _ = con.execute("CREATE TABLE people (id INTEGER, name VARCHAR)")
@@ -21,7 +21,7 @@ appender.end_row()
 # appender is flushed and destroyed automatically
 ```
 
-Example — appending structs:
+Example: appending structs:
 ```mojo
 @fieldwise_init
 struct Person(Copyable, Movable):
@@ -33,20 +33,20 @@ appender.append_row(Person(1, "Mark"))
 appender.append_row(Person(2, "Hannes"))
 ```
 
-Example — appending tuples:
+Example: appending tuples:
 ```mojo
 var appender = Appender(con, "people")
 appender.append_tuple_row(Tuple(Int32(1), String("Mark")))
 ```
 
-Example — appending from a list:
+Example: appending from a list:
 ```mojo
 var people = List[Person](Person(1, "Mark"), Person(2, "Hannes"))
 var appender = Appender(con, "people")
 appender.append_rows(people)
 ```
 
-Example — nullable columns with Optional:
+Example: nullable columns with Optional:
 ```mojo
 @fieldwise_init
 struct PersonOpt(Copyable, Movable):
@@ -58,7 +58,7 @@ appender.append_row(PersonOpt(1, String("Mark")))
 appender.append_row(PersonOpt(2, None))
 ```
 
-Example — appending a List column:
+Example: appending a List column:
 ```mojo
 _ = con.execute("CREATE TABLE t (tags LIST(VARCHAR))")
 var appender = Appender(con, "t")
@@ -66,7 +66,7 @@ appender.append_value(List[String]("a", "b", "c"))
 appender.end_row()
 ```
 
-Example — appending a Dict as a MAP column:
+Example: appending a Dict as a MAP column:
 ```mojo
 _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
 var appender = Appender(con, "t")
@@ -75,7 +75,7 @@ appender.append_value(d)
 appender.end_row()
 ```
 
-Example — appending a Variant as a UNION column:
+Example: appending a Variant as a UNION column:
 ```mojo
 _ = con.execute("CREATE TABLE t (u UNION(i INTEGER, s VARCHAR))")
 var appender = Appender(con, "t")
@@ -107,7 +107,7 @@ from duckdb.typed_api import (
 
 
 # ──────────────────────────────────────────────────────────────────
-# Appendable trait — high-level interface for appending typed values
+# Appendable trait: high-level interface for appending typed values
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -254,7 +254,7 @@ __extension Interval(Appendable):
 __extension Decimal(Appendable):
     def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
-        # No dedicated duckdb_append_decimal — use value-based appending.
+        # There is no duckdb_append_decimal, so use value-based appending.
         var val = libduckdb.duckdb_create_decimal(self)
         appender._check(libduckdb.duckdb_append_value(appender._appender, val))
         libduckdb.duckdb_destroy_value(Pointer(to=val))
@@ -350,9 +350,9 @@ __extension List(Appendable):
                 ),
             )
         elif _is_known_scalar_type[Self.T]():
-            # General list of known scalars — create a list or array value.
+            # General list of known scalars: create a list or array value.
             # Refine Self.T to Copyable & Deinitable so we can call _to_duckdb_value /
-            # mojo_type_to_duckdb_type — every known scalar satisfies both traits.
+            # mojo_type_to_duckdb_type. Every known scalar satisfies both traits.
             comptime CT = downcast[Self.T, Copyable & Deinitable]
             ref libduckdb = DuckDB().libduckdb()
             var src_ptr = Pointer(to=self).unsafe_bitcast[List[CT]]()
@@ -443,7 +443,7 @@ __extension Dict(Appendable):
         var keys = unsafe_alloc[duckdb_value](n)
         var vals = unsafe_alloc[duckdb_value](n)
 
-        # Refine K and V so they satisfy _to_duckdb_value's bounds — any type
+        # Refine K and V so they satisfy _to_duckdb_value's bounds. Any type
         # convertible to a duckdb_value is copyable, movable and deinitable.
         comptime KT = downcast[Self.K, Copyable & Deinitable]
         comptime VT = downcast[Self.V, Copyable & Deinitable]
@@ -494,7 +494,7 @@ __extension Variant(Appendable):
         )
 
         # Find the active member using isa[] and create the member value.
-        # Placeholder handle — overwritten in the loop below.
+        # Placeholder value, overwritten in the loop below.
         var tag = 0
         var member_val = duckdb_value.unsafe_dangling()
         comptime for i in range(Self.Ts.length):
@@ -519,7 +519,7 @@ __extension Variant(Appendable):
 
 
 # ──────────────────────────────────────────────────────────────────
-# Appender — high-level API
+# Appender: high-level API
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -554,7 +554,7 @@ struct Appender(Movable):
             table: The table name to append to.
             schema: The schema name (empty string for default schema).
         """
-        # Placeholder handle — duckdb_appender_create populates it via out-param.
+        # Placeholder handle. duckdb_appender_create fills it in via an out-param.
         self._appender = duckdb_appender.unsafe_dangling()
         self._current_col = 0
         var _table = table.copy()
@@ -658,7 +658,7 @@ struct Appender(Movable):
         self._current_col = 0
 
     def begin_row(mut self) raises:
-        """Begin a new row (optional — rows begin automatically)."""
+        """Begin a new row (optional, rows begin automatically)."""
         ref libduckdb = DuckDB().libduckdb()
         self._check(libduckdb.duckdb_appender_begin_row(self._appender))
         self._current_col = 0

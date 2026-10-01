@@ -98,7 +98,7 @@ def test_show_truncation_footer() raises:
     var con = DuckDB.connect(":memory:")
     var mat = con.execute("SELECT i FROM range(60) t(i)").fetchall()
     var table = mat._render_table(max_rows=40, max_col_width=32)
-    # 20 top + 3 dot rows + 20 bottom shown; footer reports totals.
+    # Shows the top 20 rows, 3 dot rows and the bottom 20 rows. The footer reports totals.
     assert_true("·" in table)
     assert_true("60 rows" in table)
     assert_true("(40 shown)" in table)
@@ -109,7 +109,7 @@ def test_show_truncation_footer() raises:
 
 def test_show_nulls_and_bool_multichunk() raises:
     var con = DuckDB.connect(":memory:")
-    # UNION ALL yields two 1-row chunks — exercises cross-chunk row access.
+    # UNION ALL yields two 1-row chunks, which tests row access across chunks.
     var mat = con.execute(
         "SELECT NULL::INTEGER AS i, true AS b UNION ALL SELECT 5, false"
     ).fetchall()
@@ -122,7 +122,7 @@ def test_show_nulls_and_bool_multichunk() raises:
 
 def test_show_no_truncation_within_threshold() raises:
     var con = DuckDB.connect(":memory:")
-    # 43 == max_rows + 3 → DuckDB shows all, no footer / dots.
+    # 43 == max_rows + 3, so DuckDB shows all rows with no footer or dots.
     var mat = con.execute("SELECT i FROM range(43) t(i)").fetchall()
     var table = mat._render_table(max_rows=40, max_col_width=32)
     assert_false("·" in table)
@@ -132,7 +132,7 @@ def test_show_no_truncation_within_threshold() raises:
 
 def test_show_consuming() raises:
     var con = DuckDB.connect(":memory:")
-    # Result.show consumes self; just assert it doesn't raise.
+    # Result.show consumes self, so only assert that it doesn't raise.
     con.execute("SELECT 42 AS answer").show()
 
 

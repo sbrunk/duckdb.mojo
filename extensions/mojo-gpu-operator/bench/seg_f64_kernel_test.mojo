@@ -1,11 +1,12 @@
 """End-to-end test of the production float64 segreduce kernel
 (seg_ungrouped_kernel_f64) vs DuckDB, using the real scaled l_extendedprice col.
 
-This exercises the EXACT kernel the operator's transcendental path launches: the
-float64 VM (true-double reconstruction via col_div + transcendental op) + the
-shared-memory float64 reduction + per-metric atomic accumulator. Two metrics are
-reduced in ONE launch: m0 = sum(sqrt(ext)), m1 = count (PUSH_CONST(1)) -- the
-AVG decomposition -- so avg(sqrt(ext)) = m0/m1 is also validated.
+This exercises the same kernel the operator's transcendental path launches: the
+float64 VM (reconstructing the real double via col_div, then the transcendental
+op), the shared-memory float64 reduction, and the per-metric atomic accumulator.
+Two metrics are reduced in one launch: m0 = sum(sqrt(ext)) and m1 = count
+(PUSH_CONST(1)), which is how AVG is split up, so avg(sqrt(ext)) = m0/m1 is also
+checked.
 
 Reference (DuckDB sf1, stock):
   sum(sqrt(l_extendedprice)) = 1105786098.5653913
@@ -84,13 +85,13 @@ def main() raises:
     var mlen_d = ctx.enqueue_create_buffer[DType.int64](2)
     ctx.enqueue_copy(mlen_d, mlen_h.unsafe_origin_cast[MutAnyOrigin]())
 
-    # col_div: slot 0 is DECIMAL(_,2) -> 100.0
+    # col_div: slot 0 is DECIMAL(_,2), so 100.0
     var cdiv_h = alloc[Float64](1)
     cdiv_h[0] = 100.0
     var cdiv_d = ctx.enqueue_create_buffer[DType.float64](1)
     ctx.enqueue_copy(cdiv_d, cdiv_h.unsafe_origin_cast[MutAnyOrigin]())
 
-    # const_div: parallel to op index; the PUSH_CONST(1) at op-index 2 is a pure
+    # const_div: parallel to op index; the PUSH_CONST(1) at op-index 2 is a plain
     # count (1.0), divisor 1.0. (The float VM indexes const_div by op position k.)
     var nstdiv_h = alloc[Float64](3)
     nstdiv_h[0] = 1.0; nstdiv_h[1] = 1.0; nstdiv_h[2] = 1.0
@@ -105,8 +106,8 @@ def main() raises:
 
     var fpart_d = ctx.enqueue_create_buffer[DType.float64](2)
     fpart_d.enqueue_fill(0.0)
-    # Empty fpred (n_fpred 0 -> in-kernel filter is a no-op; the pass program
-    # alone gates rows, exactly the original behavior this test validates).
+    # Empty fpred (with n_fpred 0 the in-kernel filter is a no-op; the pass
+    # program alone gates rows, which is the original behavior this test checks).
     var fpred_d = ctx.enqueue_create_buffer[DType.int64](1)
     ctx.synchronize()
 

@@ -1,15 +1,15 @@
 """Batch-amortization latency sweep for the GPU exact-cosine top-k path.
 
 Pins a 1M x 768 matrix once (fp16, the gpu_cosine_topk default), then measures
-the BATCHED per-query latency as a function of batch size M: warm-times one
-`mojo_gpu_pin_query_topk_batch_f16` call over M queries and divides by M. The
-point: because the batched kernel reads the resident matrix ONCE per query-tile
-(not once per query), per-query latency should DROP sharply as M grows -- the
-N*K bandwidth cost is amortized across the whole batch. At M=1 it matches the
+the batched per-query latency as a function of batch size M: it times one warm
+`mojo_gpu_pin_query_topk_batch_f16` call over M queries and divides by M.
+Because the batched kernel reads the resident matrix once per query tile (not
+once per query), per-query latency should drop sharply as M grows, since the N*K
+bandwidth cost is spread across the whole batch. At M=1 it matches the
 single-query latency; at M=1000 it should be far below it.
 
-For contrast we also time the single-query path at M=1 (the ~2ms floor a
-per-query index/HNSW lookup competes with, except HNSW can't batch at all).
+For contrast we also time the single-query path at M=1 (the ~2ms minimum that a
+per-query index/HNSW lookup competes with, except that HNSW can't batch at all).
 
 Run on frederick (RTX 4090):
   LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH \
@@ -108,7 +108,7 @@ def main() raises:
         unsafe_from_address=Int(qs)
     )
 
-    # Single-query reference (the ~2ms floor a per-query lookup competes with).
+    # Single-query reference (the ~2ms minimum a per-query lookup competes with).
     var sids = alloc[Int64](KK)
     var sdists = alloc[Float32](KK)
     for _ in range(5):

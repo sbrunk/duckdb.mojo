@@ -1,20 +1,20 @@
 """Apple fused 8x8-MMA batched kNN: correctness vs scalar + A/B latency.
 
-Validates `run_tc_knn_apple_batch` (routed through
+Checks `run_tc_knn_apple_batch` (routed through
 `mojo_gpu_pin_query_topk_batch_f16` when GPU_OP_TENSORCORE is set on an Apple
-build, cosine, supported K/k) against the SCALAR single-query top-k
-(`mojo_gpu_pin_query_topk_f16`, ground truth) on the SAME pinned fp16 data, with
-the `cosine_f16_test.mojo` genuine-miss methodology (recall@10, genuine misses
-beyond an FP-tie band).
+build, cosine, supported K/k) against the scalar single-query top-k
+(`mojo_gpu_pin_query_topk_f16`, ground truth) on the same pinned fp16 data, using
+the genuine-miss method from `cosine_f16_test.mojo` (recall@10, genuine misses
+outside a floating-point tie band).
 
-Run BOTH passes:
+Run both passes:
   # scalar batched (flag off):
   pixi run mojo run -I extensions/mojo-gpu-operator/src \
       extensions/mojo-gpu-operator/bench/apple_tc_knn_test.mojo
   # Apple fused MMA (flag on):
   GPU_OP_TENSORCORE=1 pixi run mojo run -I extensions/mojo-gpu-operator/src \
       extensions/mojo-gpu-operator/bench/apple_tc_knn_test.mojo
-The reported per-query latency from the two passes is the A/B (scalar vs fused).
+Comparing the per-query latency of the two passes gives scalar vs fused.
 """
 
 from std.sys import has_accelerator

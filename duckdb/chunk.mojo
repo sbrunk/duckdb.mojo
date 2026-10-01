@@ -711,7 +711,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             T: A Mojo struct whose fields correspond to table columns.
 
         Returns:
-            List[T] — one struct per row.
+            List[T] with one struct per row.
 
         Example:
             ```mojo
@@ -905,7 +905,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
             Ts: The Mojo types for each column.
 
         Returns:
-            List[Tuple[*Ts]] — one tuple per row.
+            List[Tuple[*Ts]] with one tuple per row.
 
         Example:
             ```mojo
@@ -928,7 +928,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 struct Row(Movable, Copyable):
     """A lightweight proxy for accessing a single row in a chunk.
 
-    Row does not own the underlying data — it holds a raw pointer to the
+    Row does not own the underlying data. It holds a raw pointer to the
     chunk's memory and a row index.  It is only valid while the chunk it
     was created from is alive (guaranteed by the ``for`` loop contract).
     """
@@ -1004,7 +1004,7 @@ struct Row(Movable, Copyable):
 
 
 # ──────────────────────────────────────────────────────────────────
-# Chunk row iterator — makes Chunk iterable over Row proxies
+# Chunk row iterator: makes Chunk iterable over Row proxies
 # ──────────────────────────────────────────────────────────────────
 
 

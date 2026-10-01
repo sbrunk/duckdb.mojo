@@ -1,5 +1,4 @@
 from duckdb.api import DuckDB
-from duckdb.api_level import ApiLevel
 from duckdb.appender import Appender, Appendable
 from duckdb.config import Config
 from duckdb.duckdb_type import *
@@ -13,7 +12,7 @@ from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo, 
 from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
 from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet, AggregateFunctionInfo, AggregateState, AggregateStateArray
 from duckdb.value import DuckDBValue
-from duckdb.extension import Extension, duckdb_extension_access, EXTENSION_API_VERSION, ExtApi, ExtApiUnstable
+from duckdb.extension import Extension, duckdb_extension_access, EXTENSION_API_VERSION, ExtApi
 from duckdb.database import Database
 
 from duckdb.logical_type import (

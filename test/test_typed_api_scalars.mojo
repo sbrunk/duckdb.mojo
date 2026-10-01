@@ -1,4 +1,4 @@
-"""Tests for the typed API — scalar types, date/time, timestamps, UUID, hugeint, decimal, null handling, column retrieval, multiple columns, type mismatch, blob, enum, bit."""
+"""Tests for the typed API: scalar types, date/time, timestamps, UUID, hugeint, decimal, null handling, column retrieval, multiple columns, type mismatch, blob, enum, bit."""
 
 from duckdb import *
 from duckdb.duckdb_type import Bit

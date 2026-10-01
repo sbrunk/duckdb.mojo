@@ -1,13 +1,13 @@
-"""RawPlan -> descriptor IR + matcher brain (Stage 1+, PURE, no GPU, no exports).
+"""Turns a RawPlan into the descriptor IR and runs the matcher (Stage 1+, pure, no GPU, no exports).
 
 Parses the flat int64 "tape" + string "blob" emitted by the C++
 `SerializeMatchedPlan` (see RAW_PLAN_CONTRACT.md) into a `GpuPlanDescriptor` and
 runs the fail-closed matcher (fact/dim resolution, strategy + kind
 classification).
 
-This module is PURE: structs, `RawPlanReader`, `parse_raw_plan`,
-`build_descriptor_impl`, `classify`, and helpers -- all importable, no GPU, no
-`@export` wrappers. The C-ABI `@export` wrappers that surface this logic live in
+This module is pure: structs, `RawPlanReader`, `parse_raw_plan`,
+`build_descriptor_impl`, `classify`, and helpers. All are importable, with no GPU
+and no `@export` wrappers. The C-ABI `@export` wrappers that surface this logic live in
 `gpu_kernels.mojo` (the root build file) so they share one compilation unit with
 the GPU kernels and are retained in the dylib (a bare `import` strips exports).
 
@@ -164,11 +164,11 @@ struct GpuAggregate(Copyable, Movable):
 
 @fieldwise_init
 struct GpuJoinEdge(Copyable, Movable):
-    """A resolved fact->dim equi-join edge.
+    """A resolved fact-to-dim equi-join edge.
 
     `fact_key` is the fact (or already-included dim) side column; `dim_key` is
     this dim's side. The carried payload (e.g. dim filter columns / build-side
-    layout) is not needed for Stage 1 -- left for Stage 2.
+    layout) is not needed for Stage 1 and is left for Stage 2.
     """
 
     var dim_table: String
@@ -186,11 +186,11 @@ struct GpuGet(Copyable, Movable):
     var table: String
     var est_cardinality: Int64
     var filters: List[GpuPredicate]
-    # NR3 (GPU_OP_FILTER_OR): an OR-of-equalities residual-filter PASS-PROGRAM
-    # (postfix, ONLY OP_LOAD_COL/PUSH_CONST/EQ/ADD/MUL) the on-GPU expr-VM
+    # NR3 (GPU_OP_FILTER_OR): an OR-of-equalities residual-filter pass program
+    # (postfix, only OP_LOAD_COL/PUSH_CONST/EQ/ADD/MUL) the on-GPU expr-VM
     # AND-composes into the host pass column. Empty unless the C++ writer emitted a
     # PASS_PROGRAMS entry for this GET. `pass_load_cols` resolves the program's
-    # OP_LOAD_COL ops to (table,col), in program order -- same rationale as an
+    # OP_LOAD_COL ops to (table,col), in program order, for the same reason as an
     # aggregate's load_cols (the raw string ids are gone after the reader's table).
     var pass_prog: List[GpuExprOp]
     var pass_load_cols: List[GpuColRef]
@@ -231,7 +231,7 @@ struct GpuPlanDescriptor(Copyable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# Straight decode -- no decisions. Verifies MAGIC first.
+# Straight decode with no decisions. Verifies MAGIC first.
 # ---------------------------------------------------------------------------
 def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
     # HEADER
@@ -332,12 +332,12 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
             var a = r.next()
             var b = r.next()
             if op == OP_LOAD_COL:
-                # a = table_strid, b = col_strid -> resolve now.
+                # a = table_strid, b = col_strid; resolve now.
                 load_cols.append(
                     GpuColRef(r.string_at(Int(a)), r.string_at(Int(b)))
                 )
             elif op == OP_PROMO_PRED:
-                # a = table_strid, b = col_strid (the dim-side p_type) -> resolve.
+                # a = table_strid, b = col_strid (the dim-side p_type); resolve.
                 promo_cols.append(
                     GpuColRef(r.string_at(Int(a)), r.string_at(Int(b)))
                 )
@@ -375,11 +375,10 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
             if op == OP_LOAD_COL:
                 pp_cols.append(GpuColRef(r.string_at(Int(a)), r.string_at(Int(b))))
             pp_prog.append(GpuExprOp(op, a, b))
-        # Guard the ordinal; out-of-range -> drop (the build guard then declines any
-        # GET whose pass_prog is empty when one was expected is N/A -- a dropped
-        # program just leaves the GET unfiltered, but build_descriptor_impl only
-        # routes GETs whose pass_prog is consistent; a bad ordinal cannot happen from
-        # our own writer). Stay defensive: only attach when in range.
+        # Guard the ordinal and drop the program if it is out of range. A dropped
+        # program would leave the GET unfiltered, but build_descriptor_impl only
+        # routes GETs whose pass_prog is consistent, and a bad ordinal cannot come
+        # from our own writer. Stay defensive: only attach when in range.
         if get_ord >= 0 and get_ord < len(gets):
             gets[get_ord].pass_prog = pp_prog^
             gets[get_ord].pass_load_cols = pp_cols^
@@ -404,14 +403,14 @@ def parse_raw_plan(mut r: RawPlanReader) raises -> GpuPlanDescriptor:
 # Helpers.
 # ---------------------------------------------------------------------------
 def _agg_kind_supported(k: Int64) -> Bool:
-    # AGG_MIN / AGG_MAX are deliberately NOT supported: the segreduce path is a SUM
+    # AGG_MIN / AGG_MAX are deliberately not supported: the segreduce path is a SUM
     # reduction and there is no min/max reduction kernel, so a routed min/max was
-    # silently SUMMED -- a pre-existing default-on wrong result (e.g. min(x)/max(x)
+    # silently summed. That was an earlier wrong result with the default settings (e.g. min(x)/max(x)
     # returning sum(x); an int64-backed DECIMAL min/max additionally crashed on the
-    # i128 result read). DuckDB folds an *unfiltered* ungrouped MIN/MAX into a
-    # constant (no Aggregate node -- see gpu_operator.cpp:531), so only a FILTERED
-    # min/max ever reaches here; decline it to correct CPU stock. Re-enable ONLY
-    # alongside real min/max reduction kernels + a _assemble min/max branch.
+    # i128 result read). DuckDB folds an unfiltered ungrouped MIN/MAX into a
+    # constant (no Aggregate node, see gpu_operator.cpp:531), so only a filtered
+    # min/max ever reaches here; decline it so stock CPU computes it correctly.
+    # Re-enable only alongside real min/max reduction kernels + a _assemble min/max branch.
     return (
         k == AGG_SUM
         or k == AGG_AVG
@@ -423,7 +422,7 @@ def _agg_kind_supported(k: Int64) -> Bool:
     )
 
 
-# True if an op tag is a transcendental unary op (handled ONLY by the float64
+# True if an op tag is a transcendental unary op (handled only by the float64
 # expr-VM / DOUBLE accumulator; GPU_OP_TRANSCENDENTAL path).
 def _is_transcendental_op(op: Int64) -> Bool:
     return (
@@ -450,14 +449,14 @@ def _has_transcendental(desc: GpuPlanDescriptor) -> Bool:
 
 
 # True if an AggKind tag is a statistical aggregate (GPU_OP_STATS). DOUBLE result
-# (BIGINT for regr_count), derived CLOSED-FORM on the host from the shared sums
+# (BIGINT for regr_count), derived in closed form on the host from the shared sums
 # the f64 seg kernels accumulate. The contiguous range [STDDEV_SAMP, REGR_COUNT]
 # is the full stat family (see raw_plan_tags / raw_plan.h).
 def _is_stat_agg_kind(k: Int64) -> Bool:
     return k >= AGG_STDDEV_SAMP and k <= AGG_REGR_COUNT
 
 
-# True if any aggregate is a statistical aggregate -> the whole offload uses the
+# True if any aggregate is a statistical aggregate. Then the whole offload uses the
 # DOUBLE accumulator + the float64 kernels (same substrate as transcendentals).
 def _has_stats(desc: GpuPlanDescriptor) -> Bool:
     for ai in range(len(desc.aggregates)):
@@ -475,25 +474,25 @@ def _cond_touches(
 
 
 # ---------------------------------------------------------------------------
-# Offload-vs-CPU-fallback policy (the only "cost"-ish decision the engine makes).
+# Offload-vs-CPU-fallback policy (the only cost-like decision the engine makes).
 #
-# CORRECTNESS NOTE: declining is ALWAYS correct — it just routes the query to
+# Correctness note: declining is always correct. It only routes the query to
 # stock DuckDB CPU. So this helper can never produce a wrong answer; the only
 # thing at stake is performance. That means the bar is: never decline a shape we
 # know wins (Q1/Q5/Q6/Q14), and only decline shapes measured to lose.
 #
 # `desc` is the fully classified descriptor (fact_table / strategy / kind set).
-# Returns True => return None from build_descriptor_impl => stock CPU fallback.
+# Returning True makes build_descriptor_impl return None, which falls back to stock CPU.
 # ---------------------------------------------------------------------------
 def _should_decline(desc: GpuPlanDescriptor, force_highcard: Bool) -> Bool:
-    # (a) HIGH-CARDINALITY GROUP-BY (the Q3 shape) — measured & settled.
+    # (a) High-cardinality GROUP BY (the Q3 shape). Measured and settled.
     # Light per-row work over a large fact table producing many groups (e.g.
     # TPC-H Q3, ~1.5M order groups) is CPU-favorable: DuckDB's multithreaded
     # join+hash-aggregate beats the single-threaded GPU source op at every
     # measured scale (Q3 RTX 4090: 0.87x vs 16-thread stock at sf1, 0.54x at
-    # sf10 — the gap widens with scale). The engine is otherwise cost-blind and
+    # sf10; the gap widens with scale). The engine otherwise ignores cost and
     # would offload Q3 and make it slower; declining keeps it on the CPU.
-    # UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14 — few groups or join-heavy, which
+    # UNGROUPED / DENSE_GROUP (Q1/Q5/Q6/Q14: few groups or join-heavy, where
     # the GPU wins) are unaffected. GPU_OP_FORCE_HIGHCARD=1 (or the test-only
     # `force_highcard=True`) force-offloads anyway, for A/B measurement of the
     # GPU path / classification validation without the policy.
@@ -504,30 +503,30 @@ def _should_decline(desc: GpuPlanDescriptor, force_highcard: Bool) -> Bool:
         if not force_highcard and getenv("GPU_OP_FORCE_HIGHCARD", "") == "":
             return True
 
-    # (b) COST-MODEL HOOK (Mordred-style transfer-vs-compute), DEFAULT OFF.
+    # (b) Cost-model hook (Mordred-style transfer-vs-compute), off by default.
     #
-    # Available signal: `est_cardinality` per GET is DuckDB's *post-filter* row
+    # Available signal: `est_cardinality` per GET is DuckDB's post-filter row
     # estimate (relation_statistics_helper.cpp: `get.estimated_cardinality =
     # cardinality_after_filters`), so the fact GET's value is the estimated GPU
-    # *input* size after pushdown — exactly the transfer-vs-compute driver.
+    # input size after pushdown, which is what drives transfer vs compute.
     #
-    # WHY THIS IS A HOOK AND NOT AN ACTIVE THRESHOLD (the honest finding):
-    # the operator's win is the WARM / repeated path; the cold (first-touch)
+    # Why this is a hook and not an active threshold:
+    # the operator wins on the warm (repeated) path; the cold (first-touch)
     # path "does not beat stock" by design and is amortized by the resident pin.
-    # A small `est_cardinality` is precisely the case that (1) loses COLD because
-    # the fixed offload overhead isn't amortized, AND (2) is cheap to keep
-    # resident and WINS WARM if it repeats. The plan carries no repeat-count /
-    # query-history signal, so `est_cardinality` alone CANNOT separate "tiny,
+    # A small `est_cardinality` is exactly the case that (1) loses cold because
+    # the fixed offload overhead isn't amortized, and (2) is cheap to keep
+    # resident and wins warm if it repeats. The plan carries no repeat-count /
+    # query-history signal, so `est_cardinality` alone cannot separate "tiny,
     # loses even warm" from "tiny now, repeats and wins warm". Any threshold
-    # tuned to kill cold losses would wrongly decline warm-winning queries — the
-    # one regression we must not cause. So the model stays OFF by default and
+    # tuned to remove cold losses would wrongly decline queries that win warm,
+    # which is the one regression we must not cause. So the model stays off by default and
     # current behavior is unchanged. The hook exists for future measurement on
     # real hardware: set GPU_OP_COSTMODEL=1 to enable, GPU_OP_COSTMODEL_MINROWS
     # to override the (unvalidated, conservative) threshold below which the fact
     # input is deemed too small to amortize an offload. See DESIGN.md "The cost
     # model (investigated)".
     if getenv("GPU_OP_COSTMODEL", "") != "":
-        # Default threshold is deliberately tiny: with the model OFF this branch
+        # Default threshold is deliberately tiny: with the model off this branch
         # never runs, and when a user opts in it should only catch trivially
         # small inputs unless they raise it via GPU_OP_COSTMODEL_MINROWS.
         var min_rows: Int64 = 4096
@@ -550,7 +549,7 @@ def _should_decline(desc: GpuPlanDescriptor, force_highcard: Bool) -> Bool:
 
 
 # ---------------------------------------------------------------------------
-# The matcher brain. Fail-closed: returns None on anything unsupported.
+# The matcher. Fail-closed: returns None on anything unsupported.
 # ---------------------------------------------------------------------------
 def build_descriptor_impl(
     mut r: RawPlanReader,
@@ -654,7 +653,7 @@ def build_descriptor_impl(
     if n_gkeys == 0:
         strategy = STRAT_UNGROUPED
     else:
-        # Integer fact group key -> sort + segmented reduce.
+        # Integer fact group key: sort + segmented reduce.
         var has_int_fact_key = False
         for gk in range(n_gkeys):
             ref key = desc.group_keys[gk]
@@ -663,7 +662,7 @@ def build_descriptor_impl(
             # Look up the key column's type via OUT_TYPES is not reliable here
             # (OUT_TYPES is positional schema, no col names). The contract states
             # the integer fact group key is BIGINT/INTEGER; we classify by the
-            # group-key column being on the fact table AND an aggregate program
+            # group-key column being on the fact table and an aggregate program
             # not depending on it. Use the out-type of the group column slot:
             # group columns come first in OUT_TYPES, in group-key order.
             if gk < len(desc.out_types):
@@ -674,15 +673,15 @@ def build_descriptor_impl(
             # High-cardinality integer fact group key (Q3: l_orderkey). On a GPU
             # with 64-bit atomics (NVIDIA / AMD) prefer a single-pass GPU hash-
             # aggregate (no sort, no ORDER BY, no 1-warp-per-tiny-segment launch).
-            # Apple has no 64-bit atomics, so it MUST keep sort+segreduce. This is
-            # a HOST capability check (`has_*_accelerator`), not a kernel target
+            # Apple has no 64-bit atomics, so it must keep sort+segreduce. This is
+            # a host capability check (`has_*_accelerator`), not a kernel target
             # check, so it is correct to evaluate here in strategy selection.
             if has_nvidia_gpu_accelerator() or has_amd_gpu_accelerator():
                 strategy = STRAT_HASH_GROUP
             else:
                 strategy = STRAT_SORT_SEGREDUCE
         else:
-            # Small group-key count / VARCHAR dimension keys -> dense group.
+            # Small group-key count / VARCHAR dimension keys: dense group.
             # (Q1: 2 VARCHAR fact keys; Q5: 1 VARCHAR dim key.)
             var all_small = n_gkeys <= 4
             if all_small:
@@ -710,14 +709,13 @@ def build_descriptor_impl(
     desc.strategy = strategy
     desc.kind = kind
 
-    # EMPTY-MATERIALIZE GATE (FIX 3): a bare `SELECT count(*) FROM t` (no filter, no
-    # group key, no dim edge, no other aggregate column) has NOTHING to project from
-    # the fact table -> the shuttle emits an empty "SELECT  FROM t", a parser error.
-    # Decline whenever the fact materialize set is empty: no fact group keys AND no
-    # dim edges (which would carry fact join keys/cond cols) AND no fact-projected
-    # columns (filter cols + aggregate LOAD_COLs). A FILTERED count(*) materializes
-    # the filter column (fact_projected_columns non-empty) -> NOT empty -> still
-    # routes. Declining is correct (stock CPU computes count(*) trivially).
+    # Empty-materialize gate (fix 3): a bare `SELECT count(*) FROM t` (no filter, no
+    # group key, no dim edge, no other aggregate column) has nothing to project from
+    # the fact table, so the shuttle would emit an empty "SELECT  FROM t", a parser
+    # error. Decline whenever the fact materialize set is empty: no fact group keys,
+    # no dim edges (which would carry fact join keys/cond cols) and no fact-projected
+    # columns (filter cols + aggregate LOAD_COLs). A filtered count(*) materializes
+    # the filter column (fact_projected_columns is non-empty), so it still routes. Declining is correct (stock CPU computes count(*) trivially).
     var has_fact_gkey = False
     for gk in range(n_gkeys):
         if desc.group_keys[gk].table == fact_table:
@@ -730,18 +728,18 @@ def build_descriptor_impl(
     ):
         return None
 
-    # NR3 (GPU_OP_FILTER_OR) scope guard. A residual OR-of-equalities PASS-PROGRAM
-    # is composed into the HOST pass column ONLY on the int128 ungrouped / dense-
-    # group path (_pin_finalize_generic resolves + AND-MULs it there). It is NOT
+    # NR3 (GPU_OP_FILTER_OR) scope guard. A residual OR-of-equalities pass program
+    # is composed into the host pass column only on the int128 ungrouped / dense-
+    # group path (_pin_finalize_generic resolves + AND-MULs it there). It is not
     # wired into the FK-join (dims) path, the HASH/SORT segreduce paths, or the f64
-    # (transcendental/stats) path -- those use an in-kernel fpred / different
-    # finalize that does NOT consult get.pass_prog. So fail-closed: decline whenever
-    # any GET carries a pass_prog but the shape is NOT a plain-int128 (no dims AND
-    # strategy in {UNGROUPED, DENSE_GROUP} AND not an f64 transcendental/stats
-    # query). Declining there is correct (stock CPU) and -- critically -- avoids
-    # SILENTLY DROPPING the OR predicate on a path that ignores pass_prog. With the
-    # flag off no pass_prog is ever emitted, so this branch is dead -> byte-identical
-    # default behavior. Placed BEFORE the transcendental/stats guards (which
+    # (transcendental/stats) path. Those use an in-kernel fpred or a different
+    # finalize that does not consult get.pass_prog. So fail closed: decline whenever
+    # any GET carries a pass_prog but the shape is not plain int128 (no dims,
+    # strategy in {UNGROUPED, DENSE_GROUP}, and not an f64 transcendental/stats
+    # query). Declining there is correct (stock CPU) and, most importantly, avoids
+    # silently dropping the OR predicate on a path that ignores pass_prog. With the
+    # flag off no pass_prog is ever emitted, so this branch is dead and default
+    # behavior is byte-identical. Placed before the transcendental/stats guards (which
     # return desc^ early) so an OR-filtered f64 query is declined here.
     var has_passprog = False
     for gi in range(len(desc.gets)):
@@ -754,33 +752,33 @@ def build_descriptor_impl(
         if strategy != STRAT_UNGROUPED and strategy != STRAT_DENSE_GROUP:
             return None
         # The f64 paths (transcendental/stats) thread the filter through an
-        # in-kernel fpred, not get.pass_prog -> declining keeps the OR predicate
-        # honored (on stock CPU) instead of silently dropped.
+        # in-kernel fpred, not get.pass_prog. Declining keeps the OR predicate
+        # applied (on stock CPU) instead of silently dropping it.
         if _has_transcendental(desc) or _has_stats(desc):
             return None
 
     # Transcendental scope guard (GPU_OP_TRANSCENDENTAL): the float64 kernels are
     # the UNGROUPED accumulator (seg_ungrouped_kernel_f64) and the DENSE_GROUP
     # accumulator (seg_dense_kernel_f64). A transcendental program is therefore
-    # accepted as UNGROUPED or DENSE_GROUP only, with NO FK-join dims (the
+    # accepted as UNGROUPED or DENSE_GROUP only, with no FK-join dims (the
     # transcendental arg is a pure fact column / const), and every aggregate a
-    # SUM / AVG / COUNT(*) (DOUBLE result, AVG = sum + per-group count). ANY other
-    # shape DECLINES -> stock DuckDB CPU. Fail-closed: never wrong. (With the flag
-    # off no transcendental op is ever emitted by the C++ EmitProgram, so this
-    # branch is dead -> byte-identical default behavior.)
+    # SUM / AVG / COUNT(*) (DOUBLE result, AVG = sum + per-group count). Any other
+    # shape is declined and runs on stock DuckDB CPU. Fail-closed: never wrong. (With
+    # the flag off no transcendental op is ever emitted by the C++ EmitProgram, so
+    # this branch is dead and default behavior is byte-identical.)
     #
     # HASH_GROUP (high-cardinality integer fact key) is correct end-to-end (kernel
-    # + driver + assembler all validated bit-exact) but MEASURED SLOWER than stock
+    # + driver + assembler all validated bit-exact) but measured slower than stock
     # (RTX 4090: sf1 0.48x, sf10 0.3-0.5x warm vs stock): the 200k+-group hash-
     # aggregate + the per-run PCIe read-back of every occupied slot dominate, and
-    # DuckDB's multithreaded hash-aggregate wins this regime -- the SAME reason
+    # DuckDB's multithreaded hash-aggregate wins here. This is the same reason
     # _should_decline declines the Q3 high-card shape. So HASH_GROUP transcendental
-    # is DECLINED here (kept on CPU); the f64 hash machinery stays dormant behind
+    # is declined here (kept on CPU); the f64 hash machinery stays dormant behind
     # this guard for a future tighter-cap / fewer-output-rows revisit.
     if _has_transcendental(desc):
-        # FIX 4 (Group F): sin/cos are computed in FLOAT32 on NVIDIA (no precise f64
-        # sin/cos PTX), rel-err ~5e-7 >> the aggregate exactness tolerance -> silent
-        # wrong results. The other transcendentals (sqrt/exp/ln/log10/log2/pow) are
+        # Fix 4 (Group F): sin/cos are computed in float32 on NVIDIA (no precise f64
+        # sin/cos PTX). The relative error of ~5e-7 is far above the aggregate
+        # exactness tolerance and would give silently wrong results. The other transcendentals (sqrt/exp/ln/log10/log2/pow) are
         # f64-precise and keep routing. Decline any program carrying OP_SIN/OP_COS
         # to stock CPU. (Defense-in-depth: the C++ EmitProgram already declines to
         # emit these opcodes, so under the default planner path this is unreachable;
@@ -790,13 +788,13 @@ def build_descriptor_impl(
             for k in range(len(prog)):
                 if prog[k].op == OP_SIN or prog[k].op == OP_COS:
                     return None
-        # NVIDIA-ONLY: the float64 transcendental kernels need in-kernel f64, which
+        # NVIDIA only: the float64 transcendental kernels need in-kernel f64, which
         # Apple Metal lacks (abort-only there) and AMD is unvalidated. Decline on
-        # non-NVIDIA -> stock CPU (never route into the abort kernel).
+        # non-NVIDIA so stock CPU runs it (never route into the abort kernel).
         if not has_nvidia_gpu_accelerator():
             return None
         # No FK-join dims (the transcendental arg is a fact column / const); only
-        # UNGROUPED + DENSE_GROUP (the float kernels that WIN). HASH_GROUP declines.
+        # UNGROUPED + DENSE_GROUP (the float kernels that win). HASH_GROUP declines.
         if n_dims != 0:
             return None
         if strategy != STRAT_UNGROUPED and strategy != STRAT_DENSE_GROUP:
@@ -805,59 +803,59 @@ def build_descriptor_impl(
             var ak = desc.aggregates[ai].kind
             if ak != AGG_SUM and ak != AGG_AVG and ak != AGG_COUNT_STAR:
                 return None
-        # ACCEPT directly, bypassing `_should_decline`. Its high-cardinality
-        # GROUP-BY decline (the Q3 shape) targets LIGHT per-row work; an UNGROUPED
-        # or small-DENSE transcendental is HEAVY per-row math the GPU wins (sum(sqrt)
-        # ~3-8x warm vs stock) and DuckDB does NOT GPU-accelerate. The shape is
+        # Accept directly, bypassing `_should_decline`. Its high-cardinality
+        # GROUP BY decline (the Q3 shape) targets light per-row work; an UNGROUPED
+        # or small-DENSE transcendental is heavy per-row math the GPU wins (sum(sqrt)
+        # ~3-8x warm vs stock) and DuckDB does not accelerate on GPU. The shape is
         # validated above (no dims, no HASH, sum/avg/count) and the flag is opt-in.
         return desc^
 
     # Statistical-aggregate scope guard (GPU_OP_STATS): stddev/var/covar/corr/
-    # regr_* are CLOSED-FORM over the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the
-    # float64 seg kernels already accumulate (the SAME substrate as the
-    # transcendental path -- f64 VM + seg_ungrouped_kernel_f64 / seg_dense_kernel_f64
+    # regr_* are closed-form over the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the
+    # float64 seg kernels already accumulate (the same building blocks as the
+    # transcendental path: f64 VM + seg_ungrouped_kernel_f64 / seg_dense_kernel_f64
     # + a host closed-form finalize). DuckDB computes these with a serial scalar
     # Welford accumulator (12-15x slower than sum at sf10), unaccelerated, so this
-    # is a NEW win class. Accepted as UNGROUPED or DENSE_GROUP (see the DENSE gate
-    # below), with NO FK-join dims (the stat args are pure fact columns / consts).
-    # ANY other shape DECLINES -> stock CPU. Fail-closed: with the flag off the C++
-    # MapAggKind never emits a stat AggKind, so this branch is dead -> byte-identical
-    # default behavior.
+    # is a new class of wins. Accepted as UNGROUPED or DENSE_GROUP (see the DENSE gate
+    # below), with no FK-join dims (the stat args are pure fact columns / consts).
+    # Any other shape is declined to stock CPU. Fail-closed: with the flag off the C++
+    # MapAggKind never emits a stat AggKind, so this branch is dead and default
+    # behavior is byte-identical.
     if _has_stats(desc):
-        # NVIDIA-ONLY: the float64 kernels need in-kernel f64 (Apple Metal lacks it,
-        # abort-only there; AMD unvalidated). Decline on non-NVIDIA -> stock CPU.
+        # NVIDIA only: the float64 kernels need in-kernel f64 (Apple Metal lacks it,
+        # abort-only there; AMD unvalidated). Decline on non-NVIDIA to stock CPU.
         if not has_nvidia_gpu_accelerator():
             return None
         if n_dims != 0:
             return None
-        # GROUP-BY GATE for DENSE stats (no RawPlan header / binary-contract change).
-        # The DENSE f64 stat kernel now uses a GLOBAL per-group accumulator
+        # GROUP BY gate for DENSE stats (no RawPlan header / binary-contract change).
+        # The DENSE f64 stat kernel now uses a global per-group accumulator
         # (seg_dense_kernel_f64_global: one f64 atomic-add into fpartials[g*M+m] per
-        # passing row), so it is CORRECT for ANY group count G -- the old fixed
+        # passing row), so it is correct for any group count G. The old fixed
         # SEG_MAX_METRICS^2 (=64) per-lane array bound is gone. What remains is a
-        # PERFORMANCE/footprint risk: a HIGH-CARDINALITY group key makes G*M huge
+        # performance and memory risk: a high-cardinality group key makes G*M huge
         # (slow O(rows) host gid-build + a G*M*8B device accumulator) and, like the
-        # Q3 hash-aggregate shape, LOSES to DuckDB's multithreaded aggregate. A
-        # finalize failure THROWS (no post-route CPU fallback), so high-card must be
-        # declined at PLAN TIME -- and the plan carries NO group-count / NDV estimate
-        # (we deliberately do NOT add one to the header). The gate is therefore a
-        # pure-TYPE heuristic over info ALREADY in the descriptor (out_types[gk],
-        # group columns first -- the same source the strategy classifier reads):
+        # Q3 hash-aggregate shape, loses to DuckDB's multithreaded aggregate. A
+        # finalize failure throws (no post-route CPU fallback), so high-card must be
+        # declined at plan time, and the plan carries no group-count / NDV estimate
+        # (we deliberately do not add one to the header). The gate is therefore a
+        # type-only heuristic over info already in the descriptor (out_types[gk],
+        # group columns first, the same source the strategy classifier reads):
         #
-        #   * STRAT_HASH_GROUP / STRAT_SORT_SEGREDUCE  -> an INTEGER fact group key,
-        #     which the strategy classifier already routes here for HIGH-CARDINALITY
-        #     keys (Q3 l_orderkey). DECLINE (the measured Q3 loser).
-        #   * STRAT_DENSE_GROUP with a VARCHAR group key -> the EDA dimension case
-        #     (l_returnflag / l_linestatus / l_shipmode: a small FIXED domain in
-        #     practice). ROUTE (the win; global accumulator keeps it correct at any G).
+        #   * STRAT_HASH_GROUP / STRAT_SORT_SEGREDUCE: an INTEGER fact group key,
+        #     which the strategy classifier already routes here for high-cardinality
+        #     keys (Q3 l_orderkey). Decline (measured to lose, like Q3).
+        #   * STRAT_DENSE_GROUP with a VARCHAR group key: the EDA dimension case
+        #     (l_returnflag / l_linestatus / l_shipmode: a small fixed domain in
+        #     practice). Route it (it wins; the global accumulator keeps it correct at any G).
         #   * STRAT_DENSE_GROUP with a continuous/wide key (DATE / DECIMAL / FLOAT /
         #     DOUBLE / INTEGER): grouping by such a key is high-NDV by nature
-        #     (per-date / per-value groups), the high-card loser regime -> DECLINE.
+        #     (per-date / per-value groups), where the GPU loses. Decline.
         #
         # The heuristic is conservative: it accepts only VARCHAR DENSE keys (the
         # low-card EDA dimensions this win targets) and declines everything else to
         # stock CPU. A free-text VARCHAR (e.g. l_comment, ~1.5M NDV) would be wrongly
-        # accepted -- but that is a PERFORMANCE regression on a pathological query,
+        # accepted, but that is only a slowdown on an unusual query,
         # never a wrong answer (the global accumulator is exact), and is far outside
         # the EDA / dimension-key shape this class is for. (The plain SUM/AVG int128
         # DENSE paths are unaffected: this guard is stats-only.)
@@ -865,7 +863,7 @@ def build_descriptor_impl(
             pass  # always safe (G == 1)
         elif strategy == STRAT_DENSE_GROUP:
             # Every group key must be VARCHAR (out_types: group cols first, in key
-            # order). Any non-VARCHAR (continuous/wide) key -> high-NDV risk -> decline.
+            # order). Any non-VARCHAR (continuous/wide) key risks high NDV, so decline.
             if n_gkeys == 0 or n_gkeys > len(desc.out_types):
                 return None
             for gk in range(n_gkeys):
@@ -873,9 +871,9 @@ def build_descriptor_impl(
                     return None
         else:
             # STRAT_HASH_GROUP / STRAT_SORT_SEGREDUCE (integer high-card key, Q3
-            # shape) -- the measured loser. DECLINE to stock CPU.
+            # shape), measured to lose. Decline to stock CPU.
             return None
-        # Every aggregate must be a recognized stat agg, OR a plain SUM/AVG/COUNT(*)
+        # Every aggregate must be a recognized stat agg or a plain SUM/AVG/COUNT(*)
         # (so a mixed `SELECT count(*), corr(x,y) ...` is still offloadable on the
         # shared f64 kernels). MIN/MAX (no float path here) decline the whole plan.
         for ai in range(len(desc.aggregates)):
@@ -887,8 +885,8 @@ def build_descriptor_impl(
                 or ak == AGG_COUNT_STAR
             ):
                 return None
-        # ACCEPT directly (bypass _should_decline): heavy per-row math (1-6 divisions
-        # + multi-accumulate) the GPU wins, on a class DuckDB does NOT accelerate.
+        # Accept directly (bypass _should_decline): heavy per-row math (1-6 divisions
+        # + multi-accumulate) the GPU wins, on a class DuckDB does not accelerate.
         return desc^
 
     # Offload-vs-CPU-fallback policy (see `_should_decline`): keeps the
@@ -901,10 +899,10 @@ def build_descriptor_impl(
 
 
 # ---------------------------------------------------------------------------
-# Materialization helper: the DISTINCT fact-table columns referenced by the
+# Materialization helper: the distinct fact-table columns referenced by the
 # fact filters + aggregate programs (LOAD_COL ops whose table == fact), in a
 # deterministic order (first-seen). The Stage-2 shuttle SELECTs these columns
-# and feeds them back in this exact order. Pure -- no GPU.
+# and feeds them back in this exact order. Pure, no GPU.
 # ---------------------------------------------------------------------------
 def fact_projected_columns(desc: GpuPlanDescriptor) -> List[String]:
     var cols: List[String] = []
@@ -915,10 +913,10 @@ def fact_projected_columns(desc: GpuPlanDescriptor) -> List[String]:
                 return
         cols.append(name)
 
-    # Fact filters first (in filter order), then the NR3 OR-filter PASS-PROGRAM's
-    # columns (so the OR's columns get materialized/fed -- the host AND-compose in
+    # Fact filters first (in filter order), then the NR3 OR-filter pass program's
+    # columns (so the OR's columns get materialized/fed; the host AND-compose in
     # _pin_finalize_generic resolves each pass_load_cols column via col_slot, which
-    # only contains FED columns), then aggregate-program LOAD_COLs.
+    # only contains fed columns), then aggregate-program LOAD_COLs.
     for gi in range(len(desc.gets)):
         ref g = desc.gets[gi]
         if g.table != desc.fact_table:

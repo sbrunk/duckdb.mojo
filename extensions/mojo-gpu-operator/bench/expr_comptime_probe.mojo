@@ -1,49 +1,50 @@
 """Feasibility probe: comptime-specialized expression kernels vs the runtime VM.
 
 Improvement #2 for the mojo-gpu-operator: today the segreduce kernels evaluate
-the per-row metric/filter expressions with a RUNTIME stack-machine interpreter
-(`eval_program` in src/expr_vm.mojo). Per row, per metric it loops over a flat
-int64 program in global memory, switches on an op tag, and push/pops an
-InlineArray stack. This probe asks: if the program STRUCTURE is a compile-time
+the per-row metric/filter expressions with a runtime stack-machine interpreter
+(`eval_program` in src/expr_vm.mojo). For each row and metric it loops over a
+flat int64 program in global memory, switches on an op tag, and pushes/pops an
+InlineArray stack. This probe asks: if the program structure is a compile-time
 value, does Mojo's comptime machinery unroll it into branch-free, register-only,
-straight-line arithmetic — and is that materially faster on this Apple M3 Max?
+straight-line arithmetic, and is that noticeably faster on this Apple M3 Max?
 
-It is the structural analogue of cuDF's runtime nvrtc JIT: cuDF needs nvrtc at
-runtime; Mojo specializes at compile time and the same source ports to
+It is the counterpart of cuDF's runtime nvrtc JIT. cuDF needs nvrtc at runtime,
+while Mojo specializes at compile time and the same source ports to
 Apple/AMD/NVIDIA.
 
-WHAT THIS PROBE DOES
+What this probe does
 --------------------
 Two GPU kernels over a synthetic ~6M-row Q1-like workload (the 8 Q1 metric
-expressions + the Q1 filter, integer inputs exactly like the kernel oracles):
+expressions plus the Q1 filter, with integer inputs like the kernel oracles):
 
-  (A) interpreter   — calls the existing `eval_program` per row per metric
-                      (imported from src/expr_vm.mojo). Programs live in device
-                      memory, addressed exactly as segreduce builds them.
-  (B) comptime      — the 8 metric programs + filter are COMPTIME values, and a
-                      `comptime for` unrolls them into straight-line register
-                      arithmetic: no stack, no op-tag switch, no per-op global
-                      reads. For a fixed synthetic query ALL operands are
-                      comptime (the realistic production split keeps filter
-                      *constants* as runtime kernel args; see the report).
+  (A) interpreter:  calls the existing `eval_program` per row per metric
+                    (imported from src/expr_vm.mojo). Programs live in device
+                    memory, addressed the same way segreduce builds them.
+  (B) comptime:     the 8 metric programs and the filter are comptime values,
+                    and a `comptime for` unrolls them into straight-line
+                    register arithmetic: no stack, no op-tag switch, no per-op
+                    global reads. For a fixed synthetic query all operands are
+                    comptime (a realistic production split would keep filter
+                    constants as runtime kernel args; see the report).
 
 Both kernels mirror `seg_ungrouped_kernel`'s lane-strided layout and write
 per-block int64 partials `partials[block * M + m]`. The probe:
 
-  (a) asserts (B) produces BIT-IDENTICAL per-block partials to (A) — fails loud;
-  (b) warm-times each kernel over many iterations (excludes the first), prints
-      GPU ms and the speedup, for BOTH the Q1-like (8-metric) and Q6-like
+  (a) asserts that (B) produces bit-identical per-block partials to (A), and
+      aborts if not;
+  (b) times each kernel warm over many iterations (skipping the first) and
+      prints GPU ms and the speedup, for both the Q1-like (8-metric) and Q6-like
       (1-metric) cases.
 
-CAN `comptime for` LOOP OVER A RUNTIME-UNKNOWN PROGRAM?  No.
-------------------------------------------------------------
-`comptime for` requires a compile-time-known iterable. That is exactly the
-point: the improvement makes the op STRUCTURE a comptime value. Here, because
-the synthetic query is fixed, the whole program (ops + operands) is comptime, so
-the unroll is direct. In production the op structure is comptime per query KIND
-and the kernel is dispatched from a runtime `kind` through a finite switch (one
-comptime-specialized kernel instance per kind), with the interpreter as the
-universal fallback. The probe models the per-kind specialized instance.
+Can `comptime for` loop over a program only known at runtime? No.
+-----------------------------------------------------------------
+`comptime for` requires an iterable known at compile time. That is the point of
+the improvement: it makes the op structure a comptime value. Here the synthetic
+query is fixed, so the whole program (ops and operands) is comptime and the
+unroll is direct. In production the op structure would be comptime per query
+kind, and the kernel would be dispatched from a runtime `kind` through a finite
+switch (one comptime-specialized kernel instance per kind), with the interpreter
+as the general fallback. The probe models one such per-kind instance.
 """
 
 from std.gpu import block_idx, thread_idx
@@ -81,7 +82,7 @@ comptime M_Q6 = 1  # Q6 single-metric case
 
 
 # ===========================================================================
-# (A) INTERPRETER kernels — call the existing eval_program, exactly as the real
+# (A) Interpreter kernels: call the existing eval_program, the same way the real
 # seg_ungrouped_kernel does (filter via a 1-op pass-column program).
 # ===========================================================================
 def interp_kernel(
@@ -125,7 +126,7 @@ def interp_kernel(
 
 
 # ===========================================================================
-# (B) COMPTIME-UNROLLED kernels — the program STRUCTURE + operands are comptime.
+# (B) Comptime-unrolled kernels: the program structure and operands are comptime.
 #
 # Q1: the 8 metrics, in segreduce VM terms (constants already resolved to int64;
 # "1 - discount" at scale 2 is "100 - disc"), are:
@@ -140,8 +141,8 @@ def interp_kernel(
 #
 # The single-LOAD / count metrics are driven by a comptime slot table and a
 # `comptime for` unroll (slot == -1 means the constant-1 count metric). The two
-# multi-op metrics (m4, m5) are direct register expressions — the unrolled form
-# of their postfix programs. This is exactly what the planner would emit per Q1.
+# multi-op metrics (m4, m5) are direct register expressions, the unrolled form
+# of their postfix programs. This is what the planner would emit for Q1.
 # ===========================================================================
 
 # Per-metric column slot for the LOAD/count metrics; -1 == count (PUSH 1),
@@ -166,7 +167,7 @@ def comptime_kernel_q1(
             var e = cols[S_EXT * n_rows + i]
             var d = cols[S_DISC * n_rows + i]
             var t = cols[S_TAX * n_rows + i]
-            # m4 = ext*(100-disc) scale4; m5 = m4*(100+tax) scale6 — direct.
+            # m4 = ext*(100-disc) scale4; m5 = m4*(100+tax) scale6, computed directly.
             var disc_price = e * (Int64(100) - d)
             var charge = disc_price * (Int64(100) + t)
             # m0..m3, m6, m7 via comptime-unrolled slot table.
@@ -210,7 +211,7 @@ def comptime_kernel_q6(
 
 
 # ---------------------------------------------------------------------------
-# Build the metric programs in the EXACT segreduce concatenated-program layout
+# Build the metric programs in the same concatenated-program layout as segreduce
 # (flat int64 triples [op, a, b], metric m starts at 3 * metric_offsets[m]).
 # Returns (flat_prog, offsets, lens, total_ops).
 # ---------------------------------------------------------------------------
@@ -299,7 +300,7 @@ def build_q6_progs() -> ProgPack:
 # ---------------------------------------------------------------------------
 # Warm-timed launch helper: runs the bound kernel `iters` times after a warmup,
 # returns the average GPU ms (launch + synchronize, first excluded). We time
-# kernel-only (the resident column buffer is uploaded once, like the real
+# only the kernel (the resident column buffer is uploaded once, like the real
 # pin-resident segreduce path).
 # ---------------------------------------------------------------------------
 

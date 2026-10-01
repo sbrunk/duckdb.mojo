@@ -17,7 +17,7 @@ from duckdb.kernels.simd import ksqrt, ksin, kcos, kln, kexp, klog10
 def _register[
     name: StringLiteral,
     func: def[w: SIMDLength] (SIMD[DType.float64, w]) thin -> SIMD[DType.float64, w],
-](conn: Connection[_]) raises:
+](conn: Connection) raises:
     var sf = ScalarFunction()
     sf.set_name(name)
     sf.add_parameter(LogicalType(dtype_to_duckdb_type[DType.float64]()))
@@ -26,7 +26,7 @@ def _register[
     sf.register(conn)
 
 
-def register_simd_math(conn: Connection[_]) raises:
+def register_simd_math(conn: Connection) raises:
     """Register the SIMD math scalar UDFs on a connection."""
     _register["mojo_sqrt", ksqrt](conn)
     _register["mojo_sin", ksin](conn)

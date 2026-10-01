@@ -1,19 +1,19 @@
-"""FUSED tensor-core kNN: S = Q.Emb^T via MMA, fused with a streaming per-query
-top-k over N (flash-attention style), so the M x N similarity matrix is NEVER
-materialized -- only Emb is read, only M x k results are written.
+"""Fused tensor-core kNN: S = Q.Emb^T via MMA, fused with a streaming per-query
+top-k over N (flash-attention style), so the M x N similarity matrix is never
+materialized. Only Emb is read and only M x k results are written.
 
 Stage 1 (fused kernel, grid = NBLOCKS one-warp-grid-tile blocks):
-  Each block GRID-STRIDES over N in BN-wide chunks (chunk c = block, block+NBLOCKS,
+  Each block grid-strides over N in BN-wide chunks (chunk c = block, block+NBLOCKS,
   ...). For each chunk it:
     * loops K in BK chunks, stages Q (BM x BK) and the Emb-chunk (BN x BK) into
       shared via copy_dram_to_sram_async, MMAs (m16n8k8, transpose_b) into a
-      per-warp fp32 register accumulator -> the BM x BN S-tile (registers only;
-      S is never written to global).
+      per-warp fp32 register accumulator, giving the BM x BN S-tile (registers
+      only; S is never written to global memory).
     * store_d's the S-tile into a shared BM x BN fp32 buffer.
     * converts S to cosine distance with host-precomputed qnorm[M] / enorm[N]
-      and UPDATES a PERSISTENT per-thread register top-k (thread t owns query
-      row t; QPT=1) using the SAME insertion-sort + (dist, rowid) tie-break as
-      topk_batch_kernel, surviving across every chunk this block streams.
+      and updates a persistent per-thread register top-k (thread t owns query
+      row t; QPT=1) using the same insertion sort and (dist, rowid) tie-break as
+      topk_batch_kernel. The top-k persists across every chunk this block streams.
   After the sweep, the block emits its M x k candidates [block*BM*k + m*k + slot].
   Because the grid dim (NBLOCKS) is fixed independent of N, the cross-block merge
   cost (NBLOCKS*k candidates/query) stays bounded as N scales.
@@ -24,16 +24,18 @@ topk_batch_merge_kernel).
 
 Correctness reference: mojo_gpu_pin_query_topk_batch_f16 on the same data.
 
-Result on an RTX 4090 (BM=128 BN=64 BK=32, WM=64 WN=32 -> 4 warps, NBLOCKS=256):
+Result on an RTX 4090 (BM=128 BN=64 BK=32, WM=64 WN=32, so 4 warps, NBLOCKS=256):
   * N=1,048,576, K=768, M=128, k=10: recall@10 = 1.0, 128/128 exact-id rows,
-    0 genuine misses vs the scalar batched path. The only differences vs the
-    scalar reference are fp16 tie-reorders (MMA does fp16-product dot, the scalar
-    path fp32-product dot; both fp32-accumulate) -- at small N (4096, a dense tie
-    thicket) this shows as recall 0.9977 / 0 genuine misses; at 1M it is exact.
-  * warm per-query latency: 29.4 us (fused) vs 1984 us (scalar batched) = ~67x.
-    The standalone GEMM's Emb-read floor was ~18 us/query; the fused kernel is
-    ~1.6x that floor (the small BN=64 / BK=32 tile -- the BM x BN fp32 S-tile must
-    fit the 48 KB shared budget -- plus the per-chunk streaming top-k).
+    0 genuine misses vs the scalar batched path. The only differences from the
+    scalar reference are ties reordered by fp16 rounding (MMA computes the dot
+    with fp16 products, the scalar path with fp32 products; both accumulate in
+    fp32). At small N (4096, with many near-ties) this shows as recall 0.9977 with
+    0 genuine misses; at 1M it is exact.
+  * Warm per-query latency: 29.4 us (fused) vs 1984 us (scalar batched), ~67x.
+    The standalone GEMM's lower bound for reading Emb was ~18 us/query. The fused
+    kernel is ~1.6x that bound, because of the small BN=64 / BK=32 tile (the
+    BM x BN fp32 S-tile must fit the 48 KB shared memory budget) and the
+    per-chunk streaming top-k.
 """
 
 from std.gpu import (
@@ -72,9 +74,9 @@ comptime MMA_N = 8
 comptime MMA_K = 8
 
 # Fused-kernel tile. Small BN so the BM x BN fp32 S-tile fits shared
-# (128*64*4 = 32 KB + a/b stages). Each block GRID-STRIDES over N in BN-chunks,
+# (128*64*4 = 32 KB + a/b stages). Each block grid-strides over N in BN-chunks,
 # so the grid dim (NBLOCKS) is fixed and the merge cost (NBLOCKS*k per query)
-# stays bounded regardless of N -- this is the flash-attention streaming shape.
+# stays bounded regardless of N. This is the flash-attention streaming pattern.
 comptime BM = 128
 comptime BN = 64
 comptime BK = 32
@@ -88,7 +90,7 @@ comptime QPT = BM // NUM_THREADS  # 1
 # Grid dim for the fused kernel: enough blocks to saturate the SMs (RTX 4090 has
 # 128 SMs; ~2x oversubscription) while keeping NBLOCKS*k merge candidates per
 # query small. 256 blocks * 64 = 16384-wide N sweep stride; merge handles
-# 256*10 = 2560 candidates/query. Swept on the 4090: 256 is the sweet spot.
+# 256*10 = 2560 candidates/query. A sweep on the 4090 found 256 to be the best value.
 comptime NBLOCKS = 256
 
 comptime TOPK_MAX = 1024
@@ -157,7 +159,7 @@ def fused_knn_kernel[
 
     var tid = Int(thread_idx.x)
 
-    # PERSISTENT per-thread register top-k: thread tid owns query rows
+    # Persistent per-thread register top-k: thread tid owns query rows
     # tid, tid+NUM_THREADS, ... (QPT of them). Kept ascending by (dist, rowid),
     # surviving across every BN-chunk this block streams.
     var bd = stack_allocation[QPT * KK, Scalar[DType.float32]]()
@@ -171,7 +173,7 @@ def fused_knn_kernel[
     comptime KCH = KD // BK  # K chunks
     comptime NSTRIDE = NBLOCKS * BN  # N advanced per grid-stride step
 
-    # GRID-STRIDE over N: this block handles N-chunks n0, n0+NSTRIDE, ...
+    # Grid-stride over N: this block handles N-chunks n0, n0+NSTRIDE, ...
     var n0 = Int(block_idx.x) * BN
     while n0 < n_rows:
         # --- MMA the BM x BN tile S = Q . Emb[n0:n0+BN]^T ---
@@ -274,7 +276,7 @@ def fused_knn_kernel[
 
 
 # ===-------------------------------------------------------------------===#
-# Stage 2: per-query merge of nblocks*k candidates -> final k (one warp/query).
+# Stage 2: per-query merge of nblocks*k candidates into the final k (one warp/query).
 # Mirrors topk_batch_merge_kernel but candidate layout is [block*BM*k + m*k + j].
 # ===-------------------------------------------------------------------===#
 def merge_kernel(
@@ -379,10 +381,10 @@ def main() raises:
             var v = qh[m * KD + i]
             s += v * v
         qnorm_h[m] = sqrt(s)
-    # enorm holds the row L2-NORM (already sqrt'd, so the kernel inner loop avoids
-    # a per-(query,row) sqrt). To MATCH the scalar f16 path exactly, the embedding
-    # norm there sums squares of the fp16-cast values (na += av*av, av =
-    # emb_half.cast[fp32]()) then sqrt's it -- so cast each value to fp16 first,
+    # enorm holds the row L2 norm (already sqrt'd, so the kernel inner loop avoids
+    # a per-(query,row) sqrt). To match the scalar f16 path exactly (it sums the
+    # squares of the fp16-cast values, na += av*av with av =
+    # emb_half.cast[fp32](), then takes the sqrt), cast each value to fp16 first,
     # square, sum, and take the sqrt here (bit-identical to the scalar denom).
     var enorm_h = alloc[Float32](N)
     for r in range(N):
@@ -456,7 +458,7 @@ def main() raises:
         raise Error(String("ref rc=") + String(Int(rc)))
 
     # ---- compare (ref = ground truth; a "miss" is an absent ref id whose ref
-    # distance is NOT within TIE_EPS of the fused boundary => genuine, not a tie) ----
+    # distance is not within TIE_EPS of the fused boundary, i.e. genuine, not a tie) ----
     var TIE_EPS = Float32(1.0e-5)
     var exact_match = 0
     var total_overlap = 0

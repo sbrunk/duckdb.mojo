@@ -1,13 +1,13 @@
 // Probe: does a scanned FLOAT[K] array column's data memory flow
 // through DBConfig.allocator?
 //
-// This gates the whole "DuckDB buffers ARE unified memory" idea.
+// The whole "DuckDB buffers are unified memory" idea depends on the answer.
 // We open a DB with a custom logging Allocator that records every live range it
 // hands out, register a vectorized UDF `probe(v FLOAT[K]) -> BIGINT` that returns
 // 1 when the input array column's child data pointer falls inside one of those
 // ranges (0 otherwise), and aggregate over a storage-backed table.
 //
-//   in-allocator rows == total rows  -> column data IS our memory  (allocator route viable)
+//   in-allocator rows == total rows  -> column data is our memory  (allocator route viable)
 //   in-allocator rows ~ 0            -> column comes from BufferManager blocks that
 //                                       bypass DBConfig.allocator   -> use pin-resident route
 //

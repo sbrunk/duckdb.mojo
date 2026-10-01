@@ -1,19 +1,19 @@
-"""FP16 vs FP32 exact-cosine top-k: recall AND latency.
+"""FP16 vs FP32 exact-cosine top-k: recall and latency.
 
-Validates the fp16-resident variant of the GPU exact-cosine top-k path against
-the fp32 path (which is treated as ground truth). The whole point of fp16 is to
-attack the bandwidth floor of the distance scan (the resident matrix read
-dominates at 1M rows), so this bench measures BOTH:
+Checks the fp16-resident variant of the GPU exact-cosine top-k path against the
+fp32 path (which is treated as ground truth). The purpose of fp16 is to lower the
+bandwidth limit of the distance scan (reading the resident matrix dominates at
+1M rows), so this bench measures both:
 
-  * recall@10  -- overlap of the fp16 top-10 id set vs the fp32-exact top-10 id
+  * recall@10: overlap of the fp16 top-10 id set with the fp32-exact top-10 id
     set, averaged over the query set. For unit-normalized embeddings this should
     be ~0.99+; misses are distinguished from boundary FP ties (a "miss" whose
     fp32 distance is within a tiny epsilon of the kept boundary is a tie, not a
     genuine accuracy loss).
-  * warm-median latency -- fp32 vs fp16 at each (N, K), >= WARM iters, so we can
-    see whether the fp16 scan roughly halves (the bandwidth win).
+  * warm-median latency: fp32 vs fp16 at each (N, K), >= WARM iters, so we can
+    see whether the fp16 scan time roughly halves (the bandwidth gain).
 
-Embeddings are CLUSTERED, UNIT-NORMALIZED, non-zero, and fully deterministic (no
+Embeddings are clustered, unit-normalized, non-zero, and fully deterministic (no
 random()): each row is assigned to one of NCLUST cluster centers, perturbed by a
 small deterministic jitter, then L2-normalized. Queries sit near cluster
 centers. This is far more realistic for kNN than uniform noise (real embeddings
@@ -78,8 +78,8 @@ def build_embeddings(
         var base = row * K
         var nrm = Float32(0)
         # A per-row jitter scale that varies across rows so each row sits at a
-        # genuinely DIFFERENT radius from its cluster center -> the top-k
-        # distances are well-separated rather than a dense thicket of near-ties
+        # different radius from its cluster center. That way the top-k
+        # distances are well separated rather than a dense cluster of near-ties
         # (so recall measures real accuracy, not boundary tie reordering).
         var jit = Float32(0.10) + Float32(row % 4096) * (Float32(0.30) / 4096.0)
         for i in range(K):
@@ -111,8 +111,9 @@ def build_query(q: UnsafePointer[Float32, MutAnyOrigin], m: Int, K: Int):
 
 
 # Recall of a single query: |fp16_ids ∩ fp32_ids| / k, plus a count of genuine
-# misses (an fp16-missing fp32 id whose fp32 distance is NOT within TIE_EPS of
-# the fp16 result's worst kept distance -> a real accuracy loss, not a tie).
+# misses (an fp32 id missing from the fp16 result whose fp32 distance is not
+# within TIE_EPS of the fp16 result's worst kept distance: a real accuracy loss,
+# not a tie).
 @fieldwise_init
 struct RecallResult(Copyable, Movable):
     var overlap: Int
@@ -175,7 +176,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
         unsafe_from_address=Int(emb)
     )
 
-    # Pin both representations of the SAME host data.
+    # Pin both representations of the same host data.
     var h32_i = mojo_gpu_pin(emb_imm, N, K)
     if h32_i == 0:
         raise Error("mojo_gpu_pin (fp32) failed")

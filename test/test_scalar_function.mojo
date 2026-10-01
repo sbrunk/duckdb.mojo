@@ -446,7 +446,7 @@ def test_scalar_function_set_duplicate_overload() raises:
     func2.set_return_type(int_type)
     func2.set_function[binary_add]()
     
-    # DuckDB might accept duplicates or might raise - for now just test it doesn't crash
+    # DuckDB might accept duplicates or might raise. For now, only test that it doesn't crash.
     try:
         func_set.add_function(func2)
     except e:
@@ -459,8 +459,8 @@ def test_scalar_function_set_duplicate_overload() raises:
 
 def test_bind_info_operations() raises:
     """Test BindInfo struct creation and basic operations."""
-    # Note: BindInfo is typically used inside bind callbacks
-    # This test just verifies the struct can be instantiated
+    # BindInfo is typically used inside bind callbacks.
+    # This test only verifies that the struct can be instantiated.
     var conn = DuckDB.connect(":memory:")
     
     # We can't easily test BindInfo without a bind callback setup
@@ -554,7 +554,7 @@ def test_function_outlives_connection() raises:
     """Test that a registered function is available on new connections to the same database.
 
     DuckDB registers functions in the database catalog, so they are accessible
-    from any connection to the same database — no re-registration needed.
+    from any connection to the same database without registering them again.
     """
     var db = Database(":memory:")
     var func = ScalarFunction.from_function[
@@ -585,7 +585,7 @@ def test_connection_outlives_function() raises:
     """
     var conn = DuckDB.connect(":memory:")
 
-    # func's last use is register() — ASAP destruction destroys it before execute().
+    # func's last use is register(), so ASAP destruction destroys it before execute().
     var func = ScalarFunction.from_function[
         "survive_test", DType.int32, DType.int32, simple_add_one
     ]()
@@ -821,7 +821,7 @@ def test_from_simd_function_large_table() raises:
 
     var result = conn.execute("SELECT sf_big_add(a, b) as c FROM sf_big ORDER BY a LIMIT 5")
     var chunk = result.fetch_chunk()
-    # a=0,b=0 -> 0; a=1,b=2 -> 3; a=2,b=4 -> 6; a=3,b=6 -> 9; a=4,b=8 -> 12
+    # Expected a + b: 0+0=0, 1+2=3, 2+4=6, 3+6=9, 4+8=12
     assert_equal(chunk.get[Int32](col=0, row=0), 0)
     assert_equal(chunk.get[Int32](col=0, row=1), 3)
     assert_equal(chunk.get[Int32](col=0, row=2), 6)

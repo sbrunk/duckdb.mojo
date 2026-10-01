@@ -75,43 +75,11 @@ pixi run duckdb -unsigned -c "
 
 Expected output: `42`
 
-## API Level & Compile-Time Safety
+## API version
 
-Extension init functions receive a `Connection` parameterized with an
-`ApiLevel` that controls which DuckDB C API functions are available:
-
-| Level | Meaning | Unstable functions |
-| --- | --- | --- |
-| `ApiLevel.CLIENT` | Standalone client binary (default) | ✅ all available |
-| `ApiLevel.EXT_STABLE` | Extension via `Extension.run` | ❌ compile error |
-| `ApiLevel.EXT_UNSTABLE` | Extension via `Extension.run_unstable` | ✅ all available |
-
-`Extension.run` uses the stable `duckdb_ext_api_v1` struct, so only stable
-functions are resolved.  Calling an unstable-only method (e.g.
-`ScalarFunction.set_bind()`, `Vector.slice()`) from a stable extension is
-caught at **compile time**:
-
-```mojo
-fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
-    var sf = ScalarFunction()
-    sf.set_bind(my_bind)  # ← compile error: requires unstable API
-```
-
-To opt into the full (unstable) API surface, use `Extension.run_unstable`:
-
-```mojo
-fn init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
-    var sf = ScalarFunction()
-    sf.set_bind(my_bind)  # ← OK
-    ...
-
-@export("my_ext_init_c_api")
-fn my_ext_init_c_api(info: duckdb_extension_info, access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin]) abi("C") -> Bool:
-    return Extension.run_unstable[init](info, access)
-```
-
-Client code (standalone programs using `DuckDB.connect()`) is completely
-unaffected — `ApiLevel.CLIENT` is the default and gives full access.
+`Extension.run` requests extension API version v1.5.6. DuckDB 1.5.6
+stabilized every function that used to be unstable, so extensions get the full
+C API, and they load in DuckDB 1.5.6 or newer.
 
 ## Limitations
 
@@ -124,11 +92,11 @@ unaffected — `ApiLevel.CLIENT` is the default and gives full access.
 
 To create your own Mojo extension for DuckDB:
 
-1. **Copy this directory** as a starting point
-2. **Write your functions** using the duckdb.mojo API (`ScalarFunction`, `AggregateFunction`, `TableFunction`)
-3. **Create an init function** that registers them via a `Connection`
-4. **Export the entry point** using `@export("{name}_init_c_api")` with the `abi("C")` effect
-5. **Build and load** using the pixi tasks or manual steps above
+1. Copy this directory as a starting point
+2. Write your functions using the duckdb.mojo API (`ScalarFunction`, `AggregateFunction`, `TableFunction`)
+3. Create an init function that registers them via a `Connection`
+4. Export the entry point using `@export("{name}_init_c_api")` with the `abi("C")` effect
+5. Build and load it using the pixi tasks or manual steps above
 
 ### Entry Point Convention
 
@@ -143,25 +111,23 @@ fn my_extension_init_c_api(
     ...
 ```
 
-The `{extension_name}` part must match the filename stem of the `.duckdb_extension` file (e.g., `demo_mojo.duckdb_extension` → `demo_mojo_init_c_api`).
+The `{extension_name}` part must match the filename stem of the `.duckdb_extension` file (for example, `demo_mojo.duckdb_extension` needs `demo_mojo_init_c_api`).
 
 ### Using `Extension.run` (recommended)
 
-The simplest way to implement the entry point. Write an init function that
-receives a `Connection[ApiLevel.EXT_STABLE]` and registers your functions,
-then pass it to `Extension.run`:
+This is the easiest way to implement the entry point. Write an init function that
+receives a `Connection` and registers your functions, then pass it to `Extension.run`:
 
 ```mojo
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
 fn add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+fn init(conn: Connection) raises:
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
     ](conn)
@@ -174,22 +140,15 @@ fn my_extension_init_c_api(
     return Extension.run[init](info, access)
 ```
 
-`Extension.run` handles creating the connection and reporting errors back to
-DuckDB automatically. If `init` raises, the error message is forwarded to
+`Extension.run` creates the connection and reports errors back to DuckDB. If `init` raises, the error message is forwarded to
 DuckDB via `set_error`.
 
-The `Connection` is parameterized with `ApiLevel.EXT_STABLE`, which means any
-attempt to call an unstable C API function (e.g. `ScalarFunction.set_bind()`,
-`Vector.slice()`) will be caught at **compile time**. If you need unstable
-functions, use `Extension.run_unstable` which provides a
-`Connection[ApiLevel.EXT_UNSTABLE]` instead.
-
-See the [API Level & Compile-Time Safety](#api-level--compile-time-safety)
-section below for details.
+The `Connection` has the full C API. See the [API version](#api-version)
+section above for details.
 
 ### Using `Extension` directly
 
-For more control (e.g. to access the `Database` handle or report custom errors),
+For more control (for example to access the `Database` handle or report custom errors),
 create an `Extension` manually:
 
 ```mojo

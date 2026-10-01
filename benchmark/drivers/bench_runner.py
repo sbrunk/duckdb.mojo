@@ -14,7 +14,7 @@ Usage:
 
     <group>       a dir under benchmark/sql/ (mojo_simd | gpu_xover | gpu_knn), or a
                   path under the runner tree for built-ins (e.g. tpch/sf1/q0[16]).
-    --engines     toggle mode (default): run the SAME benchmarks under each engine,
+    --engines     toggle mode (default): run the same benchmarks under each engine,
                   one column per engine.
     --by-suffix   per-file mode: each <regime>_<engine>.benchmark runs under the
                   extension named by its suffix (stock|cpu|gpu); rows are regimes.

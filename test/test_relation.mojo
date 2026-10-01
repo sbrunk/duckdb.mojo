@@ -9,7 +9,7 @@ struct Row2(Writable, Copyable, Movable):
     var v: Int32
 
 
-def _con() raises -> Connection[ApiLevel.CLIENT]:
+def _con() raises -> Connection:
     var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t AS SELECT * FROM (VALUES ('a',1),('a',2),('b',3)) tbl(k,v)"
@@ -158,7 +158,7 @@ def test_explain_nonempty() raises:
 
 def test_named_relation_outlives_creation_use() raises:
     # Regression: Relation borrows the connection via an origin-tracked
-    # pointer, so `con` is not destroyed early even when its last *direct*
+    # pointer, so `con` is not destroyed early even when its last direct
     # use is the relation constructor.
     var con = _con()
     var rel = con.table("t").filter("v >= 2")

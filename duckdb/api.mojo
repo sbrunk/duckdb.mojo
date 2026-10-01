@@ -1,11 +1,6 @@
 from std.ffi import _Global, external_call
 from std.os import abort
-from duckdb._libduckdb import (
-    LibDuckDB,
-    duckdb_ext_api_v1,
-    duckdb_ext_api_v1_unstable,
-)
-from duckdb.api_level import ApiLevel
+from duckdb._libduckdb import LibDuckDB, duckdb_ext_api_v1
 from duckdb.config import Config
 from duckdb.connection import Connection
 
@@ -31,10 +26,10 @@ def _kgen_get_global(name: StringSlice) -> Pointer[NoneType, MutUntrackedOrigin]
 
 
 def _set_ext_api_ptr(ptr: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]):
-    """Store the stable extension API pointer for later use by
+    """Store the extension API pointer for later use by
     _init_duckdb_global.
 
-    Must be called BEFORE the first DuckDB() access so that LibDuckDB is
+    Must be called before the first DuckDB() access so that LibDuckDB is
     constructed from the API struct instead of via dlopen/dlsym.
     """
     _kgen_insert_global("DuckDB_ExtApiPtr", ptr)
@@ -43,7 +38,7 @@ def _set_ext_api_ptr(ptr: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]):
 def _get_ext_api_ptr() -> Optional[
     Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]
 ]:
-    """Retrieve the previously stored stable extension API pointer, or `None`."""
+    """Retrieve the previously stored extension API pointer, or `None`."""
     var raw = _kgen_get_global("DuckDB_ExtApiPtr")
     var addr = Int(raw)
     if addr == 0:
@@ -53,40 +48,11 @@ def _get_ext_api_ptr() -> Optional[
     )
 
 
-def _set_ext_api_unstable_ptr(
-    ptr: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin],
-):
-    """Store the unstable extension API pointer for later use by
-    _init_duckdb_global.
-
-    Must be called BEFORE the first DuckDB() access so that LibDuckDB is
-    constructed from the API struct instead of via dlopen/dlsym.
-    """
-    _kgen_insert_global("DuckDB_ExtApiUnstablePtr", ptr)
-
-
-def _get_ext_api_unstable_ptr() -> Optional[
-    Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin]
-]:
-    """Retrieve the previously stored unstable extension API pointer, or `None`."""
-    var raw = _kgen_get_global("DuckDB_ExtApiUnstablePtr")
-    var addr = Int(raw)
-    if addr == 0:
-        return None
-    return Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin](
-        unsafe_from_address=addr
-    )
-
-
 # ===--------------------------------------------------------------------===#
 # Global singleton
 # ===--------------------------------------------------------------------===#
 
 def _init_duckdb_global() -> _DuckDBGlobal:
-    # Check unstable first (superset of stable)
-    var unstable_ptr = _get_ext_api_unstable_ptr()
-    if unstable_ptr is not None:
-        return _DuckDBGlobal(unstable_ptr.value())
     var api_ptr = _get_ext_api_ptr()
     if api_ptr is not None:
         return _DuckDBGlobal(api_ptr.value())
@@ -103,14 +69,7 @@ struct _DuckDBGlobal(Defaultable, Movable):
     def __init__(
         out self, api: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]
     ):
-        """Extension mode (stable): construct LibDuckDB from the stable API struct."""
-        self.libduckdb = LibDuckDB(api)
-
-    def __init__(
-        out self,
-        api: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin],
-    ):
-        """Extension mode (unstable): construct LibDuckDB from the unstable API struct."""
+        """Extension mode: construct LibDuckDB from the extension API struct."""
         self.libduckdb = LibDuckDB(api)
 
 
@@ -141,11 +100,11 @@ struct DuckDB(ImplicitlyCopyable):
         return self._impl[]
 
     @staticmethod
-    def connect(db_path: String) raises -> Connection[ApiLevel.CLIENT]:
+    def connect(db_path: String) raises -> Connection:
         return Connection(db_path)
 
     @staticmethod
-    def connect(db_path: String, config: Config) raises -> Connection[ApiLevel.CLIENT]:
+    def connect(db_path: String, config: Config) raises -> Connection:
         """Open a connection with startup configuration.
 
         Args:
@@ -157,7 +116,7 @@ struct DuckDB(ImplicitlyCopyable):
     @staticmethod
     def connect(
         db_path: String, *, config: Dict[String, String]
-    ) raises -> Connection[ApiLevel.CLIENT]:
+    ) raises -> Connection:
         """Open a connection with configuration from a dictionary.
 
         Args:
@@ -170,7 +129,7 @@ struct DuckDB(ImplicitlyCopyable):
     @staticmethod
     def connect(
         db_path: String, *, read_only: Bool
-    ) raises -> Connection[ApiLevel.CLIENT]:
+    ) raises -> Connection:
         """Open a connection, optionally in read-only mode.
 
         Args:
@@ -181,7 +140,7 @@ struct DuckDB(ImplicitlyCopyable):
 
 
 # ===--------------------------------------------------------------------===#
-# Default (process-wide) connection — mirrors Python's ``:default:`` connection
+# Default (process-wide) connection, like Python's ``:default:`` connection
 # ===--------------------------------------------------------------------===#
 
 comptime _DEFAULT_CONN_GLOBAL = _Global["DuckDBDefaultConn", _init_default_conn]
@@ -192,7 +151,7 @@ def _init_default_conn() -> _DefaultConnGlobal:
 
 
 struct _DefaultConnGlobal(Defaultable, Movable):
-    var conn: Connection[ApiLevel.CLIENT]
+    var conn: Connection
 
     def __init__(out self):
         try:
@@ -202,14 +161,14 @@ struct _DefaultConnGlobal(Defaultable, Movable):
 
 
 def _get_default_connection() raises -> Pointer[
-    Connection[ApiLevel.CLIENT], ImmStaticOrigin
+    Connection, ImmStaticOrigin
 ]:
     """Return a static pointer to the lazily-created default connection.
 
     The default connection is a single, process-wide in-memory connection,
     created on first use and living until process exit (its destructor is never
-    run, same as the ``LibDuckDB`` global). It is NOT
-    thread-safe for concurrent use; open an explicit `connect()` for that.
+    run, same as the ``LibDuckDB`` global). It is not safe to use from
+    several threads at once. Open an explicit `connect()` for that.
     """
     var ptr = _DEFAULT_CONN_GLOBAL.get_or_create_ptr()
     var conn_ptr = Pointer(to=ptr[].conn).as_imm().unsafe_origin_cast[

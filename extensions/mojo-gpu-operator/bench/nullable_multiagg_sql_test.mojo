@@ -1,16 +1,16 @@
 """A1 unified pass model: count(*) + multi-aggregate over nullable columns, live SQL.
 
 The shipped single-aggregate nullable path folded validity into the host pass column,
-which CANNOT serve count(*) (must count NULL-input rows) or two aggregates over DIFFERENT
-nullable columns (each must exclude only its own NULLs). A1 moves agg-input-column
-validity OUT of the pass into a per-metric multiply (count(*) unmultiplied), with a
+which cannot handle count(*) (it must count NULL-input rows) or two aggregates over
+different nullable columns (each must exclude only its own NULLs). A1 moves the
+validity of agg input columns out of the pass column into a per-metric multiply (count(*) unmultiplied), with a
 per-aggregate validity-product count for NULL-on-empty.
 
 Each probe wraps its aggregates in a COALESCE(<agg>::VARCHAR,'NULL') '|'-concat so a
 single VARCHAR column captures every aggregate cell (incl. NULLs); the operator still
-routes the underlying aggregate (the concat is a CPU projection above it). We compare the
-operator (GPU_OP_NULLABLE=1) string to stock DuckDB's (GPU_OP_GENERIC=off) for the SAME
-connection (toggled via setenv). Any divergence in per-metric validity (count(*)
+handles the underlying aggregate (the concat is a CPU projection above it). We compare
+the operator (GPU_OP_NULLABLE=1) string to stock DuckDB's (GPU_OP_GENERIC=off) on the
+same connection (toggled via setenv). Any divergence in per-metric validity (count(*)
 undercounting, or sum(b) leaking sum(c)'s NULL set) shows as a string mismatch.
 
 Run: GPU_OP_NULLABLE=1 pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -54,16 +54,16 @@ def main() raises:
 
     # Each entry: a SELECT whose single VARCHAR column is the '|'-joined aggregate cells.
     var sqls = List[String]()
-    # count(*) counts ALL rows; sum(b) excludes only NULL-b.
+    # count(*) counts all rows; sum(b) excludes only NULL-b.
     sqls.append(
         "SELECT count(*)::VARCHAR || '|' || COALESCE(sum(b)::VARCHAR,'NULL') FROM t"
     )
-    # two aggregates over DIFFERENT nullable columns -- each excludes only its own NULLs.
+    # two aggregates over different nullable columns; each excludes only its own NULLs.
     sqls.append(
         "SELECT COALESCE(sum(b)::VARCHAR,'NULL') || '|' ||"
         " COALESCE(sum(c)::VARCHAR,'NULL') FROM t"
     )
-    # count(*) with a nullable filter (NULL f -> excluded).
+    # count(*) with a nullable filter (rows with NULL f are excluded).
     sqls.append("SELECT count(*)::VARCHAR FROM t WHERE f > 50")
     # count(*) + sum + avg together.
     sqls.append(
@@ -76,7 +76,7 @@ def main() raises:
         " COALESCE(sum(c)::VARCHAR,'NULL') || '|' || count(*)::VARCHAR"
         " FROM t WHERE f > 30"
     )
-    # all-NULL sum -> NULL alongside a live count(*).
+    # all-NULL sum gives NULL alongside a non-NULL count(*).
     sqls.append(
         "SELECT COALESCE(sum(g)::VARCHAR,'NULL') || '|' || count(*)::VARCHAR FROM t"
     )

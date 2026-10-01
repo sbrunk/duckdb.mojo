@@ -1,17 +1,18 @@
 """GPU_OP_NULLABLE adversarial correctness sweep (operator vs stock, live SQL).
 
-Hardening due-diligence for the full nullable feature (int SUM/AVG/count(*)/multi-agg,
-f64 transcendental/stats single-agg, DENSE GROUP BY) before any default-on flip. Builds
-a fact table with nullable columns of varied TYPE / SCALE / sign / NULL-density and runs
-a broad suite, comparing the operator (GPU_OP_NULLABLE[_GROUPED]=1) to stock DuckDB
-(GPU_OP_GENERIC=off) for the SAME connection (toggled via setenv). Each query is reduced
-to ONE VARCHAR (single cell, or string_agg over an ORDER BY subquery for grouped) so all
-output cells incl. NULLs are captured; a mismatch is a wrong result.
+Correctness checks for the full nullable feature (int SUM/AVG/count(*)/multi-agg,
+f64 transcendental/stats single-agg, dense GROUP BY) before it is turned on by
+default. Builds a fact table with nullable columns of varied type, scale, sign and
+NULL density and runs a broad suite, comparing the operator
+(GPU_OP_NULLABLE[_GROUPED]=1) to stock DuckDB (GPU_OP_GENERIC=off) on the same
+connection (toggled via setenv). Each query is reduced to one VARCHAR (a single
+cell, or string_agg over an ORDER BY subquery for grouped queries) so all output
+cells including NULLs are captured; a mismatch is a wrong result.
 
 Run: GPU_OP_NULLABLE=1 GPU_OP_NULLABLE_GROUPED=1 pixi run mojo run \
         -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/nullable_adversarial_sweep.mojo
-(transcendental/stats route only on NVIDIA; on Apple they decline -> op==stock anyway.)
+(transcendental/stats are only handled on NVIDIA; on Apple they decline, so op==stock anyway.)
 """
 
 from duckdb import DuckDB
@@ -32,9 +33,9 @@ def main() raises:
         "GPU_OP_EXT",
         "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension",
     )
-    # Rely on the DEFAULTS (GPU_OP_NULLABLE / _GROUPED / TRANSCENDENTAL / STATS are all
-    # default-ON) -- this also validates the default-on posture. Only GPU_OP_GENERIC is
-    # toggled below for the stock comparison.
+    # Rely on the defaults (GPU_OP_NULLABLE / _GROUPED / TRANSCENDENTAL / STATS are all
+    # on by default), which also checks the default configuration. Only GPU_OP_GENERIC
+    # is toggled below for the stock comparison.
     var config = Config({"allow_unsigned_extensions": "true"})
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
@@ -43,8 +44,8 @@ def main() raises:
     #  d0  DECIMAL(15,0) nullable, sparse NULLs (i%101)         -- scale 0
     #  d4  DECIMAL(18,4) nullable, signed (negative half)       -- scale 4, negatives
     #  bg  BIGINT nullable (i%7), can be 0                      -- int, zeros
-    #  pn  DECIMAL(12,2) nullable, strictly POSITIVE (for ln/sqrt)
-    #  alln BIGINT, ALL NULL
+    #  pn  DECIMAL(12,2) nullable, strictly positive (for ln/sqrt)
+    #  alln BIGINT, all NULL
     #  fi  INTEGER nullable filter (i%5)
     #  k   VARCHAR NOT NULL group key (5 groups)
     _ = con.execute("CREATE TABLE t(d2 DECIMAL(15,2), d0 DECIMAL(15,0),"
@@ -78,7 +79,7 @@ def main() raises:
     q.append("SELECT COALESCE(round(avg(d2),6)::VARCHAR,'NULL') FROM t")
     q.append("SELECT COALESCE(round(avg(d4),6)::VARCHAR,'NULL') FROM t")
     q.append("SELECT COALESCE(round(avg(alln),6)::VARCHAR,'NULL') FROM t")  # NULL
-    # --- count(*) + multi-agg over DIFFERENT nullable columns ---
+    # --- count(*) + multi-agg over different nullable columns ---
     q.append("SELECT count(*)::VARCHAR||'|'||COALESCE(sum(d2)::VARCHAR,'NULL') FROM t")
     q.append("SELECT COALESCE(sum(d2)::VARCHAR,'NULL')||'|'||"
              "COALESCE(sum(d4)::VARCHAR,'NULL')||'|'||"
@@ -91,7 +92,7 @@ def main() raises:
     q.append("SELECT count(*)::VARCHAR FROM t WHERE fi = 7")
     q.append("SELECT COALESCE(sum(bg)::VARCHAR,'NULL') FROM t WHERE fi > 100000")  # empty -> NULL
     q.append("SELECT count(*)::VARCHAR||'|'||COALESCE(sum(d2)::VARCHAR,'NULL') FROM t WHERE fi > 50")
-    # --- grouped (DENSE, NOT-NULL key) ---
+    # --- grouped (dense, NOT NULL key) ---
     q.append("SELECT string_agg(k||':'||COALESCE(s::VARCHAR,'NULL')||':'||c::VARCHAR,'|' ORDER BY k)"
              " FROM (SELECT k, sum(d2) s, count(*) c FROM t GROUP BY k)")
     q.append("SELECT string_agg(k||':'||COALESCE(s::VARCHAR,'NULL'),'|' ORDER BY k)"

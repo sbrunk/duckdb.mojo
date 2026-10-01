@@ -19,13 +19,12 @@ Example:
 ```mojo
 from duckdb.extension import Extension, duckdb_extension_access
 from duckdb._libduckdb import duckdb_extension_info
-from duckdb.api_level import ApiLevel
 from duckdb import Connection, ScalarFunction
 
 fn add_one(x: Int64) -> Int64:
     return x + 1
 
-fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+fn init(conn: Connection) raises:
     ScalarFunction.from_function[
         "add_one", DType.int64, DType.int64, add_one
     ](conn)
@@ -53,26 +52,22 @@ SELECT add_one(41);  -- Returns 42
 from duckdb._libduckdb import *
 from duckdb.database import Database
 from duckdb.connection import Connection
-from duckdb.api import DuckDB, _set_ext_api_ptr, _set_ext_api_unstable_ptr
-from duckdb.api_level import ApiLevel
+from duckdb.api import DuckDB, _set_ext_api_ptr
 
 # ===--------------------------------------------------------------------===#
 # Extension API version
 # ===--------------------------------------------------------------------===#
 
-comptime EXTENSION_API_VERSION = "v1.2.0"
+comptime EXTENSION_API_VERSION = DUCKDB_EXTENSION_API_VERSION
 """The C Extension API version this library targets.
 
 This corresponds to `DUCKDB_EXTENSION_API_VERSION_STRING` in duckdb_extension.h.
-When calling `get_api`, pass this version to request the stable v1.2.0 API.
+`get_api` requests this version by default. DuckDB loads the extension only if
+its own C API version is at least this one (DuckDB 1.5.6 or newer for v1.5.6).
 """
 
-# Default API struct for stable usage
 comptime ExtApi = duckdb_ext_api_v1
-"""The default (stable) extension API struct type."""
-
-comptime ExtApiUnstable = duckdb_ext_api_v1_unstable
-"""The full extension API struct type, including unstable functions."""
+"""The extension API struct type for `EXTENSION_API_VERSION`."""
 
 
 # ===--------------------------------------------------------------------===#
@@ -150,7 +145,7 @@ struct Extension(Movable):
         var db_ptr = self._access[].get_database(self._info)
         return Database(_handle=db_ptr[])
 
-    def connect(self) raises -> Connection[ApiLevel.CLIENT]:
+    def connect(self) raises -> Connection:
         """Create a connection to the extension's database.
 
         Example:
@@ -173,10 +168,10 @@ struct Extension(Movable):
         """Request the DuckDB C API function pointer struct (untyped).
 
         Returns an opaque pointer that can be bitcast to the appropriate
-        ``duckdb_ext_api_v1`` or ``duckdb_ext_api_v1_unstable`` struct.
+        ``duckdb_ext_api_v1`` struct.
 
         Args:
-            version: The semver API version string to request (e.g. "v1.2.0").
+            version: The semver API version string to request (e.g. "v1.5.6").
                 Defaults to `EXTENSION_API_VERSION`.
 
         Returns:
@@ -195,8 +190,6 @@ struct Extension(Movable):
         """Request the DuckDB C API as a typed struct pointer.
 
         Returns a pointer to the API struct with the expected struct layout.
-        Use ``ExtApi`` (default) for the stable API, or ``ExtApiUnstable``
-        for the full API including unstable functions.
 
         Parameters:
             ApiStruct: The struct type to cast to. Defaults to ``ExtApi``
@@ -224,22 +217,19 @@ struct Extension(Movable):
 
     @staticmethod
     def run[
-        init_fn: def(conn: Connection[ApiLevel.EXT_STABLE]) raises thin -> None,
+        init_fn: def(conn: Connection) raises thin -> None,
     ](
         info: duckdb_extension_info,
         access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
     ) -> Bool:
-        """Run an extension init function (stable API) with automatic error handling.
+        """Run an extension init function with automatic error handling.
 
-        Creates an `Extension`, connects to the database, calls `init_fn`,
-        and reports any errors back to DuckDB.  The ``init_fn`` receives a
-        ``Connection[ApiLevel.EXT_STABLE]`` — any attempt to call an
-        unstable-only method will be caught at compile time.
-
-        Use ``run_unstable`` if you need the full (unstable) API surface.
+        Creates an `Extension`, requests the C API struct for
+        `EXTENSION_API_VERSION`, connects to the database, calls `init_fn`,
+        and reports any errors back to DuckDB.
 
         Parameters:
-            init_fn: A function that receives a ``Connection[EXT_STABLE]``
+            init_fn: A function that receives a ``Connection``
                 and registers extension functionality.  Raise on failure.
 
         Args:
@@ -251,7 +241,7 @@ struct Extension(Movable):
 
         Example:
         ```mojo
-        fn init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+        fn init(conn: Connection) raises:
             ScalarFunction.from_function[
                 "add_one", DType.int64, DType.int64, add_one
             ](conn)
@@ -277,65 +267,7 @@ struct Extension(Movable):
         _set_ext_api_ptr(api_ptr.value())
 
         try:
-            var conn = Connection[ApiLevel.EXT_STABLE](ext.database())
-            init_fn(conn)
-        except e:
-            ext.set_error(String(e))
-            return False
-        return True
-
-    @staticmethod
-    def run_unstable[
-        init_fn: def(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises thin -> None,
-    ](
-        info: duckdb_extension_info,
-        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
-    ) -> Bool:
-        """Run an extension init function (unstable API) with automatic error handling.
-
-        Like ``run``, but requests the **unstable** API struct so that all
-        DuckDB C API functions (including unstable ones) are available.  The
-        ``init_fn`` receives a ``Connection[ApiLevel.EXT_UNSTABLE]``.
-
-        Parameters:
-            init_fn: A function that receives a ``Connection[EXT_UNSTABLE]``
-                and registers extension functionality.  Raise on failure.
-
-        Args:
-            info: The extension info handle from DuckDB.
-            access: Pointer to the extension access struct from DuckDB.
-
-        Returns:
-            True on success, False on failure.
-
-        Example:
-        ```mojo
-        fn init(conn: Connection[ApiLevel.EXT_UNSTABLE]) raises:
-            # Can use unstable API here
-            ...
-
-        @export("my_ext_init_c_api")
-        fn my_ext_init(
-            info: duckdb_extension_info,
-            access: UnsafePointer[duckdb_extension_access],
-        ) abi("C") -> Bool:
-            return Extension.run_unstable[init](info, access)
-        ```
-        """
-        var ext = Extension(info, access)
-
-        var api_ptr = ext.get_api_typed[ExtApiUnstable]()
-        if api_ptr is None:
-            ext.set_error(
-                "Incompatible DuckDB C API version (requested "
-                + EXTENSION_API_VERSION
-                + ")"
-            )
-            return False
-        _set_ext_api_unstable_ptr(api_ptr.value())
-
-        try:
-            var conn = Connection[ApiLevel.EXT_UNSTABLE](ext.database())
+            var conn = Connection(ext.database())
             init_fn(conn)
         except e:
             ext.set_error(String(e))

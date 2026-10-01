@@ -1,5 +1,5 @@
-// Example custom function implementations for testing operator replacement
-// These are test stubs that demonstrate the operator replacement mechanism
+// Example custom function implementations for testing operator replacement.
+// These are test stubs that demonstrate how operator replacement works.
 
 #include "test_functions.h"
 #include "duckdb.hpp"
@@ -14,7 +14,7 @@
 
 using namespace duckdb;
 
-// Custom multiply function implementation - works with any integer type
+// Custom multiply function implementation. Works with any integer type.
 template<class T>
 static void custom_multiply_impl(DataChunk &args, ExpressionState &state, Vector &result) {
     auto &left = args.data[0];
@@ -48,7 +48,7 @@ static void custom_multiply_func(DataChunk &args, ExpressionState &state, Vector
     }
 }
 
-// Custom sqrt function - returns input + 100 to show it's custom
+// Custom sqrt function. Returns input + 100 to show it's custom.
 static void custom_sqrt_func(DataChunk &args, ExpressionState &state, Vector &result) {
     auto &input = args.data[0];
     UnaryExecutor::Execute<double, double>(input, result, args.size(), [](double val) {

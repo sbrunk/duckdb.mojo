@@ -40,24 +40,25 @@ check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on 
 
 # Demo extension.
 # The mojo build/run calls are wrapped in `bash -c` so $MOJO_TARGET_FLAGS (set
-# ONLY in CI, see .github/workflows/test.yml) is applied as a codegen target
-# override on the affected runners. Unset locally → expands to nothing → native.
+# only in CI, see .github/workflows/test.yml) is applied as a codegen target
+# override on the affected runners. Locally it is unset, expands to nothing,
+# and the build targets the native CPU.
 build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
 # Test extension
-build-test-extension = { cmd = "bash -c 'mkdir -p extensions/test-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o extensions/test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/bad_api.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_unstable_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo_unstable.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo_unstable.duckdb_extension --abi-type C_STRUCT_UNSTABLE'", depends-on = ["build"] }
+build-test-extension = { cmd = "bash -c 'mkdir -p extensions/test-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o extensions/test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/bad_api.duckdb_extension'", depends-on = ["build"] }
 test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS extensions/test-extension/test_extension.mojo'", depends-on = ["build-test-extension"] }
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
 
 # Mojo kernel overrides (extensions/mojo-kernel-overrides): a DuckDB extension that
 # rewrites built-in scalar/aggregate functions to Mojo SIMD kernels at load time,
-# with NO patch to DuckDB. Builds against the default env's libduckdb headers/lib.
+# without patching DuckDB. Builds against the default env's libduckdb headers/lib.
 overrides-build = "bash extensions/mojo-kernel-overrides/build.sh"
-# Correctness regression: stock-vs-override array-distance results (+ NULL/known-value checks).
+# Correctness test: compares stock and override array-distance results, plus NULL and known-value checks.
 overrides-test = { cmd = "bash extensions/mojo-kernel-overrides/test/correctness.sh", depends-on = ["overrides-build"] }
-# Build + load the extension and print a stock-vs-Mojo benchmark table.
+# Build and load the extension, then print a benchmark table comparing stock DuckDB and Mojo.
 # Pass driver args after `--`, e.g.: pixi run overrides-bench -- --threads=1 --rows=20000000
 overrides-bench = "bash extensions/mojo-kernel-overrides/run-benchmark.sh"
 overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
@@ -68,7 +69,7 @@ overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
 gpu-op-build = "bash extensions/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf extensions/mojo-gpu-operator/build"
 
-# ── Benchmarks (consolidated) ── see benchmark/README.md for the full map.
+# Benchmarks. See benchmark/README.md for an overview.
 # One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).
 bench-build = { cmd = "bash benchmark/drivers/build_runner.sh", depends-on = ["clone-duckdb"] }
 # Unified warm compare via benchmark_runner. <group> = a benchmark/sql/ dir or a
@@ -79,8 +80,9 @@ bench-build = { cmd = "bash benchmark/drivers/build_runner.sh", depends-on = ["c
 #   pixi run bench-sql tpch/sf1/q0[16] --engines=stock,cpu,gpu
 bench-sql = "python3 benchmark/drivers/bench_runner.py"
 # Mojo vector-search harness (via the duckdb.mojo client): single + batch cosine
-# top-k across stock / cpu-simd / vss-HNSW / GPU, with latency + recall. Build the
-# extensions first (overrides-build / gpu-op-build); GPU/vss rows self-skip if absent.
+# top-k across stock, cpu-simd, vss-HNSW and GPU, reporting latency and recall. Build
+# the extensions first (overrides-build, gpu-op-build). GPU and vss rows are skipped
+# if those are not available.
 bench-knn = "mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo"
 
 # Compile-check (no run) the benchmarks so they can't silently rot when the
@@ -90,8 +92,9 @@ compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.5.5"
-duckdb-cli = "=1.5.5"
+libduckdb-devel = "=1.5.6"
+duckdb-cli = "=1.5.6"
+pyyaml = "*"
 mojo = "==1.0.0"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
@@ -115,7 +118,7 @@ mojo = "==1.0.0"
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
 # `mojo` finds both the `duckdb` package (project root) and the installed
-# packages — stdlib + operator_replacement — under $CONDA_PREFIX/lib/mojo.
+# packages (stdlib and operator_replacement) under $CONDA_PREFIX/lib/mojo.
 # Stdlib path first (see note above): keeps each env's own std.mojoc from being
 # shadowed by the other env's copy when both are materialized under .pixi/.
 [feature.operator-replacement.activation.env]

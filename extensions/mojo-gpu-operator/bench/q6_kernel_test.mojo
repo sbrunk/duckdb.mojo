@@ -1,7 +1,7 @@
-"""De-risk the TPC-H Q6 GPU kernel: filter + exact decimal sum(ext*disc).
+"""Validate the TPC-H Q6 GPU kernel: filter + exact decimal sum(ext*disc).
 
 DuckDB stores l_extendedprice/l_discount/l_quantity as DECIMAL(15,2) = int64
-(scale 2) and l_shipdate as DATE = int32 (days). The Q6 sum must be EXACT to
+(scale 2) and l_shipdate as DATE = int32 (days). The Q6 sum must be exact to
 match DuckDB, so we do integer arithmetic, not float:
 
   per-row product ext*disc fits int64 (~1e7 * ~10);

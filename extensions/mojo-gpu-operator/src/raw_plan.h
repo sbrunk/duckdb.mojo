@@ -1,5 +1,5 @@
 // RawPlan C-ABI contract tag constants (v1). See RAW_PLAN_CONTRACT.md.
-// MUST stay in lockstep with raw_plan_tags.mojo (identical integer values).
+// Must stay in lockstep with raw_plan_tags.mojo (identical integer values).
 #pragma once
 #include <cstdint>
 
@@ -21,9 +21,9 @@ enum : int64_t {
   TYPE_DECIMAL = 9,
   TYPE_DATE = 10,
   TYPE_VARCHAR = 11,
-  // Unsigned integer RESULT types (GPU_OP_STATS only -- DuckDB's regr_count
+  // Unsigned integer result types (GPU_OP_STATS only, because DuckDB's regr_count
   // returns UINTEGER/UBIGINT). Additive to the TypeTag vocabulary: they appear
-  // ONLY in an aggregate's OUT_TYPE / ret_type slot, never in a group key, filter
+  // only in an aggregate's OUT_TYPE / ret_type slot, never in a group key, filter
   // const, or any tape-section field-count, so the fixed header layout + the
   // hand-built shuttle tapes are unaffected. They round-trip through the existing
   // (tag, scale, width) OUT_TYPES triples with no layout change.
@@ -50,7 +50,7 @@ enum : int64_t {
   AGG_AVG = 3,
   AGG_MIN = 4,
   AGG_MAX = 5,
-  // Statistical aggregates (GPU_OP_STATS). DOUBLE result derived CLOSED-FORM on
+  // Statistical aggregates (GPU_OP_STATS). DOUBLE result derived in closed form on
   // the host from the shared sums {n, Sx, Sx2, Sy, Sy2, Sxy} the f64 seg kernels
   // accumulate. 1-arg: stddev/var (x). 2-arg: covar/corr/regr_* with arg order
   // (y_dependent, x_independent) matching DuckDB. regr_count returns BIGINT.
@@ -90,7 +90,7 @@ enum : int64_t {
                      //   push dim_arrays[a][ cols[b][row] ] (FK gather)
   OP_EQ = 9,         // pop b, a -> push (a == b) ? 1 : 0
   // --- Transcendental unary ops (FLOAT eval path only; GPU_OP_TRANSCENDENTAL).
-  // These appear ONLY in a metric program evaluated by the float64 VM
+  // These appear only in a metric program evaluated by the float64 VM
   // (eval_program_f64); the int64 VM (eval_program) treats them as no-ops and
   // never sees them (the builder emits them only for a DOUBLE-returning
   // transcendental aggregate routed to the float accumulator). Unary: pop a,
@@ -106,8 +106,8 @@ enum : int64_t {
   // single Agg.program tape; the Mojo side splits on it. Never reaches any
   // expr-VM (it is stripped during the per-stat metric lowering).
   OP_ARGSEP = 16,
-  // Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). BINARY: pop exp, pop base
-  // -> push base**exp. Emitted ONLY for integer-valued constant exponents (the f64
+  // Power (FLOAT eval path only; GPU_OP_TRANSCENDENTAL). Binary: pop exp, pop base
+  // -> push base**exp. Emitted only for integer-valued constant exponents (the f64
   // const tape rounds doubles to int, so fractional exponents fail-closed in
   // EmitProgram); eval_program_f64 computes it via exact binary exponentiation.
   OP_POW = 17,
@@ -119,7 +119,7 @@ enum : int64_t {
   // OP_EQ: pop b, a -> push 1 if (a <op> b) else 0. They let an OR-of-RANGE /
   // inequality residual LogicalFilter (a<10 OR a>95, BETWEEN, a!=5, ...) over
   // INTEGER/DATE columns lower like the OR-of-equalities path, chained with OP_ADD
-  // (OR) / OP_MUL (AND). EmitOrEq maps the DuckDB COMPARE_* type -> one of these
+  // (OR) / OP_MUL (AND). EmitOrEq maps the DuckDB COMPARE_* type to one of these
   // (inverting LT<->GT, LE<->GE when the column is on the RHS). See raw_plan_tags.mojo.
   OP_LT = 19, // pop b, a -> push (a <  b) ? 1 : 0
   OP_LE = 20, // pop b, a -> push (a <= b) ? 1 : 0

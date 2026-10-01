@@ -1,14 +1,14 @@
-"""Recall of the batched fp16 top-k THROUGH THE OPERATOR ENTRY POINT.
+"""Recall of the batched fp16 top-k through the operator entry point.
 
 Calls the real exported `mojo_gpu_pin_query_topk_batch_f16` (the entry the C++
 GpuCosinePhysicalOp invokes) and compares its M*k result against a per-query
 ground truth computed via `mojo_gpu_pin_query_topk_f16` (the single-query exact
-path, which NEVER routes through the batched fused kernel). Identical data to
+path, which never routes through the batched fused kernel). Uses the same data as
 cosine_batch_latency.mojo / tc_knn_fused.mojo.
 
 Run it twice on frederick:
-  * GPU_OP_TENSORCORE unset  -> batched scalar path; sanity recall should be ~1.0
-  * GPU_OP_TENSORCORE=1       -> batched FUSED tensor-core path; require
+  * GPU_OP_TENSORCORE unset  -> batched scalar path; recall should be ~1.0
+  * GPU_OP_TENSORCORE=1       -> batched fused tensor-core path; require
                                  recall@10 >= 0.99 and 0 genuine misses.
 
   LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH \
@@ -75,7 +75,7 @@ def main() raises:
     )
 
     # Ground truth: per-query single-query exact top-k (scalar warp path; does
-    # NOT touch the batched fused kernel regardless of the flag).
+    # not touch the batched fused kernel regardless of the flag).
     var ref_ids = alloc[Int64](M * KK)
     var ref_dists = alloc[Float32](M * KK)
     var oneq_ids = alloc[Int64](KK)
@@ -91,7 +91,7 @@ def main() raises:
             ref_ids[m * KK + j] = oneq_ids[j]
             ref_dists[m * KK + j] = oneq_dists[j]
 
-    # Path under test: the BATCHED operator entry (flag selects scalar vs fused).
+    # Path under test: the batched operator entry (flag selects scalar vs fused).
     var bat_ids = alloc[Int64](M * KK)
     var bat_dists = alloc[Float32](M * KK)
     var brc = mojo_gpu_pin_query_topk_batch_f16(

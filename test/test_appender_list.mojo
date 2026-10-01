@@ -1,4 +1,4 @@
-"""Tests for the Appender API — List and Array types."""
+"""Tests for the Appender API: List and Array types."""
 
 from duckdb import *
 from std.collections import Optional

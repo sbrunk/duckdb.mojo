@@ -2,21 +2,21 @@
 
 The ABI-neutral serialization of a matched DuckDB `LogicalAggregate` subtree. C++
 (`SerializeMatchedPlan`) walks the plan and emits it; Mojo (`build_descriptor`)
-parses it. **No DuckDB types cross the boundary** — only two flat buffers.
+parses it. No DuckDB types cross the boundary, only two flat buffers.
 
 ## Wire form
 
 Two buffers handed to Mojo:
 
-- `tape: const int64_t*`, `tape_len: int64_t` — a flat array of int64 words.
-- `blob: const uint8_t*`, `blob_len: int64_t` — raw bytes for interned strings.
+- `tape: const int64_t*`, `tape_len: int64_t`: a flat array of int64 words.
+- `blob: const uint8_t*`, `blob_len: int64_t`: raw bytes for interned strings.
 
-Strings are interned: a **string id** indexes a string table on the tape, each
-entry a `(blob_offset, byte_len)` pair. C++ dedups identical strings (optional);
-Mojo materializes a `String` from `blob[off : off+len]` (UTF-8).
+Strings are interned: a string id indexes a string table on the tape, where each
+entry is a `(blob_offset, byte_len)` pair. C++ may deduplicate identical strings.
+Mojo builds a `String` from `blob[off : off+len]` (UTF-8).
 
-The tape is a sequence of **sections in fixed order**. Each count-prefixed.
-All values are `int64`. Reader advances a cursor; writer appends. Layout:
+The tape is a sequence of sections in a fixed order, each prefixed with its count.
+All values are `int64`. The reader advances a cursor and the writer appends. Layout:
 
 ```
 HEADER
@@ -66,9 +66,9 @@ PASS_PROGRAMS                      // NR3 (GPU_OP_FILTER_OR); TRAILING additive 
     repeat n_ops: op_tag, operand_a, operand_b   // same postfix Op triples as AGGREGATES
 ```
 
-A program is **postfix** (RPN). `operand_b` is 0 unless noted.
+A program is postfix (RPN). `operand_b` is 0 unless noted.
 
-## Tag values (MUST match on both sides exactly)
+## Tag values (must match exactly on both sides)
 
 ```
 # TypeTag (type_tag, ret_type_tag, const type_tag)
@@ -110,10 +110,8 @@ OP_ADD        = 3   # pop b,a -> push a+b
 OP_SUB        = 4   # pop b,a -> push a-b
 OP_MUL        = 5   # pop b,a -> push a*b
 OP_SELECT     = 6   # pop else,then,pred -> push (pred ? then : else)   (CASE)
-OP_PROMO_PRED = 7   # operand_a = table_strid, operand_b = col_strid (p_type),
-                    #   operand_b2 via next... -> we instead encode pattern const in operand via
-                    #   a preceding OP_PUSH_CONST? NO: PROMO_PRED operand_a=col table_strid,
-                    #   operand_b = col_strid; the 'PROMO%' pattern is implicit (prefix match).
+OP_PROMO_PRED = 7   # operand_a = table_strid, operand_b = col_strid (p_type);
+                    #   the 'PROMO%' pattern is implicit (prefix match), not a constant
                     #   -> push bool (p_type LIKE 'PROMO%')
 OP_LOAD_DIM   = 8   # operand_a = dim-array index, operand_b = fact-key col slot (FK gather)
 OP_EQ         = 9   # pop b,a -> push (a==b) ? 1 : 0          (FILTER/PREDICATE 0/1)
@@ -139,14 +137,14 @@ OP_NE         = 23  # pop b,a -> push (a!=b) ? 1 : 0          (FILTER/PREDICATE 
 ```
 
 ### Notes / invariants
-- `MAGIC` is the first word; Mojo aborts/returns-null on mismatch.
+- `MAGIC` is the first word; on a mismatch Mojo aborts or returns null.
 - `group_index == -1` (all bits set) means ungrouped (Q6/Q14 class). `n_gkeys==0`
   in that case.
 - Filter constants and expr constants both live in the single `CONSTS` pool.
 - Numeric constants are emitted at their column's decimal `scale` as int128 limbs
   (`val_lo` = low 64 bits, `val_hi` = high 64 bits, two's-complement). DATE uses
-  `val_lo = date_t.days`. C++ does NOT pre-scale to a fixed scale — it emits the
-  raw decimal integer + `scale`, so Mojo has full fidelity.
+  `val_lo = date_t.days`. C++ does not rescale to a fixed scale. It emits the
+  raw decimal integer plus `scale`, so Mojo keeps full precision.
 - The revenue grammar `ext * (1 - disc)` serializes as:
   `LOAD_COL(ext); PUSH_CONST(1@scale); LOAD_COL(disc); SUB; MUL`.
 - The Q6 product `ext * disc` serializes as `LOAD_COL(ext); LOAD_COL(disc); MUL`.
@@ -154,26 +152,31 @@ OP_NE         = 23  # pop b,a -> push (a!=b) ? 1 : 0          (FILTER/PREDICATE 
   `PROMO_PRED(p_type); <then-program: ext*(1-disc)>; PUSH_CONST(0); SELECT`.
 - `OUT_TYPES` order is exactly the operator's output: all group columns first
   (in group-key order), then all aggregate columns (in aggregate order).
-- `PASS_PROGRAMS` (NR3, behind `GPU_OP_FILTER_OR`) is a **trailing additive** section
-  after `AGGREGATES`; it does NOT change `MAGIC` or any prior section's layout. It
-  carries a single-table residual `LogicalFilter` that is an OR-of-equalities (and
-  small sparse `IN`, which DuckDB lowers to OR-of-equalities) **or an OR-of-RANGE /
-  inequality** predicate (e.g. `a<10 OR a>95`, `a BETWEEN .. OR a BETWEEN ..`,
-  `a!=5 OR ...`) over INTEGER/DATE columns, serialized as a postfix program:
-  a comparison `col <op> k` -> `OP_LOAD_COL slot; OP_PUSH_CONST const_id;
-  OP_{EQ,NE,LT,LE,GT,GE}` (pushes 0/1; ops 19..23 are the GPU_OP_FILTER_OR range/
-  inequality widening, and the comparator is INVERTED when the column is on the RHS,
-  e.g. `5 > a` -> `a < 5`); a `BETWEEN` arrives as a `CONJUNCTION_AND` of two ranges
-  (AND->MUL recursion) and OR-of-BETWEEN as OR of those AND-groups;
-  **OR** of N branches -> chain with `OP_ADD` (sum is `!=0` iff any leaf is 1, since
-  every leaf is 0/1 -> the sum is `>=0`); **AND** of M sub-results (a
-  `CONJUNCTION_AND` and the implicitly-ANDed `LogicalFilter.expressions[]`) -> chain
-  with `OP_MUL` (`!=0` iff all). A row passes iff `eval_program(...) != 0`. The Mojo
-  side AND-composes this into the host pass column via `OP_MUL`, so the pushed range
-  filters and the OR predicate are both honored. `n_pass == 0` when there is no such
-  filter (the default), and `get_ordinal` indexes `GETS` in emit order. Hand-built
-  tapes (the round-trip + shuttle tests) MUST append the `n_pass=0` token so the
-  reader does not overrun.
+- `PASS_PROGRAMS` (NR3, behind `GPU_OP_FILTER_OR`) is an additional section at the
+  end, after `AGGREGATES`. It does not change `MAGIC` or the layout of any earlier
+  section. It carries a residual single-table `LogicalFilter` over INTEGER/DATE
+  columns that is either an OR of equalities (including small sparse `IN` lists,
+  which DuckDB lowers to an OR of equalities) or an OR of ranges / inequalities
+  (e.g. `a<10 OR a>95`, `a BETWEEN .. OR a BETWEEN ..`, `a!=5 OR ...`). It is
+  serialized as a postfix program:
+  - A comparison `col <op> k` becomes `OP_LOAD_COL slot; OP_PUSH_CONST const_id;
+    OP_{EQ,NE,LT,LE,GT,GE}`, which pushes 0 or 1. Ops 19 to 23 are the range and
+    inequality ops added for `GPU_OP_FILTER_OR`. When the column is on the right
+    side the comparison is flipped, e.g. `5 > a` becomes `a < 5`.
+  - A `BETWEEN` arrives as a `CONJUNCTION_AND` of two ranges (AND is lowered to MUL
+    recursively), and an OR of BETWEENs as an OR of those AND groups.
+  - An OR of N branches is chained with `OP_ADD`. Every leaf is 0 or 1, so the sum
+    is never negative and is `!=0` if and only if some leaf is 1.
+  - An AND of M sub-results (a `CONJUNCTION_AND`, and the entries of
+    `LogicalFilter.expressions[]`, which are implicitly ANDed) is chained with
+    `OP_MUL`, which is `!=0` if and only if all are.
+
+  A row passes if and only if `eval_program(...) != 0`. The Mojo side combines this
+  with the host pass column via `OP_MUL`, so both the pushed range filters and the
+  OR predicate are applied. `n_pass == 0` when there is no such filter (the
+  default), and `get_ordinal` indexes `GETS` in emit order. Hand-built tapes (the
+  round-trip and shuttle tests) must append the `n_pass=0` token so the reader does
+  not read past the end.
 
 ## Mojo C-ABI surface (exported from engine, Stage 1 subset)
 
@@ -189,24 +192,25 @@ mojo_gpu_desc_n_aggs(handle) -> int64
 mojo_gpu_desc_fact_table(handle, out: ptr<uint8>, cap: int64) -> int64   # writes name, returns len
 ```
 
-`build_descriptor` returns 0 (reject → CPU fallback / shadow logs "unsupported")
-on any field outside the supported class. Strategy selection: 0 group keys →
-UNGROUPED; integer fact group key → SORT_SEGREDUCE; small dense key space →
-DENSE_GROUP; else HASH_GROUP (rewritten to SORT_SEGREDUCE on Apple later).
+`build_descriptor` returns 0 if any field is outside the supported class (the
+query is rejected and falls back to the CPU; shadow mode logs "unsupported").
+Strategy selection: 0 group keys gives UNGROUPED; an integer fact group key gives
+SORT_SEGREDUCE; a small dense key space gives DENSE_GROUP; anything else gives
+HASH_GROUP (rewritten to SORT_SEGREDUCE on Apple later).
 
-## Stage-1 usage (zero behavior change)
+## Stage-1 usage (no behavior change)
 Execution stays on the existing `MatchQ*`/`LogicalQ*`. When an existing matcher
-fires, C++ ALSO calls `SerializeMatchedPlan` + `mojo_gpu_build_descriptor` and
+fires, C++ also calls `SerializeMatchedPlan` + `mojo_gpu_build_descriptor` and
 logs whether the descriptor's `kind`/`strategy`/`n_dims`/`n_aggs`/`fact_table`
-agree with the matcher (shadow validation). No emitted plan changes.
+agree with the matcher (shadow validation). The emitted plan does not change.
 
 ## Stage-2 execution shuttle (descriptor drives execution)
 
-Where all Mojo lives: from Stage 2 on, the descriptor logic (`descriptor.mojo`,
-pure, no exports) is imported by `gpu_kernels.mojo`, which hosts ALL `@export`
-C-ABI wrappers in one compilation unit (the GPU dylib) — so the same code can
-read the descriptor AND run kernels. `descriptor.o` is no longer linked
-separately.
+Where the Mojo code lives: from Stage 2 on, the descriptor logic
+(`descriptor.mojo`, pure, no exports) is imported by `gpu_kernels.mojo`, which
+holds all `@export` C-ABI wrappers in one compilation unit (the GPU dylib). That
+way the same code can read the descriptor and run kernels. `descriptor.o` is no
+longer linked separately.
 
 C++ `PhysicalGpuAgg` (a source op, `IsSource()==true`, `ParallelSource()==false`)
 holds the descriptor handle and drives:
@@ -246,14 +250,19 @@ and `feed_column` each flat column; then `pin_finalize`. `GetDataInternal` walks
 Materialization SQL is generic: Mojo selects the distinct fact columns referenced
 by the fact filters + aggregate programs (and per-dim queries for dim tables),
 ordering them deterministically and remembering that order for `feed_column`.
-`ORDER BY <fact group key>` is appended iff `strategy == SORT_SEGREDUCE`.
+`ORDER BY <fact group key>` is appended only when `strategy == SORT_SEGREDUCE`.
 
-Pin-cache signature (process-lifetime, keyed in Mojo): fact table + sorted
-projected fact columns + dim tables + carried columns + strategy — NOT filter
-constants (filters are kernel args, so a repeat query with different constants is
-still WARM and reuses resident buffers).
+Pin-cache signature (lives for the process, keyed in Mojo, see `_signature` in
+`gpu_kernels.mojo`): fact table + sorted projected fact columns + strategy + kind +
+dim tables and their carried columns + the filter constants + an aggregate program
+fingerprint. Including the constants means a warm hit guarantees an identical
+predicate, so a repeated query with different constants is cold. The exception is
+the predicate-independent paths (`GPU_OP_NATIVE_DECODE` for Q6/Q1/Q5/Q14, and the
+f64 paths): they evaluate the filter in the kernel from per-run bounds, so their
+signature keeps only the filter columns and comparisons, not the constants, and
+queries that differ only in constants stay warm.
 
-Stage-2 migration routes ONE query class at a time through `LogicalGpuAgg`
+The Stage-2 migration routes one query class at a time through `LogicalGpuAgg`
 (behind an env flag, e.g. `GPU_OP_GENERIC=q6`); others keep their bespoke
 `MatchQ*` path. `pin_finalize` may reuse the existing per-query kernels
 (`mojo_q6_*` etc.) selected by descriptor shape during Stage 2; Stage 3 replaces

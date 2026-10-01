@@ -2,11 +2,13 @@
 //
 // Builds a table, times a set of queries against stock DuckDB, LOADs the
 // mojo_overrides extension (which rewrites the built-ins to Mojo SIMD kernels),
-// re-times, and prints the per-query speedup plus a correctness check.
+// re-times, and prints the per-query speedup. Correctness is checked separately
+// by test/correctness.sh.
 //
 //   benchmark <extension_path> [--threads=N] [--rows=N]
 //
-// Env: DUCKDB_MOJO_LIB must point at libmojo_simd.dylib (the extension dlopen's it).
+// The extension is self-contained (the kernels are linked in), so no other
+// library or environment variable is needed.
 
 #include "duckdb.hpp"
 

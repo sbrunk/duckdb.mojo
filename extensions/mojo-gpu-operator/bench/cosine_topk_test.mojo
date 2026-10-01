@@ -4,9 +4,9 @@ Synthesizes an N x K embedding matrix + query vectors with a deterministic
 generator (no random()), pins the matrix on the GPU, and runs the new
 `mojo_gpu_pin_query_topk` / `mojo_gpu_pin_query_topk_batch` C-ABI entry points.
 
-The GPU returns ONLY the k nearest rows (ids + distances). The CPU reference
+The GPU returns only the k nearest rows (ids + distances). The CPU reference
 computes all N cosine distances, stable-sorts by (dist asc, id asc), and takes
-the first k. The test asserts the GPU's k ids AND dists equal the CPU top-k
+the first k. The test asserts that the GPU's k ids and dists equal the CPU top-k
 exactly (dists within ~1e-6, ids identical under the same tie-break).
 
 Run:
@@ -36,7 +36,7 @@ comptime K = 384
 # Deterministic, index-varying generators (no random()). Mixed LCG-style so the
 # distances are well-spread but reproducible run-to-run.
 def emb_val(row: Int, i: Int) -> Float32:
-    # Mix the row in non-periodically so distances genuinely vary across rows
+    # Mix the row in non-periodically so distances vary across rows
     # (exercises the distance ordering), while the modulo still produces some
     # exact ties (exercises the (dist, rowid) tie-break).
     var idx = (row * 2654435761 + i * 40503 + 12345) & 0x7FFFFFFF
@@ -47,8 +47,8 @@ def query_val(m: Int, i: Int) -> Float32:
     return Float32(((m * 31 + i) * 48271) % 1024) * 0.002 + 0.001
 
 
-# CPU reference: all N cosine distances for query at `q`, then a STABLE selection
-# of the k smallest under (dist asc, id asc) -- matching the GPU tie-break.
+# CPU reference: all N cosine distances for query at `q`, then a stable selection
+# of the k smallest under (dist asc, id asc), matching the GPU tie-break.
 def cpu_topk(
     emb: UnsafePointer[Float32, MutAnyOrigin],
     q: UnsafePointer[Float32, MutAnyOrigin],

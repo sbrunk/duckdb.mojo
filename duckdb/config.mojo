@@ -39,7 +39,7 @@ struct Config(Movable):
 
     def __init__(out self) raises:
         """Create an empty configuration."""
-        # Placeholder handle — duckdb_create_config populates it via out-param.
+        # Placeholder handle. duckdb_create_config fills it in via an out-param.
         self._config = duckdb_config.unsafe_dangling()
         ref libduckdb = DuckDB().libduckdb()
         if libduckdb.duckdb_create_config(Pointer(to=self._config)) == DuckDBError:
@@ -108,7 +108,7 @@ struct Config(Movable):
         var count = libduckdb.duckdb_config_count()
         var result = Dict[String, String]()
         for i in range(count):
-            # Placeholders — duckdb_get_config_flag fills both via out-params.
+            # Placeholders. duckdb_get_config_flag fills both via out-params.
             var name_ptr = Pointer[c_char, ImmutAnyOrigin].unsafe_dangling()
             var desc_ptr = Pointer[c_char, ImmutAnyOrigin].unsafe_dangling()
             if (
@@ -126,7 +126,7 @@ struct Config(Movable):
     def _handle(self) -> duckdb_config:
         """Return the underlying duckdb_config handle.
 
-        The Config instance retains ownership — the handle is only borrowed.
+        The Config instance keeps ownership. The handle is only borrowed.
         DuckDB copies its contents during ``duckdb_open_ext``.
         """
         return self._config

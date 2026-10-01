@@ -23,7 +23,7 @@ from std import benchmark
 
 
 # ===--------------------------------------------------------------------===#
-# Configuration — change F to DType.float32 for single-precision benchmark
+# Configuration: change F to DType.float32 for a single-precision benchmark
 # ===--------------------------------------------------------------------===#
 
 comptime F = DType.float32
@@ -42,8 +42,8 @@ def sql_type() -> String:
 # SIMD math kernels
 # ===--------------------------------------------------------------------===#
 # For standard math functions (sqrt, sin, cos, exp, log) we pass the stdlib
-# functions directly — no wrappers needed thanks to the stdlib-compatible
-# from_simd_function overload.
+# functions directly. The stdlib-compatible from_simd_function overload means
+# no wrappers are needed.
 #
 # Only fused/compound kernels need custom definitions.
 
@@ -51,24 +51,24 @@ def sql_type() -> String:
 # --- Fused (compound) kernels ---
 
 def simd_sin_plus_cos[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
-    """Computes sin(x) + cos(x) — a common fused trig computation."""
+    """Computes sin(x) + cos(x), a common fused trig computation."""
     return math.sin(x) + math.cos(x)
 
 
 def simd_hypot1[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
-    """Computes sqrt(x*x + 1) — distance from origin to (x, 1)."""
+    """Computes sqrt(x*x + 1), the distance from the origin to (x, 1)."""
     return math.sqrt(x * x + 1.0)
 
 
 def simd_gauss[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
-    """Computes exp(-x*x) — unnormalized Gaussian kernel."""
+    """Computes exp(-x*x), an unnormalized Gaussian kernel."""
     return math.exp(-(x * x))
 
 
 # --- Binary kernels (compound only) ---
 
 def simd_hypot[w: SIMDLength](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
-    """Computes sqrt(a*a + b*b) — Euclidean distance."""
+    """Computes sqrt(a*a + b*b), the Euclidean distance."""
     return math.sqrt(a * a + b * b)
 
 
@@ -100,7 +100,7 @@ def register_functions(conn: Connection) raises:
     ScalarFunction.from_simd_function["mojo_gauss", F, F, simd_gauss](conn)
 
     # Binary functions:
-    # atan2 matches the stdlib signature — pass directly
+    # atan2 matches the stdlib signature, so pass it directly
     ScalarFunction.from_simd_function["mojo_atan2", F, math.atan2](conn)
     # hypot is a custom compound kernel
     ScalarFunction.from_simd_function["mojo_hypot", F, F, F, simd_hypot](conn)
@@ -231,7 +231,7 @@ def main() raises:
             + String(ck.get[Float32](col=3, row=0))
         )
 
-    # Quick numeric check on aggregate — use wider tolerance for float32
+    # Quick numeric check on an aggregate, with a wider tolerance for float32
     def agg_tol() -> String:
         comptime if F == DType.float64:
             return "0.001"
@@ -247,7 +247,7 @@ def main() raises:
     )
     var ac = agg_check.fetch_chunk()
     print(
-        "  Aggregate check — sqrt: "
+        "  Aggregate check, sqrt: "
         + String(ac.get[Bool](col=0, row=0))
         + ", sin: "
         + String(ac.get[Bool](col=1, row=0))

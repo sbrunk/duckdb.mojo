@@ -1,7 +1,6 @@
 from std.collections import List, Dict
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
-from duckdb.api_level import ApiLevel
 from duckdb.config import Config
 from duckdb.database import Database
 from duckdb.result import Result, ResultError, ResultType, ErrorType
@@ -25,24 +24,15 @@ def _reader_call(
     return out^
 
 
-struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
+struct Connection(Movable):
     """A connection to a DuckDB database.
 
-    Connection borrows the Database handle during construction — it does **not**
+    Connection borrows the Database handle during construction. It does not
     take ownership. The caller is responsible for keeping the Database alive for
     the lifetime of all its connections (same contract as the C API).
 
     The convenience constructor ``Connection(path)`` (and ``DuckDB.connect()``)
     creates *and owns* an internal Database so the connection is self-contained.
-
-    The ``api_level`` parameter controls compile-time access to unstable API
-    functions.  The default (``ApiLevel.CLIENT``) gives full access.  When
-    running as an extension, ``Extension.run`` creates a connection with the
-    appropriate level (``EXT_STABLE`` or ``EXT_UNSTABLE``).
-
-    Parameters:
-        api_level: The API surface available at compile time.  Defaults to
-            ``ApiLevel.CLIENT`` (full access).
 
     Example:
     ```mojo
@@ -106,9 +96,9 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         if read_only:
             var cfg = Config()
             cfg.set("access_mode", "READ_ONLY")
-            self = Connection[Self.api_level](path, cfg)
+            self = Connection(path, cfg)
         else:
-            self = Connection[Self.api_level](path)
+            self = Connection(path)
 
     def __init__(out self, db: Database) raises:
         """Create a connection from an existing database.
@@ -210,17 +200,17 @@ struct Connection[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_disconnect(Pointer(to=self._conn))
 
-    def cursor(self) raises -> Connection[Self.api_level]:
+    def cursor(self) raises -> Connection:
         """Open a second connection to the same database.
 
         The returned connection shares this connection's database and must not
         outlive it.
         """
-        return Connection[Self.api_level](self._db)
+        return Connection(self._db)
 
-    def duplicate(self) raises -> Connection[Self.api_level]:
+    def duplicate(self) raises -> Connection:
         """Alias for `cursor` (Python ``duplicate``)."""
-        return Connection[Self.api_level](self._db)
+        return Connection(self._db)
 
     def __enter__(var self) -> Self:
         """Enter a ``with`` block; the connection is destroyed (disconnected)

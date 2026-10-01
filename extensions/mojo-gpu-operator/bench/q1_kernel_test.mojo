@@ -1,4 +1,4 @@
-"""De-risk the TPC-H Q1 GPU grouped-aggregation kernel (bit-exact vs CPU int128).
+"""Validate the TPC-H Q1 GPU grouped-aggregation kernel (bit-exact vs CPU int128).
 
 DuckDB stores l_quantity/l_extendedprice/l_discount/l_tax as DECIMAL(15,2) = int64
 (scale 2) and l_shipdate as DATE = int32 (days). l_returnflag/l_linestatus are a
@@ -13,8 +13,8 @@ The kernel accumulates, per group, 6 integer quantities (all exact):
     [5] sum(ext_raw*(100-disc_raw)*(100+tax_raw)) scale 6  (sum_charge)
 
 Per-row magnitudes: sum_charge per row ~ 1e7 * 100 * 108 ~ 1.1e11; a per-block
-partial over ~1500 rows ~ 1.7e14 — fits int64. Only the cross-block reduction
-needs int128 (done on the host), so the kernel is pure-integer and EXACT.
+partial over ~1500 rows ~ 1.7e14, which fits int64. Only the cross-block
+reduction needs int128 (done on the host), so the kernel is integer-only and exact.
 
 Kernel design: one warp (32 lanes) per block. Each lane keeps private int64
 accumulators [NGROUPS][6], lane-strided over rows; then warp.sum reduces each

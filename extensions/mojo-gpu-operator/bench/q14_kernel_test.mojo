@@ -1,4 +1,4 @@
-"""De-risk the TPC-H Q14 GPU hash-probe join kernel (bit-exact vs CPU int128).
+"""Validate the TPC-H Q14 GPU hash-probe join kernel (bit-exact vs CPU int128).
 
 Q14 is a FK join lineitem -> part (p_partkey unique) + a probe-side aggregation:
     promo_revenue = 100 * sum(CASE WHEN p_type LIKE 'PROMO%'
@@ -6,8 +6,8 @@ Q14 is a FK join lineitem -> part (p_partkey unique) + a probe-side aggregation:
                         / sum(l_extendedprice*(1-l_discount))
 with the probe restricted to l_shipdate in [lo, hi).
 
-Build-small / probe-big hash join:
-  * Build an open-addressing (linear-probing) hash table on the HOST keyed by
+Hash join that builds on the small side and probes with the big side:
+  * Build an open-addressing (linear-probing) hash table on the host keyed by
     p_partkey (int64) with a 1-byte payload is_promo (p_type starts "PROMO").
     Table size = next pow2 >= 2 * build_rows; empty slot = key 0 (TPC-H partkeys
     start at 1, so 0 is a safe sentinel).
@@ -16,10 +16,11 @@ Build-small / probe-big hash join:
     row (shipdate in [lo,hi)), hash l_partkey, linear-probe the resident table,
     read is_promo, compute prod = ext_raw * (100 - disc_raw)  (scale 4, int64),
     add to a local total; if promo add to a local promo. warp.sum both; per-block
-    partials; host reduces in int128 -> EXACT (matches DuckDB's int128 sum).
+    partials; the host reduces in int128, which is exact (matches DuckDB's
+    int128 sum).
 
 Exactness: ext is DECIMAL(15,2)=int64 scale2; (1-disc) computed as (100-disc_raw)
-with disc DECIMAL(15,2) scale2 -> (100-disc_raw) is scale2; product is scale4 int64.
+with disc DECIMAL(15,2) scale2, so (100-disc_raw) is scale2; product is scale4 int64.
 Per-row product ~ 1e7 * 100 = 1e9; per-block partial over ~6M/4096 rows fits int64.
 Only the cross-block reduction needs int128 (host).
 """

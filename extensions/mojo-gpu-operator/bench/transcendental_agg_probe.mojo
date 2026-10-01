@@ -1,27 +1,28 @@
-"""PHASE A de-risk probe: GPU scalar aggregate of a transcendental over a big col.
+"""Phase A feasibility probe: GPU scalar aggregate of a transcendental over a large column.
 
-Goal: prove (or refute) that a GPU can compute `sum(f(x))` for f in
-{sqrt, exp, ln} over a large float64 column at ~memory-bandwidth speed, i.e.
-~10-40x the CPU-SIMD overrides path (which wins only 1.2-4.6x vs stock at
-1 thread, per PERF_BACKLOG R7). DuckDB does NOT GPU-accelerate these at all, so
-this is a NEW win class for the operator -- but the expr-VM + segreduce are
-INT64/INT128, so a transcendental aggregate needs a FLOAT eval + a float64
-accumulator. Before paying for that integration we prove the GPU win here, in
-isolation.
+Goal: show whether a GPU can compute `sum(f(x))` for f in {sqrt, exp, ln} over a
+large float64 column at close to memory-bandwidth speed, i.e. ~10-40x the
+CPU-SIMD overrides path (which is only 1.2-4.6x faster than stock at 1 thread,
+per PERF_BACKLOG R7). DuckDB does not GPU-accelerate these at all, so this would
+be a new kind of query the operator can speed up. However, the expr-VM and
+segreduce are INT64/INT128, so a transcendental aggregate needs a float eval and
+a float64 accumulator. Before building that integration we measure the GPU gain
+here, in isolation.
 
 Method:
   - Generate N float64 on host in [1, 2] (so sqrt/ln/exp are all finite, no NaN).
   - GPU: upload once, a grid-stride kernel applies f per element and reduces to a
-    float64 sum (per-warp warp.sum -> lane0 atomic into a single device float64).
-    Kernel time measured GPU-side excluding upload (the operator's win is warm:
-    the column is already resident), but upload is also reported for context.
+    float64 sum (per-warp warp.sum, then a lane-0 atomic into a single device
+    float64). Kernel time is measured on the GPU without the upload (the
+    operator's gain is on warm runs, where the column is already resident), but
+    the upload is also reported for context.
   - CPU: a plain Mojo scalar loop over the same host array (sanity reference).
-  - Correctness: |gpu - cpu| / |cpu| < REL_TOL (float64, thread-order reassoc,
-    so not bit-exact; ~1e-9 is comfortable).
-  - Throughput: GB/s = N*8 / time. The GPU should land near the card's HBM
-    bandwidth (RTX 4090 ~1 TB/s) -> a 60M f64 col (480 MB) at ~1-2 ms warm.
+  - Correctness: |gpu - cpu| / |cpu| < REL_TOL (float64 summed in thread order,
+    so not bit-exact; ~1e-9 leaves plenty of margin).
+  - Throughput: GB/s = N*8 / time. The GPU should get close to the card's HBM
+    bandwidth (RTX 4090 ~1 TB/s), i.e. a 60M f64 column (480 MB) in ~1-2 ms warm.
 
-Run (Apple or NVIDIA -- pass on both):
+Run (Apple or NVIDIA, must pass on both):
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/transcendental_agg_probe.mojo
 """
@@ -42,7 +43,7 @@ comptime DEFAULT_N = 60_000_000
 
 # 256-thread blocks; grid-stride over the column. warp.sum has no float64 path
 # (the warp-shuffle intrinsic has no f64 dtype on this stdlib), so we reduce in
-# SHARED memory (float64 IS supported in shared/global on NVIDIA) then atomic-add
+# shared memory (float64 is supported in shared/global memory on NVIDIA), then atomic-add
 # the block partial into the single device output.
 comptime BLOCK = 256
 comptime NBLOCKS = 4096          # grid-stride: plenty of blocks
@@ -56,10 +57,10 @@ comptime F_LN = 2
 
 # Precise f64 sqrt on NVIDIA: the stdlib `sqrt(Float64)` routes to the NVVM
 # `sqrt.approx.d` path, which is constrained off for f64 ("not supported for
-# approx sqrt on NVIDIA GPU"). We seed from the f32 approx sqrt and do ONE
-# Newton-Raphson step in f64 (y = 0.5*(y + x/y)); from a ~1e-7-accurate seed one
-# step yields ~1e-14 relative error -- far under the 1e-9 correctness tol. (x>0
-# here by construction.)
+# approx sqrt on NVIDIA GPU"). We seed from the f32 approx sqrt and do one
+# Newton-Raphson step in f64 (y = 0.5*(y + x/y)). From a seed accurate to ~1e-7,
+# one step gives ~1e-14 relative error, far below the 1e-9 correctness tolerance.
+# (x>0 here by construction.)
 @always_inline
 def _sqrt_f64(x: Float64) -> Float64:
     var y = Float64(sqrt(x.cast[DType.float32]()))
@@ -81,7 +82,7 @@ def _apply[F: Int](x: Float64) -> Float64:
 # float64 partial over its strided slice; the block reduces in shared memory
 # (tree reduction), thread 0 atomic-adds the block partial into the single device
 # output. This is the float64 analogue of seg_ungrouped_kernel_q6 (the int64 path
-# uses warp.sum, which has no f64 dtype here -> shared-mem reduction instead).
+# uses warp.sum, which has no f64 dtype here, so this uses a shared-memory reduction).
 def trans_sum_kernel[F: Int](
     x: UnsafePointer[Scalar[DType.float64], MutAnyOrigin],
     n: Int,

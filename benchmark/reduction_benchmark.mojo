@@ -5,8 +5,8 @@ Compares aggregate functions registered via the high-level `from_reduce`,
 against DuckDB's built-in aggregates (sum, max, min, product, avg).
 
 Two scenarios are tested:
-  1. **Ungrouped** — a single aggregate over the entire table.
-  2. **Grouped**  — aggregate per group with ~1 000 distinct groups.
+  1. Ungrouped: a single aggregate over the entire table.
+  2. Grouped: an aggregate per group with ~1 000 distinct groups.
 
 Change ``F`` below to switch between Float64 (DOUBLE) and Float32 (FLOAT).
 
@@ -36,7 +36,7 @@ def sql_type() -> String:
 
 
 # ===--------------------------------------------------------------------===#
-# Custom reduce kernel — sum of squares (not a DuckDB builtin)
+# Custom reduce kernel: sum of squares (not a DuckDB builtin)
 # ===--------------------------------------------------------------------===#
 
 def simd_add[w: SIMDLength](a: SIMD[F, w], b: SIMD[F, w]) -> SIMD[F, w]:
@@ -254,7 +254,7 @@ def main() raises:
 
     # ---- Grouped benchmarks ----
     print("\n" + "=" * 70)
-    print("GROUPED AGGREGATES (GROUP BY g — " + String(num_groups) + " groups)")
+    print("GROUPED AGGREGATES (GROUP BY g, " + String(num_groups) + " groups)")
     print("=" * 70)
 
     run_benchmark(

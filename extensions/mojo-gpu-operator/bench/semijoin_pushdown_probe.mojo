@@ -1,12 +1,12 @@
-"""PROBE (throwaway): semi-join pushdown feasibility for TPC-H Q5 fact materialize.
+"""Throwaway probe: semi-join pushdown feasibility for TPC-H Q5 fact materialize.
 
 Measures whether pushing Q5's dimension semi-join (ASIA region + 1994 orders)
-into the lineitem fact-scan SQL meaningfully reduces the rows/time DuckDB must
-materialize, vs. scanning the FULL lineitem table (the current GPU-operator
-cold path that uploads all fact rows and filters on-GPU).
+into the lineitem fact-scan SQL noticeably reduces the rows/time DuckDB must
+materialize, compared with scanning the full lineitem table (the current
+GPU-operator cold path that uploads all fact rows and filters on the GPU).
 
-Both A and B use the SAME forcing -- wrap in `SELECT count(*), sum(...)` over a
-subquery -- so DuckDB cannot optimize the scan away and the comparison is fair.
+Both A and B are forced the same way (wrapped in `SELECT count(*), sum(...)` over
+a subquery), so DuckDB cannot optimize the scan away and the comparison is fair.
 
 Run: pixi run mojo run extensions/mojo-gpu-operator/bench/semijoin_pushdown_probe.mojo
 """
@@ -33,7 +33,7 @@ comptime BODY_B = String(
 )
 
 
-# Forcing 1: aggregate that TOUCHES ALL 4 COLUMNS so DuckDB cannot reduce the
+# Forcing 1: aggregate that touches all 4 columns so DuckDB cannot reduce the
 # scan to a metadata-only count(*). Models "read all 4 cols through the filter".
 def agg4(body: String) -> String:
     return String(
@@ -92,7 +92,7 @@ def time_agg4(con: Connection, body: String, runs: Int) raises -> Float64:
     return median_of(times)
 
 
-# Forcing 2: CREATE TABLE AS -- physically materialize all 4 cols to a new
+# Forcing 2: CREATE TABLE AS, which physically materializes all 4 cols into a new
 # table. Closest analog to "materialize 4 cols into a host buffer for upload".
 def time_ctas(con: Connection, body: String, runs: Int) raises -> Float64:
     var times = List[Float64]()

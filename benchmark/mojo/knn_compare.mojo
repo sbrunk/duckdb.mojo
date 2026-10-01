@@ -1,18 +1,18 @@
-"""Vector-search (cosine top-k) benchmark harness — Mojo, via the duckdb.mojo client.
+"""Vector-search (cosine top-k) benchmark harness in Mojo, using the duckdb.mojo client.
 
-Compares, warm, on one dataset:
+Compares warm runs on one dataset:
   single-query top-k : stock-brute | cpu-simd (array override) | vss-HNSW | gpu
   batch top-k (M qs) : cpu (mojo_knn) | gpu (gpu_cosine_topk_batch)
 reporting median latency (ms) and recall@k vs the exact brute-force result.
 
 Loads the CPP-ABI extensions (version-locked, unsigned) per engine in its own
-connection. Skips an engine cleanly if its extension/feature is unavailable.
+connection. Skips an engine if its extension or feature is unavailable.
 
   pixi run bench-knn      # = mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo
 Tune N/M/K/k via the comptime constants. Extensions must be built first:
   pixi run overrides-build && pixi run gpu-op-build
 """
-from duckdb import DuckDB, Config, Connection, ApiLevel
+from duckdb import DuckDB, Config, Connection
 from std.time import perf_counter_ns
 from std.sys import has_accelerator
 from std.collections import List
@@ -41,19 +41,19 @@ def vec_literal() raises -> String:
 
 
 
-def new_con(unsigned: Bool) raises -> Connection[ApiLevel.CLIENT]:
+def new_con(unsigned: Bool) raises -> Connection:
     var cfg = Config()
     if unsigned:
         cfg.set("allow_unsigned_extensions", "true")
     return DuckDB.connect(DB_PATH, cfg)
 
 
-def consume(mut con: Connection[ApiLevel.CLIENT], sql: String) raises:
+def consume(mut con: Connection, sql: String) raises:
     for _ in con.execute(sql):
         pass
 
 
-def time_query(mut con: Connection[ApiLevel.CLIENT], sql: String) raises -> Float64:
+def time_query(mut con: Connection, sql: String) raises -> Float64:
     for _ in range(WARMUP):
         consume(con, sql)
     var times = List[Int]()
@@ -64,7 +64,7 @@ def time_query(mut con: Connection[ApiLevel.CLIENT], sql: String) raises -> Floa
     return warm_median(times)
 
 
-def topk_ids(mut con: Connection[ApiLevel.CLIENT], sql: String) raises -> List[Int64]:
+def topk_ids(mut con: Connection, sql: String) raises -> List[Int64]:
     var ids = List[Int64]()
     for row in con.execute(sql):
         ids.append(row.get[Int64](col=0))

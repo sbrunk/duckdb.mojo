@@ -6,7 +6,7 @@ buffers:
 
     void *mojo_gpu_cosine_init(const float *q, int64_t K, int64_t capacity_rows);
     int32_t mojo_gpu_cosine_run(void *handle, const float *emb, int64_t n_rows,
-                                float *out);   // 0 = ok, nonzero = error -> CPU fallback
+                                float *out);   // 0 = ok, nonzero = error (CPU fallback)
     void mojo_gpu_cosine_free(void *handle);
 
 The handle owns a DeviceContext + resident in/out/query DeviceBuffers, created
@@ -15,7 +15,7 @@ buffer, launches the warp-reduction kernel (one warp per row, `warp.sum`, no
 barriers), and copies the distances back. Built to `build/gpu_kernels.o` by
 build.sh and linked straight into the one extension .so.
 
-The compute core is the proven warp kernel from
+The compute core is the tested warp kernel from
 `benchmark/gpu_table_function_poc.mojo`, with K promoted to a runtime argument.
 """
 
@@ -161,15 +161,15 @@ from std.collections import Dict
 #
 # `DeviceContext()` pays a ~32 ms one-time GPU/driver init. The struct is
 # `RegisterPassable` with a single `_handle` pointer, so copying a DeviceContext
-# copies the handle and shares the same underlying AsyncRT context — copies are
-# free, only construction is expensive. Every "pin" engine here only needs a
+# copies the handle and shares the same underlying AsyncRT context. Copies are
+# free; only construction is expensive. Every "pin" engine here only needs a
 # context to alloc buffers / enqueue kernels / copy / sync, all of which are
 # fine on a shared context. So we create it exactly once (lazily, on first
 # `shared_device_context()` call, or eagerly at extension LOAD via
 # `mojo_gpu_ctx_init`) and hand out cheap copies thereafter.
 #
-# `_Global` provides the proper process-wide storage + lazy guarded init. NOT
-# thread-safe to *create* concurrently, but pins in this extension run
+# `_Global` provides the proper process-wide storage + lazy guarded init. It is
+# not thread-safe to create concurrently, but pins in this extension run
 # single-threaded per query (every pin engine sets MaxThreads()==1 / declares
 # ParallelSource()==false), and the eager LOAD-time init means the expensive
 # creation happens before any query runs.
@@ -239,8 +239,8 @@ def cosine_kernel_warp(
 # fp16-resident variant of `cosine_kernel_warp`.
 #
 # Identical algorithm and tie-break to the fp32 kernel, but the embedding matrix
-# is RESIDENT as float16 (half the VRAM, half the bandwidth of the dominant
-# scan). Storage is half; MATH stays fp32: each float16 element is loaded and
+# is resident as float16 (half the VRAM, half the bandwidth of the dominant
+# scan). Storage is half; math stays fp32: each float16 element is loaded and
 # immediately cast to Float32, so the dot product and the L2-norm accumulate in
 # fp32. The query stays fp32 (it is tiny and per-call). This preserves nearly all
 # accuracy for unit-normalized embeddings while halving the bandwidth-bound read.
@@ -264,7 +264,7 @@ def cosine_kernel_warp_f16(
     var na = Float32(0)
     var i = lane
     while i < K:
-        # Load the stored half, cast to fp32 BEFORE any arithmetic so the dot and
+        # Load the stored half, cast to fp32 before any arithmetic so the dot and
         # norm accumulate in fp32 (only the storage/read is half-width).
         var av = emb[base + i].cast[DType.float32]()
         dot += av * q[i]
@@ -365,8 +365,8 @@ def mojo_gpu_cosine_run(
         # Stage this morsel into the resident input buffer (a copy). A plain
         # enqueue_copy is the fast path: the driver stages the pageable source
         # through its own pinned bounce buffer in one shot. (map_to_host is the
-        # WRONG tool here — it is bidirectional, DMAing device->host on enter, so
-        # for a pure upload it ~3.4x slower on PCIe; measured on RTX 4090.)
+        # wrong tool here: it is bidirectional, DMAing device to host on enter, so
+        # for a pure upload it is ~3.4x slower on PCIe; measured on RTX 4090.)
         var in_sub = DeviceBuffer(
             st.ctx, st.in_buf.unsafe_ptr(), n_rows * st.K, owning=False
         )
@@ -413,10 +413,10 @@ struct PinState(Movable):
     ]  # resident column: n_rows * K floats
     var q_dev: DeviceBuffer[DType.float32]
     var out_dev: DeviceBuffer[DType.float32]  # resident dist scratch: n_rows
-    # Resident top-k scratch, allocated ONCE at pin time and reused every query
-    # so the warm top-k path does ZERO per-call device/host allocation. Sized for
+    # Resident top-k scratch, allocated once at pin time and reused every query
+    # so the warm top-k path does no per-call device/host allocation. Sized for
     # the worst case at this n_rows: nblocks (capped, depends only on n_rows/k) at
-    # the largest k we support (TOPK_MAX) => cand_cap candidates.
+    # the largest k we support (TOPK_MAX), giving cand_cap candidates.
     var cand_dist_dev: DeviceBuffer[DType.float32]
     var cand_id_dev: DeviceBuffer[DType.int64]
     var cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin]
@@ -465,7 +465,7 @@ def mojo_gpu_pin(
         var emb_dev = ctx.enqueue_create_buffer[DType.float32](n_rows * K)
         var q_dev = ctx.enqueue_create_buffer[DType.float32](K)
         var out_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
-        # Resident top-k candidate scratch, sized ONCE for the worst case at this
+        # Resident top-k candidate scratch, sized once for the worst case at this
         # n_rows: nblocks depends only on n_rows/k (capped in _topk_nblocks), so the
         # max candidate count is at the largest k we support (TOPK_MAX). Every warm
         # top-k query reuses these instead of allocating per call.
@@ -474,8 +474,8 @@ def mojo_gpu_pin(
         var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
         # One-time pin upload. enqueue_copy of the pageable source is the fast
         # path: the driver bounces it through its own pinned buffer in one shot.
-        # (map_to_host would be ~3.4x slower here — it is bidirectional and DMAs
-        # device->host on enter; measured on RTX 4090.) Single sync afterwards;
+        # (map_to_host would be ~3.4x slower here: it is bidirectional and DMAs
+        # device to host on enter; measured on RTX 4090.) Single sync afterwards;
         # the buffer allocs above are ordered on the one runtime stream.
         ctx.enqueue_copy(emb_dev, emb)
         ctx.synchronize()
@@ -551,8 +551,8 @@ def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi("
 
 
 # Phase 1 column-pool measurement hook: the monotonic count of bytes actually
-# pushed host->device on pool MISSES (GPU_OP_COLPOOL). The dedup proof reads the
-# DELTA across queries -- once a shared column is resident later signatures HIT
+# pushed host to device on pool misses (GPU_OP_COLPOOL). The dedup check reads the
+# delta across queries: once a shared column is resident, later signatures hit
 # and add nothing, so the per-query delta shrinks. Returns 0 if the pool was
 # never touched (flag off / no eligible query). Diagnostic only.
 @export("mojo_gpu_colpool_uploaded_bytes")
@@ -563,7 +563,7 @@ def mojo_gpu_colpool_uploaded_bytes() abi("C") -> Int64:
         return Int64(0)
 
 
-# Current RESIDENT pool footprint (sum of pooled per-column buffer bytes) and the
+# Current resident pool footprint (sum of pooled per-column buffer bytes) and the
 # tracked _pin2 footprint. For the VRAM-bound assertion (stays under budget).
 @export("mojo_gpu_colpool_pool_bytes")
 def mojo_gpu_colpool_pool_bytes() abi("C") -> Int64:
@@ -640,13 +640,13 @@ def mojo_gpu_colpool_costaware() abi("C") -> Int64:
 # Same contract as PinState/mojo_gpu_pin/mojo_gpu_pin_query_topk, but the
 # resident embedding matrix is stored as float16: half the VRAM (doubling the
 # max N at a given budget) and half the read bandwidth of the distance scan,
-# which is the bandwidth floor at 1M rows. The fp32->fp16 conversion is done
-# ONCE on the host at pin time (one-time cost), then uploaded as half. The
+# which is the bandwidth floor at 1M rows. The fp32 to fp16 conversion is done
+# once on the host at pin time (one-time cost), then uploaded as half. The
 # distance kernel (`cosine_kernel_warp_f16`) casts each half back to fp32 and
 # accumulates the dot/norm in fp32, so only storage is lossy. The candidate
 # scratch, top-k partial kernel, and host merge are shared with the fp32 path.
 #
-# fp16 handles are a DISTINCT struct from PinState; free them via
+# fp16 handles are a distinct struct from PinState; free them via
 # `mojo_gpu_pin_free_f16` (mojo_gpu_pin_free stays the fp32 free, unchanged).
 # ===-------------------------------------------------------------------===#
 struct PinStateF16(Movable):
@@ -689,7 +689,7 @@ struct PinStateF16(Movable):
         self.K = K
 
 
-# Pin a column as fp16: takes the SAME fp32 host embedding data, converts it to
+# Pin a column as fp16: takes the same fp32 host embedding data, converts it to
 # float16 on the host once, and uploads the halves to a resident device buffer.
 # Returns the handle as an integer address (0 == failure).
 @export("mojo_gpu_pin_f16")
@@ -707,12 +707,12 @@ def mojo_gpu_pin_f16(
         var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
         var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
 
-        # One-time fp32->fp16 conversion on the host, then a single enqueue_copy
+        # One-time fp32 to fp16 conversion on the host, then a single enqueue_copy
         # of the half buffer (the conversion cost is paid once at pin; every query
         # then reads half the bytes from VRAM). Convert into a plain host buffer
         # and let the driver bounce it to device in one shot: writing into
         # emb_dev.map_to_host() instead is ~3.4x slower, since map_to_host is
-        # bidirectional and DMAs device->host on enter (measured on RTX 4090).
+        # bidirectional and DMAs device to host on enter (measured on RTX 4090).
         var total = n_rows * K
         var h16 = alloc[Float16](total)
         for j in range(total):
@@ -824,23 +824,23 @@ def mojo_gpu_pin_free_f16(
 
 
 # ===-------------------------------------------------------------------===#
-# GPU EXACT TOP-K over the pinned column.
+# GPU exact top-k over the pinned column.
 #
-# The plain `mojo_gpu_pin_query` returns ALL N distances to the host (DuckDB then
+# The plain `mojo_gpu_pin_query` returns all N distances to the host (DuckDB then
 # does ORDER BY ... LIMIT k). For kNN that streams N floats across PCIe per query
-# just to throw all but k away. The top-k path computes the same exact cosine
-# distances on the GPU but returns ONLY the k nearest rows, so the transfer is
+# only to throw all but k away. The top-k path computes the same exact cosine
+# distances on the GPU but returns only the k nearest rows, so the transfer is
 # ~nblocks*k (or k) floats+ids, never N.
 #
-# Algorithm (per-block k-best -> host merge), correctness-first:
-#   1. Kernel A == the proven `cosine_kernel_warp`: compute all N distances into
-#      a RESIDENT device `dist` buffer (no host transfer).
+# Algorithm (per-block k-best, then host merge), correctness first:
+#   1. Kernel A is the tested `cosine_kernel_warp`: compute all N distances into
+#      a resident device `dist` buffer (no host transfer).
 #   2. Kernel B (`topk_partial_kernel`): one block (WARP_SIZE lanes) per strided
-#      row range maintains a per-block k-best in SHARED memory (sorted ascending
+#      row range maintains a per-block k-best in shared memory (sorted ascending
 #      by the (dist, rowid) tie-break key) via threshold-insert, and writes its k
 #      candidates as (dist, rowid) into a device `cand` buffer of size nblocks*k.
 #   3. Host: copy the nblocks*k candidates back (nblocks*k << N) and stable-select
-#      the final k under the SAME (dist asc, rowid asc) comparator. This guarantees
+#      the final k under the same (dist asc, rowid asc) comparator. This guarantees
 #      the result equals a CPU stable top-k bit-for-bit.
 #
 # Tie-break: every comparison is "smaller key wins", key = (dist, rowid). Equal
@@ -857,7 +857,7 @@ comptime TOPK_MAX = 1024
 
 # Per-block partial top-k over a resident `dist` buffer.
 #
-# Shared layout: `sd[k]` (distances) + `si[k]` (rowids), kept sorted ASCENDING by
+# Shared layout: `sd[k]` (distances) + `si[k]` (rowids), kept sorted ascending by
 # (dist, rowid) with `sd[cnt-1]` the current worst kept. A candidate row beats the
 # buffer iff it is smaller than the worst (or the buffer isn't yet full); inserts
 # are serialized across the warp's lanes (one lane at a time) so the shared buffer
@@ -874,7 +874,7 @@ def topk_partial_kernel(
     var n_rows = Int(n_rows_dp)
     var k = Int(k_dp)
     var nblocks = Int(nblocks_dp)
-    # Raw-pointer shared memory (std.memory.stack_allocation) — avoids a dependency
+    # Raw-pointer shared memory (std.memory.stack_allocation) avoids a dependency
     # on the `layout` package (TileTensor), which isn't installed in every Mojo env.
     var sd = stack_allocation[
         TOPK_MAX, Scalar[DType.float32], address_space = AddressSpace.SHARED
@@ -894,7 +894,7 @@ def topk_partial_kernel(
         scnt[0] = 0
     barrier()
 
-    # Uniform wave count across the WHOLE block: every lane runs the same number
+    # Uniform wave count across the whole block: every lane runs the same number
     # of waves and reaches every `barrier()` (a barrier with divergent
     # participation is undefined). Lanes whose row is out of range carry an
     # "invalid" candidate (rowid -1) that the insert step skips.
@@ -906,7 +906,7 @@ def topk_partial_kernel(
     for w in range(nwaves):
         # Each lane reads its own candidate (dist, rowid) for this wave. The warp
         # then folds the (up to WARP) candidates into the one shared k-buffer, with
-        # each lane inserting its OWN candidate when it is that lane's turn -- the
+        # each lane inserting its own candidate when it is that lane's turn. The
         # inserting lane holds the values in registers, so no cross-lane shuffle is
         # needed. Serializing by lane keeps the shared buffer consistent without
         # atomics. A barrier between turns publishes the previous insert.
@@ -968,7 +968,7 @@ def _topk_nblocks(n_rows: Int, k: Int) -> Int:
     var nb = (n_rows + WARP - 1) // WARP
     if nb < 1:
         nb = 1
-    # Keep the candidate set small: at most ~256 blocks => nblocks*k transfer.
+    # Keep the candidate set small: at most ~256 blocks, so a small nblocks*k transfer.
     var cap = 256
     # ...but never fewer rows-per-block-worth of parallelism than makes sense.
     if nb > cap:
@@ -976,12 +976,12 @@ def _topk_nblocks(n_rows: Int, k: Int) -> Int:
     return nb
 
 
-# Number of blocks for the BATCHED fused kernel. Unlike the single-query top-k
-# (whose candidate set is just nblocks*k, so 256 blocks suffices), the batched
-# kernel does M dot products per row, so it is COMPUTE-bound: it must launch
+# Number of blocks for the batched fused kernel. Unlike the single-query top-k
+# (whose candidate set is only nblocks*k, so 256 blocks suffices), the batched
+# kernel does M dot products per row, so it is compute-bound: it must launch
 # enough warps to saturate the GPU's SMs, or per-query latency plateaus far above
 # the bandwidth floor. We therefore use a much higher block cap (one warp per
-# ~rows_per_block rows). The candidate set is nblocks*qcount*k -- still a bounded
+# ~rows_per_block rows). The candidate set is nblocks*qcount*k, still a bounded
 # host transfer because qcount*k <= TOPK_BATCH_CAND_CAP and nblocks is capped.
 def _topk_nblocks_batch(n_rows: Int) -> Int:
     var nb = (n_rows + WARP - 1) // WARP
@@ -1029,9 +1029,9 @@ def mojo_gpu_pin_query_topk(
             st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
         )
 
-        # Enqueue the whole pipeline on the stream, then a SINGLE synchronize
-        # before the host merge: q H->D, distance kernel, partial top-k kernel,
-        # candidate D->H -- one sync per warm query (was two), zero allocations.
+        # Enqueue the whole pipeline on the stream, then a single synchronize
+        # before the host merge: q H2D, distance kernel, partial top-k kernel,
+        # candidate D2H. One sync per warm query (was two), no allocations.
         st.ctx.enqueue_function[cosine_kernel_warp](
             st.emb_dev,
             st.q_dev,
@@ -1063,45 +1063,45 @@ def mojo_gpu_pin_query_topk(
 
 
 # ===-------------------------------------------------------------------===#
-# TRUE BATCHED EXACT TOP-K: read the resident N*K matrix ONCE per query-tile.
+# True batched exact top-k: read the resident N*K matrix once per query-tile.
 #
-# The old batched entry just looped the single-query path: it re-read the whole
-# N*K matrix M times (one cosine kernel launch per query) -- wasting the dominant
-# bandwidth cost, which is exactly the regime where the GPU should crush a per-
-# query index (HNSW can't use its index for batched queries at all).
+# The old batched entry only looped the single-query path: it re-read the whole
+# N*K matrix M times (one cosine kernel launch per query). That wasted the dominant
+# bandwidth cost, which is exactly where the GPU should clearly beat a per-query
+# index (HNSW can't use its index for batched queries at all).
 #
 # The fused kernel below amortizes that read. Layout:
-#   * Grid  = nblocks (same cap as _topk_nblocks); one WARP per block.
+#   * Grid  = nblocks (same cap as _topk_nblocks); one warp per block.
 #   * Each block strides over its assigned embedding rows. For each row it loads
-#     the row's lane-strided slice into REGISTERS once and computes the L2 norm
+#     the row's lane-strided slice into registers once and computes the L2 norm
 #     once (norm is query-independent), then loops over the QCOUNT queries in this
 #     tile, reusing the in-register row slice to form each query's dot product.
-#     => every matrix element crosses the memory bus exactly ONCE per query-tile,
-#        not once per query.
-#   * Per-block, per-query top-k lives in SHARED memory: sd[QCOUNT*k] distances +
-#     si[QCOUNT*k] rowids + scnt[QCOUNT] fills, each kept ascending by the SAME
+#     So every matrix element crosses the memory bus exactly once per query-tile,
+#     not once per query.
+#   * Per-block, per-query top-k lives in shared memory: sd[QCOUNT*k] distances +
+#     si[QCOUNT*k] rowids + scnt[QCOUNT] fills, each kept ascending by the same
 #     (dist, rowid) tie-break as topk_partial_kernel / the single-query path, so a
 #     batched result for query j is bit-for-bit the single-query result for j.
 #   * The kernel emits nblocks*QCOUNT*k candidates (per query, per block); the host
 #     merges per query exactly as the single-query path does.
 #
 # Query tiling: the per-block shared top-k is QCOUNT*(4+8) bytes + QCOUNT*4. To
-# stay within a safe shared budget for ALL k up to TOPK_MAX we cap the live tile
+# stay within a safe shared budget for all k up to TOPK_MAX we cap the live tile
 # at TOPK_BATCH_CAND_CAP = QCOUNT*k candidate slots; the host splits M into tiles
 # of qtile = min(M, TOPK_BATCH_CAND_CAP // k) queries and launches the fused
-# kernel once per tile. So the matrix is read ceil(M / qtile) times, NOT M times:
+# kernel once per tile. So the matrix is read ceil(M / qtile) times, not M times:
 # at k=10 a tile is ~410 queries (one matrix read for the whole M<=410 batch); at
 # k=100 it is ~40; the read is amortized across the tile either way.
 #
-# The query vectors stay in GLOBAL memory (they are tiny, M*K, and after the
+# The query vectors stay in global memory (they are tiny, M*K, and after the
 # first row they live in L2); only their per-element reads recur, never the N*K
 # matrix.
 # ===-------------------------------------------------------------------===#
 
 # Max candidate slots (QCOUNT*k) kept live in one block's shared top-k. Bounds the
 # shared-memory footprint per block: sd (4B) + si (8B) per slot + scnt (4B/query,
-# and a tile holds at most CAP queries when k==1) => CAP*(4+8) + CAP*4 = 16*CAP
-# bytes. 1536 => 24 KB, safely within a block's shared memory on ALL targets
+# and a tile holds at most CAP queries when k==1), so CAP*(4+8) + CAP*4 = 16*CAP
+# bytes. 1536 gives 24 KB, safely within a block's shared memory on all targets
 # (Apple ~32 KB threadgroup; NVIDIA/AMD 48 KB+). Caps the per-tile query count.
 comptime TOPK_BATCH_CAND_CAP = 1536
 # Max embedding dims the in-register row cache holds per lane: ceil(K/WARP). At
@@ -1111,7 +1111,7 @@ comptime BATCH_MAX_LANE_DIMS = 64
 
 # Fused batched distance + per-query partial top-k over a query-tile.
 #
-# `qs` is the FULL M*K query buffer; `q0` is this tile's first query index and
+# `qs` is the full M*K query buffer; `q0` is this tile's first query index and
 # `qcount` (<= qtile, and qtile*k <= TOPK_BATCH_CAND_CAP) the number of queries in
 # the tile. `qnorms` holds all M precomputed query norms. Candidates are written
 # row-major [block*qcount*k + local_q*k + slot] into cand_dist/cand_id.
@@ -1158,13 +1158,13 @@ def topk_batch_kernel(
             scnt[lq] = 0
     barrier()
 
-    # In-register cache of this lane's strided slice of the CURRENT embedding row
-    # (lane i holds dims i, i+WARP, ...). Loaded ONCE per row, reused for every
-    # query in the tile -- this is the amortization: each matrix element crosses
+    # In-register cache of this lane's strided slice of the current embedding row
+    # (lane i holds dims i, i+WARP, ...). Loaded once per row, reused for every
+    # query in the tile. This is the amortization: each matrix element crosses
     # the bus once per tile, not once per query.
     var rowvals = stack_allocation[BATCH_MAX_LANE_DIMS, Scalar[DType.float32]]()
 
-    # One WARP cooperates on ONE row at a time (lanes stride over K, warp.sum
+    # One warp cooperates on one row at a time (lanes stride over K, warp.sum
     # reduces). The block sweeps rows bid, bid+nblocks, bid+2*nblocks, ...
     var row = bid
     while row < n_rows:
@@ -1296,7 +1296,7 @@ def topk_batch_kernel_f16(
         var nd = 0
         var i = lane
         while i < K:
-            # Cast the stored half to fp32 BEFORE arithmetic (storage-only loss).
+            # Cast the stored half to fp32 before arithmetic (storage-only loss).
             var av = emb[base + i].cast[DType.float32]()
             rowvals[nd] = av
             na += av * av
@@ -1359,12 +1359,12 @@ def topk_batch_kernel_f16(
                     cand_id[out_base + j] = Int64(-1)
 
 
-# GPU second-stage merge: one block (one WARP) per query reduces that query's
+# GPU second-stage merge: one block (one warp) per query reduces that query's
 # nblocks*k scattered per-block candidates down to the final k, in shared memory,
-# under the SAME (dist, rowid) tie-break as topk_partial_kernel / the host merge.
+# under the same (dist, rowid) tie-break as topk_partial_kernel / the host merge.
 # This keeps the cross-block merge on the GPU so the host only ever receives the
-# final M*k results -- without it, the host merge over nblocks*k candidates per
-# query (nblocks is large to saturate the GPU) becomes the throughput wall.
+# final M*k results. Without it, the host merge over nblocks*k candidates per
+# query (nblocks is large to saturate the GPU) limits throughput.
 #
 # Candidate layout (from topk_batch_kernel): for query lq in this tile, block b's
 # k candidates live at cand[(b*qcount + lq)*k + j]. The merged final k for query
@@ -1409,7 +1409,7 @@ def topk_batch_merge_kernel(
         var my_d = Float32(3.0e38)
         var my_id = Int64(-1)
         if valid:
-            # candidate c => block b = c // k, slot j = c % k.
+            # candidate c: block b = c // k, slot j = c % k.
             var b = c // k
             var j = c % k
             var idx = (b * qcount + lq) * k + j
@@ -1489,20 +1489,20 @@ def _run_topk_batch[
     out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
 ) raises:
     # `metric` (0=cosine, 1=L2, 2=inner-product; see tc_knn.TC_METRIC_*). Only
-    # the FUSED tensor-core path below honors non-cosine metrics; the scalar
+    # the fused tensor-core path below honors non-cosine metrics; the scalar
     # fallback is cosine-only, so a non-cosine request that cannot take the
     # fused path is rejected (the C++ caller then falls back to stock DuckDB).
-    # FUSED tensor-core path (NVIDIA-only, opt-in). Routed ONLY when (a) the
+    # Fused tensor-core path (NVIDIA-only, opt-in). Routed only when (a) the
     # resident matrix is fp16 (the fused MMA kernel is fp16), (b) the build
     # targets an NVIDIA accelerator (`has_nvidia_gpu_accelerator()`, the
-    # HOST-side comptime query; the in-kernel `is_nvidia_gpu()` triple check is
+    # host-side comptime query; the in-kernel `is_nvidia_gpu()` triple check is
     # always False in host context, so it can't gate this host branch), (c) the
     # env flag GPU_OP_TENSORCORE is set, and (d) (K, k) is a supported fused
     # shape. On Apple `has_nvidia_gpu_accelerator()` is comptime-False, so this
-    # branch -- and the tensor-core kernel instantiation inside
-    # `run_tc_knn_batch` -- is never compiled. On any runtime miss we fall
-    # through to the existing scalar path below (zero behavior change with the
-    # flag unset). Default OFF.
+    # branch (and the tensor-core kernel instantiation inside
+    # `run_tc_knn_batch`) is never compiled. On any runtime miss we fall
+    # through to the existing scalar path below (no behavior change with the
+    # flag unset). Default off.
     comptime if is_f16 and has_nvidia_gpu_accelerator():
         if getenv("GPU_OP_TENSORCORE", "") != "" and tc_knn_supported(K, k):
             run_tc_knn_batch(
@@ -1510,16 +1510,16 @@ def _run_topk_batch[
             )
             return
 
-    # FUSED Apple-Silicon (M1-M4) path: the 8x8 `simdgroup_matrix` MMA analogue
-    # of the NVIDIA tensor-core path above. Routed ONLY when (a) the resident
+    # Fused Apple-Silicon (M1-M4) path: the 8x8 `simdgroup_matrix` MMA analogue
+    # of the NVIDIA tensor-core path above. Routed only when (a) the resident
     # matrix is fp16 (the fused MMA is fp16), (b) the build targets an Apple GPU
-    # (`has_apple_gpu_accelerator()`, the HOST comptime query; on NVIDIA this is
-    # comptime-False so the Apple kernel instantiation never compiles -- and the
-    # NVIDIA branch above is correspondingly never compiled on Apple), (c) the
-    # env flag GPU_OP_TENSORCORE is set, (d) the metric is COSINE (the only
-    # metric the Apple fused path implements -- normalized inputs), and (e)
+    # (`has_apple_gpu_accelerator()`, the host comptime query; on NVIDIA this is
+    # comptime-False so the Apple kernel instantiation never compiles, and the
+    # NVIDIA branch above is likewise never compiled on Apple), (c) the
+    # env flag GPU_OP_TENSORCORE is set, (d) the metric is cosine (the only
+    # metric the Apple fused path implements, for normalized inputs), and (e)
     # (K, k) is a supported fused shape. Any runtime miss falls through to the
-    # scalar path below (zero behavior change with the flag unset). Default OFF.
+    # scalar path below (no behavior change with the flag unset). Default off.
     comptime if is_f16 and has_apple_gpu_accelerator():
         if (
             getenv("GPU_OP_TENSORCORE", "") != ""
@@ -1531,9 +1531,9 @@ def _run_topk_batch[
             )
             return
 
-    # Non-cosine metrics are ONLY implemented on the fused path above. If we did
+    # Non-cosine metrics are only implemented on the fused path above. If we did
     # not route there (flag unset / non-NVIDIA / unsupported shape / fp32),
-    # there is no correct scalar implementation -- error out so the caller falls
+    # there is no correct scalar implementation, so error out and let the caller fall
     # back to stock DuckDB rather than silently returning cosine results.
     if metric != 0:
         raise Error(
@@ -1564,7 +1564,7 @@ def _run_topk_batch[
     var cand_dist_dev = ctx.enqueue_create_buffer[DType.float32](cand_cap)
     var cand_id_dev = ctx.enqueue_create_buffer[DType.int64](cand_cap)
     # Final merged results for one tile (qtile*k) live on the device; only these
-    # M*k (NOT the nblocks*qtile*k candidates) ever cross PCIe -- the cross-block
+    # M*k (not the nblocks*qtile*k candidates) ever cross PCIe, because the cross-block
     # merge runs on the GPU (topk_batch_merge_kernel), so the host does no top-k.
     var merged_dist_dev = ctx.enqueue_create_buffer[DType.float32](qtile * k)
     var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](qtile * k)
@@ -1643,7 +1643,7 @@ def _run_topk_batch[
         ctx.enqueue_copy(merged_id_h, mid_view)
         ctx.synchronize()
 
-        # The GPU merge already produced exact ascending top-k per query; just copy
+        # The GPU merge already produced exact ascending top-k per query; only copy
         # each query's k results into the caller's row-major M*k output.
         for lq in range(qcount):
             var m = q0 + lq
@@ -1659,9 +1659,9 @@ def _run_topk_batch[
 
 # Batched exact top-k (fp32-resident). M query vectors (row-major M*K) scored
 # against the resident matrix, results row-major M*k into out_ids/out_dists. The
-# matrix is read ONCE per query-tile (see topk_batch_kernel), so the dominant
-# bandwidth cost is amortized across the batch -- batch-M per-query latency drops
-# sharply with M. Returns the SAME exact (ids, dists) as M single-query calls.
+# matrix is read once per query-tile (see topk_batch_kernel), so the dominant
+# bandwidth cost is amortized across the batch and batch-M per-query latency drops
+# sharply with M. Returns the same exact (ids, dists) as M single-query calls.
 @export("mojo_gpu_pin_query_topk_batch")
 def mojo_gpu_pin_query_topk_batch(
     handle: UnsafePointer[NoneType, MutUntrackedOrigin],
@@ -1759,7 +1759,7 @@ def mojo_gpu_pin_query_topk_batch_f16(
     )
 
 
-# Batched fp16 top-k with an explicit metric (NEW symbol; the existing cosine
+# Batched fp16 top-k with an explicit metric (new symbol; the existing cosine
 # entry above is untouched). metric: 0=cosine, 1=L2 (array_distance, squared
 # euclidean), 2=inner-product (array_negative_inner_product / -dot). Non-cosine
 # only works on the fused tensor-core path (GPU_OP_TENSORCORE on an NVIDIA build,
@@ -1820,7 +1820,7 @@ def _host_merge_topk(
 
 
 # ===-------------------------------------------------------------------===#
-# Descriptor C-ABI wrappers (Stage 1) -- MOVED here from descriptor.mojo so the
+# Descriptor C-ABI wrappers (Stage 1), moved here from descriptor.mojo so the
 # descriptor logic and the GPU kernels share one compilation unit (the dylib).
 # `import descriptor` brings the pure logic; a bare import would strip exports,
 # which is why these thin wrappers are (re)defined in this root build file.
@@ -1852,7 +1852,7 @@ def mojo_gpu_desc_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi(
     if Int(handle) == 0:
         return
     # Drop any Stage-2 exec state keyed by this handle (the pin cache is
-    # process-lifetime and intentionally NOT evicted here).
+    # process-lifetime and intentionally not evicted here).
     _exec_drop(Int(handle))
     var p = handle.bitcast[GpuPlanDescriptor]()
     p.destroy_pointee()
@@ -1870,8 +1870,8 @@ def mojo_gpu_desc_kind(
 
 # GPU_OP_TRANSCENDENTAL: 1 if any aggregate's metric program contains a
 # transcendental op (sqrt/exp/ln/log10/sin/cos). The C++ router uses this to
-# enable routing for a transcendental aggregate whose KIND is UNKNOWN (e.g. a
-# grouped sum/avg of f(col) -- no TPC-H kind matches the GROUP BY shape). The
+# enable routing for a transcendental aggregate whose kind is UNKNOWN (e.g. a
+# grouped sum/avg of f(col), where no TPC-H kind matches the GROUP BY shape). The
 # Mojo descriptor scope guard already validated the shape (UNGROUPED/DENSE/HASH,
 # no FK dims, sum/avg/count, NVIDIA-only); a non-buildable shape returns a null
 # handle, so this only ever sees an accepted transcendental descriptor.
@@ -1886,7 +1886,7 @@ def mojo_gpu_desc_is_transcendental(
 
 # GPU_OP_STATS: 1 if any aggregate is a statistical aggregate (stddev/var/covar/
 # corr/regr_*). The C++ router uses this to enable routing for a stat plan whose
-# KIND is UNKNOWN. The Mojo scope guard already validated the shape (UNGROUPED/
+# kind is UNKNOWN. The Mojo scope guard already validated the shape (UNGROUPED/
 # DENSE, no FK dims, NVIDIA-only); a non-buildable shape returns a null handle.
 @export("mojo_gpu_desc_is_stats")
 def mojo_gpu_desc_is_stats(
@@ -1898,14 +1898,14 @@ def mojo_gpu_desc_is_stats(
 
 
 # A1 unified pass model (GPU_OP_NULLABLE): 1 iff this descriptor is an UNGROUPED,
-# INT-path (NOT transcendental/stats) aggregate whose every aggregate is SUM / AVG /
-# count(*) -- i.e. an int multi-aggregate the generic ungrouped int128 kernel executes
+# int-path (not transcendental/stats) aggregate whose every aggregate is SUM / AVG /
+# count(*), i.e. an int multi-aggregate the generic ungrouped int128 kernel executes
 # (count(*) + sum(x), sum(x)+sum(y), count(*)+sum+avg, ...). The C++ router uses this
-# to enable routing for such a plan whose KIND is UNKNOWN (multi-agg never matches a
+# to enable routing for such a plan whose kind is UNKNOWN (multi-agg never matches a
 # single TPC-H kind). Restricting to all-int avoids mixing an int128 SUM with an f64
 # stat/transcendental metric on the f64 path (which would sum the int as a lossy
-# double). MIN/MAX -> 0 (they decline). A single-agg ungrouped int already routes via
-# KIND_Q6, so this only ADDS the multi-agg case.
+# double). MIN/MAX return 0 (they decline). A single-agg ungrouped int already routes via
+# KIND_Q6, so this only adds the multi-agg case.
 @export("mojo_gpu_desc_a1_ungrouped_ok")
 def mojo_gpu_desc_a1_ungrouped_ok(
     handle: UnsafePointer[NoneType, MutUntrackedOrigin]
@@ -1922,18 +1922,18 @@ def mojo_gpu_desc_a1_ungrouped_ok(
     for ai in range(len(d.aggregates)):
         var k = d.aggregates[ai].kind
         if k != AGG_SUM and k != AGG_AVG and k != AGG_COUNT_STAR:
-            return 0  # MIN/MAX/other -> decline
+            return 0  # MIN/MAX/other: decline
     return 1
 
 
-# GPU_OP_NULLABLE_GROUPED: 1 iff this descriptor is a DENSE_GROUP, INT-path (NOT
-# transcendental/stats) aggregate whose every aggregate is SUM / AVG / count(*) -- an
+# GPU_OP_NULLABLE_GROUPED: 1 iff this descriptor is a DENSE_GROUP, int-path (not
+# transcendental/stats) aggregate whose every aggregate is SUM / AVG / count(*): an
 # int grouped aggregate the generic dense int128 kernel executes. The C++ router uses
 # this (when GPU_OP_NULLABLE_GROUPED is on) to enable routing for such a plan whose
-# KIND is UNKNOWN (a generic GROUP BY shape -- KIND_Q1 needs 2 keys + 8 aggs). The A1
+# kind is UNKNOWN (a generic GROUP BY shape; KIND_Q1 needs 2 keys + 8 aggs). The A1
 # per-metric validity multiply + per-group validity-count NULL marking (both g*M-indexed,
 # already per-group) handle nullable agg columns; grouped_count_m gives per-group
-# existence; the C++ gate requires NOT-NULL group keys. Restricting to all-int avoids
+# existence; the C++ gate requires NOT NULL group keys. Restricting to all-int avoids
 # mixing an int128 SUM with an f64 stat on the f64 dense path.
 @export("mojo_gpu_desc_a1_grouped_ok")
 def mojo_gpu_desc_a1_grouped_ok(
@@ -2001,8 +2001,8 @@ def mojo_gpu_desc_fact_table(
 
 # ===-------------------------------------------------------------------===#
 # Stage-2 execution shuttle (Q6 class). The descriptor drives execution:
-# materialize SQL -> feed flat columns -> finalize (run the existing Q6 kernel)
-# -> typed results. Process-global maps keyed by the descriptor handle int.
+# materialize SQL, feed flat columns, finalize (run the existing Q6 kernel),
+# then return typed results. Process-global maps keyed by the descriptor handle int.
 # ===-------------------------------------------------------------------===#
 
 # One fed flat column: an owned host copy of the transient DuckDB pointer, plus
@@ -2013,7 +2013,7 @@ struct FedColumn(Movable):
     var elem_size: Int
     var type_tag: Int64
     # Decimal scale of the source column (0 for non-DECIMAL). GPU_OP_STATS reads
-    # this to build col_div for a stat-argument fact column that is NOT a filter
+    # this to build col_div for a stat-argument fact column that is not a filter
     # column (filter columns get their scale from the filter constant). The legacy
     # TPC-H paths hardcode scale 2 and never read this (only the stat path does).
     var dec_scale: Int64
@@ -2023,8 +2023,8 @@ struct FedColumn(Movable):
     # source DuckDB result (and its string heap) is freed. None for non-VARCHAR.
     var str_heap: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
     # GPU_OP_NULLABLE: optional per-row validity (1 byte/row, 1=valid, 0=SQL NULL).
-    # None when the column carries no NULLs (the common case / all NOT-NULL columns)
-    # -> every row is valid. C++ feeds this (via mojo_gpu_feed_validity) ONLY for a
+    # None when the column carries no NULLs (the common case / all NOT NULL columns),
+    # meaning every row is valid. C++ feeds this (via mojo_gpu_feed_validity) only for a
     # column the materialize scan observed an actual NULL in; the finalize pass-bake
     # ANDs it into the host pass column so a NULL row is excluded exactly like a
     # filtered-out row (SQL aggregate NULL semantics). See _pin_finalize_generic.
@@ -2059,7 +2059,7 @@ struct FedColumn(Movable):
         self.type_tag = type_tag
         self.str_heap = None
         # A re-fill replaces the data, so any prior validity is stale (validity is
-        # fed AFTER data, so this is normally already None). free_data above also
+        # fed after data, so this is normally already None). free_data above also
         # frees it; reset defensively.
         self.validity = None
         if type_tag == TYPE_VARCHAR:
@@ -2084,7 +2084,7 @@ struct FedColumn(Movable):
 
     # Deep-copy every non-inlined DuckDB string_t (length > 12) into an owned heap
     # and rewrite the copied struct's pointer (bytes 8..15) to point at it. The
-    # source pointers are only valid NOW (the DuckDB result is freed before
+    # source pointers are only valid now (the DuckDB result is freed before
     # finalize), so we must capture the bytes at feed time. Inlined strings
     # (length <= 12) carry their bytes in the struct, so they need no copy.
     def _deep_copy_strings(mut self, n_rows: Int):
@@ -2155,19 +2155,19 @@ struct GpuExecState(Movable):
     var n_rows: Int
     # --- SKIP-MATERIALIZE (GPU_OP_COLPOOL=2) request-0 bookkeeping ---
     # `colpool_omit[mj]` is True for a fact column (mat_cols index mj) the narrowed
-    # SELECT OMITTED because it is pool-resident: it is NOT scanned/fed; the
+    # SELECT omitted because it is pool-resident: it is not scanned/fed; the
     # finalize sources it from the pool (D2D) and never reads st.cols[mj].
-    # `fed_pos_to_matcol[p]` maps the p-th EMITTED (narrowed) result column back to
-    # its FULL mat_cols index, so feed_column keeps st.cols indexed by mat_cols
+    # `fed_pos_to_matcol[p]` maps the p-th emitted (narrowed) result column back to
+    # its full mat_cols index, so feed_column keeps st.cols indexed by mat_cols
     # order (the finalize slot map is unchanged). Both are recomputed every
     # request-0 materialize_sql; empty when skip-materialize is inactive (then
     # `colpool_omit` is all-False / fed_pos_to_matcol is the identity).
     var colpool_omit: List[Bool]
     var fed_pos_to_matcol: List[Int]
-    # The pool ColKeys this request leased AT OMIT-DECISION TIME (materialize_sql),
+    # The pool ColKeys this request leased at omit-decision time (materialize_sql),
     # one per omitted column. The lease (refcount++) is held from the probe so the
-    # column CANNOT be evicted before the finalize sources it (closing the
-    # probe->finalize race). The cold finalize TRANSFERS each lease to the cached
+    # column cannot be evicted before the finalize sources it (closing the
+    # race between probe and finalize). The cold finalize transfers each lease to the cached
     # GpuPinned (pool_lease_keys) and clears this; on a backstop bail it releases
     # them. Empty when skip-materialize is inactive.
     var colpool_omit_leases: List[String]
@@ -2185,19 +2185,19 @@ struct GpuExecState(Movable):
     var res_f64: List[Float64]
     # String result cells, same row-major layout (group-key columns).
     var res_str: List[String]
-    # GPU_OP_STATS: per-cell validity, same row-major layout. False -> SQL NULL.
+    # GPU_OP_STATS: per-cell validity, same row-major layout. False means SQL NULL.
     # Default True (valid); only the stat finalize sets cells invalid, so the int /
-    # transcendental paths leave this all-True (or empty) -> byte-identical behavior.
+    # transcendental paths leave this all-True (or empty) and behave byte-identically.
     var res_valid: List[Bool]
     var res_rows: Int
     var res_cols: Int
-    # DOMAIN-ERROR signal (audit Group G; TRANSCENDENTAL f64 path only). The f64 VM
+    # Domain-error signal (audit Group G; transcendental f64 path only). The f64 VM
     # normalizes out-of-domain inputs to a NaN sentinel (sqrt(x<0), ln/log10/log2(x<=0));
-    # the f64 assemble detects a NaN aggregate result and records WHICH op so the
-    # finalize can RAISE the matching DuckDB error (instead of emitting a silent nan).
+    # the f64 assemble detects a NaN aggregate result and records which op so the
+    # finalize can raise the matching DuckDB error (instead of emitting a silent nan).
     #   0 = none, 1 = sqrt domain (negative), 2 = logarithm domain (zero/negative).
-    # A valid Inf (exp overflow) does NOT set this. Only the transcendental path sets
-    # it (stats legitimately emit nan on zero-variance corr/regr -> never flagged).
+    # A valid Inf (exp overflow) does not set this. Only the transcendental path sets
+    # it (stats legitimately emit nan on zero-variance corr/regr, so they are never flagged).
     var domain_err: Int
 
     def __init__(out self, n_cols: Int):
@@ -2273,11 +2273,11 @@ def _exec_drop(handle: Int):
 
 
 # ---------------------------------------------------------------------------
-# Process-global RESIDENT pin cache: signature -> GpuPinned.
+# Process-global resident pin cache: signature -> GpuPinned.
 #
-# `GpuPinned` owns the resident device buffers (SegResident) PLUS everything
-# needed to (a) re-run the kernel on a WARM hit (the small per-run programs) and
-# (b) assemble the result table WITHOUT any fed host data. On a WARM hit the C++
+# `GpuPinned` owns the resident device buffers (SegResident) plus everything
+# needed to (a) re-run the kernel on a warm hit (the small per-run programs) and
+# (b) assemble the result table without any fed host data. On a warm hit the C++
 # side feeds nothing (pin_begin returned 0), so the finalize re-launches the
 # kernel on the resident buffers and assembles from this cached metadata alone.
 #
@@ -2286,8 +2286,8 @@ def _exec_drop(handle: Int):
 # ---------------------------------------------------------------------------
 
 # Per-output-candidate group/segment description, constant for a cache entry
-# (the predicate constants are in the signature, so a WARM hit ⇒ identical
-# predicate ⇒ identical group/segment layout). `assemble` re-runs the kernel,
+# (the predicate constants are in the signature, so a warm hit implies an identical
+# predicate and therefore an identical group/segment layout). `assemble` re-runs the kernel,
 # computes the emit rule per candidate, and places the cached group-key cells +
 # the freshly-computed sums into the current handle's exec-state result table.
 struct GpuPinned(Movable):
@@ -2324,7 +2324,7 @@ struct GpuPinned(Movable):
     # Number of output candidates (G / n_seg / 1).
     var n_cand: Int
     # Emit rule: -1 = emit every candidate; otherwise the aggregate index whose
-    # i128 sum gates emission. `emit_gt0` => emit iff sum > 0 (Q3/Q5).
+    # i128 sum gates emission. `emit_gt0` means emit iff sum > 0 (Q3/Q5).
     var emit_agg: Int
     var emit_gt0: Bool
     # --- HASH_GROUP extra state (mode == STRAT_HASH_GROUP) ---
@@ -2335,37 +2335,37 @@ struct GpuPinned(Movable):
     var hash_gk_slot: Int
     var hash_cap: Int
     var hash_gk_dim_arr: List[List[Int64]]  # per group key; carried dim array
-    # Query KIND (KIND_Q1/Q6/Q14/Q5/...), used to route segreduce_run to the
-    # comptime-specialized kernel for that shape (KIND_UNKNOWN -> generic VM).
+    # Query kind (KIND_Q1/Q6/Q14/Q5/...), used to route segreduce_run to the
+    # comptime-specialized kernel for that shape (KIND_UNKNOWN uses the generic VM).
     var kind: Int64
     # --- Phase G Stage 2: Q6 predicate-independent residency (flag-gated) ---
     # When `q6_pred` is True, the resident columns include the Q6 filter inputs and
-    # the filter is evaluated IN-KERNEL from these slots + the CURRENT query's
-    # bounds (threaded into _assemble every run), NOT from a host pass column. The
+    # the filter is evaluated in the kernel from these slots + the current query's
+    # bounds (passed into _assemble every run), not from a host pass column. The
     # slots are constant-independent (they depend only on the column layout), so
-    # they live in the cache entry; the bounds do NOT (they come from `d`).
+    # they live in the cache entry; the bounds do not (they come from `d`).
     # Slot order: [ship_slot, disc_slot, qty_slot].
     var q6_pred: Bool
     var q6_pred_slots: List[Int]
     # --- Phase G Stage 2 (generalized): Q1/Q14 predicate-independent residency ---
     # When `gen_pred` is True, the row filter is the general in-kernel fact-range
-    # predicate evaluated from the resident columns + the CURRENT query's bounds.
-    # The constant-INDEPENDENT part lives in the cache entry: `gen_pred_slots[p]`
+    # predicate evaluated from the resident columns + the current query's bounds.
+    # The constant-independent part lives in the cache entry: `gen_pred_slots[p]`
     # and `gen_pred_cmps[p]` for each fact filter `p` (in descriptor order). The
-    # constant-DEPENDENT bounds do NOT (they are threaded into _assemble fresh from
+    # constant-dependent bounds do not (they are passed into _assemble fresh from
     # the live descriptor each run, aligned to the same descriptor-filter order).
     var gen_pred: Bool
     var gen_pred_slots: List[Int]
     var gen_pred_cmps: List[Int64]
     # --- Phase G Stage 2 (Path B): Q5 predicate-independent residency ---
-    # When `q5_pred` is True the resident dim arrays + gid are the CONSTANT-
-    # INDEPENDENT raw forms (arr0=o_orderdate, arr1=order_cust_nation,
+    # When `q5_pred` is True the resident dim arrays + gid are the constant-
+    # independent raw forms (arr0=o_orderdate, arr1=order_cust_nation,
     # arr2=supp_nation, arr3=supp_region; gid = raw supp_nation), and the Q5 filter
-    # (region + orderdate window + cust_nation==supp_nation) is evaluated IN-KERNEL
-    # from these + the CURRENT query's scalars (o_lo/o_hi/asia_region) threaded into
-    # _assemble every run. The constant-INDEPENDENT slots (l_orderkey / l_suppkey)
-    # live here; the bounds do NOT. The region_name->regionkey map (ALL 5 regions,
-    # itself region-independent) is cached so the WARM path can resolve THIS query's
+    # (region + orderdate window + cust_nation==supp_nation) is evaluated in the kernel
+    # from these + the current query's scalars (o_lo/o_hi/asia_region) passed into
+    # _assemble every run. The constant-independent slots (l_orderkey / l_suppkey)
+    # live here; the bounds do not. The region_name to regionkey map (all 5 regions,
+    # itself region-independent) is cached so the warm path can resolve this query's
     # region const to its key with no region dim fed.
     var q5_pred: Bool
     var q5_pred_slots: List[Int]  # [l_orderkey_slot, l_suppkey_slot]
@@ -2373,18 +2373,18 @@ struct GpuPinned(Movable):
     var q5_region_keys: List[Int64]
     # --- Phase 1 column pool (GPU_OP_COLPOOL): the pooled-column ColKeys this
     # entry leased to assemble its cols_d. The lease lifetime == this cached
-    # entry's lifetime, so the NEXT signature can dedup against the same resident
+    # entry's lifetime, so the next signature can dedup against the same resident
     # columns. Released (refcount--) when this entry is evicted from _pin2 (under
-    # budget pressure). EMPTY when the flag is off or the path didn't pool (then
-    # there is nothing to release -> byte-identical behavior).
+    # budget pressure). Empty when the flag is off or the path didn't pool (then
+    # there is nothing to release and behavior is byte-identical).
     var pool_lease_keys: List[String]
     # --- GPU_OP_TRANSCENDENTAL: DOUBLE transcendental aggregate (UNGROUPED) ---
     # When `is_float64` the entry routes to segreduce_run_f64 (float64 ungrouped
     # accumulator) instead of segreduce_run; results land in res_f64 (per agg).
     # col_div[slot]=10^scale per resident numeric slot, n_slots its length;
     # const_div is parallel to the concatenated metric op tape (10^scale at
-    # PUSH_CONST ops, 1.0 elsewhere). Empty / False when the flag is off ->
-    # byte-identical int128 path. NVIDIA-only (Apple never builds the float desc).
+    # PUSH_CONST ops, 1.0 elsewhere). Empty / False when the flag is off, giving
+    # the byte-identical int128 path. NVIDIA-only (Apple never builds the float desc).
     var is_float64: Bool
     var col_div: List[Float64]
     var n_slots: Int
@@ -2393,11 +2393,11 @@ struct GpuPinned(Movable):
     # When `is_stats`, each output aggregate's shared-sum metric indices are recorded
     # here (parallel to agg_kind; -1 = unused/not-a-stat). _assemble_f64 reads the
     # accumulated f64 metric sums at these indices and computes the closed form per
-    # stat kind. Shared sums are DEDUPED across all aggregates (same metric op tape
-    # -> one metric), so the 6-stat fused query computes {n, Sx, Sx2, Sy, Sy2, Sxy}
-    # exactly ONCE. m0/m1 (sum/count) are reused for the plain SUM/AVG/COUNT path;
-    # stats use the extended set below. Empty / False on the int + transcendental
-    # paths -> unchanged behavior.
+    # stat kind. Shared sums are deduplicated across all aggregates (the same metric
+    # op tape becomes one metric), so the 6-stat fused query computes {n, Sx, Sx2, Sy,
+    # Sy2, Sxy} exactly once. m0/m1 (sum/count) are reused for the plain SUM/AVG/COUNT
+    # path; stats use the extended set below. Empty / False on the int + transcendental
+    # paths, so their behavior is unchanged.
     var is_stats: Bool
     var agg_msx: List[Int]  # index of metric Sx (sum of x); -1 if unused
     var agg_msx2: List[Int]  # index of metric Sx2 (sum of x*x)
@@ -2414,30 +2414,30 @@ struct GpuPinned(Movable):
     var agg_cy: List[Float64]
     # NULL-on-empty fix (UNGROUPED only): metric index of a count-of-passing-rows
     # metric (PUSH_CONST(1) summed). When `mode == STRAT_UNGROUPED` the assemble
-    # reads sums[ungrouped_count_m]; if it is 0 the single output row had ZERO
+    # reads sums[ungrouped_count_m]; if it is 0 the single output row had no
     # contributing rows, so sum/avg/min/max/stats emit SQL NULL (count stays 0).
     # -1 when not set.
     var ungrouped_count_m: Int
     # DENSE-existence fix (int128 DENSE_GROUP): metric index of a per-group filter-
-    # passing count (count(*) reused when present). The dense gid is built over ALL
-    # materialized rows (materialize has no WHERE), so a group whose rows ALL fail the
-    # filter still gets a gid; without this gate _assemble would emit a PHANTOM row
-    # for it (count 0, all aggregates 0/NULL) -- SQL forms groups AFTER filtering and
-    # OMITS it. When >=0 and mode==STRAT_DENSE_GROUP, _assemble skips any group whose
+    # passing count (count(*) reused when present). The dense gid is built over all
+    # materialized rows (materialize has no WHERE), so a group whose rows all fail the
+    # filter still gets a gid; without this gate _assemble would emit a phantom row
+    # for it (count 0, all aggregates 0/NULL). SQL forms groups after filtering and
+    # leaves it out. When >=0 and mode==STRAT_DENSE_GROUP, _assemble skips any group whose
     # count metric is 0. -1 (no count metric available) leaves the legacy behavior.
     # The f64 dense path has the equivalent gate already (skips fsums[gm+g]==0).
     var grouped_count_m: Int
-    # A1 unified pass model (GPU_OP_NULLABLE): per-output-aggregate VALID-COUNT
+    # A1 unified pass model (GPU_OP_NULLABLE): per-output-aggregate valid-count
     # metric index (UNGROUPED only). For a SUM/AVG/stat whose program reads one or
-    # more nullable AGG-INPUT columns (columns NOT folded into the host pass), this
-    # is the metric index of the sum of its validity-PRODUCT (Σ valid_a[*valid_b..]),
-    # i.e. the count of filter-passing rows that have ALL of this aggregate's inputs
-    # valid. _assemble marks THIS aggregate's cell SQL NULL iff that count is 0 --
-    # per-aggregate, so a multi-aggregate query over DIFFERENT nullable columns gets
-    # each aggregate's own NULL-on-empty. For AVG this index IS the denominator (m1).
+    # more nullable agg-input columns (columns not folded into the host pass), this
+    # is the metric index of the sum of its validity product (Σ valid_a[*valid_b..]),
+    # i.e. the count of filter-passing rows that have all of this aggregate's inputs
+    # valid. _assemble marks this aggregate's cell SQL NULL iff that count is 0.
+    # This is per aggregate, so a multi-aggregate query over different nullable columns
+    # gets each aggregate's own NULL-on-empty. For AVG this index is the denominator (m1).
     # -1 when the aggregate has no nullable agg-input (its NULL-on-empty falls back to
     # the shared filter-only ungrouped_count_m) or is count(*) (never NULL). Parallel
-    # to agg_kind; EMPTY / all -1 with the flag off -> byte-identical behavior.
+    # to agg_kind; empty / all -1 with the flag off, so behavior is byte-identical.
     var agg_valid_count_m: List[Int]
 
     def __init__(out self, var res: SegResident):
@@ -2509,14 +2509,14 @@ def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutUntrackedOri
 
 
 # ===-------------------------------------------------------------------===#
-# Phase 1 column pool (GPU_OP_COLPOOL) -- helpers shared by the 3 cold paths.
+# Phase 1 column pool (GPU_OP_COLPOOL): helpers shared by the 3 cold paths.
 #
-# The pool deduplicates the COLD H2D upload of aggregate FACT columns shared
-# across query signatures. KERNELS AND C++ ARE UNTOUCHED: each query still owns a
-# packed `cols_d` of the SAME bytes/layout/length as today; the only change is
-# HOW it gets filled -- shared columns are D2D-copied from a resident per-column
-# buffer instead of re-uploaded from host. Flag off => none of this runs and the
-# behavior is byte-identical (incl. _pin2 unbounded).
+# The pool deduplicates the cold H2D upload of aggregate fact columns shared
+# across query signatures. Kernels and C++ are untouched: each query still owns a
+# packed `cols_d` of the same bytes/layout/length as today; the only change is
+# how it gets filled. Shared columns are D2D-copied from a resident per-column
+# buffer instead of re-uploaded from host. With the flag off none of this runs and
+# the behavior is byte-identical (incl. _pin2 unbounded).
 # ===-------------------------------------------------------------------===#
 
 def _colpool_on() -> Bool:
@@ -2524,21 +2524,21 @@ def _colpool_on() -> Bool:
 
 
 # Phase 3 (Option B) column-pointer-table flag. When on, eligible queries read
-# pooled columns DIRECTLY via a per-column device-pointer table instead of a
-# packed D2D copy -- eliminating the Phase 1/2 cols_d duplicate (~44% resident
+# pooled columns directly via a per-column device-pointer table instead of a
+# packed D2D copy. This removes the Phase 1/2 cols_d duplicate (~44% of resident
 # VRAM). Requires the pool (it references pooled buffers); implies _colpool_on.
-# Off by default => the packed path runs (byte-identical).
+# Off by default, so the packed path runs (byte-identical).
 def _colptr_on() -> Bool:
     return _colpool_on() and getenv("GPU_OP_COLPTR", "") != ""
 
 
-# Phase 3 is active for THIS query iff: the colptr flag is on AND the query is the
+# Phase 3 is active for this query iff the colptr flag is on and the query is the
 # in-scope all-pooled class. Initial scope: Q6 UNGROUPED with the in-kernel
-# predicate-independent filter (`_q6_pred_enabled`) -- its cols_d is entirely
-# pooled fact columns, so the pointer table captures the full win and the only
-# colptr-capable kernel wired is seg_ungrouped_kernel_q6_pred[True]. ANY other
-# kind/strategy returns False -> the packed pool path runs (correct). Composes
-# with skip-materialize (omitted slots are pool borrows -> pointers, not copies).
+# predicate-independent filter (`_q6_pred_enabled`). Its cols_d is entirely
+# pooled fact columns, so the pointer table gets the full benefit, and the only
+# colptr-capable kernel wired is seg_ungrouped_kernel_q6_pred[True]. Any other
+# kind/strategy returns False and the packed pool path runs (correct). Works
+# with skip-materialize (omitted slots are pool borrows, so pointers, not copies).
 def _colptr_eligible(d: GpuPlanDescriptor) -> Bool:
     if not _colptr_on():
         return False
@@ -2561,24 +2561,25 @@ def _colptr_eligible(d: GpuPlanDescriptor) -> Bool:
         # Mirrors the Q5 finalize pred gate (`q5_pred_on = _q5_pred_enabled(d)`).
         return d.strategy == STRAT_DENSE_GROUP and _q5_pred_enabled(d)
     if d.kind == KIND_Q3:
-        # Q3 HASH_GROUP ONLY (NVIDIA/AMD; needs 64-bit atomics). HASH_GROUP appends
-        # NO ORDER BY => STORAGE row order, so the fact cols (incl. the integer fact
-        # group key l_orderkey) ARE pooled. The host-baked pass column + the FK dim
-        # arrays are per-query derived/separate buffers (handled by the assembly).
-        # SORT_SEGREDUCE is EXCLUDED: it appends ORDER BY (a different row order),
-        # so its fact columns are NOT poolable -> no pooled slots to point at; it
-        # must stay on the packed path (this gate returns False for it -> correct).
+        # Q3 HASH_GROUP only (NVIDIA/AMD; needs 64-bit atomics). HASH_GROUP appends
+        # no ORDER BY, so rows stay in STORAGE order and the fact cols (incl. the
+        # integer fact group key l_orderkey) are pooled. The host-baked pass column +
+        # the FK dim arrays are per-query derived/separate buffers (handled by the
+        # assembly). SORT_SEGREDUCE is excluded: it appends ORDER BY (a different row
+        # order), so its fact columns are not poolable and there are no pooled slots
+        # to point at. It must stay on the packed path (this gate returns False for it).
         return d.strategy == STRAT_HASH_GROUP
     return False
 
 
-# SKIP-MATERIALIZE sub-flag (the cold WALL-TIME follow-up to Phase 1). When on,
-# the SQL-feed path emits a NARROWER fact SELECT that omits fact columns already
+# SKIP-MATERIALIZE sub-flag (the cold wall-time follow-up to Phase 1). When on,
+# the SQL-feed path emits a narrower fact SELECT that omits fact columns already
 # pool-resident: DuckDB's columnar scan reads only the non-resident fact columns,
 # and the finalize sources the resident ones from the pool (Phase 1 already
-# D2D's pool HITs). `GPU_OP_COLPOOL=2` (Phase 1 + narrow-SQL) or the explicit
+# D2D-copies pool hits). `GPU_OP_COLPOOL=2` (Phase 1 + narrow-SQL) or the explicit
 # GPU_OP_SKIP_MATERIALIZE toggle enables it. `_colpool_on()` (!= "") stays the
-# pool gate; off or =1 => narrowing never happens => byte-identical to Phase 1.
+# pool gate; when off or =1, narrowing never happens and behavior is byte-identical
+# to Phase 1.
 def _skipmat_on() -> Bool:
     return (
         getenv("GPU_OP_COLPOOL", "") == "2"
@@ -2586,13 +2587,13 @@ def _skipmat_on() -> Bool:
     )
 
 
-# SKIP-MATERIALIZE is active for THIS query iff: the pool is on, the sub-flag is
+# SKIP-MATERIALIZE is active for this query iff: the pool is on, the sub-flag is
 # on, the descriptor is one of the in-scope ungrouped predicate-independent
-# classes (Q6 / Q14 -- Q1 is DENSE_GROUP and deferred, Q5 deferred, Q3 excluded),
-# the predicate-independent path is ACTIVE (so the host pass-bake reads NO fact
-# data -> omitted fact columns are never needed on the host), and the row order
-# is STORAGE (no ORDER BY; SORT_SEGREDUCE never eligible). ANY uncertainty here
-# returns False -> the full SELECT is emitted (feed everything) -> correct.
+# classes (Q6 / Q14; Q1 is DENSE_GROUP and deferred, Q5 deferred, Q3 excluded),
+# the predicate-independent path is active (so the host pass-bake reads no fact
+# data and omitted fact columns are never needed on the host), and the row order
+# is STORAGE (no ORDER BY; SORT_SEGREDUCE never eligible). Any uncertainty here
+# returns False, so the full SELECT is emitted (feed everything), which is correct.
 def _skipmat_active(d: GpuPlanDescriptor) -> Bool:
     if not _colpool_on() or not _skipmat_on():
         return False
@@ -2610,7 +2611,7 @@ def _skipmat_active(d: GpuPlanDescriptor) -> Bool:
 
 
 # Resident-byte budget in bytes. Mirrors the C++ PinBudgetBytes: GPU_OP_PIN_BUDGET_MB
-# overrides (in MB); default 4 GiB. 0 => unbounded. Read every call (cheap; the
+# overrides (in MB); default 4 GiB. 0 means unbounded. Read every call (cheap; the
 # value is a process-wide policy but re-reading keeps it stateless on the Mojo side).
 def _pin_budget_bytes() -> Int:
     var env = getenv("GPU_OP_PIN_BUDGET_MB", "")
@@ -2630,10 +2631,10 @@ def _pin_budget_bytes() -> Int:
 def _gp_footprint_bytes(gp: GpuPinned) -> Int:
     var b: Int
     if gp.res.use_colptr:
-        # Phase 3: no packed cols_d -- the pooled columns live ONLY in the pool
-        # (counted by pool_bytes, NOT here). This resident owns just the small
+        # Phase 3: no packed cols_d. The pooled columns live only in the pool
+        # (counted by pool_bytes, not here). This resident owns only the small
         # pointer table (n_cols int64) + the per-query derived/fallback buffers
-        # (each n_rows int64). That delta IS the ~44% VRAM win.
+        # (each n_rows int64). That difference is the ~44% VRAM saving.
         b = gp.res.n_cols * 8
         b += len(gp.res.derived_bufs) * gp.res.n_rows * 8
     else:
@@ -2656,21 +2657,21 @@ def _pin2_resident_bytes() raises -> Int:
 
 
 # Register a just-inserted _pin2 entry's footprint with the pool side-bookkeeping
-# (flag-on only). Called right AFTER `p2[sig] = gp^` at every wired insertion
-# site, using a footprint captured BEFORE the move. Uses the col_pool global
-# (not _pin2), so it never re-borrows the live `ref p2`. Flag off => no-op, so
-# _pin2 stays exactly as today (unbounded, untracked).
+# (flag-on only). Called right after `p2[sig] = gp^` at every wired insertion
+# site, using a footprint captured before the move. Uses the col_pool global
+# (not _pin2), so it never re-borrows the live `ref p2`. With the flag off this is
+# a no-op, so _pin2 stays exactly as today (unbounded, untracked).
 def _pin2_track(sig: String, footprint_bytes: Int) raises:
     if _colpool_on():
         pin2_register(sig, footprint_bytes)
 
 
-# Evict the oldest (insertion-order ~ LRU for a single-source stream) cached
+# Evict the oldest (insertion order, roughly LRU for a single-source stream) cached
 # _pin2 entry to reclaim VRAM. Releases the entry's pooled-column leases first
 # (so those columns become evictable), unregisters its footprint, then drops the
 # entry (freeing its SegResident device buffers). Returns the freed footprint
 # bytes, or 0 if the cache is empty. Used only under budget pressure with the
-# flag on. Correctness-safe: an evicted signature simply goes COLD next run.
+# flag on. Safe for correctness: an evicted signature runs cold next time.
 def _evict_one_pin2() raises -> Int:
     var victim = pin2_oldest_key()
     if victim == "":
@@ -2690,10 +2691,10 @@ def _evict_one_pin2() raises -> Int:
 
 
 # Make room for `need` more resident bytes (a pending pool miss) under the
-# budget. Evict pooled LRU columns FIRST (conservative: prefer dropping pooled
+# budget. Evict pooled LRU columns first (conservative: prefer dropping pooled
 # columns over the aggregate residency, to avoid warm-hit regression), then LRU
 # _pin2 entries. Stops when within budget or nothing more is evictable (the
-# subsequent allocation's OOM-retry is the backstop). budget == 0 => unbounded.
+# subsequent allocation's OOM-retry is the backstop). budget == 0 means unbounded.
 def _colpool_make_room(need: Int) raises:
     var budget = _pin_budget_bytes()
     if budget == 0:
@@ -2709,29 +2710,29 @@ def _colpool_make_room(need: Int) raises:
         var freed = evict_victim()
         if freed > 0:
             continue
-        # No evictable pooled column left -> drop an aggregate residency.
+        # No evictable pooled column left, so drop an aggregate residency.
         freed = _evict_one_pin2()
         if freed == 0:
             return  # nothing evictable; allocation OOM-retry handles the rest
 
 
 # Assemble the per-signature packed `cols_d` via the column pool (flag-on,
-# STORAGE-only callers). `cols_host` is the FULLY packed host buffer the cold
+# STORAGE-only callers). `cols_host` is the fully packed host buffer the cold
 # path already built (numeric slots + gid/pass slots), byte-identical to today.
-# For each NUMERIC fact slot we ensure_column the pooled per-column buffer and
+# For each numeric fact slot we ensure_column the pooled per-column buffer and
 # D2D-copy it into slot offset `slot*n`; non-numeric/derived slots (gid, pass)
 # are H2D-copied from `cols_host` as today (they are per-query derived, never
 # pooled). On a not-poolable / fallback slot we H2D-copy that slot straight from
-# `cols_host` -- so the result is ALWAYS byte-identical regardless of HIT/MISS/
+# `cols_host`, so the result is always byte-identical regardless of hit, miss or
 # fallback. Returns the assembled cols_d (ownership to caller) and appends the
 # leased ColKeys to `out_lease_keys` (stored in the GpuPinned for release on
-# eviction). Per-column HIT/MISS is logged when GPU_OP_PIN_LOG is set.
+# eviction). Per-column hit/miss is logged when GPU_OP_PIN_LOG is set.
 #
 # `mat_col_of_slot[slot]` is the mat_cols index of numeric slot `slot` (i.e.
 # numeric_matcols); slots >= n_numeric are derived (gid/pass) and copied whole.
-# Build the per-NUMERIC-SLOT omit mask from st.colpool_omit (indexed by mat_cols).
+# Build the per-numeric-slot omit mask from st.colpool_omit (indexed by mat_cols).
 # omit_slot[slot] == st.colpool_omit[numeric_matcols[slot]] (False when the omit
-# mask is absent/short -> nothing omitted -> Phase 1 behavior). Used by the three
+# mask is absent/short, so nothing is omitted and Phase 1 behavior applies). Used by the three
 # cold finalize paths to gate the packing loop + drive _colpool_assemble_cols_d.
 def _omit_slot_mask(st: GpuExecState, numeric_matcols: List[Int]) -> List[Bool]:
     var out: List[Bool] = []
@@ -2770,25 +2771,25 @@ def _colpool_assemble_cols_d(
         var col_name = st.mat_cols[mj]
         var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
         # Host pointer to this slot's already-packed int64 values (slot*n..+n).
-        # For an OMITTED slot this host region is UNFILLED (the packing loop and
-        # the feed both skipped it) -- it MUST be sourced from the pool, never from
+        # For an omitted slot this host region is unfilled (the packing loop and
+        # the feed both skipped it), so it must be sourced from the pool, never from
         # host. For a non-omitted slot it holds the freshly-packed bytes.
         var slot_host = cols_host + slot * n
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
-            # SKIP-MATERIALIZE: the column was NOT scanned/fed. It is GUARANTEED
-            # resident -- materialize_sql only omitted it after taking an in-use
-            # LEASE (refcount++) on this exact key, and a leased column is never
-            # evicted by _colpool_make_room, so the probe->finalize race is closed.
-            # col_pool_borrow returns the buffer WITHOUT a refcount bump (the
+            # SKIP-MATERIALIZE: the column was not scanned/fed. It is guaranteed to be
+            # resident: materialize_sql only omitted it after taking an in-use
+            # lease (refcount++) on this exact key, and a leased column is never
+            # evicted by _colpool_make_room, so there is no race between probe and
+            # finalize. col_pool_borrow returns the buffer without a refcount bump (the
             # materialize lease in st.colpool_omit_leases is the only +1 for this
-            # column; the finalize transfers ALL of those to the GpuPinned after a
-            # successful assemble, so we DO NOT append `key` to out_lease_keys here
-            # -- that would double-count the lease). was_hit backstop (landmine #4):
-            # if the column is somehow gone (impossible while leased), we CANNOT
-            # reconstruct it (it was never fed) -> signal failure -> finalize nonzero
-            # rc -> CPU fallback (never wrong). slot_host is unfilled, never read.
+            # column; the finalize transfers all of those to the GpuPinned after a
+            # successful assemble, so we do not append `key` to out_lease_keys here,
+            # which would double-count the lease). was_hit backstop (landmine #4):
+            # if the column is somehow gone (impossible while leased), we cannot
+            # reconstruct it (it was never fed). We signal failure, the finalize
+            # returns a nonzero rc, and the query falls back to CPU (never wrong). slot_host is unfilled, never read.
             var er = col_pool_borrow(ctx, key)
             if not (er.ok and er.was_hit):
                 fail = True
@@ -2810,7 +2811,7 @@ def _colpool_assemble_cols_d(
             continue
 
         # Budget: make room for one more resident column (n int64) before a miss.
-        # (HITs add nothing, but make_room is cheap when already within budget.)
+        # (Hits add nothing, but make_room is cheap when already within budget.)
         _colpool_make_room(n * 8)
         var er = ensure_column(
             ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE, slot_host, n,
@@ -2818,7 +2819,7 @@ def _colpool_assemble_cols_d(
         )
         if er.ok:
             out_lease_keys.append(key)
-            # D2D copy the resident column into THIS query's slot offset.
+            # D2D copy the resident column into this query's slot offset.
             var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
             ctx.enqueue_copy(dst, er.buf)
             if pin_log:
@@ -2828,8 +2829,8 @@ def _colpool_assemble_cols_d(
                     " n=", n, file=FileDescriptor(2),
                 )
         else:
-            # Not poolable / nothing evictable -> upload this slot straight from
-            # host, exactly as today (byte-identical; just not deduped).
+            # Not poolable / nothing evictable: upload this slot straight from
+            # host, exactly as today (byte-identical, only not deduplicated).
             var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
             ctx.enqueue_copy(dst, slot_host)
             if pin_log:
@@ -2855,23 +2856,23 @@ def _colpool_assemble_cols_d(
 
 
 # ===-------------------------------------------------------------------===#
-# Phase 3 (GPU_OP_COLPTR) -- column-POINTER-TABLE assembly. The Option B sibling
+# Phase 3 (GPU_OP_COLPTR): column pointer table assembly. The Option B sibling
 # of _colpool_assemble_cols_d: instead of allocating a packed cols_d and D2D-
-# copying every pooled column into it (a full SECOND copy of the pooled data),
-# this builds a small device table of n_slots DEVICE ADDRESSES:
-#   - pooled slot (HIT / MISS / skip-mat borrow): the address is the resident POOL
-#     buffer's own device pointer -> read DIRECTLY, no copy (the VRAM win).
+# copying every pooled column into it (a full second copy of the pooled data),
+# this builds a small device table of n_slots device addresses:
+#   - pooled slot (hit / miss / skip-mat borrow): the address is the resident pool
+#     buffer's own device pointer, read directly with no copy (this saves the VRAM).
 #   - non-poolable fallback / derived (gid/pass) slot: a per-query buffer filled
 #     H2D from the packed host buffer's slot region, kept alive in `out_derived_bufs`
 #     for the resident's lifetime; its pointer goes in the table.
-# The kernels (launched USE_COLPTR=True) read column `slot` via table[slot] -> the
-# SAME int64 values the packed layout holds, so results are bit-exact. The pooled
+# The kernels (launched USE_COLPTR=True) read column `slot` via table[slot] and get
+# the same int64 values the packed layout holds, so results are bit-exact. The pooled
 # addresses stay valid because the GpuPinned holds the pool leases (out_lease_keys
 # + the transferred omit leases) for its whole lifetime (invariant #3).
 #
 # Returns the device pointer-table buffer (ownership to caller). `fail` is set on a
-# skip-mat omit that is not a guaranteed HIT (same backstop as the packed path) ->
-# caller bails to CPU.
+# skip-mat omit that is not a guaranteed hit (same backstop as the packed path);
+# the caller then bails to CPU.
 # ===-------------------------------------------------------------------===#
 def _colpool_assemble_col_ptrs(
     ctx: DeviceContext,
@@ -2893,7 +2894,7 @@ def _colpool_assemble_col_ptrs(
     # Host array of the n_slots device addresses (uploaded to the table at the end).
     var addr_h = alloc[Int64](n_slots if n_slots > 0 else 1)
 
-    # --- numeric fact slots: pooled -> pool pointer; fallback -> per-query buf. ---
+    # --- numeric fact slots: pooled uses the pool pointer; fallback a per-query buf. ---
     for slot in range(n_numeric):
         var mj = numeric_matcols[slot]
         var col_name = st.mat_cols[mj]
@@ -2902,7 +2903,7 @@ def _colpool_assemble_col_ptrs(
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
-            # skip-materialize: GUARANTEED resident pool borrow (lease held at
+            # skip-materialize: guaranteed resident pool borrow (lease held at
             # materialize). Point directly at the pooled buffer; no copy.
             var er = col_pool_borrow(ctx, key)
             if not (er.ok and er.was_hit):
@@ -2930,7 +2931,7 @@ def _colpool_assemble_col_ptrs(
                 var tag = "HIT" if er.was_hit else "MISS"
                 print("[gpu-op colptr] ", tag, " col=", col_name, file=FileDescriptor(2))
         else:
-            # Not poolable -> per-query buffer, H2D from host (kept alive).
+            # Not poolable: per-query buffer, H2D from host (kept alive).
             var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
             ctx.enqueue_copy(buf, slot_host)
             addr_h[slot] = Int64(Int(buf.unsafe_ptr()))
@@ -2964,27 +2965,27 @@ def _colpool_assemble_col_ptrs(
 
 
 # Re-run the resident kernel + assemble the result table into `dst` from the
-# cached GpuPinned metadata + the freshly-computed sums. Used by BOTH the COLD
-# path (after it builds + stores the GpuPinned) and the WARM path, so the two
-# can never drift. Reads NO fed host columns.
+# cached GpuPinned metadata + the freshly-computed sums. Used by both the cold
+# path (after it builds + stores the GpuPinned) and the warm path, so the two
+# can never drift. Reads no fed host columns.
 #
-# Phase G Stage 2: `q6_bounds` carries the CURRENT query's Q6 filter bounds when
-# `gp.q6_pred` is set. They are NOT part of the cache entry (the whole point is
-# warm-across-constants), so they are passed in fresh every run from the live
+# Phase G Stage 2: `q6_bounds` carries the current query's Q6 filter bounds when
+# `gp.q6_pred` is set. They are not part of the cache entry (the goal is to stay
+# warm across constants), so they are passed in fresh every run from the live
 # descriptor. When `gp.q6_pred` is False the spec is ignored (stock pass-column
 # path). The slots come from the cache entry (constant-independent); the bounds
 # from `q6_bounds`.
 #
-# Phase G Stage 2 (generalized): `gen_bounds` carries the CURRENT query's Q1/Q14
+# Phase G Stage 2 (generalized): `gen_bounds` carries the current query's Q1/Q14
 # fact-range filter bounds (one int64 per fact filter, in descriptor order) when
 # `gp.gen_pred` is set. Like `q6_bounds`, they are threaded fresh from the live
-# descriptor every run; the constant-INDEPENDENT slots + cmps come from the cache
+# descriptor every run; the constant-independent slots + cmps come from the cache
 # entry. The (slot,cmp,bound) triples are assembled here into `fpred_list`.
 # GPU_OP_TRANSCENDENTAL float64 result assembly (sum/avg/count of f(col)). Runs
-# the float64 accumulator (UNGROUPED -> M doubles; DENSE_GROUP -> G*M doubles laid
-# out fsums[g*M+m]) and places per-group DOUBLEs into res_f64. The f64 VM already
-# reconstructed TRUE doubles from scaled-int64 storage via col_div/const_div, so
-# there is NO scale division here (unlike the int128 AVG rescale):
+# the float64 accumulator (UNGROUPED gives M doubles; DENSE_GROUP gives G*M doubles
+# laid out fsums[g*M+m]) and places per-group DOUBLEs into res_f64. The f64 VM already
+# reconstructed true doubles from scaled-int64 storage via col_div/const_div, so
+# there is no scale division here (unlike the int128 AVG rescale):
 #   AGG_SUM  -> res_f64 = fsums[g*M+m0]
 #   AGG_AVG  -> res_f64 = fsums[g*M+m0] / fsums[g*M+m1]   (m1 = float count metric)
 #   AGG_COUNT_STAR -> placed as int64 (count fits exactly; same as the int path)
@@ -2992,13 +2993,13 @@ def _colpool_assemble_col_ptrs(
 # `kind` is the stat AggKind; n/sx/sx2/sy/sy2/sxy are the accumulated f64 metric
 # sums for this (group's) passing rows (sy/sy2/sxy are 0 for 1-arg stats). Returns
 # (value, is_valid): is_valid=False means the cell is a SQL NULL (the caller marks
-# the result-vector validity invalid). EVERY degenerate case matches DuckDB 1.5.4
-# EXACTLY -- verified in the CLI across 0-row / 1-row / zero-variance / normal:
+# the result-vector validity invalid). Every degenerate case matches DuckDB 1.5.4
+# exactly, verified in the CLI across 0-row / 1-row / zero-variance / normal:
 #
 #   var_pop / stddev_pop / covar_pop : NULL iff n==0;  n>=1 -> value (n==1 -> 0).
 #   var_samp / stddev_samp / covar_samp : NULL iff n<2; n>=2 -> value (0 if zero var).
 #   corr        : NULL iff n==0;  else value (DuckDB emits *nan* on zero variance,
-#                 NOT null -> we return nan, valid).
+#                 not NULL, so we return nan, valid).
 #   regr_slope  : NULL iff n==0;  else value (nan when regr_sxx==0, valid).
 #   regr_intercept : NULL iff n==0 OR regr_sxx==0.
 #   regr_r2     : NULL iff n==0 OR regr_sxx==0; else 1.0 when regr_syy==0; else corr^2.
@@ -3008,7 +3009,7 @@ def _colpool_assemble_col_ptrs(
 #
 # regr arg order: DuckDB regr_*(y_dependent, x_independent). In our metric layout x
 # is arg0 (the dependent / stddev-var subject), y is arg1 (the independent). So for
-# regression the INDEPENDENT variable's sums are the y-sums:
+# regression the independent variable's sums are the y-sums:
 #   regr_sxx = Syy_indep = sy2 - sy^2/n  ;  regr_syy = Sxx_dep = sx2 - sx^2/n
 #   regr_sxy = sxy - sx*sy/n  ;  slope = regr_sxy / regr_sxx
 #   intercept = x_mean - slope*y_mean    (x = dependent mean, y = independent mean)
@@ -3016,9 +3017,9 @@ def _colpool_assemble_col_ptrs(
 # `out_valid` (mut) is set False when the cell is a SQL NULL, True otherwise; the
 # returned Float64 is the value (ignored by the caller when out_valid is False).
 # GPU_OP_STATS numerical stability (audit Group H): sx / sx2 / sy / sy2 / sxy are
-# accumulated over the SHIFTED data (x-cx, y-cy) -- see _shift_arg. The variance /
-# covariance / corr / regr_slope/r2/sxx/syy/sxy closed forms are SHIFT-INVARIANT and
-# use the shifted sums unchanged. The MEAN-returning kinds (regr_avgx / regr_avgy /
+# accumulated over the shifted data (x-cx, y-cy); see _shift_arg. The variance /
+# covariance / corr / regr_slope/r2/sxx/syy/sxy closed forms are shift-invariant and
+# use the shifted sums unchanged. The mean-returning kinds (regr_avgx / regr_avgy /
 # regr_intercept) add the shift back: mean(x) = cx + sx/n, mean(y) = cy + sy/n.
 # cx / cy are 0 on the legacy (unshifted) fallback, so those branches reduce to the
 # original formulas byte-for-byte.
@@ -3065,10 +3066,10 @@ def _stat_value(
     var Syy_indep = sy2 - sy * sy / n if n > 0.0 else NAN  # over independent (arg1)
     var Sxy = sxy - sx * sy / n if n > 0.0 else NAN
     if kind == AGG_REGR_SXX:
-        out_valid = n > 0.0  # over the INDEPENDENT (2nd) arg; NULL iff n==0
+        out_valid = n > 0.0  # over the independent (2nd) arg; NULL iff n==0
         return Syy_indep
     if kind == AGG_REGR_SYY:
-        out_valid = n > 0.0  # over the DEPENDENT (1st) arg; NULL iff n==0
+        out_valid = n > 0.0  # over the dependent (1st) arg; NULL iff n==0
         return Sxx_dep
     if kind == AGG_REGR_SXY:
         out_valid = n > 0.0  # NULL iff n==0
@@ -3089,7 +3090,7 @@ def _stat_value(
         var r = Sxy / sqrt(Sxx_dep * Syy_indep)
         return r * r
     if kind == AGG_REGR_SLOPE:
-        # DuckDB: NULL iff n==0; else value (nan when regr_sxx==0, NOT null).
+        # DuckDB: NULL iff n==0; else value (nan when regr_sxx==0, not NULL).
         out_valid = n > 0.0
         return Sxy / Syy_indep if Syy_indep != 0.0 else NAN
     if kind == AGG_REGR_INTERCEPT:
@@ -3107,9 +3108,9 @@ def _stat_value(
 # Audit Group G: classify the domain-error op of a NaN transcendental result from
 # the metric op tape (flattened (op,a,b) triples). A NaN aggregate result on the
 # transcendental f64 path can only originate from a domain violation the f64 VM
-# normalized to NaN: sqrt(x<0) or ln/log10/log2(x<=0) (exp overflow -> a VALID Inf,
-# never NaN; the other ops -- add/sub/mul/select -- never produce NaN from finite
-# scaled-decimal operands). Returns 1 (sqrt), 2 (logarithm), or 0 (none found ->
+# normalized to NaN: sqrt(x<0) or ln/log10/log2(x<=0) (exp overflow gives a valid Inf,
+# never NaN; the other ops, add/sub/mul/select, never produce NaN from finite
+# scaled-decimal operands). Returns 1 (sqrt), 2 (logarithm), or 0 (none found; then
 # the finalize falls back to a generic OutOfRange message). Sqrt takes precedence
 # when both are present (rare; a single clear message is acceptable per the audit).
 def _transcendental_domain_op(metric_ops: List[Int64]) -> Int:
@@ -3127,21 +3128,21 @@ def _transcendental_domain_op(metric_ops: List[Int64]) -> Int:
 # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: gp.n_cand candidates, group-key
 # cells from gp.gk_str_vals / gp.gk_i64_vals (mirrors _assemble's placement).
 #
-# PREDICATE-INDEPENDENT (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): when `gp.gen_pred`
+# Predicate-independent (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): when `gp.gen_pred`
 # is set (UNGROUPED f64 with a canonical fact-range filter), the in-kernel filter
 # is evaluated from per-run bounds (`gen_bounds`, one int64 per fact filter, in
-# descriptor order -- mirrors _assemble's int128 gen_pred path). The constant-
-# INDEPENDENT slots + cmps come from the cache entry (gp.gen_pred_slots /
-# gp.gen_pred_cmps); the bounds are threaded fresh per run so the SAME resident
-# (full, unfiltered) columns serve any constant -> warm-across-constants. When
+# descriptor order, mirroring _assemble's int128 gen_pred path). The constant-
+# independent slots + cmps come from the cache entry (gp.gen_pred_slots /
+# gp.gen_pred_cmps); the bounds are passed fresh per run so the same resident
+# (full, unfiltered) columns serve any constant and stay warm across constants. When
 # `gp.gen_pred` is False the fpred_list is empty (the host-baked pass column path,
 # byte-identical to the original f64 wiring).
 def _assemble_f64(
     mut dst: GpuExecState, mut gp: GpuPinned, gen_bounds: List[Int64] = []
 ) raises:
     # Build the (slot,cmp,bound) fpred tape from the cached slots/cmps + this run's
-    # bounds. Guards mirror _assemble: lengths must align AND > 0, else empty (->
-    # falls back to the pass-column path the COLD bake produced -- still correct).
+    # bounds. Guards mirror _assemble: lengths must align and be > 0, else empty
+    # (falls back to the pass-column path the cold bake produced, still correct).
     var gen_active = (
         gp.gen_pred
         and len(gen_bounds) > 0
@@ -3171,15 +3172,15 @@ def _assemble_f64(
         G=gp.G,
         fpred_list=fpred_list^,
         # DENSE accumulator kernel selection. The shared-reduction dense kernel
-        # (seg_dense_kernel_f64) reduces per-lane in registers first -> NUMERICALLY
-        # ACCURATE (~1e-13 on covariance), but its per-lane array is sized
-        # SEG_MAX_METRICS^2 == 64, so it is SAFE only while G*M <= 64. The GLOBAL
+        # (seg_dense_kernel_f64) reduces per-lane in registers first, which is
+        # numerically accurate (~1e-13 on covariance), but its per-lane array is sized
+        # SEG_MAX_METRICS^2 == 64, so it is safe only while G*M <= 64. The global
         # kernel (seg_dense_kernel_f64_global) does a direct per-row f64 atomic-add
-        # into fpartials[g*M+m] -> CORRECT FOR ANY G (no bound), but its arbitrary-
-        # order atomic accumulation loses low-order bits (catastrophic on the
+        # into fpartials[g*M+m], which is correct for any G (no bound), but its arbitrary-
+        # order atomic accumulation loses low-order bits (very bad for the
         # covariance cancellation, ~1e-8). So: use the accurate shared kernel
-        # whenever it FITS (G*M <= 64 -- the common gated case: a few VARCHAR groups
-        # x <=6 stat metrics = ~18-24), and fall back to the global kernel ONLY when
+        # whenever it fits (G*M <= 64, the common gated case: a few VARCHAR groups
+        # x <=6 stat metrics = ~18-24), and fall back to the global kernel only when
         # G*M would overflow it (the safety net that keeps any G correct without a
         # crash). For transcendentals (M=1) G*M==G; G<=64 always uses the shared
         # kernel (byte-identical to before). 64 == SEG_MAX_METRICS*SEG_MAX_METRICS.
@@ -3190,12 +3191,12 @@ def _assemble_f64(
     var n_cols = gp.n_cols
     var n_keys = gp.n_keys
     # DENSE: the per-group passing-row counts are appended after the G*M sums
-    # (result[G*M + g]). The dense gid is built over ALL materialized rows, so a
+    # (result[G*M + g]). The dense gid is built over all materialized rows, so a
     # group can have 0 passing rows; a stock GROUP BY emits a group only when it
-    # has >=1 passing row -> gate emit on the count. UNGROUPED has no count tail.
+    # has >=1 passing row, so emit is gated on the count. UNGROUPED has no count tail.
     var dense = gp.mode == STRAT_DENSE_GROUP
     var gm = gp.G * gp.M
-    # NULL-on-empty (UNGROUPED only): zero contributing rows => sum/avg/min/max/stats
+    # NULL-on-empty (UNGROUPED only): with zero contributing rows sum/avg/min/max/stats
     # are SQL NULL (count stays 0). The pass-count metric sums 1.0 per passing row.
     var ungrouped_empty = (
         gp.mode == STRAT_UNGROUPED
@@ -3210,7 +3211,7 @@ def _assemble_f64(
     var out_rows = 0
     for g in range(gp.n_cand):
         if dense and fsums[gm + g] == 0.0:
-            continue  # group had no passing rows -> not emitted (matches stock)
+            continue  # group had no passing rows, so not emitted (matches stock)
         for _ in range(n_cols):
             res_lo.append(0)
             res_hi.append(0)
@@ -3230,7 +3231,7 @@ def _assemble_f64(
             var gbase = g * gp.M
             if gp.is_stats and _is_stat_agg_kind(gp.agg_kind[ai]):
                 # GPU_OP_STATS: combine the shared sums into the closed form. Unused
-                # metric indices are -1 (1-arg stats have no y/Sy2/Sxy) -> 0.0.
+                # metric indices are -1 (1-arg stats have no y/Sy2/Sxy) and read as 0.0.
                 var nn = fsums[gbase + gp.agg_mn[ai]]
                 var sx = fsums[gbase + gp.agg_msx[ai]]
                 var sx2 = fsums[gbase + gp.agg_msx2[ai]]
@@ -3244,14 +3245,14 @@ def _assemble_f64(
                 var v = _stat_value(
                     gp.agg_kind[ai], nn, sx, sx2, sy, sy2, sxy, cx, cy, is_valid
                 )
-                # is_valid=False -> emit a SQL NULL (mark the result cell invalid).
+                # is_valid=False: emit a SQL NULL (mark the result cell invalid).
                 res_valid[base + col] = is_valid
                 if gp.agg_kind[ai] == AGG_REGR_COUNT:
                     res_lo[base + col] = Int64(v)  # BIGINT count
                 else:
                     res_f64[base + col] = v
             elif gp.agg_kind[ai] == AGG_COUNT_STAR:
-                # The float count metric sums 1.0 per row -> exact integer count.
+                # The float count metric sums 1.0 per row, giving an exact integer count.
                 res_lo[base + col] = Int64(fsums[gbase + gp.agg_m0[ai]])
             elif gp.agg_kind[ai] == AGG_AVG:
                 var cnt = fsums[gbase + gp.agg_m1[ai]]
@@ -3259,22 +3260,22 @@ def _assemble_f64(
                     fsums[gbase + gp.agg_m0[ai]] / cnt
                 ) if cnt != 0.0 else 0.0
                 res_f64[base + col] = av
-                # Audit Group G: a NaN result on the TRANSCENDENTAL path is a domain
+                # Audit Group G: a NaN result on the transcendental path is a domain
                 # violation the f64 VM normalized to NaN (sqrt(neg)/log(<=0)); avg of
-                # a poisoned sum is NaN/n == NaN too. RAISE in the finalize (matching
+                # a NaN sum is NaN/n == NaN too. Raise in the finalize (matching
                 # stock), not a silent nan. Stats legitimately emit nan (zero-variance
-                # corr/regr) -> never flagged here. (x != x is true iff x is NaN.)
+                # corr/regr), so they are never flagged here. (x != x is true iff x is NaN.)
                 if not gp.is_stats and av != av:
                     dst.domain_err = _transcendental_domain_op(gp.metric_ops)
-            else:  # AGG_SUM -> DOUBLE sum, already in true-double units
+            else:  # AGG_SUM: DOUBLE sum, already in true-double units
                 var sm = fsums[gbase + gp.agg_m0[ai]]
                 res_f64[base + col] = sm
-                # Audit Group G: NaN sum on the transcendental path -> domain error.
-                # A valid Inf (exp overflow) is NOT NaN, so it does not raise here.
+                # Audit Group G: a NaN sum on the transcendental path is a domain error.
+                # A valid Inf (exp overflow) is not NaN, so it does not raise here.
                 if not gp.is_stats and sm != sm:
                     dst.domain_err = _transcendental_domain_op(gp.metric_ops)
             # NULL-on-empty: an UNGROUPED result with zero contributing rows is
-            # SQL NULL for every aggregate EXCEPT count(*)/count(col)/regr_count
+            # SQL NULL for every aggregate except count(*)/count(col)/regr_count
             # (those are 0 over an empty set). Matches stock DuckDB.
             if (
                 ungrouped_empty
@@ -3282,9 +3283,9 @@ def _assemble_f64(
                 and gp.agg_kind[ai] != AGG_REGR_COUNT
             ):
                 res_valid[base + col] = False
-            # A1 PER-AGGREGATE NULL-on-empty (f64): a transcendental SUM/AVG/stat over
+            # A1 per-aggregate NULL-on-empty (f64): a transcendental SUM/AVG/stat over
             # nullable agg-input(s) is SQL NULL when its validity-product count metric
-            # is 0 (zero rows with all inputs valid). -1 / out-of-range -> inert; the
+            # is 0 (zero rows with all inputs valid). -1 / out-of-range means inert; the
             # stat path's own _stat_value NULL handling still applies on top.
             if (
                 gp.agg_kind[ai] != AGG_REGR_COUNT
@@ -3355,7 +3356,7 @@ def _assemble_hash_f64(mut dst: GpuExecState, mut gp: GpuPinned) raises:
                     hr.fsums[g * gp.M + gp.agg_m0[ai]] / cnt
                 ) if cnt != 0.0 else 0.0
                 res_f64[base + col] = av
-                # Audit Group G: NaN -> domain error (sqrt(neg)/log(<=0)); raise in
+                # Audit Group G: NaN means a domain error (sqrt(neg)/log(<=0)); raise in
                 # the finalize. HASH is the transcendental scope only (never stats).
                 if av != av:
                     dst.domain_err = _transcendental_domain_op(gp.metric_ops)
@@ -3388,10 +3389,10 @@ def _assemble(
         if gp.mode == STRAT_HASH_GROUP:
             _assemble_hash_f64(dst, gp)
         else:
-            # Thread THIS run's fact-filter bounds into the f64 accumulator. When
+            # Pass this run's fact-filter bounds into the f64 accumulator. When
             # gp.gen_pred is set (UNGROUPED f64 + canonical fact-range filter) the
-            # in-kernel fpred applies them over the resident full columns (warm-
-            # across-constants); otherwise gen_bounds is empty -> pass-column path.
+            # in-kernel fpred applies them over the resident full columns (warm
+            # across constants); otherwise gen_bounds is empty and the pass-column path runs.
             _assemble_f64(dst, gp, gen_bounds)
         return
     var q6_active = gp.q6_pred and gp.kind == KIND_Q6
@@ -3414,7 +3415,7 @@ def _assemble(
             fpred_list.append(gp.gen_pred_cmps[p])
             fpred_list.append(gen_bounds[p])
     # Phase G Stage 2 (Path B): Q5 in-kernel predicate. The resident dim arrays +
-    # gid are constant-independent; THIS query's region/date scalars come fresh from
+    # gid are constant-independent; this query's region/date scalars come fresh from
     # `q5_bounds` ([o_lo, o_hi, asia_region], assembled by the caller from the live
     # descriptor + the cached region map). Slots (l_orderkey / l_suppkey) are
     # constant-independent and live in the cache entry.
@@ -3468,10 +3469,10 @@ def _assemble(
     var res_f64: List[Float64] = []
     var res_str: List[String] = []
     var res_valid: List[Bool] = []  # NULL-on-empty mask (True=valid); see below.
-    # NULL-on-empty (UNGROUPED only): zero contributing rows => sum/avg/min/max are
+    # NULL-on-empty (UNGROUPED only): with zero contributing rows sum/avg/min/max are
     # SQL NULL (count stays 0). The pass-count metric sums 1 per passing row. The
     # int path previously left res_valid empty (all valid); now it is populated so
-    # the empty-set NULL is emitted. NON-empty -> all cells valid == prior behavior.
+    # the empty-set NULL is emitted. When non-empty, all cells are valid as before.
     var ungrouped_empty = (
         gp.mode == STRAT_UNGROUPED
         and gp.ungrouped_count_m >= 0
@@ -3480,11 +3481,11 @@ def _assemble(
     var out_rows = 0
     for g in range(gp.n_cand):
         # DENSE-existence gate (fix phantom fully-filtered groups): SQL forms groups
-        # AFTER the WHERE filter, so a group with ZERO filter-passing rows is OMITTED.
-        # The dense gid is built over ALL materialized rows (materialize has no WHERE),
+        # after the WHERE filter, so a group with zero filter-passing rows is left out.
+        # The dense gid is built over all materialized rows (materialize has no WHERE),
         # so such a group still has a gid here; skip it when its per-group filter-
         # passing count is 0. Mirrors the f64 dense path. grouped_count_m<0 (no count
-        # metric, or non-dense) -> legacy behavior; emit_gt0 paths (Q5) keep their gate.
+        # metric, or non-dense) keeps the legacy behavior; emit_gt0 paths (Q5) keep their gate.
         if (
             gp.mode == STRAT_DENSE_GROUP
             and gp.grouped_count_m >= 0
@@ -3528,21 +3529,21 @@ def _assemble(
                 res_f64[base + col] = (
                     sumf / scale_div / Float64(cnt)
                 ) if cnt != 0 else 0.0
-            else:  # AGG_SUM/MIN/MAX -> i128 limbs at ret_scale
+            else:  # AGG_SUM/MIN/MAX: i128 limbs at ret_scale
                 res_lo[base + col] = v0.cast[DType.int64]()
                 res_hi[base + col] = (v0 >> 64).cast[DType.int64]()
             # NULL-on-empty: an UNGROUPED result with zero contributing rows is
-            # SQL NULL for every aggregate EXCEPT count(*)/count(col) (0 over an
+            # SQL NULL for every aggregate except count(*)/count(col) (0 over an
             # empty set). Matches stock DuckDB.
             if ungrouped_empty and gp.agg_kind[ai] != AGG_COUNT_STAR:
                 res_valid[base + col] = False
-            # A1 PER-AGGREGATE NULL-on-empty: a SUM/AVG/stat over nullable agg-input(s)
-            # is SQL NULL when ZERO rows have ALL its inputs valid (its validity-product
-            # count metric == 0) -- e.g. sum(x) where x is all-NULL among filter-passing
+            # A1 per-aggregate NULL-on-empty: a SUM/AVG/stat over nullable agg-input(s)
+            # is SQL NULL when zero rows have all its inputs valid (its validity-product
+            # count metric == 0), e.g. sum(x) where x is all-NULL among filter-passing
             # rows. Distinct from the shared `ungrouped_empty` (zero filter-passing rows
             # at all). agg_valid_count_m[ai] is -1 (inert) for count(*) / no-nullable-
-            # input aggregates; the list is EMPTY for finalize paths that don't set it
-            # (Q5/dims) -> the length guard keeps those byte-identical.
+            # input aggregates; the list is empty for finalize paths that don't set it
+            # (Q5/dims), and the length guard keeps those byte-identical.
             if (
                 ai < len(gp.agg_valid_count_m)
                 and gp.agg_valid_count_m[ai] >= 0
@@ -3560,14 +3561,14 @@ def _assemble(
     dst.res_valid = res_valid^
 
 
-# Re-run the HASH_GROUP kernel + assemble. Used by BOTH cold and warm Q3 paths
+# Re-run the HASH_GROUP kernel + assemble. Used by both cold and warm Q3 paths
 # on NVIDIA/AMD. The kernel discovers the occupied groups (l_orderkey), atomic-
 # accumulates the int64 revenue per group, and we widen to int128 here (the same
 # exactness contract: per-order revenue fits int64; see _pin_finalize). For each
 # group we emit one row iff its gated SUM > 0, look up the dim-carried group keys
 # (o_orderdate / o_shippriority) by the group key from the cached host dim arrays
 # (constant within an orderkey), and place the aggregate cells exactly as
-# `_assemble` does. Output row ORDER is unspecified (the parent ORDER BY sorts).
+# `_assemble` does. Output row order is unspecified (the parent ORDER BY sorts).
 def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
     var hr = segreduce_run_hash(
         gp.res,
@@ -3634,7 +3635,7 @@ def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
                 res_f64[base + col] = (
                     sumf / scale_div / Float64(cnt)
                 ) if cnt != 0 else 0.0
-            else:  # AGG_SUM -> i128 limbs at ret_scale
+            else:  # AGG_SUM: i128 limbs at ret_scale
                 res_lo[base + col] = v0.cast[DType.int64]()
                 res_hi[base + col] = (v0 >> 64).cast[DType.int64]()
         out_rows += 1
@@ -3709,11 +3710,11 @@ def mojo_gpu_desc_materialize_count(
     ref d = handle.bitcast[GpuPlanDescriptor]()[]
     # Request 0 is always the fact-table query. For an FK-join plan each dim_edge
     # adds one dim request (request index 1..n_dims), so the count is 1 + n_dims.
-    # 0-dim shapes (ungrouped Q6 / grouped DENSE_GROUP Q1) -> one fact request.
+    # 0-dim shapes (ungrouped Q6 / grouped DENSE_GROUP Q1) have one fact request.
     return 1 + len(d.dim_edges)
 
 
-# The DISTINCT fact-table columns the shuttle must SELECT + feed, in a
+# The distinct fact-table columns the shuttle must SELECT + feed, in a
 # deterministic order: fact group-key columns first (in group-key order), then
 # `fact_projected_columns` (fact filters in filter order, then aggregate-program
 # LOAD_COLs). De-dups across the two (a group key also referenced by an
@@ -3742,7 +3743,7 @@ def _materialize_columns(d: GpuPlanDescriptor) -> List[String]:
         ref e = d.dim_edges[de]
         if e.fact_key.table == d.fact_table:
             _add(cols, e.fact_key.column)
-    # A join cond can reference a fact column that the chosen attach edge did NOT
+    # A join cond can reference a fact column that the chosen attach edge did not
     # pick as its fact_key (Q5: supplier attaches transitively via a nation cond,
     # so the `l_suppkey = s_suppkey` cond's fact side l_suppkey is otherwise never
     # materialized). The Q5 lowering gathers supplier per lineitem row by
@@ -3762,9 +3763,9 @@ def _materialize_columns(d: GpuPlanDescriptor) -> List[String]:
 # The columns to SELECT from dim-edge `de`'s dimension table, in a deterministic
 # order: the dim PK (join key) first, then every carried dim column referenced by
 # an aggregate program (LOAD_COL or PROMO_PRED on this dim table), then any dim
-# filter columns. The pin builds a DENSE array indexed by the PK value from the
+# filter columns. The pin builds a dense array indexed by the PK value from the
 # carried payload (Q14: the promo flag derived from p_type). Returns parallel
-# lists (column name, contract TypeTag-ish role) — the role distinguishes the PK
+# lists (column name, a role similar to a contract TypeTag); the role distinguishes the PK
 # / carried / filter columns for the pin's dense-array build.
 def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
     ref e = d.dim_edges[de]
@@ -3777,7 +3778,7 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
                 return
         cols.append(name)
 
-    # 1. the dim PK (the join key on the dim side) — drives the dense index.
+    # 1. the dim PK (the join key on the dim side), which drives the dense index.
     _add(cols, e.dim_key.column)
     # 2. carried columns referenced by aggregate programs (LOAD_COL / PROMO_PRED).
     for ai in range(len(d.aggregates)):
@@ -3796,15 +3797,15 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
         for fi in range(len(g.filters)):
             if g.filters[fi].col.table == dim_table:
                 _add(cols, g.filters[fi].col.column)
-    # 4. dim-carried GROUP-KEY columns (SORT_SEGREDUCE: o_orderdate /
+    # 4. dim-carried group-key columns (SORT_SEGREDUCE: o_orderdate /
     #    o_shippriority live on the orders dim and are emitted per group). They
     #    are gathered per output segment by the fact group key's FK value into
     #    this dim, so they must be materialized as carried dim arrays.
     for gk in range(len(d.group_keys)):
         if d.group_keys[gk].table == dim_table:
             _add(cols, d.group_keys[gk].column)
-    # 5. CHILD-edge join columns: when another dim_edge attaches to THIS dim
-    #    (a transitive dim->dim join, e.g. customer joins orders on o_custkey),
+    # 5. Child-edge join columns: when another dim_edge attaches to this dim
+    #    (a transitive dim-to-dim join, e.g. customer joins orders on o_custkey),
     #    its near-side column lives on this dim and is the FK used to fold the
     #    child's pass flag into this dim. Materialize it so the host fold can
     #    gather is_building[o_custkey]. This is the generalization that makes a
@@ -3814,10 +3815,10 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
             continue
         if d.dim_edges[ce].fact_key.table == dim_table:
             _add(cols, d.dim_edges[ce].fact_key.column)
-    # 6. CORRELATED join-cond columns on this dim (Q5): a join cond can couple two
-    #    dims on a non-edge column (c_nationkey = s_nationkey) — neither side is
+    # 6. Correlated join-cond columns on this dim (Q5): a join cond can couple two
+    #    dims on a non-edge column (c_nationkey = s_nationkey). Neither side is
     #    the chosen attach edge's key, so rules 1/5 miss it. Materialize every
-    #    join-cond column that lives on THIS dim table so the correlated compare
+    #    join-cond column that lives on this dim table so the correlated compare
     #    (evaluated per fact row on the GPU via OP_EQ) has the value available.
     for ji in range(len(d.joins)):
         ref jn = d.joins[ji]
@@ -3832,7 +3833,7 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
 
 # Build the materialization SQL for request `i` and remember the column order on
 # the exec state (created lazily, keyed by the descriptor handle). The columns
-# are the DISTINCT fact-table columns referenced by the fact filters + aggregate
+# are the distinct fact-table columns referenced by the fact filters + aggregate
 # programs, in deterministic (first-seen) order:
 #   SELECT <c0>, <c1>, ... FROM <fact_table>
 # `ORDER BY` is appended iff strategy == SORT_SEGREDUCE (no-op for Q6).
@@ -3854,9 +3855,9 @@ def mojo_gpu_desc_materialize_sql(
         var sql = String("")
         if i == 0:
             # --- request 0: the fact-table query ---
-            # KEEP mat_cols = the FULL list (the finalize slot map + result
+            # Keep mat_cols = the full list (the finalize slot map + result
             # assembly index by it). SKIP-MATERIALIZE only narrows the SELECT (and
-            # the feed) -- it never changes mat_cols.
+            # the feed); it never changes mat_cols.
             var cols = _materialize_columns(d)
             # Lazily create the exec state, sized for the fact columns + dims.
             if key not in m:
@@ -3869,17 +3870,17 @@ def mojo_gpu_desc_materialize_sql(
                     counts.append(len(_dim_columns(d, de)))
                 m[key].init_dims(counts)
 
-            # --- SKIP-MATERIALIZE: compute which fact columns to OMIT. ---
-            # Omit col c IFF skip-materialize is active for this query AND a column
-            # is pool-resident under the EXACT key the finalize will form
-            # (fact_table, c, REPR_INT64_PACKED, STORAGE, resident_n) AND we can
-            # take an in-use LEASE on it. The lease (held from here to the finalize)
-            # closes the probe->finalize eviction race: a leased column can never be
-            # evicted by _colpool_make_room, so the finalize HIT is GUARANTEED. Any
-            # exception -> emit the FULL SELECT (omit nothing) -> correct.
+            # --- SKIP-MATERIALIZE: compute which fact columns to omit. ---
+            # Omit col c iff skip-materialize is active for this query, a column
+            # is pool-resident under the exact key the finalize will form
+            # (fact_table, c, REPR_INT64_PACKED, STORAGE, resident_n), and we can
+            # take an in-use lease on it. The lease (held from here to the finalize)
+            # closes the eviction race between probe and finalize: a leased column can
+            # never be evicted by _colpool_make_room, so the finalize hit is guaranteed.
+            # On any exception we emit the full SELECT (omit nothing), which is correct.
             #
-            # materialize_sql(0) is called TWICE by C++ (length then fill), so first
-            # RELEASE any leases a prior call took, then recompute from scratch.
+            # materialize_sql(0) is called twice by C++ (length then fill), so first
+            # release any leases a prior call took, then recompute from scratch.
             for li in range(len(m[key].colpool_omit_leases)):
                 release_lease(m[key].colpool_omit_leases[li])
             m[key].colpool_omit_leases = []
@@ -3900,12 +3901,12 @@ def mojo_gpu_desc_materialize_sql(
                         if rn < 0:
                             continue
                         # All resident fact cols of one predicate-independent table
-                        # share the row count; capture it once. Only omit at THAT n.
+                        # share the row count; capture it once. Only omit at that n.
                         if resident_n < 0:
                             resident_n = rn
                         if rn != resident_n:
                             continue
-                        # Take the lease on the EXACT key the finalize will form.
+                        # Take the lease on the exact key the finalize will form.
                         var ck = col_key(
                             d.fact_table, cols[c], REPR_INT64_PACKED,
                             ORDERING_STORAGE, rn,
@@ -3914,10 +3915,10 @@ def mojo_gpu_desc_materialize_sql(
                             omit[c] = True
                             any_omit = True
                             omit_leases.append(ck)
-                        # lease failed (raced away) -> leave omit[c] False (feed it).
+                        # lease failed (raced away): leave omit[c] False (feed it).
                 except:
-                    # Omit computation failed -> release any leases we took and
-                    # emit the FULL SELECT (feed all). Never omit on uncertainty.
+                    # Omit computation failed: release any leases we took and
+                    # emit the full SELECT (feed all). Never omit on uncertainty.
                     for li in range(len(omit_leases)):
                         release_lease(omit_leases[li])
                     omit_leases = []
@@ -3927,9 +3928,9 @@ def mojo_gpu_desc_materialize_sql(
                     resident_n = -1
             m[key].colpool_omit_leases = omit_leases.copy()
 
-            # Record the omit mask + the emitted-position -> mat_cols-index map so
-            # feed_column can keep st.cols indexed by FULL mat_cols order. (When
-            # nothing is omitted these are all-False / the identity -- so the
+            # Record the omit mask + the map from emitted position to mat_cols index so
+            # feed_column can keep st.cols indexed by full mat_cols order. (When
+            # nothing is omitted these are all-False / the identity, so the
             # feed/finalize behave exactly as Phase 1.)
             m[key].colpool_omit = omit.copy()
             var fpm: List[Int] = []
@@ -3938,10 +3939,10 @@ def mojo_gpu_desc_materialize_sql(
                     fpm.append(c)
             m[key].fed_pos_to_matcol = fpm.copy()
 
-            # If ALL fact columns are omitted (everything resident), a 0-column
+            # If all fact columns are omitted (everything resident), a 0-column
             # SELECT is illegal SQL. Seed st.n_rows from the resident row count so
-            # the C++ side can SKIP the fact query and rely on it (feed_rowcount is
-            # the belt-and-suspenders backstop). The finalize sources every column
+            # the C++ side can skip the fact query and rely on it (feed_rowcount is
+            # the extra backstop). The finalize sources every column
             # from the pool. We still emit the (empty) "SELECT  FROM <table>" so
             # the byte length signals C++ via the all-omit detection; C++ checks
             # the parsed column count, not the literal text.
@@ -3958,10 +3959,10 @@ def mojo_gpu_desc_materialize_sql(
                 sql += cols[c]
                 emitted += 1
             sql += " FROM " + d.fact_table
-            # SORT_SEGREDUCE: order by the FACT group key (the segment key, e.g.
+            # SORT_SEGREDUCE: order by the fact group key (the segment key, e.g.
             # l_orderkey) so each order's lineitems are contiguous for one-warp-
-            # per-segment reduction. Dim-carried group keys are NOT sort columns.
-            # (SORT_SEGREDUCE is never skip-materialize eligible -> omit is all
+            # per-segment reduction. Dim-carried group keys are not sort columns.
+            # (SORT_SEGREDUCE is never skip-materialize eligible, so omit is all
             # False here, so this rebuilds the full ORDER-BY SELECT unchanged.)
             if d.strategy == STRAT_SORT_SEGREDUCE and len(d.group_keys) > 0:
                 var sort_col = String("")
@@ -3995,7 +3996,7 @@ def mojo_gpu_desc_materialize_sql(
                     sql += ", "
                 sql += dcols[c]
             sql += " FROM " + d.dim_edges[de].dim_table
-            # NOTE: dim filters are NOT applied in SQL. The pin materializes ALL
+            # Dim filters are not applied in SQL. The pin materializes all
             # dim rows, builds a dense per-PK pass-flag array from the dim filter
             # columns, and ANDs that flag into the row pass program via
             # OP_LOAD_DIM (the dim-filter-AND-via-MUL mechanism). That keeps const
@@ -4015,11 +4016,11 @@ def mojo_gpu_desc_materialize_sql(
 # ---------------------------------------------------------------------------
 # Pin + feed + finalize.
 # ---------------------------------------------------------------------------
-# Compute the RESIDENT-pin signature: fact table + sorted projected fact columns
-# (incl. group-key columns) + strategy + dim tables/carried columns AND every
-# filter's column+cmp+const lo/hi (fact AND dim filters, including VARCHAR const
-# values). Including the constants means a WARM hit ⇒ an IDENTICAL predicate, so
-# the resident device buffers AND the per-group/segment result layout cached in
+# Compute the resident-pin signature: fact table + sorted projected fact columns
+# (incl. group-key columns) + strategy + dim tables/carried columns and every
+# filter's column+cmp+const lo/hi (fact and dim filters, including VARCHAR const
+# values). Including the constants means a warm hit implies an identical predicate, so
+# the resident device buffers and the per-group/segment result layout cached in
 # GpuPinned are valid as-is on re-run (no re-bake needed). This trades "warm
 # across different constants" for correctness + simplicity.
 def _signature(d: GpuPlanDescriptor) -> String:
@@ -4040,7 +4041,7 @@ def _signature(d: GpuPlanDescriptor) -> String:
     sig += "|strat=" + String(Int(d.strategy))
     sig += "|kind=" + String(Int(d.kind))
     # FK-join: include each dim edge's table + carried/filter columns + the
-    # fact-key column so a Q14 pin keys distinctly and a WARM hit is sound.
+    # fact-key column so a Q14 pin keys distinctly and a warm hit is sound.
     for de in range(len(d.dim_edges)):
         ref e = d.dim_edges[de]
         sig += "|dim=" + e.dim_table + ":" + e.fact_key.column + ":"
@@ -4048,12 +4049,12 @@ def _signature(d: GpuPlanDescriptor) -> String:
         for c in range(len(dcols)):
             sig += dcols[c] + ","
     # Phase G Stage 2: for the Q6 predicate-independent path the resident columns'
-    # CONTENT is filter-const-independent (materialize SQL has no WHERE) and the
-    # filter is evaluated in-kernel from per-run bounds, so a WARM hit across
-    # DIFFERENT constants reuses the same resident buffers. EXCLUDE the filter
+    # content is filter-const-independent (materialize SQL has no WHERE) and the
+    # filter is evaluated in-kernel from per-run bounds, so a warm hit across
+    # different constants reuses the same resident buffers. Exclude the filter
     # constants (but keep cmp/column structure) so distinct-constant Q6 maps to one
     # signature. We still fold in the cmp+column shape so a genuinely different
-    # predicate STRUCTURE keys distinctly. The bounds are threaded per run.
+    # predicate structure keys distinctly. The bounds are threaded per run.
     if _q6_pred_enabled(d):
         for gi in range(len(d.gets)):
             ref g = d.gets[gi]
@@ -4070,13 +4071,13 @@ def _signature(d: GpuPlanDescriptor) -> String:
         sig += "|q6_pred=1"
         return sig
     # Phase G Stage 2 (generalized): the same const-decoupling for the canonical
-    # Q1/Q14 fact-range filter. The resident columns' CONTENT is filter-const-
+    # Q1/Q14 fact-range filter. The resident columns' content is filter-const-
     # independent (materialize SQL has no WHERE) and the fact filter is evaluated
     # in-kernel from per-run bounds; Q14's promo dim array is itself constant-
-    # independent (p_type LIKE 'PROMO%'). So EXCLUDE the fact filter constants
-    # (keep cmp+column structure) -> distinct-constant Q1/Q14 map to one signature.
+    # independent (p_type LIKE 'PROMO%'). So exclude the fact filter constants
+    # (keep cmp+column structure), and distinct-constant Q1/Q14 map to one signature.
     # The dim edges (already folded above) + cmp/column shape still key a genuinely
-    # different predicate STRUCTURE distinctly. Distinct per-kind tag.
+    # different predicate structure distinctly. Distinct per-kind tag.
     if _gen_pred_enabled(d):
         for gi in range(len(d.gets)):
             ref g = d.gets[gi]
@@ -4095,12 +4096,12 @@ def _signature(d: GpuPlanDescriptor) -> String:
     # Phase G Stage 2 (Path B): Q5's predicate-independent residency decouples the
     # resident dim arrays + gid from the region/date constants (raw o_orderdate /
     # cust_nation / supp_nation / supp_region; gid = raw supp_nation), evaluating
-    # the region + orderdate window + cust_nation==supp_nation filter IN-KERNEL from
-    # per-run scalars. So EXCLUDE the region (r_name) + o_orderdate constants (keep
-    # the cmp/column shape) -> r_name in {ASIA,EUROPE,AMERICA,...} and ANY date
-    # window collapse to ONE signature, reusing the resident buffers warm. The dim
+    # the region + orderdate window + cust_nation==supp_nation filter in the kernel from
+    # per-run scalars. So exclude the region (r_name) + o_orderdate constants (keep
+    # the cmp/column shape): r_name in {ASIA,EUROPE,AMERICA,...} and any date
+    # window collapse to one signature, reusing the resident buffers warm. The dim
     # edges (already folded above) + the dim-filter cmp/column shape still key a
-    # genuinely different predicate STRUCTURE distinctly.
+    # genuinely different predicate structure distinctly.
     if _q5_pred_enabled(d):
         for gi in range(len(d.gets)):
             ref g = d.gets[gi]
@@ -4119,14 +4120,14 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     )
         sig += "|q5_pred=1"
         return sig
-    # FLOAT64 predicate-independent (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): the
-    # resident columns are the FULL unfiltered table (materialize SQL has no WHERE)
+    # Float64 predicate-independent (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS): the
+    # resident columns are the full unfiltered table (materialize SQL has no WHERE)
     # and the fact-range filter is evaluated in-kernel from per-run bounds, so
-    # DIFFERENT constants reuse the same residency. EXCLUDE the fact-filter constants
-    # (keep cmp+column structure). CRITICAL: unlike the int128 kinds (where each kind
-    # fixes the aggregate shape per column set), two f64 queries over the SAME column
-    # with DIFFERENT functions (sum(sqrt(x)) vs sum(exp(x))) share columns/strat/kind,
-    # so the base signature alone would COLLIDE -> a warm hit would reuse the wrong
+    # different constants reuse the same residency. Exclude the fact-filter constants
+    # (keep cmp+column structure). Important: unlike the int128 kinds (where each kind
+    # fixes the aggregate shape per column set), two f64 queries over the same column
+    # with different functions (sum(sqrt(x)) vs sum(exp(x))) share columns/strat/kind,
+    # so the base signature alone would collide and a warm hit would reuse the wrong
     # metric program. Fold in a fingerprint of every aggregate's kind + op tape
     # (op/a/b) + each LOAD_COL's table.column, so distinct functions / metric programs
     # key distinctly. (This also hardens the committed transcendental path, which had
@@ -4159,12 +4160,12 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(o.b))
                     + ";"
                 )
-                # Fold the CONST VALUE for PUSH_CONST ops: o.a is a per-descriptor
-                # const_id (index), not the value, so two queries differing ONLY in a
-                # constant (e.g. power(x,2) vs power(x,3) -> same opcodes, same const
-                # slot 0) would otherwise share a fingerprint and a WARM hit would reuse
-                # the WRONG cached result. (Filter constants are folded separately as
-                # "|f="; this covers AGGREGATE-PROGRAM constants like the power exponent.)
+                # Fold the const value for PUSH_CONST ops: o.a is a per-descriptor
+                # const_id (index), not the value, so two queries differing only in a
+                # constant (e.g. power(x,2) vs power(x,3): same opcodes, same const
+                # slot 0) would otherwise share a fingerprint and a warm hit would reuse
+                # the wrong cached result. (Filter constants are folded separately as
+                # "|f="; this covers aggregate-program constants like the power exponent.)
                 if (
                     o.op == OP_PUSH_CONST
                     and Int(o.a) >= 0
@@ -4183,9 +4184,9 @@ def _signature(d: GpuPlanDescriptor) -> String:
             for lc in range(len(agg.load_cols)):
                 sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
         return sig
-    # Filter CONSTANTS: every GET's predicates (fact AND dim) by table.column,
+    # Filter constants: every GET's predicates (fact and dim) by table.column,
     # cmp, and the const lo/hi (+ str_val for VARCHAR consts). This is what makes
-    # a WARM hit guarantee an identical predicate so the cached layout is valid.
+    # a warm hit guarantee an identical predicate so the cached layout is valid.
     for gi in range(len(d.gets)):
         ref g = d.gets[gi]
         for fi in range(len(g.filters)):
@@ -4205,17 +4206,17 @@ def _signature(d: GpuPlanDescriptor) -> String:
                 + ":"
                 + c.str_val
             )
-    # AGGREGATE-PROGRAM collision guard (ALL non-pred-independent queries -- int128
-    # AND f64). Two queries over the SAME columns / strat / kind / filters but
-    # DIFFERENT aggregates would otherwise share a signature and a WARM hit would
-    # reuse the WRONG metric program / layout. This bites the INT path too, NOT just
-    # f64: `sum(c)` then `avg(c)` over the same column collide (same cols/strat/kind)
-    # -> avg WARM-reuses sum's resident pin (M=1, no count metric) -> avg = 0.0, a
-    # default-on silent wrong result (the int128 `kind` does NOT fix the aggregate
-    # shape -- sum/avg/count over one column all share a kind). Examples it fixes:
+    # Aggregate-program collision guard (all non-pred-independent queries, int128
+    # and f64). Two queries over the same columns / strat / kind / filters but
+    # different aggregates would otherwise share a signature and a warm hit would
+    # reuse the wrong metric program / layout. This affects the int path too, not only
+    # f64: `sum(c)` then `avg(c)` over the same column collide (same cols/strat/kind),
+    # so avg reuses sum's resident pin warm (M=1, no count metric) and returns 0.0, a
+    # silent wrong result with default settings (the int128 `kind` does not fix the
+    # aggregate shape; sum/avg/count over one column all share a kind). Examples it fixes:
     # sum(x) vs avg(x); sum(x) vs sum(x*2); f64 stddev(x) vs var(x); sum(sqrt(x)) vs
-    # sum(exp(x)). Folding the agg shape in is monotonic-safe (only MORE distinct
-    # signatures; a missed warm-hit just re-pins cold, still correct). The TPC-H
+    # sum(exp(x)). Folding the agg shape in can only add distinct signatures, which
+    # is safe (a missed warm hit only re-pins cold, still correct). The TPC-H
     # pred-independent kinds (q6/gen/q5/f64_pred) returned above already key on their
     # fixed canonical agg shape, so they are unaffected.
     if len(d.aggregates) > 0:
@@ -4232,12 +4233,12 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     + String(Int(o.b))
                     + ";"
                 )
-                # Fold the CONST VALUE for PUSH_CONST ops: o.a is a per-descriptor
-                # const_id (index), not the value, so two queries differing ONLY in a
-                # constant (e.g. power(x,2) vs power(x,3) -> same opcodes, same const
-                # slot 0) would otherwise share a fingerprint and a WARM hit would reuse
-                # the WRONG cached result. (Filter constants are folded separately as
-                # "|f="; this covers AGGREGATE-PROGRAM constants like the power exponent.)
+                # Fold the const value for PUSH_CONST ops: o.a is a per-descriptor
+                # const_id (index), not the value, so two queries differing only in a
+                # constant (e.g. power(x,2) vs power(x,3): same opcodes, same const
+                # slot 0) would otherwise share a fingerprint and a warm hit would reuse
+                # the wrong cached result. (Filter constants are folded separately as
+                # "|f="; this covers aggregate-program constants like the power exponent.)
                 if (
                     o.op == OP_PUSH_CONST
                     and Int(o.a) >= 0
@@ -4255,17 +4256,17 @@ def _signature(d: GpuPlanDescriptor) -> String:
                     )
             for lc in range(len(agg.load_cols)):
                 sig += agg.load_cols[lc].table + "." + agg.load_cols[lc].column + "|"
-    # NR3 (GPU_OP_FILTER_OR) collision guard. Fold the OR-of-equalities PASS-PROGRAM
-    # SHAPE (op tags + each LOAD_COL's table.column) AND the resolved OP_PUSH_CONST
-    # VALUES into the signature. The OR constants are BAKED into the cached program
-    # at finalize (the host AND-compose resolves PUSH_CONST(const_id) -> consts[id].lo),
-    # so a WARM hit MUST NOT reuse stale constants -- unlike the pushed range filters
-    # (kernel args, threaded per run), the OR consts are frozen in the resolved
-    # pass_prog. This is the conservative correct-first choice: it SACRIFICES warming
-    # across different OR constants (e.g. `a IN (2,9,40)` vs `a IN (3,8,41)` re-pin
-    # cold) for guaranteed correctness. A future refinement could thread the OR
-    # consts per-run like the range filters; not done here. Empty (no pass_prog) on
-    # every non-NR3 query -> byte-identical signature for the existing classes.
+    # NR3 (GPU_OP_FILTER_OR) collision guard. Fold the OR-of-equalities pass-program
+    # shape (op tags + each LOAD_COL's table.column) and the resolved OP_PUSH_CONST
+    # values into the signature. The OR constants are baked into the cached program
+    # at finalize (the host AND-compose resolves PUSH_CONST(const_id) to consts[id].lo),
+    # so a warm hit must not reuse stale constants. Unlike the pushed range filters
+    # (kernel args, passed per run), the OR consts are frozen in the resolved
+    # pass_prog. This is the conservative choice that puts correctness first: it gives
+    # up warming across different OR constants (e.g. `a IN (2,9,40)` vs `a IN (3,8,41)`
+    # re-pin cold) for guaranteed correctness. A future refinement could pass the OR
+    # consts per run like the range filters; not done here. Empty (no pass_prog) on
+    # every non-NR3 query, so the signature is byte-identical for the existing classes.
     for gi in range(len(d.gets)):
         ref g = d.gets[gi]
         if len(g.pass_prog) == 0:
@@ -4295,12 +4296,12 @@ def _signature(d: GpuPlanDescriptor) -> String:
 def mojo_gpu_pin_begin(
     handle: UnsafePointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
-    # 0 = WARM (resident buffers cached, skip feeding), 1 = COLD.
-    # WARM iff the signature is already in the process-global resident pin cache
-    # (_pin2) — for ALL classes, including FK-joins. A WARM hit means the resident
+    # 0 = warm (resident buffers cached, skip feeding), 1 = cold.
+    # Warm iff the signature is already in the process-global resident pin cache
+    # (_pin2), for all classes including FK-joins. A warm hit means the resident
     # device buffers + the cached per-group/segment result layout are valid as-is
     # (the signature includes the filter constants), so the finalize re-runs the
-    # kernel on the resident buffers and assembles from cached metadata, with NO
+    # kernel on the resident buffers and assembles from cached metadata, with no
     # access to fed host columns (C++ feeds nothing on warm).
     if Int(handle) == 0:
         return 1
@@ -4316,8 +4317,8 @@ def mojo_gpu_pin_begin(
 
         var sig = _signature(d)
         ref p2 = _pin2_ptr()[]
-        # Phase G Stage 2 observability: gated WARM/COLD + signature trace on
-        # stderr (GPU_OP_PIN_LOG). Diagnostic only -- does not affect results.
+        # Phase G Stage 2 observability: gated warm/cold + signature trace on
+        # stderr (GPU_OP_PIN_LOG). Diagnostic only; does not affect results.
         var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
         if sig in p2:
             m[key].warm = True
@@ -4336,8 +4337,8 @@ def mojo_gpu_pin_begin(
 
 # Stash a fed flat column into the exec state. `col_j` indexes the mat_cols
 # order chosen in materialize_sql. The element width follows `type_tag`:
-# TYPE_DATE/INTEGER -> int32 (4 bytes); everything else (DECIMAL int64-backed /
-# BIGINT / HUGEINT-as-2x... ) -> int64 (8 bytes). Copies into an owned buffer
+# TYPE_DATE/INTEGER use int32 (4 bytes); everything else (DECIMAL int64-backed /
+# BIGINT / HUGEINT-as-2x... ) uses int64 (8 bytes). Copies into an owned buffer
 # (the DuckDB pointer is transient).
 @export("mojo_gpu_feed_column")
 def mojo_gpu_feed_column(
@@ -4374,7 +4375,7 @@ def mojo_gpu_feed_column(
         # Request 0 is the fact table; requests 1..n_dims are dim-edge queries.
         if req_i == 0:
             # SKIP-MATERIALIZE: the narrowed SELECT fed fewer fact columns, so
-            # `col_j` indexes the EMITTED order. Translate it to the FULL mat_cols
+            # `col_j` indexes the emitted order. Translate it to the full mat_cols
             # index via fed_pos_to_matcol so st.cols stays indexed by mat_cols
             # order (the finalize slot map is unchanged). materialize_sql(0) always
             # populates fed_pos_to_matcol (the identity when nothing is omitted),
@@ -4405,13 +4406,13 @@ def mojo_gpu_feed_column(
         return 4
 
 
-# SKIP-MATERIALIZE landmine #1: set st.n_rows for the FACT request UNCONDITIONALLY
-# from the row count C++ observed. Called for request 0 BEFORE the feed loop with
-# `res->RowCount()`. When the narrowed SELECT omits ALL fact columns (everything
-# resident), C++ SKIPS the fact Connection::Query entirely (a 0-column SELECT is
-# illegal) and this is the ONLY thing that sets st.n_rows -- so the finalize knows
+# SKIP-MATERIALIZE landmine #1: set st.n_rows for the fact request unconditionally
+# from the row count C++ observed. Called for request 0 before the feed loop with
+# `res->RowCount()`. When the narrowed SELECT omits all fact columns (everything
+# resident), C++ skips the fact Connection::Query entirely (a 0-column SELECT is
+# illegal) and this is the only thing that sets st.n_rows, so the finalize knows
 # the row count even with no fed fact column. When at least one column is fed,
-# feed_column ALSO sets st.n_rows to the same value (same predicate-independent
+# feed_column also sets st.n_rows to the same value (same predicate-independent
 # scan), so this is harmless/idempotent. Returns 0 on success.
 @export("mojo_gpu_feed_rowcount")
 def mojo_gpu_feed_rowcount(
@@ -4433,11 +4434,11 @@ def mojo_gpu_feed_rowcount(
 
 # GPU_OP_NULLABLE: feed a per-row validity byte array (1=valid, 0=SQL NULL,
 # `n_rows` bytes) for one fed column. Mirrors mojo_gpu_feed_column's req_i/col_j
-# resolution (req 0 = fact, else dim-edge `req_i-1`); `col_j` is the SAME emitted
+# resolution (req 0 = fact, else dim-edge `req_i-1`); `col_j` is the same emitted
 # index feed_column used, translated through fed_pos_to_matcol for the fact. C++
-# calls this ONLY for a column whose materialize scan observed an actual NULL
+# calls this only for a column whose materialize scan observed an actual NULL
 # (AllValid() false), so columns with no NULLs keep validity == None (all valid).
-# Must be called AFTER mojo_gpu_feed_column for that column (fill resets validity).
+# Must be called after mojo_gpu_feed_column for that column (fill resets validity).
 @export("mojo_gpu_feed_validity")
 def mojo_gpu_feed_validity(
     handle: UnsafePointer[NoneType, MutUntrackedOrigin],
@@ -4475,8 +4476,8 @@ def mojo_gpu_feed_validity(
         return 4
 
 
-# SKIP-MATERIALIZE: is the narrow-SQL skip-materialize path active for THIS query?
-# C++ calls it BEFORE the feed loop to decide whether to (a) bypass the GPU-direct
+# SKIP-MATERIALIZE: is the narrow-SQL skip-materialize path active for this query?
+# C++ calls it before the feed loop to decide whether to (a) bypass the GPU-direct
 # fact feed (it uses the narrowed SQL feed instead) and (b) call feed_rowcount +
 # detect a 0-column SELECT. Returns 1 (active) / 0 (not). Same gate as the Mojo
 # omit decision so C++ and Mojo agree exactly.
@@ -4491,7 +4492,7 @@ def mojo_gpu_skipmat_active(
 
 
 # Map a fed column index to a typed (immutable-origin) pointer over the owned
-# host buffer -- the origin `mojo_q6_pin` expects. Rebuilt from the raw address.
+# host buffer, the origin `mojo_q6_pin` expects. Rebuilt from the raw address.
 def _col_i32(
     st: GpuExecState, j: Int
 ) -> UnsafePointer[Int32, ImmUntrackedOrigin]:
@@ -4598,12 +4599,12 @@ def _q6_consts(
     return (ship_lo, ship_hi, disc_lo, disc_hi, qty_hi)
 
 
-# Build dim arrays / stage / upload (if COLD) + run kernel + int128 reduce.
-# Q6 shape: map fed columns BY NAME to the Q6 kernel inputs and reuse the
+# Build dim arrays / stage / upload (if cold) + run kernel + int128 reduce.
+# Q6 shape: map fed columns by name to the Q6 kernel inputs and reuse the
 # existing mojo_q6_pin (upload) + mojo_q6_query path. Stores the int128 result
 # (two limbs) as the single result row/col in the exec state.
 # Read the Q1 shipdate cutoff from the fact filters. Q1's single fact filter is
-# `l_shipdate <= cutoff` (CMP_LE) -> ship_hi = const days (inclusive, matching
+# `l_shipdate <= cutoff` (CMP_LE), so ship_hi = const days (inclusive, matching
 # the q1_kernel's `sd <= ship_hi`). A `< cutoff` (CMP_LT) is normalized to
 # `<= cutoff-1`. Returns the days int32.
 def _q1_ship_cutoff(d: GpuPlanDescriptor) raises -> Int32:
@@ -4623,21 +4624,21 @@ def _q1_ship_cutoff(d: GpuPlanDescriptor) raises -> Int32:
 
 
 # ===-------------------------------------------------------------------===#
-# Generic descriptor -> generic-kernel lowering (n_dims == 0).
+# Lowering from the generic descriptor to the generic kernel (n_dims == 0).
 #
 # Replaces the bespoke Q6/Q1 compute in the shuttle's pin_finalize. Given the fed
 # fact columns (in mat_cols order) + the descriptor it:
 #   1. assigns each distinct *numeric* fact column a slot in a packed int64 buffer
 #      cols[slot*n_rows+row] (int32 DATE/INTEGER widened to int64);
-#   2. resolves each aggregate program's PUSH_CONST pool-id -> consts[id].lo and
-#      LOAD_COL string-id -> fact-column slot, producing (op,a,b) int64 triples;
-#   3. computes a HOST 0/1 pass column (AND of the fact range predicates) into an
-#      extra slot, and uses a 1-op `LOAD_COL(pass_slot)` pass program -- the VM
-#      has no CMP/AND ops, so this is the exact + simplest correct lowering;
-#   4. lowers COUNT_STAR -> PUSH_CONST(1), SUM -> the resolved program, AVG -> two
+#   2. resolves each aggregate program's PUSH_CONST pool-id to consts[id].lo and
+#      LOAD_COL string-id to a fact-column slot, producing (op,a,b) int64 triples;
+#   3. computes a host 0/1 pass column (AND of the fact range predicates) into an
+#      extra slot, and uses a 1-op `LOAD_COL(pass_slot)` pass program. The VM
+#      has no CMP/AND ops, so this is the exact and simplest correct lowering;
+#   4. lowers COUNT_STAR to PUSH_CONST(1), SUM to the resolved program, AVG to two
 #      internal metrics (sum + count) reduced to a host DOUBLE;
 #   5. for 0 group keys runs UNGROUPED (G=1); for group keys reuses the VARCHAR
-#      dense-gid assignment (sorted distinct tuple -> gid) as an int64 gid slot;
+#      dense-gid assignment (sorted distinct tuple to gid) as an int64 gid slot;
 #   6. calls run_segreduce and assembles the result table in out_types order.
 # ===-------------------------------------------------------------------===#
 
@@ -4658,8 +4659,8 @@ def _col_val(st: GpuExecState, j: Int, i: Int) -> Int64:
     return p[]
 
 
-# GPU_OP_NULLABLE: True iff row `i` of fed fact column `j` is VALID (non-NULL).
-# A column with no validity mask (the all-NOT-NULL / no-NULL-observed common case)
+# GPU_OP_NULLABLE: True iff row `i` of fed fact column `j` is valid (non-NULL).
+# A column with no validity mask (the all-NOT NULL / no-NULL-observed common case)
 # is all-valid. Used by the host pass-bake to AND validity into the pass column so a
 # NULL agg-input / filter row is excluded exactly like a filtered-out row.
 def _col_valid(st: GpuExecState, j: Int, i: Int) -> Bool:
@@ -4718,7 +4719,7 @@ def _dim_col_str(st: GpuExecState, de: Int, c: Int, i: Int) raises -> String:
     return s
 
 
-# p_type LIKE 'PROMO%' — true iff the first 5 bytes are exactly "PROMO".
+# p_type LIKE 'PROMO%': true iff the first 5 bytes are exactly "PROMO".
 # Mirrors the C++ EnsureQ14Pinned promo test exactly.
 def _starts_promo(s: String) -> Bool:
     if s.byte_length() < 5:
@@ -4741,8 +4742,8 @@ struct MetricPlan(Copyable, Movable):
 
 
 # Resolve one aggregate's postfix program into VM (op,a,b) int64 triples:
-# LOAD_COL (raw string ids) -> fact-column slot index (via the agg's load_cols
-# list, walked in program order); PUSH_CONST (const-pool id) -> consts[id].lo.
+# LOAD_COL (raw string ids) becomes a fact-column slot index (via the agg's load_cols
+# list, walked in program order); PUSH_CONST (const-pool id) becomes consts[id].lo.
 def _resolve_program(
     d: GpuPlanDescriptor,
     agg: GpuAggregate,
@@ -4761,7 +4762,7 @@ def _resolve_program(
             ops.append(Int64(col_slot[name]))
             ops.append(Int64(0))
         elif o.op == OP_PUSH_CONST:
-            # o.a is a const-pool id at this layer -> resolve to the literal.
+            # o.a is a const-pool id at this layer; resolve it to the literal.
             var cid = Int(o.a)
             if cid < 0 or cid >= len(d.consts):
                 raise Error("generic: PUSH_CONST bad const id")
@@ -4775,7 +4776,7 @@ def _resolve_program(
     return MetricPlan(ops^, len(agg.program))
 
 
-# NR3 (GPU_OP_FILTER_OR): resolve a GET's OR-of-equalities PASS-PROGRAM (postfix:
+# NR3 (GPU_OP_FILTER_OR): resolve a GET's OR-of-equalities pass program (postfix:
 # OP_LOAD_COL/PUSH_CONST/EQ/ADD/MUL) into flattened (op,a,b) VM triples, the same
 # lowering _resolve_program does for an aggregate metric:
 #   OP_LOAD_COL  -> (OP_LOAD_COL, col_slot[pass_load_cols[next].column], 0)
@@ -4785,7 +4786,7 @@ def _resolve_program(
 # consts (the C++ type gate), whose scale is 0, so `lo` is the exact comparison
 # value the column slot holds (INTEGER/DATE columns are fed scale-0). Sets
 # `missing` True (and returns an empty list) if a referenced column is not in
-# col_slot -> the caller maps this to the existing missing-column error (return 8).
+# col_slot; the caller maps this to the existing missing-column error (return 8).
 def _resolve_pass_prog(
     d: GpuPlanDescriptor,
     fact_get_index: Int,
@@ -4824,7 +4825,7 @@ def _resolve_pass_prog(
 
 # Build the float64 VM's `const_div`, parallel to one aggregate's op tape (one
 # Float64 per op, in program order, matching _resolve_program's emission). For an
-# OP_PUSH_CONST op it is 10^(const decimal scale) -> eval_program_f64 reconstructs
+# OP_PUSH_CONST op it is 10^(const decimal scale), and eval_program_f64 reconstructs
 # the true double via Float64(a)/const_div[k]; every other op is 1.0 (unused). The
 # whole-query const_div is these per-metric lists concatenated in metric order
 # (parallel to metric_ops), so the f64 kernel slices it by metric_offsets exactly
@@ -4854,7 +4855,7 @@ def _resolve_const_div(
 # GPU_OP_STATS: per-stat shared-sum metric resolution.
 #
 # A stat aggregate carries its argument program(s) in agg.program: 1-arg
-# (stddev/var) is just the x program; a 2-arg stat (covar/corr/regr_*) is the
+# (stddev/var) is only the x program; a 2-arg stat (covar/corr/regr_*) is the
 # dependent-y program, OP_ARGSEP, then the independent-x program (DuckDB's
 # regr_*(y, x) order). We resolve each arg sub-program into VM op triples + its
 # parallel const_div (identical lowering to _resolve_program / _resolve_const_div),
@@ -4864,7 +4865,7 @@ def _resolve_const_div(
 #   Sy   = <y>                (2-arg only)
 #   Sy2  = <y> <y> MUL        (2-arg only)
 #   Sxy  = <x> <y> MUL        (2-arg only)
-# Each base metric is keyed by its resolved op tape and DEDUPED across all
+# Each base metric is keyed by its resolved op tape and deduplicated across all
 # aggregates in _pin_finalize_generic, so shared sums compute exactly once.
 # ===-------------------------------------------------------------------===#
 @fieldwise_init
@@ -4956,18 +4957,18 @@ def _mul_metric(
 # ===-------------------------------------------------------------------===#
 # A1 unified pass model (GPU_OP_NULLABLE): per-metric agg-input validity multiply.
 #
-# A nullable AGG-INPUT column (one NOT folded into the host pass column) gets a
+# A nullable agg-input column (one not folded into the host pass column) gets a
 # packed 0/1 validity column at `valid_col_slot_of[data_slot]`. A metric whose
 # resolved op tape reads such a column must be multiplied by that column's validity
-# (DuckDB: any NULL operand => the row is excluded from THAT aggregate). value*1 is
+# (DuckDB: any NULL operand excludes the row from that aggregate). value*1 is
 # identity; value*0 zeroes a NULL row. A multi-column expr like ext*(1-disc) with
-# both ext and disc nullable is multiplied by valid_ext AND valid_disc.
+# both ext and disc nullable is multiplied by valid_ext and valid_disc.
 # ===-------------------------------------------------------------------===#
 
-# Distinct nullable agg-input VALIDITY column slots the op tape reads, in first-
+# Distinct nullable agg-input validity column slots the op tape reads, in first-
 # appearance order. Scans for OP_LOAD_COL(data_slot) where data_slot is a key of
 # `valid_col_slot_of`; returns the corresponding validity column slots. Empty when
-# the tape reads no nullable agg-input column (the common case) -> no-op multiply.
+# the tape reads no nullable agg-input column (the common case), so no multiply.
 def _aggin_valid_cols_in_tape(
     read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
 ) raises -> List[Int]:
@@ -4987,9 +4988,9 @@ def _aggin_valid_cols_in_tape(
 
 # Append, to a resolved op tape (+ its parallel const_div), one OP_LOAD_COL(vslot)
 # OP_MUL per distinct nullable agg-input the tape reads. const_div gets 1.0 per
-# appended op (validity is 0/1 -> no scale). Returns (ops', divs'); when there is no
+# appended op (validity is 0/1, so no scale). Returns (ops', divs'); when there is no
 # nullable agg-input the tape is returned unchanged (byte-identical to the flag-off
-# / no-NULL path). `divs` may be empty (int path) -> stays empty (never read).
+# / no-NULL path). `divs` may be empty (int path); it then stays empty (never read).
 def _append_valid_mul(
     read ops: List[Int64],
     read divs: List[Float64],
@@ -5012,11 +5013,11 @@ def _append_valid_mul(
     return (out_ops^, out_div^)
 
 
-# Build the VALIDITY-PRODUCT op tape (+ parallel const_div) for a metric: the sum
-# of this tape == the count of filter-passing rows that have ALL of the metric's
+# Build the validity-product op tape (+ parallel const_div) for a metric: the sum
+# of this tape == the count of filter-passing rows that have all of the metric's
 # nullable agg-inputs valid (the per-agg valid-count / AVG denominator / stat n).
 # Tape: OP_LOAD_COL(v0) [OP_LOAD_COL(v1) OP_MUL ...]. const_div all 1.0. Returns an
-# EMPTY (ops,divs) when the tape reads no nullable agg-input -> the caller falls back
+# empty (ops,divs) when the tape reads no nullable agg-input; the caller then falls back
 # to the canonical PUSH_CONST(1) count (count of all filter-passing rows).
 def _valid_product_tape(
     read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
@@ -5038,33 +5039,34 @@ def _valid_product_tape(
 
 
 # ===-------------------------------------------------------------------===#
-# GPU_OP_STATS NUMERICAL STABILITY (audit Group H): centered (shifted-data) sums.
+# GPU_OP_STATS numerical stability (audit Group H): centered (shifted-data) sums.
 #
-# The closed forms in `_stat_value` derive variance / covariance from RAW second
+# The closed forms in `_stat_value` derive variance / covariance from raw second
 # moments: Var = Sx2/n - (Sx/n)^2 where Sx2 = sum(x*x). For large-magnitude x
 # (e.g. DECIMAL(18,2) ~1e8) `Sx2` saturates f64's 53-bit mantissa and the
-# difference `Sx2 - Sx*Sx/n` CATASTROPHICALLY CANCELS -> negative / nan variance.
+# difference `Sx2 - Sx*Sx/n` suffers catastrophic cancellation, giving a negative
+# or nan variance.
 #
-# FIX (Option A, shifted-data, single-pass): subtract a per-column representative
-# constant c (close to the data magnitude) from each value BEFORE squaring, i.e.
+# Fix (Option A, shifted-data, single-pass): subtract a per-column representative
+# constant c (close to the data magnitude) from each value before squaring, i.e.
 # accumulate Sx' = sum(x-c), Sx2' = sum((x-c)^2), Sxy' = sum((x-cx)*(y-cy)).
-# Variance / covariance / corr / regr_slope/r2/sxx/syy/sxy are SHIFT-INVARIANT, so
-# `_stat_value`'s closed forms work UNCHANGED on the shifted sums (the cancellation
-# is gone because (x-c) is O(spread), not O(1e8)). Only the MEAN-returning kinds
-# (regr_avgx/avgy, regr_intercept) must add the shift back (mean = c + S1'/n) --
+# Variance / covariance / corr / regr_slope/r2/sxx/syy/sxy are shift-invariant, so
+# `_stat_value`'s closed forms work unchanged on the shifted sums (the cancellation
+# is gone because (x-c) is O(spread), not O(1e8)). Only the mean-returning kinds
+# (regr_avgx/avgy, regr_intercept) must add the shift back (mean = c + S1'/n);
 # `_stat_value` does this via the cx/cy parameters. c==0 is the old (broken)
-# behavior; any c near the data magnitude kills the cancellation. We pick c as the
-# INTEGER-ROUNDED row-0 value of the arg program (encoded as PUSH_CONST with
+# behavior; any c near the data magnitude removes the cancellation. We pick c as the
+# integer-rounded row-0 value of the arg program (encoded as PUSH_CONST with
 # const_div 1.0, so it stays exact), which is cheap and always near the data.
 # ===-------------------------------------------------------------------===#
 
-# A picked per-arg shift: the SCALED int64 constant `c_scaled` + its divisor
+# A picked per-arg shift: the scaled int64 constant `c_scaled` + its divisor
 # `c_div`, plus the reconstructed true double `c = c_scaled/c_div` (what the f64 VM
 # computes for PUSH_CONST(c_scaled) under const_div c_div) and `ok`. Encoding the
-# shift at the SAME scale as the source column (c_div == 10^scale, c_scaled == the
-# raw int64) makes the VM reconstruct c BYTE-IDENTICALLY to a data value, so the
+# shift at the same scale as the source column (c_div == 10^scale, c_scaled == the
+# raw int64) makes the VM reconstruct c byte-identically to a data value, so the
 # centered subtraction (x-c) is Sterbenz-exact at the leading magnitude (the 1e8
-# part cancels exactly) -> the residual is only each value's own reconstruction
+# part cancels exactly), and the residual is only each value's own reconstruction
 # rounding, ~2 orders of magnitude better than an integer shift. c==0 / ok=False is
 # the legacy unshifted fallback (byte-identical to before the fix).
 @fieldwise_init
@@ -5076,14 +5078,14 @@ struct StatShift(Copyable, Movable):
 
 
 # Evaluate a resolved arg op tape (flattened op,a,b triples; the same encoding the
-# f64 VM runs) on ROW 0, host-side, to pick a representative shift near the column
-# magnitude. For the common BARE-COLUMN arg (a single LOAD_COL -- var/stddev/covar/
+# f64 VM runs) on row 0, host-side, to pick a representative shift near the column
+# magnitude. For the common bare-column arg (a single LOAD_COL: var/stddev/covar/
 # corr/regr on plain columns), the shift is the column's raw row-0 int64 at the
-# column scale (c_scaled=raw, c_div=10^scale) -> Sterbenz-exact centering. For an
-# EXPRESSION arg the row-0 value is evaluated as a double (mirroring eval_program_f64)
-# and rounded to an integer (c_div=1.0); being merely NEAR the magnitude still kills
-# the cancellation (variance is shift-invariant). ok=False (caller -> c=0, legacy)
-# when there are no rows, a LOAD_COL slot is OMITTED (skip-materialize -> no host
+# column scale (c_scaled=raw, c_div=10^scale), giving Sterbenz-exact centering. For an
+# expression arg the row-0 value is evaluated as a double (mirroring eval_program_f64)
+# and rounded to an integer (c_div=1.0); being only near the magnitude still removes
+# the cancellation (variance is shift-invariant). ok=False (the caller uses c=0, legacy)
+# when there are no rows, a LOAD_COL slot is omitted (skip-materialize leaves no host
 # buffer), or an unexpected op appears. FK-join dim gathers cannot appear in stat
 # args (n_dims==0 gate), so OP_LOAD_DIM is not handled.
 def _metric_arg_shift(
@@ -5098,14 +5100,14 @@ def _metric_arg_shift(
     if n_rows <= 0:
         return StatShift(Int64(0), Float64(1), Float64(0), False)
     var n_op = len(ops) // 3
-    # GPU_OP_NULLABLE: the shift is read from a representative row's VALUE -- but row 0
+    # GPU_OP_NULLABLE: the shift is read from a representative row's value, but row 0
     # may be NULL (its data lane is uninitialized garbage, often ~1e18), which would
-    # make the centered (x-c)^2 sums catastrophically cancel (negative variance / nan).
-    # Pick the FIRST row where every LOAD_COL slot THIS arg reads is VALID; if there is
+    # make the centered (x-c)^2 sums cancel badly (negative variance / nan).
+    # Pick the first row where every LOAD_COL slot this arg reads is valid; if there is
     # none (all such rows NULL), fall back to legacy unshifted (ok=False, c=0). The
     # per-row pass-gate still excludes the NULL rows from the accumulated sums, so the
-    # result stays correct -- the shift only buys numerical stability for huge values.
-    # No-op when no column has a validity mask (_col_valid -> True) -> r0 = 0 as before.
+    # result stays correct; the shift only adds numerical stability for huge values.
+    # No-op when no column has a validity mask (_col_valid returns True), so r0 = 0 as before.
     var r0 = 0
     var found = False
     for i in range(n_rows):
@@ -5123,7 +5125,7 @@ def _metric_arg_shift(
             break
     if not found:
         return StatShift(Int64(0), Float64(1), Float64(0), False)
-    # Fast path: a bare single LOAD_COL -> shift at the column scale (Sterbenz-exact).
+    # Fast path: a bare single LOAD_COL, shifted at the column scale (Sterbenz-exact).
     if n_op == 1 and ops[0] == OP_LOAD_COL:
         var slot = Int(ops[1])
         if slot < len(omit_slot) and omit_slot[slot]:
@@ -5177,11 +5179,11 @@ def _metric_arg_shift(
     return StatShift(ci, Float64(1), Float64(ci), True)
 
 
-# Wrap a resolved arg op tape into the SHIFTED tape `<ops> PUSH_CONST(c_scaled) SUB`
+# Wrap a resolved arg op tape into the shifted tape `<ops> PUSH_CONST(c_scaled) SUB`
 # (centered value x-c), with its parallel const_div extended by [c_div, 1.0] (the
-# PUSH_CONST carries the scaled const + its divisor -- so the VM reconstructs c the
-# same way it reconstructs a column value; the SUB op -> 1.0). When the shift is not
-# ok (legacy fallback) the original tape is returned unchanged -> byte-identical
+# PUSH_CONST carries the scaled const + its divisor, so the VM reconstructs c the
+# same way it reconstructs a column value; the SUB op gets 1.0). When the shift is not
+# ok (legacy fallback) the original tape is returned unchanged, giving byte-identical
 # legacy behavior (no extra ops, dedup key unchanged).
 def _shift_arg(
     read ops: List[Int64], read divs: List[Float64], sh: StatShift
@@ -5212,7 +5214,7 @@ def _metric_key(read ops: List[Int64]) -> String:
 
 # Symbolically evaluate the decimal scale a metric program produces, given a
 # per-(numeric)-column scale map (indexed by fact-column slot). Mirrors the VM:
-# LOAD_COL -> the column's scale; PUSH_CONST -> its const scale; ADD/SUB keep the
+# LOAD_COL gives the column's scale; PUSH_CONST its const scale; ADD/SUB keep the
 # scale (operands share it for the supported shapes); MUL adds the two scales.
 # Used only to scale AVG's int64 sum back to a real for the DOUBLE result.
 def _program_scale(
@@ -5247,7 +5249,7 @@ def _program_scale(
     return stack[len(stack) - 1] if len(stack) > 0 else Int64(0)
 
 
-# Apply one fact range predicate to a per-row int64 value -> pass (Bool).
+# Apply one fact range predicate to a per-row int64 value; returns pass (Bool).
 def _pred_pass(v: Int64, cmp: Int64, k: Int64) -> Bool:
     if cmp == CMP_EQ:
         return v == k
@@ -5265,19 +5267,19 @@ def _pred_pass(v: Int64, cmp: Int64, k: Int64) -> Bool:
 
 
 # ===-------------------------------------------------------------------===#
-# RANK 3: parallelize the finalize host pack/pass loops (flag-gated).
+# Rank 3: parallelize the finalize host pack/pass loops (flag-gated).
 #
 # The cold finalize packs O(fact_rows) fact columns + a pass column into the
 # host `cols` buffer with serial `for i in range(n)` loops. Those loops are
 # embarrassingly parallel (disjoint writes `cols[slot*n+i]`, pure-read sources),
 # but single-threaded they fight DuckDB's multithreaded scan at scale (the sf10
 # cold loss). When GPU_OP_PARALLEL_FINALIZE is set, the helpers below run the
-# pack/pass loops over `_finalize_workers()` chunks via `algorithm.parallelize`;
-# OFF (default) they run the identical serial loop -> byte-identical output.
+# pack/pass loops over `_finalize_workers()` chunks via `algorithm.parallelize`.
+# When off (default) they run the identical serial loop, so output is byte-identical.
 #
-# Capture safety: the work fns capture ONLY raw base addresses (Int), element
+# Capture safety: the work fns capture only raw base addresses (Int), element
 # sizes (Int), the destination UnsafePointer, and small copyable Int/Int64
-# Lists -- never the GpuExecState (non-copyable; would force a ref-capture of a
+# Lists, never the GpuExecState (non-copyable; would force a ref-capture of a
 # large struct). The source reads mirror `_col_val` exactly; writes are disjoint
 # by row index, so there is no data race.
 # ===-------------------------------------------------------------------===#
@@ -5296,8 +5298,8 @@ def _finalize_workers() -> Int:
 
 
 # Raw packed-int64 read at row `i` from a resolved column base address + element
-# size. Mirrors `_col_val`: elem_size 4 => widen Int32 (DATE/INTEGER), else Int64.
-# base == 0 (unfilled column) reads as 0 -- identical to `_col_val`.
+# size. Mirrors `_col_val`: elem_size 4 widens Int32 (DATE/INTEGER), else Int64.
+# base == 0 (unfilled column) reads as 0, identical to `_col_val`.
 @always_inline
 def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
     if base == 0:
@@ -5395,8 +5397,8 @@ def _bake_pass_par(
     var fbp = Int(fb)
     # GPU_OP_NULLABLE: flatten the per-valid-slot validity base addresses (1 byte/
     # row) into a contiguous Int64 buffer (same capture constraint as fb). nv == 0
-    # in the common all-valid case -> the inner validity loop is skipped, byte-
-    # identical to the pre-nullable parallel bake. MUST mirror the serial AND.
+    # in the common all-valid case, so the inner validity loop is skipped, byte-
+    # identical to the pre-nullable parallel bake. Must mirror the serial AND.
     var nv = len(valid_bases)
     var vb = alloc[Int64](nv if nv > 0 else 1)
     for vi in range(nv):
@@ -5437,7 +5439,7 @@ def _bake_pass_par(
 
 # Q5 gid gather: `cols[gid_slot*n + i] = grp[ supp ]` where supp = the row's
 # l_suppkey (read from `sk_base`/`sk_es`) bounded to [0,max_sk]; out-of-range or
-# (when `guard_nonneg`) a negative group value -> 0. Parallel over row chunks;
+# (when `guard_nonneg`) a negative group value becomes 0. Parallel over row chunks;
 # disjoint writes. Equivalent to the serial Q5 gid-gather loop.
 def _q5_gid_gather_par(
     cols: UnsafePointer[Int64, MutUntrackedOrigin],
@@ -5477,14 +5479,14 @@ def _q5_gid_gather_par(
 # Phase G Stage 2: Q6 predicate-independent residency spec.
 #
 # Resolved view of the Q6 WHERE clause as 3 column slots + 5 int64 bounds, so the
-# kernel can evaluate the filter in-kernel (over the resident columns) for ANY
+# kernel can evaluate the filter in-kernel (over the resident columns) for any
 # constant set without a host-baked pass column. `eligible` is False unless the
-# descriptor's filters are EXACTLY the canonical Q6 shape, in which case the
-# caller MUST fall back to the per-constant pass-column path (correctness rule).
+# descriptor's filters are exactly the canonical Q6 shape. When it is False the
+# caller must fall back to the per-constant pass-column path (correctness rule).
 #
 # Slot indices index `cols[slot * n_rows + row]` (mat_cols / numeric-slot order);
 # for Q6 every fact column is numeric so the slot == the _materialize_columns
-# index. Bounds are the raw `const.lo` int64s — the exact `k` _pred_pass uses.
+# index. Bounds are the raw `const.lo` int64s, the exact `k` _pred_pass uses.
 @fieldwise_init
 struct Q6PredSpec(ImplicitlyCopyable, Movable):
     var eligible: Bool
@@ -5499,14 +5501,14 @@ struct Q6PredSpec(ImplicitlyCopyable, Movable):
 
 
 # Resolve the canonical Q6 predicate from the descriptor. Matches the filter set
-# by (column, cmp) ROLE rather than hardcoded names, so it is robust to schema
+# by (column, cmp) role rather than hardcoded names, so it is robust to schema
 # renaming while staying strictly the Q6 shape:
-#   * one column with BOTH a CMP_GE (-> ship_lo) and a CMP_LT (-> ship_hi) bound
-#   * one column with BOTH a CMP_GE (-> disc_lo) and a CMP_LE (-> disc_hi) bound
-#   * one column with a single CMP_LT (-> qty_hi) bound
-# All filters must be on the fact table, there must be EXACTLY 5 of them, exactly
+#   * one column with both a CMP_GE (ship_lo) and a CMP_LT (ship_hi) bound
+#   * one column with both a CMP_GE (disc_lo) and a CMP_LE (disc_hi) bound
+#   * one column with a single CMP_LT (qty_hi) bound
+# All filters must be on the fact table, there must be exactly 5 of them, exactly
 # these three columns, and no group keys / dims (UNGROUPED scalar). Any deviation
-# => eligible == False (the caller stays on the per-constant signature).
+# gives eligible == False (the caller stays on the per-constant signature).
 def _q6_pred_spec(d: GpuPlanDescriptor) -> Q6PredSpec:
     var bad = Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0)
     if d.kind != KIND_Q6:
@@ -5566,7 +5568,7 @@ def _q6_pred_spec(d: GpuPlanDescriptor) -> Q6PredSpec:
             v_le.append(Int64(0))
         if fcmp[fi] == CMP_GE:
             if has_ge[ci]:
-                return bad  # duplicate GE on same column -> not canonical Q6
+                return bad  # duplicate GE on same column: not canonical Q6
             has_ge[ci] = True
             v_ge[ci] = fk[fi]
         elif fcmp[fi] == CMP_LT:
@@ -5635,7 +5637,7 @@ def _q6_pred_spec(d: GpuPlanDescriptor) -> Q6PredSpec:
 
 # Phase G Stage 2 master switch: the Q6 predicate-independent residency path is
 # only taken when the native-decode flag is on (Stage 1 feeds Q6's fact columns
-# GPU-direct, the prerequisite) AND the descriptor is the canonical Q6 shape.
+# GPU-direct, the prerequisite) and the descriptor is the canonical Q6 shape.
 def _q6_pred_enabled(d: GpuPlanDescriptor) -> Bool:
     if getenv("GPU_OP_NATIVE_DECODE", "") == "":
         return False
@@ -5645,21 +5647,21 @@ def _q6_pred_enabled(d: GpuPlanDescriptor) -> Bool:
 # ---------------------------------------------------------------------------
 # Phase G Stage 2 (generalized): Q1 / Q14 predicate-independent residency.
 #
-# Unlike Q6 (resolved to fixed named role slots), Q1 and Q14 have a SIMPLE fact
+# Unlike Q6 (resolved to fixed named role slots), Q1 and Q14 have a simple fact
 # range filter that the generic finalize already collects as a list of fact
-# filters in descriptor order. The constant-INDEPENDENT part (which resident
-# column slot + which cmp) is cached; the constant-DEPENDENT bounds are threaded
+# filters in descriptor order. The constant-independent part (which resident
+# column slot + which cmp) is cached; the constant-dependent bounds are threaded
 # fresh per run. So the "spec" splits into:
-#   * `_gen_pred_eligible(d)` -- a structural gate (kind/strategy + the exact
-#     canonical fact-filter shape) used by `_signature` and the finalize. ANY
-#     deviation -> False -> the caller stays on the per-constant pass-column path
-#     (still correct, just not warm-across-constants).
-#   * `_gen_pred_bounds(d)` -- the per-run bounds (one int64 per fact filter, in
-#     the SAME descriptor order the finalize collects f_slot/f_cmp), threaded into
-#     _assemble. The slots+cmps are cached on the COLD path (where col_slot is
+#   * `_gen_pred_eligible(d)`: a structural gate (kind/strategy + the exact
+#     canonical fact-filter shape) used by `_signature` and the finalize. Any
+#     deviation returns False and the caller stays on the per-constant pass-column
+#     path (still correct, only not warm across constants).
+#   * `_gen_pred_bounds(d)`: the per-run bounds (one int64 per fact filter, in
+#     the same descriptor order the finalize collects f_slot/f_cmp), threaded into
+#     _assemble. The slots+cmps are cached on the cold path (where col_slot is
 #     available) into gp.gen_pred_slots / gp.gen_pred_cmps.
 #
-# Canonical shapes (must match EXACTLY or eligible=False):
+# Canonical shapes (must match exactly, otherwise eligible=False):
 #   Q1 (KIND_Q1, DENSE_GROUP): every fact filter is on `l_shipdate` (one column),
 #     all CMP_LE/CMP_LT/CMP_GE/CMP_GT (range, no EQ/NE). TPC-H Q1 is a single
 #     `l_shipdate <= cutoff`; we accept any all-range single-column shipdate filter
@@ -5667,10 +5669,10 @@ def _q6_pred_enabled(d: GpuPlanDescriptor) -> Bool:
 #   Q14 (KIND_Q14, UNGROUPED + dims): every fact filter is on `l_shipdate`, all
 #     range (Q14 is `l_shipdate >= lo AND l_shipdate < hi`). The promo dim gather
 #     stays in the metric programs (constant-independent), untouched.
-# Both require: >=1 fact filter, ALL fact filters range-only, all on ONE fact
-# column, and NO non-fact-table filters that are range predicates folded into the
-# fact pass (Q14's dim promo flag is a dim ARRAY, not a fact filter, so it does
-# not appear in the fact-filter list -- correctly excluded here).
+# Both require: >=1 fact filter, all fact filters range-only, all on one fact
+# column, and no non-fact-table filters that are range predicates folded into the
+# fact pass (Q14's dim promo flag is a dim array, not a fact filter, so it does
+# not appear in the fact-filter list and is correctly excluded here).
 def _gen_pred_eligible(d: GpuPlanDescriptor) -> Bool:
     if d.kind == KIND_Q1:
         if d.strategy != STRAT_DENSE_GROUP:
@@ -5681,10 +5683,10 @@ def _gen_pred_eligible(d: GpuPlanDescriptor) -> Bool:
     else:
         return False
     # Collect fact-table filters; require >=1, all range, all on one fact column.
-    # CORRECTNESS: any NON-fact-table filter carries a constant we would otherwise
-    # drop from the signature (a dim filter feeds a dim pass-flag ARRAY, which IS
-    # constant-dependent), so its presence makes the constant-decoupling unsound ->
-    # eligible=False (stay per-constant). Canonical Q1/Q14 have zero dim filters
+    # Correctness: any non-fact-table filter carries a constant we would otherwise
+    # drop from the signature (a dim filter feeds a dim pass-flag array, which is
+    # constant-dependent), so its presence makes the constant-decoupling unsound
+    # and we set eligible=False (stay per-constant). Canonical Q1/Q14 have zero dim filters
     # (Q14's promo is an aggregate CASE, not a filter), so this only excludes
     # genuinely const-coupled shapes.
     var n_fact = 0
@@ -5693,7 +5695,7 @@ def _gen_pred_eligible(d: GpuPlanDescriptor) -> Bool:
         ref g = d.gets[gi]
         if g.table != d.fact_table:
             if len(g.filters) > 0:
-                return False  # a dim filter is constant-coupled -> not eligible
+                return False  # a dim filter is constant-coupled: not eligible
             continue
         for fi in range(len(g.filters)):
             ref p = g.filters[fi]
@@ -5718,14 +5720,14 @@ def _gen_pred_eligible(d: GpuPlanDescriptor) -> Bool:
 
 
 # Master switch: the generalized Q1/Q14 predicate-independent path is only taken
-# when the native-decode flag is on AND the descriptor is a canonical Q1/Q14 shape.
+# when the native-decode flag is on and the descriptor is a canonical Q1/Q14 shape.
 def _gen_pred_enabled(d: GpuPlanDescriptor) -> Bool:
     if getenv("GPU_OP_NATIVE_DECODE", "") == "":
         return False
     return _gen_pred_eligible(d)
 
 
-# Per-run bounds: one int64 per fact filter, in the SAME order the finalize
+# Per-run bounds: one int64 per fact filter, in the same order the finalize
 # collects them (descriptor order over fact-table filters). These are the exact
 # `d.consts[p.const_id].lo` ints the host pass-bake compares against (so the
 # in-kernel filter is bit-identical). Returns an empty list if not eligible.
@@ -5744,28 +5746,28 @@ def _gen_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
 
 
 # ---------------------------------------------------------------------------
-# PREDICATE-INDEPENDENT residency for the FLOAT64 path (GPU_OP_TRANSCENDENTAL /
+# Predicate-independent residency for the float64 path (GPU_OP_TRANSCENDENTAL /
 # GPU_OP_STATS). The f64 transcendental/stats UNGROUPED accumulator today bakes a
-# host pass column from the filter constants, so DIFFERENT constants re-pay the
-# full cold materialize/upload. This gives it the SAME in-kernel fact-range filter
+# host pass column from the filter constants, so different constants pay the
+# full cold materialize/upload again. This gives it the same in-kernel fact-range filter
 # the int128 gen_pred path uses (seg_ungrouped_kernel_f64's fpred tape), so the
-# resident FULL unfiltered columns serve any constant warm; only the bounds change
+# resident full unfiltered columns serve any constant warm; only the bounds change
 # per run.
 #
-#   * `_f64_pred_eligible(d)` -- a PURE structural gate: this is an f64 (transcendental
-#     OR stats) query, UNGROUPED, NO FK-join dims, and >=1 fact-table filter, ALL
-#     range-only (CMP_LT/LE/GT/GE -- the in-kernel fpred mirrors host _pred_pass),
-#     ALL on fact columns, and NO dim-table filters (a dim filter carries a
-#     constant we'd otherwise drop from the signature -> unsound to decouple). The
+#   * `_f64_pred_eligible(d)`: a pure structural gate. This is an f64 (transcendental
+#     or stats) query, UNGROUPED, no FK-join dims, and >=1 fact-table filter, all
+#     range-only (CMP_LT/LE/GT/GE; the in-kernel fpred mirrors host _pred_pass),
+#     all on fact columns, and no dim-table filters (a dim filter carries a
+#     constant we'd otherwise drop from the signature, so decoupling is unsound). The
 #     in-kernel fpred handles any number of fact columns (unlike the int128
 #     _gen_pred_eligible's single-column Q1/Q14 restriction), since each (slot,cmp,
-#     bound) triple is independent. ANY deviation -> False -> the f64 query stays on
-#     the per-constant pass-column path (still correct, just cold-per-constant).
-#   * `_f64_pred_enabled(d)` -- the master switch: the same GPU_OP_NATIVE_DECODE
+#     bound) triple is independent. Any deviation returns False and the f64 query stays
+#     on the per-constant pass-column path (still correct, only cold per constant).
+#   * `_f64_pred_enabled(d)`: the master switch: the same GPU_OP_NATIVE_DECODE
 #     gate the int128 gen_pred path uses (the prerequisite for predicate-independent
-#     residency) AND _f64_pred_eligible.
-#   * `_f64_pred_bounds(d)` -- per-run bounds (one int64 per fact filter, in
-#     descriptor order -- the SAME order the finalize collects f_slot/f_cmp).
+#     residency) and _f64_pred_eligible.
+#   * `_f64_pred_bounds(d)`: per-run bounds (one int64 per fact filter, in
+#     descriptor order, the same order the finalize collects f_slot/f_cmp).
 def _f64_pred_eligible(d: GpuPlanDescriptor) -> Bool:
     if not (_has_transcendental(d) or _has_stats(d)):
         return False
@@ -5778,7 +5780,7 @@ def _f64_pred_eligible(d: GpuPlanDescriptor) -> Bool:
         ref g = d.gets[gi]
         if g.table != d.fact_table:
             if len(g.filters) > 0:
-                return False  # a dim filter is constant-coupled -> not eligible
+                return False  # a dim filter is constant-coupled: not eligible
             continue
         for fi in range(len(g.filters)):
             ref p = g.filters[fi]
@@ -5821,23 +5823,23 @@ def _f64_pred_bounds(d: GpuPlanDescriptor) -> List[Int64]:
 # Phase G Stage 2 (Path B): Q5 predicate-independent residency.
 #
 # Mirrors the Q6/Q1/Q14 mechanism for the Q5 shape: the resident dim arrays + gid
-# are the CONSTANT-INDEPENDENT raw forms, and the region/date filter is evaluated
-# IN-KERNEL from per-run scalars, so DIFFERENT region/date constants reuse the same
-# residency (warm-across-constants).
+# are the constant-independent raw forms, and the region/date filter is evaluated
+# in the kernel from per-run scalars, so different region/date constants reuse the same
+# residency (warm across constants).
 #
-#   * `_q5_pred_eligible(d)` -- a PURE structural gate: kind==Q5, DENSE_GROUP, the
-#     canonical 5 dims (orders/customer/supplier/nation/region), and the ONLY
+#   * `_q5_pred_eligible(d)`: a pure structural gate: kind==Q5, DENSE_GROUP, the
+#     canonical 5 dims (orders/customer/supplier/nation/region), and the only
 #     constant-bearing filters are region.r_name (CMP_EQ VARCHAR) + orders.
-#     o_orderdate (a GE/GT lo bound AND a LT/LE hi bound). No other dim/fact
-#     filters. ANY deviation -> False -> the caller stays on the per-constant
-#     |f= signature + the existing per-constant Q5 residency (still correct, just
-#     not warm-across-constants).
-#   * `_q5_pred_enabled(d)` -- the master switch: flag on AND _q5_pred_eligible.
-#   * `_q5_pred_params(d, names, keys)` -- the per-run scalars threaded into
+#     o_orderdate (a GE/GT lo bound and a LT/LE hi bound). No other dim/fact
+#     filters. Any deviation returns False and the caller stays on the per-constant
+#     |f= signature + the existing per-constant Q5 residency (still correct, only
+#     not warm across constants).
+#   * `_q5_pred_enabled(d)`: the master switch: flag on and _q5_pred_eligible.
+#   * `_q5_pred_params(d, names, keys)`: the per-run scalars threaded into
 #     _assemble: (o_lo, o_hi, asia_region). o_lo/o_hi from the o_orderdate filters
-#     (GE->lo, GT->lo+1, LT->hi, LE->hi+1 -- exactly _pin_finalize_q5 today);
-#     asia_region from the region_name->regionkey map (ALL 5 regions, cached on
-#     cold; itself region-independent) so WARM is self-contained with no region dim.
+#     (GE->lo, GT->lo+1, LT->hi, LE->hi+1, exactly as _pin_finalize_q5 does today);
+#     asia_region from the region_name to regionkey map (all 5 regions, cached on
+#     cold; itself region-independent) so the warm path is self-contained with no region dim.
 def _q5_pred_eligible(d: GpuPlanDescriptor) -> Bool:
     if d.kind != KIND_Q5:
         return False
@@ -5854,8 +5856,8 @@ def _q5_pred_eligible(d: GpuPlanDescriptor) -> Bool:
         or _de_of_table(d, "region") < 0
     ):
         return False
-    # The ONLY constant-bearing filters allowed: region.r_name (CMP_EQ VARCHAR) and
-    # orders.o_orderdate (GE/GT lo + LT/LE hi). Anything else -> not eligible.
+    # The only constant-bearing filters allowed: region.r_name (CMP_EQ VARCHAR) and
+    # orders.o_orderdate (GE/GT lo + LT/LE hi). Anything else is not eligible.
     var have_region = False
     var have_o_lo = False
     var have_o_hi = False
@@ -5869,7 +5871,7 @@ def _q5_pred_eligible(d: GpuPlanDescriptor) -> Bool:
                 if d.consts[p.const_id].type_tag != TYPE_VARCHAR:
                     return False
                 if have_region:
-                    return False  # duplicate region filter -> not canonical
+                    return False  # duplicate region filter: not canonical
                 have_region = True
             elif p.col.table == "orders" and p.col.column == "o_orderdate":
                 if p.cmp == CMP_GE or p.cmp == CMP_GT:
@@ -5884,7 +5886,7 @@ def _q5_pred_eligible(d: GpuPlanDescriptor) -> Bool:
                     return False
             else:
                 # Any other filter (fact or dim) carries a constant we would drop
-                # from the signature -> the decoupling would be unsound.
+                # from the signature, so the decoupling would be unsound.
                 return False
     if not have_region or not have_o_lo or not have_o_hi:
         return False
@@ -5898,8 +5900,8 @@ def _q5_pred_enabled(d: GpuPlanDescriptor) -> Bool:
 
 
 # Per-run scalars [o_lo, o_hi, asia_region] for the in-kernel Q5 predicate. The
-# region->regionkey map (ALL 5 regions) is passed in (cached on cold), so WARM has
-# no region dim fed yet resolves THIS query's region const to its key. o_lo/o_hi
+# region to regionkey map (all 5 regions) is passed in (cached on cold), so the warm
+# path has no region dim fed yet resolves this query's region const to its key. o_lo/o_hi
 # match _pin_finalize_q5 exactly (GE->lo, GT->lo+1, LT->hi, LE->hi+1). Returns an
 # empty list if not eligible or the region const is unknown (the caller then must
 # fall back; but eligibility already guarantees the filter shape).
@@ -5950,19 +5952,19 @@ def _pin_finalize_generic(
     if key not in m:
         return 2
 
-    # WARM: the resident buffers + assembly metadata are cached under `sig`
+    # Warm: the resident buffers + assembly metadata are cached under `sig`
     # (pin_begin returned 0, so C++ fed nothing). Re-run the kernel on the
     # resident buffers and assemble from the cached metadata alone. For the Q6
-    # predicate-independent path the CURRENT query's filter bounds are extracted
+    # predicate-independent path the current query's filter bounds are extracted
     # from the live descriptor `d` and threaded into the re-run (the resident
-    # buffers are constant-independent; the kernel applies THIS query's predicate).
+    # buffers are constant-independent; the kernel applies this query's predicate).
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
     if sig in p2:
         ref dst = m[key]
         var q6b = _q6_pred_spec(d)
-        # Generalized Q1 (DENSE_GROUP) / FLOAT64 (UNGROUPED transcendental+stats):
-        # thread THIS query's fact-filter bounds into the in-kernel fpred. The f64
+        # Generalized Q1 (DENSE_GROUP) / float64 (UNGROUPED transcendental+stats):
+        # thread this query's fact-filter bounds into the in-kernel fpred. The f64
         # path (kind-agnostic) uses _f64_pred_bounds; the int128 Q1/Q14 path uses
         # _gen_pred_bounds. _f64_pred_enabled(d) returns False unless the f64 query
         # is pred-independent, so the int128 paths see the original _gen_pred_bounds.
@@ -5972,12 +5974,12 @@ def _pin_finalize_generic(
         _assemble(dst, p2[sig], q6b, genb^)
         return 0
 
-    # COLD: build the host inputs + programs + assembly metadata, upload the
+    # Cold: build the host inputs + programs + assembly metadata, upload the
     # resident buffers once, construct + cache a GpuPinned, then assemble.
     ref st = m[key]
     var n = st.n_rows
 
-    # --- slot map: every fed NUMERIC fact column (mat_cols order) -> slot ---
+    # --- slot map: every fed numeric fact column (mat_cols order) to a slot ---
     # VARCHAR columns (group keys) are not packed as data; they only drive gids.
     var col_slot = Dict[String, Int]()
     var slot_of_matcol: List[Int] = []  # mat_cols idx -> slot (or -1 for varchar)
@@ -5992,19 +5994,19 @@ def _pin_finalize_generic(
             numeric_matcols.append(j)
     var n_numeric = len(numeric_matcols)
 
-    # SKIP-MATERIALIZE: per-numeric-slot omit mask. omit_slot[slot] True => the
-    # column was NOT scanned/fed (sourced from the pool); never read st.cols[mj]
+    # SKIP-MATERIALIZE: per-numeric-slot omit mask. omit_slot[slot] True means the
+    # column was not scanned/fed (sourced from the pool); never read st.cols[mj]
     # for it. Empty/all-False when skip-materialize is inactive (== Phase 1).
     var omit_slot = _omit_slot_mask(st, numeric_matcols)
 
     # Per-numeric-slot decimal scale, used only for AVG's DOUBLE rescale. Seed
-    # from the fed type (DATE/INTEGER/BIGINT -> 0); refine decimal-backed int64
+    # from the fed type (DATE/INTEGER/BIGINT give 0); refine decimal-backed int64
     # columns from any fact filter const that compares against them, else 2 (the
-    # TPC-H lineitem decimal scale -- l_quantity/extendedprice/discount/tax).
-    # SKIP-MATERIALIZE landmine #2: for an OMITTED slot st.cols[mj].type_tag is
-    # UNSET (0) -> would wrongly seed scale 2 (e.g. for a DATE) -> wrong AVG. Read
-    # the type_tag the column was POOLED with instead (col_pool_type_tag on the
-    # exact resident key), recovering the correct DATE/INTEGER/BIGINT->0 vs ->2.
+    # TPC-H lineitem decimal scale: l_quantity/extendedprice/discount/tax).
+    # SKIP-MATERIALIZE landmine #2: for an omitted slot st.cols[mj].type_tag is
+    # unset (0), which would wrongly seed scale 2 (e.g. for a DATE) and give a wrong
+    # AVG. Read the type_tag the column was pooled with instead (col_pool_type_tag on
+    # the exact resident key), recovering the correct scale (0 for DATE/INTEGER/BIGINT, else 2).
     var col_scale_of_slot: List[Int64] = []
     for slot in range(n_numeric):
         var tt: Int64
@@ -6019,18 +6021,18 @@ def _pin_finalize_generic(
         if tt == TYPE_DATE or tt == TYPE_INTEGER or tt == TYPE_BIGINT:
             col_scale_of_slot.append(Int64(0))
         elif not (slot < len(omit_slot) and omit_slot[slot]):
-            # Use the column's ACTUAL fed decimal scale for every non-omitted
+            # Use the column's actual fed decimal scale for every non-omitted
             # numeric (DECIMAL) slot. This feeds the int64-backed AVG rescale
-            # (_program_scale -> agg_scale -> /10^scale) AND the FLOAT64
+            # (_program_scale -> agg_scale -> /10^scale) and the float64
             # transcendental/stats col_div. (Previously the true scale was used
-            # ONLY on the transcendental/stats branch; plain int64-backed AVG fell
-            # to the `else` and hardcoded scale 2 -> silently 10^(s-2)-wrong on any
-            # DECIMAL(_, s!=2) arg, e.g. avg(DECIMAL(15,0)) was /100 too small.
+            # only on the transcendental/stats branch; plain int64-backed AVG fell
+            # to the `else` and hardcoded scale 2, which was silently off by 10^(s-2) on
+            # any DECIMAL(_, s!=2) arg, e.g. avg(DECIMAL(15,0)) was /100 too small.
             # Scale-2 columns are unaffected since the fed scale is then 2.) The
             # int128 grouped AVG (Q1) seeds agg_scale from ret_scale directly in the
-            # dedicated int128 finalize paths -- it does NOT read col_scale_of_slot,
+            # dedicated int128 finalize paths. It does not read col_scale_of_slot,
             # so it is unaffected. An omitted (skip-materialize) slot's scale is not
-            # fed -> the else keeps the legacy scale-2 default.
+            # fed, so the else keeps the legacy scale-2 default.
             col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
             col_scale_of_slot.append(Int64(2))
@@ -6046,12 +6048,12 @@ def _pin_finalize_generic(
             if c.type_tag == TYPE_DECIMAL:
                 col_scale_of_slot[col_slot[p.col.column]] = c.scale
 
-    # --- group: 0 keys -> UNGROUPED; else dense-gid from VARCHAR group keys ---
+    # --- group: 0 keys means UNGROUPED; else dense-gid from VARCHAR group keys ---
     var n_groups = 1
     var gid_slot = -1
     var G = 1
     var mode = STRAT_UNGROUPED
-    # dense-gid bookkeeping (sorted distinct tuple -> gid)
+    # dense-gid bookkeeping (sorted distinct tuple to gid)
     var order: List[Int] = []
     var gkey_vals: List[List[String]] = []  # per group-key col, per distinct-idx
     var row_gid = alloc[Int64](n if n > 0 else 1)
@@ -6074,7 +6076,7 @@ def _pin_finalize_generic(
                 break
         if fact_gk == "":
             row_gid.free()
-            return 3  # integer fact group key not materialized -> CPU fallback
+            return 3  # integer fact group key not materialized: CPU fallback
         hash_gk_slot = col_slot[fact_gk]
         # cap = next pow2 >= 2*(distinct bound). Fact row count `n` is a safe
         # superset of the distinct fact-key count; load factor stays <= 0.5.
@@ -6143,7 +6145,7 @@ def _pin_finalize_generic(
         gid_slot = n_numeric  # gid is the slot right after the numeric cols
 
     # Phase G Stage 2: is the Q6 predicate-independent path active for this entry?
-    # (flag on + canonical Q6 shape). When True we DO NOT pre-bake a host pass
+    # (flag on + canonical Q6 shape). When True we do not pre-bake a host pass
     # column; the kernel evaluates the filter in-kernel from the resident filter-
     # input columns + per-run bounds. The pass_slot column still exists in the
     # packed buffer (kept zero) so the layout / slot indices are unchanged.
@@ -6157,12 +6159,12 @@ def _pin_finalize_generic(
     # bounds. f_slot/f_cmp collected below (descriptor order) are the cached
     # constant-independent slots+cmps; the bounds are threaded per run.
     var gen_pred_on = _gen_pred_enabled(d) and d.kind == KIND_Q1
-    # FLOAT64 predicate-independent path (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS):
+    # Float64 predicate-independent path (GPU_OP_TRANSCENDENTAL / GPU_OP_STATS):
     # an UNGROUPED f64 query with a canonical fact-range filter. Like gen_pred_on it
     # skips the host pass bake (the in-kernel fpred gates rows from per-run bounds),
     # but routes the in-kernel filter through _assemble_f64 (kind-agnostic: an f64
     # transcendental classifies KIND_Q6 for 1 agg / KIND_UNKNOWN for multi, so it is
-    # NOT gated on d.kind). NVIDIA-only (the f64 kernels are NVIDIA-only; the scope
+    # not gated on d.kind). NVIDIA-only (the f64 kernels are NVIDIA-only; the scope
     # guard already declined non-NVIDIA before this finalize runs). When True, the
     # cached f_slot/f_cmp are the constant-independent slots+cmps (reused as
     # gen_pred_slots/cmps); the bounds are threaded per run. (_f64_pred_eligible
@@ -6171,10 +6173,10 @@ def _pin_finalize_generic(
 
     # --- host pass column: AND of the fact range predicates (one int64/row) ---
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
-    # feed it via a 1-op `LOAD_COL(pass_slot)` pass program (exact + simplest).
+    # feed it via a 1-op `LOAD_COL(pass_slot)` pass program (exact and simplest).
     var pass_slot = n_numeric + (1 if gid_slot >= 0 else 0)
     var pass_col = alloc[Int64](n if n > 0 else 1)
-    # Collect fact filters as (slot, cmp, const-lo) -- skip non-fact filters.
+    # Collect fact filters as (slot, cmp, const-lo); skip non-fact filters.
     var f_slot: List[Int] = []
     var f_cmp: List[Int64] = []
     var f_k: List[Int64] = []
@@ -6194,44 +6196,44 @@ def _pin_finalize_generic(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    # A1 unified pass model (GPU_OP_NULLABLE): separate FILTER-column validity from
-    # AGG-INPUT-column validity. A numeric slot carries a per-row validity mask iff
+    # A1 unified pass model (GPU_OP_NULLABLE): separate filter-column validity from
+    # agg-input-column validity. A numeric slot carries a per-row validity mask iff
     # the materialize scan observed a NULL in it. Roles:
-    #   * FILTER slot (in f_slot): a NULL makes the predicate UNKNOWN -> the row is
-    #     excluded from EXISTENCE (so from count(*) AND every metric). Fold its
+    #   * Filter slot (in f_slot): a NULL makes the predicate UNKNOWN, so the row is
+    #     excluded from existence (so from count(*) and every metric). Fold its
     #     validity into the host pass column, exactly like a failed predicate.
-    #   * AGG-INPUT slot (NOT in f_slot): a NULL excludes the row only from the
-    #     aggregates that READ that column -- NOT from count(*) or from aggregates
-    #     over other columns. So it is handled PER-METRIC (a validity-column multiply
+    #   * Agg-input slot (not in f_slot): a NULL excludes the row only from the
+    #     aggregates that read that column, not from count(*) or from aggregates
+    #     over other columns. So it is handled per metric (a validity-column multiply
     #     appended to each metric's op tape), never folded into the shared pass.
-    # A slot that is BOTH a filter and an agg input is in f_slot -> its NULL is
-    # already excluded by the pass, so the per-metric multiply would be redundant;
-    # the simplest correct rule (per A1) is: in f_slot -> pass only.
-    # EMPTY in the common all-valid case (no validity ever fed -> the fold is a no-op,
-    # no validity columns are packed, no multiplies appended -> byte-identical).
+    # A slot that is both a filter and an agg input is in f_slot, so its NULL is
+    # already excluded by the pass and the per-metric multiply would be redundant.
+    # The simplest correct rule (per A1) is: if in f_slot, use the pass only.
+    # Empty in the common all-valid case (no validity ever fed, so the fold is a no-op,
+    # no validity columns are packed, and no multiplies are appended: byte-identical).
     var is_filter_slot: List[Bool] = []
     for _ in range(n_numeric):
         is_filter_slot.append(False)
     for fi in range(n_filters):
         if f_slot[fi] >= 0 and f_slot[fi] < n_numeric:
             is_filter_slot[f_slot[fi]] = True
-    # FILTER-column nullable slots -> folded into the host pass column (below).
+    # Filter-column nullable slots: folded into the host pass column (below).
     var filter_valid_slots: List[Int] = []
-    # AGG-INPUT nullable slots (not a filter) -> per-metric validity multiply. Each
-    # gets its OWN packed 0/1 validity column at a slot beyond pass_slot; the map
-    # records data-slot -> validity-column-slot for the metric lowering.
+    # Agg-input nullable slots (not a filter): per-metric validity multiply. Each
+    # gets its own packed 0/1 validity column at a slot beyond pass_slot; the map
+    # records data slot to validity column slot for the metric lowering.
     var aggin_valid_slots: List[Int] = []
     var valid_col_slot_of = Dict[Int, Int]()  # data slot -> validity column slot
-    # The f64 (transcendental/stats) path must NOT use the per-metric validity
-    # multiply: a metric tape `LOAD x; SQRT; LOAD valid_x; MUL` EVALUATES sqrt(x) on a
-    # NULL row's garbage BEFORE the multiply zeroes it -> sqrt(negative-garbage) raises
-    # a domain error in the f64 finalize. Instead fold ALL nullable validity (agg-input
-    # too) into the host pass column so a NULL row is EXCLUDED from the kernel entirely
-    # (no transcendental on garbage; correct stat exclusion) -- the shipped ce3e7db
+    # The f64 (transcendental/stats) path must not use the per-metric validity
+    # multiply: a metric tape `LOAD x; SQRT; LOAD valid_x; MUL` evaluates sqrt(x) on a
+    # NULL row's garbage before the multiply zeroes it, and sqrt(negative-garbage) raises
+    # a domain error in the f64 finalize. Instead fold all nullable validity (agg-input
+    # too) into the host pass column so a NULL row is excluded from the kernel entirely
+    # (no transcendental on garbage; correct stat exclusion). This is the shipped ce3e7db
     # mechanism. So on the f64 path every nullable slot is a "filter_valid_slot" and
     # aggin_valid_slots stays empty (the metric-multiply / per-agg valid-count become
     # no-ops). The int path uses A1 (multiply is safe: garbage*0 == 0, no domain eval).
-    # (The C++ gate keeps f64 nullable SINGLE-aggregate, so pass-folding does not
+    # (The C++ gate keeps f64 nullable single-aggregate, so pass-folding does not
     # conflate distinct columns' NULL sets across multiple f64 aggregates.)
     var is_f64_path = _has_transcendental(d) or _has_stats(d)
     for slot in range(n_numeric):
@@ -6241,20 +6243,20 @@ def _pin_finalize_generic(
             else:
                 aggin_valid_slots.append(slot)
     var n_valid = len(filter_valid_slots)  # folded-into-pass count
-    # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
-    # is set (default off -> serial, byte-identical). PIN_LOG timing brackets the
-    # whole pack/pass stage so its serial->parallel ms + cold fraction is visible.
+    # Rank 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
+    # is set (default off: serial, byte-identical). PIN_LOG timing brackets the
+    # whole pack/pass stage so its serial vs parallel ms + cold fraction is visible.
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var t_packpass0 = perf_counter_ns() if pin_log else 0
     if q6_pred_on or gen_pred_on or f64_pred_on:
-        # GPU_OP_NULLABLE defensive guard: these in-kernel-predicate paths SKIP the
-        # host pass bake, so a validity-AND would silently NOT apply -> a NULL row
+        # GPU_OP_NULLABLE defensive guard: these in-kernel-predicate paths skip the
+        # host pass bake, so a validity-AND would silently not apply and a NULL row
         # would be summed as garbage. The C++ safe-slice gate declines nullable
         # whenever GPU_OP_NATIVE_DECODE is set (which all three pred-on paths
         # require), so this can never fire for an accepted query; fail closed (loud)
-        # if it somehow does, rather than return a silent wrong result. (A1: ANY
-        # nullable column -- filter OR agg-input -- is unhandled on these paths.)
+        # if it somehow does, rather than return a silent wrong result. (A1: any
+        # nullable column, filter or agg-input, is unhandled on these paths.)
         if n_valid > 0 or len(aggin_valid_slots) > 0:
             pass_col.free()
             row_gid.free()
@@ -6264,24 +6266,24 @@ def _pin_finalize_generic(
         for i in range(n):
             pass_col[i] = Int64(0)
     else:
-        # SKIP-MATERIALIZE airtight guard: the host pass-bake reads fact filter
-        # columns. Omitting a filter column is ONLY safe when the in-kernel
-        # predicate replaces this bake (q6_pred_on / gen_pred_on) -- guaranteed by
-        # _skipmat_active. If we are HERE (host bake) yet a filter slot is omitted,
-        # that is a contract violation -> fail closed (CPU fallback), never read an
-        # unfilled st.cols[mj].
+        # SKIP-MATERIALIZE strict guard: the host pass-bake reads fact filter
+        # columns. Omitting a filter column is only safe when the in-kernel
+        # predicate replaces this bake (q6_pred_on / gen_pred_on), which
+        # _skipmat_active guarantees. If we are here (host bake) yet a filter slot is
+        # omitted, that is a contract violation: fail closed (CPU fallback) and never
+        # read an unfilled st.cols[mj].
         for fi in range(n_filters):
             var fs = f_slot[fi]
             if fs < len(omit_slot) and omit_slot[fs]:
                 pass_col.free()
                 row_gid.free()
                 return 8
-        # A1 unified pass model: fold ONLY FILTER-column validity into the host pass
-        # column (a NULL filter row => predicate UNKNOWN => excluded from existence
-        # + count(*) + all metrics). per-FILTER-valid-slot validity base addresses
-        # (1 byte/row), in filter_valid_slots order. Empty when no FILTER column
-        # carries a validity mask -> both bake paths below run exactly as before.
-        # Agg-input validity is NOT folded here (handled per-metric below).
+        # A1 unified pass model: fold only filter-column validity into the host pass
+        # column (a NULL filter row makes the predicate UNKNOWN, so it is excluded from
+        # existence + count(*) + all metrics). Per-filter-valid-slot validity base
+        # addresses (1 byte/row), in filter_valid_slots order. Empty when no filter
+        # column carries a validity mask; both bake paths below then run exactly as
+        # before. Agg-input validity is not folded here (handled per metric below).
         var v_base: List[Int] = []
         for vs in range(n_valid):
             v_base.append(
@@ -6305,10 +6307,10 @@ def _pin_finalize_generic(
                     if not _pred_pass(v, f_cmp[fi], f_k[fi]):
                         ok = False
                         break
-                # A1: AND in each FILTER column's validity (a NULL filter row =>
-                # predicate UNKNOWN => excluded exactly like a failed predicate).
-                # MUST mirror _bake_pass_par's validity loop byte-for-byte. No-op when
-                # n_valid == 0. Agg-input validity is applied per-metric, NOT here.
+                # A1: AND in each filter column's validity (a NULL filter row makes the
+                # predicate UNKNOWN, so it is excluded exactly like a failed predicate).
+                # Must mirror _bake_pass_par's validity loop byte-for-byte. No-op when
+                # n_valid == 0. Agg-input validity is applied per metric, not here.
                 if ok:
                     for vs in range(n_valid):
                         if not _col_valid(
@@ -6319,13 +6321,13 @@ def _pin_finalize_generic(
                 pass_col[i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
-    # A1 unified pass model: each AGG-INPUT nullable column gets its OWN 0/1 int64
-    # validity column packed at a NEW slot AFTER pass_slot, in aggin_valid_slots
+    # A1 unified pass model: each agg-input nullable column gets its own 0/1 int64
+    # validity column packed at a new slot after pass_slot, in aggin_valid_slots
     # order. A metric that reads such a column appends OP_LOAD_COL(valid_col_slot)
-    # OP_MUL so a NULL input row contributes 0 to THAT metric only (count(*) and
+    # OP_MUL so a NULL input row contributes 0 to that metric only (count(*) and
     # other-column aggregates are untouched). Grow n_slots exactly like gid/pass.
-    # valid_col_slot_of maps the data slot -> its validity column slot. EMPTY in the
-    # all-valid case (no aggin nullable) -> n_slots == pass_slot + 1, byte-identical.
+    # valid_col_slot_of maps the data slot to its validity column slot. Empty in the
+    # all-valid case (no aggin nullable), so n_slots == pass_slot + 1, byte-identical.
     var n_valid_cols = len(aggin_valid_slots)
     var first_valid_slot = pass_slot + 1
     for vc in range(n_valid_cols):
@@ -6333,9 +6335,9 @@ def _pin_finalize_generic(
     var n_slots = pass_slot + 1 + n_valid_cols
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
-        # SKIP-MATERIALIZE: an OMITTED slot is sourced from the pool by
-        # _colpool_assemble_cols_d (D2D); its st.cols[mj] is UNFILLED, so DO NOT
-        # pack it here (leave the host region untouched -- it is never read).
+        # SKIP-MATERIALIZE: an omitted slot is sourced from the pool by
+        # _colpool_assemble_cols_d (D2D); its st.cols[mj] is unfilled, so do not
+        # pack it here (leave the host region untouched; it is never read).
         if slot < len(omit_slot) and omit_slot[slot]:
             continue
         var mj = numeric_matcols[slot]
@@ -6355,10 +6357,10 @@ def _pin_finalize_generic(
     else:
         for i in range(n):
             cols[pass_slot * n + i] = pass_col[i]
-    # A1: pack each AGG-INPUT validity column as a 0/1 int64 at its validity slot.
+    # A1: pack each agg-input validity column as a 0/1 int64 at its validity slot.
     # Read the C++-fed 1-byte validity mask for the data column (1=valid, 0=NULL);
     # an aggin slot is in aggin_valid_slots iff st.cols[mj].validity is present, so
-    # the .value() is safe. (n_valid_cols == 0 -> no iterations, byte-identical.)
+    # the .value() is safe. (n_valid_cols == 0 means no iterations, byte-identical.)
     # Left serial in both modes: this is a light copy (1 read + 1 write per row),
     # dwarfed by the data pack/pass loops; parallelizing it is not worth a new helper.
     for vc in range(n_valid_cols):
@@ -6379,8 +6381,8 @@ def _pin_finalize_generic(
         )
 
     # --- metrics: per output aggregate, lower to internal metric program(s) ---
-    # AGG_COUNT_STAR -> PUSH_CONST(1); AGG_SUM -> resolved program;
-    # AGG_AVG -> two internal metrics (sum, count) -> host DOUBLE ratio.
+    # AGG_COUNT_STAR becomes PUSH_CONST(1); AGG_SUM the resolved program;
+    # AGG_AVG two internal metrics (sum, count) combined into a host DOUBLE ratio.
     # Track, per output aggregate, its metric indices + kind for assembly.
     var agg_kind: List[Int64] = []
     var agg_scale: List[Int64] = []  # for AVG: the summed value's decimal scale
@@ -6390,7 +6392,7 @@ def _pin_finalize_generic(
     var metric_offsets: List[Int64] = []  # op-offset per metric
     var metric_lens: List[Int64] = []  # op-count per metric
     var n_ops_total = 0
-    # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: when this query has a transcendental OR
+    # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: when this query has a transcendental or
     # statistical aggregate, build const_div parallel to metric_ops (one Float64 per
     # op, 10^scale at PUSH_CONST, 1.0 elsewhere) so the float64 VM can reconstruct
     # true doubles. Stays empty on the int path. (The scope guards gated UNGROUPED/
@@ -6399,7 +6401,7 @@ def _pin_finalize_generic(
     var is_float64 = _has_transcendental(d) or is_stats
     var const_div: List[Float64] = []
     # GPU_OP_STATS: per-output-agg shared-sum metric indices (parallel to agg_kind;
-    # -1 unused). Stats DEDUP base metrics across aggregates via `stat_metric_key`.
+    # -1 unused). Stats deduplicate base metrics across aggregates via `stat_metric_key`.
     var agg_msx: List[Int] = []
     var agg_msx2: List[Int] = []
     var agg_msy: List[Int] = []
@@ -6411,7 +6413,7 @@ def _pin_finalize_generic(
     var agg_cy: List[Float64] = []
     var stat_metric_key = Dict[String, Int]()  # op-tape key -> metric index
     # A1 unified pass model: per-output-agg validity-count metric idx (or -1). Set
-    # below for any SUM/AVG/stat that reads a nullable AGG-INPUT column; -1 for
+    # below for any SUM/AVG/stat that reads a nullable agg-input column; -1 for
     # count(*) and for aggregates with no nullable agg-input. Threaded to GpuPinned.
     var agg_valid_count_m: List[Int] = []
 
@@ -6445,11 +6447,11 @@ def _pin_finalize_generic(
         n_ops_total += plan.n_ops
         return idx
 
-    # GPU_OP_STATS: emit a resolved base-metric op tape (+ its const_div), DEDUPED
+    # GPU_OP_STATS: emit a resolved base-metric op tape (+ its const_div), deduplicated
     # by op-tape key across all aggregates, so shared sums (Sx, Sx2, Sxy, ...) are
     # computed exactly once. Returns the metric index (existing or newly emitted).
     # `divs` is parallel to the tape (one Float64 per op). For the count metric pass
-    # an empty `ops` -> the canonical PUSH_CONST(1) (also deduped).
+    # an empty `ops`, which gives the canonical PUSH_CONST(1) (also deduplicated).
     def _emit_metric_dedup(
         read ops: List[Int64],
         read divs: List[Float64],
@@ -6475,10 +6477,10 @@ def _pin_finalize_generic(
         keymap[key] = idx
         return idx
 
-    # const_div appended in LOCKSTEP with the metric_ops emitted below (the f64
+    # const_div appended in lockstep with the metric_ops emitted below (the f64
     # path requires it parallel to the op tape; on the int path it stays empty and
-    # is never read). PUSH_CONST(1) count metric -> [1.0]; a resolved program ->
-    # _resolve_const_div (one entry per op).
+    # is never read). The PUSH_CONST(1) count metric gets [1.0]; a resolved program
+    # gets _resolve_const_div (one entry per op).
     for ai in range(len(d.aggregates)):
         ref agg = d.aggregates[ai]
         agg_kind.append(agg.kind)
@@ -6493,8 +6495,8 @@ def _pin_finalize_generic(
         agg_cy.append(Float64(0))
         if _is_stat_agg_kind(agg.kind):
             # Stat aggregate: resolve x/y arg programs, build the base-metric tapes
-            # the closed form needs, emit them DEDUPED, record their indices. The
-            # count metric `n` is the canonical PUSH_CONST(1) (deduped, shared).
+            # the closed form needs, emit them deduplicated, record their indices. The
+            # count metric `n` is the canonical PUSH_CONST(1) (deduplicated, shared).
             agg_scale.append(Int64(0))
             var two_arg = not (
                 agg.kind == AGG_STDDEV_SAMP
@@ -6516,11 +6518,11 @@ def _pin_finalize_generic(
                 out.append(Float64(1))  # the MUL op
                 return out^
 
-            # Audit Group H (numerical stability): CENTER the args before squaring.
+            # Audit Group H (numerical stability): center the args before squaring.
             # Pick a per-arg shift c near the data magnitude (row-0 value) so the
-            # accumulated second moments are O(spread^2) instead of O(magnitude^2) ->
-            # no catastrophic cancellation in `_stat_value`. _metric_arg_shift returns
-            # (0, False) when no host value is available (no rows / omitted slot) ->
+            # accumulated second moments are O(spread^2) instead of O(magnitude^2),
+            # avoiding catastrophic cancellation in `_stat_value`. _metric_arg_shift returns
+            # (0, False) when no host value is available (no rows / omitted slot), and
             # c stays 0 (legacy unshifted tape, byte-identical). _shift_arg wraps the
             # tape into `<arg> PUSH_CONST(c) SUB`; with c==0 it returns the tape
             # unchanged (dedup key + metric set identical to before).
@@ -6531,18 +6533,18 @@ def _pin_finalize_generic(
             var cx = shx.c
             var sxw = _shift_arg(sp.x_ops, sp.x_div, shx)
             # A1: multiply the centered x tape by valid_x so (x-cx)*valid contributes
-            # 0 for a NULL x row -> Sx'/Sx2'/Sxy' all exclude it. valid is 0/1, so the
+            # 0 for a NULL x row, so Sx'/Sx2'/Sxy' all exclude it. valid is 0/1, so the
             # squared/product moments stay correct (valid^2 == valid). No-op (tape
             # unchanged) when x reads no nullable agg-input column.
             var xwm = _append_valid_mul(sxw[0], sxw[1], valid_col_slot_of)
             var xw_ops = xwm[0].copy()
             var xw_div = xwm[1].copy()
 
-            # n (count): A1 -> the VALIDITY-PRODUCT of the stat's args (count of rows
-            # with ALL of this stat's inputs valid, among filter-passing rows). When
-            # the stat reads no nullable agg-input this is empty -> the canonical
-            # PUSH_CONST(1) (deduped, shared across stats), byte-identical to before.
-            # The validity product over the UNcentered arg tapes (sp.x_ops/sp.y_ops)
+            # n (count): with A1 this is the validity product of the stat's args (count
+            # of rows with all of this stat's inputs valid, among filter-passing rows).
+            # When the stat reads no nullable agg-input this is empty and the canonical
+            # PUSH_CONST(1) is used (deduplicated, shared across stats), byte-identical
+            # to before. The validity product over the uncentered arg tapes (sp.x_ops/sp.y_ops)
             # is the right set of validity columns (centering does not change which
             # columns are read). Built below once both args are resolved.
             var cnt_ops: List[Int64] = [OP_PUSH_CONST, Int64(1), Int64(0)]
@@ -6586,7 +6588,7 @@ def _pin_finalize_generic(
             # A1: NULL-on-empty for a stat is its valid-count `mn` (Σ validity-product
             # among filter-passing rows). When the stat has no nullable agg-input mn
             # is the plain PUSH_CONST(1) count; the shared filter-only count then also
-            # equals it -> no behavior change. Always record mn as the per-agg count.
+            # equals it, so there is no behavior change. Always record mn as the per-agg count.
             agg_valid_count_m.append(mn)
             if two_arg:
                 var shy = _metric_arg_shift(
@@ -6626,11 +6628,11 @@ def _pin_finalize_generic(
                 const_div.append(Float64(1))
             agg_m0.append(mi)
             agg_m1.append(-1)
-            # A1: count(*) counts ALL filter-passing rows (incl. NULL-agg-input rows);
-            # never multiplied, never SQL NULL over empty -> no per-agg valid-count.
+            # A1: count(*) counts all filter-passing rows (incl. NULL-agg-input rows);
+            # never multiplied, never SQL NULL over empty, so no per-agg valid-count.
             agg_valid_count_m.append(-1)
         elif agg.kind == AGG_AVG:
-            # AVG's DOUBLE rescale uses the summed value's scale, NOT ret_scale
+            # AVG's DOUBLE rescale uses the summed value's scale, not ret_scale
             # (which is 0 for the DOUBLE output column).
             agg_scale.append(
                 _program_scale(agg, col_scale_of_slot, col_slot, d)
@@ -6639,7 +6641,7 @@ def _pin_finalize_generic(
             # A1: multiply the avg-numerator program by the validity of every nullable
             # agg-input it reads (no-op when none). avg = Σ(x*valid)/Σ(valid): the
             # numerator excludes NULL-input rows, and the denominator (the count
-            # metric) is the matching validity-PRODUCT so it counts the SAME rows.
+            # metric) is the matching validity product so it counts the same rows.
             var avg_mul = _append_valid_mul(
                 plan.ops, _resolve_const_div(d, agg) if is_float64 else [],
                 valid_col_slot_of,
@@ -6652,9 +6654,9 @@ def _pin_finalize_generic(
                 for x in range(len(avg_mul[1])):
                     const_div.append(avg_mul[1][x])
             # AVG denominator = Σ(validity-product) of the avg-arg's nullable inputs
-            # (the count of rows with ALL inputs valid). When the arg reads no nullable
-            # agg-input this is empty -> the canonical PUSH_CONST(1) count, == the prior
-            # behavior (count of filter-passing rows).
+            # (the count of rows with all inputs valid). When the arg reads no nullable
+            # agg-input this is empty and the canonical PUSH_CONST(1) count is used, as
+            # before (count of filter-passing rows).
             var avg_cnt_vp = _valid_product_tape(plan.ops, valid_col_slot_of)
             var ci: Int
             if len(avg_cnt_vp[0]) > 0:
@@ -6673,17 +6675,17 @@ def _pin_finalize_generic(
                     const_div.append(Float64(1))  # the count metric's PUSH_CONST(1)
             agg_m0.append(mi)
             agg_m1.append(ci)
-            # A1: when the avg-arg reads a nullable agg-input, ci IS the validity-
-            # product denominator -> this avg's NULL-on-empty is gated on ci (== 0 iff
-            # NO row has all inputs valid). When the arg has no nullable agg-input,
-            # ci == filter-passing count == shared ungrouped_count_m -> fall back to
+            # A1: when the avg-arg reads a nullable agg-input, ci is the validity-
+            # product denominator, so this avg's NULL-on-empty is gated on ci (== 0 iff
+            # no row has all inputs valid). When the arg has no nullable agg-input,
+            # ci == filter-passing count == shared ungrouped_count_m, so fall back to
             # the shared empty-set NULL (-1), preserving the prior behavior exactly.
             agg_valid_count_m.append(ci if len(avg_cnt_vp[0]) > 0 else -1)
         else:  # AGG_SUM (MIN/MAX not in the n_dims==0 classes here)
             agg_scale.append(agg.ret_scale)
             var plan = _resolve_program(d, agg, col_slot)
             # A1: multiply the sum program by the validity of every nullable agg-input
-            # it reads (no-op when none) -> a NULL-input row contributes 0 to THIS sum.
+            # it reads (no-op when none), so a NULL-input row contributes 0 to this sum.
             var sum_mul = _append_valid_mul(
                 plan.ops, _resolve_const_div(d, agg) if is_float64 else [],
                 valid_col_slot_of,
@@ -6697,11 +6699,11 @@ def _pin_finalize_generic(
                     const_div.append(sum_mul[1][x])
             agg_m0.append(mi)
             agg_m1.append(-1)
-            # A1: a SUM over nullable agg-input(s) is SQL NULL iff ZERO filter-passing
-            # rows have ALL its inputs valid. Emit a companion validity-PRODUCT-sum
+            # A1: a SUM over nullable agg-input(s) is SQL NULL iff zero filter-passing
+            # rows have all its inputs valid. Emit a companion validity-product-sum
             # metric (Σ valid_a[*valid_b..]) and gate this sum's NULL-on-empty on it.
-            # When the sum reads no nullable agg-input -> -1 (the shared filter-only
-            # empty-set NULL handles it, == prior behavior; no extra metric emitted).
+            # When the sum reads no nullable agg-input, use -1 (the shared filter-only
+            # empty-set NULL handles it as before; no extra metric emitted).
             var sum_vp = _valid_product_tape(plan.ops, valid_col_slot_of)
             if len(sum_vp[0]) > 0:
                 var vci = _emit_prog(
@@ -6719,10 +6721,10 @@ def _pin_finalize_generic(
     # rows metric so the assemble can detect a zero-contributing-row result and emit
     # SQL NULL for sum/avg/min/max/stats (count stays 0), matching stock DuckDB.
     # Reuse an existing count metric when present (COUNT_STAR's m0, AVG's m1, a
-    # stat's mn -- all PUSH_CONST(1) summed); otherwise (a pure SUM/MIN/MAX query)
-    # emit one cheap count metric. GROUPED paths leave this -1 (they never emit an
+    # stat's mn, all PUSH_CONST(1) summed); otherwise (a pure SUM/MIN/MAX query)
+    # emit one cheap count metric. Grouped paths leave this -1 (they never emit an
     # empty group, so they are untouched). The extra metric (when needed) is summed
-    # over the SAME passing rows -> no kernel/tape-format change.
+    # over the same passing rows, so there is no kernel/tape-format change.
     var ungrouped_count_m = -1
     if mode == STRAT_UNGROUPED:
         for ai in range(len(d.aggregates)):
@@ -6742,18 +6744,18 @@ def _pin_finalize_generic(
             if is_float64:
                 const_div.append(Float64(1))
 
-    # DENSE-existence fix: for an int128 DENSE_GROUP, the gid is built over ALL rows
+    # DENSE-existence fix: for an int128 DENSE_GROUP, the gid is built over all rows
     # (no WHERE in materialize), so a group whose rows all fail the filter still gets
-    # a gid and -- with emit_agg<0 (e.g. KIND_Q1) -- would emit a PHANTOM row. Gate
-    # emission on a per-group FILTER-passing count. REUSE an existing count metric
-    # (count(*) / AVG's count / a stat's count -- all PUSH_CONST(1) summed per group,
+    # a gid and, with emit_agg<0 (e.g. KIND_Q1), would emit a phantom row. Gate
+    # emission on a per-group filter-passing count. Reuse an existing count metric
+    # (count(*) / AVG's count / a stat's count, all PUSH_CONST(1) summed per group,
     # pass-gated) so M is unchanged for the shapes that route today (Q1 has count(*));
-    # -1 when none is present (no routed int128-dense shape lacks one -- Q5 uses the
+    # -1 when none is present (no routed int128-dense shape lacks one; Q5 uses the
     # emit_gt0 revenue gate, untouched). The f64 dense path has its own gcount gate.
     # When no count metric is present (a count-less dense shape, e.g. grouped-nullable
-    # `sum(x) GROUP BY k`), EMIT a guaranteed PUSH_CONST(1) filter-passing count so the
+    # `sum(x) GROUP BY k`), emit a guaranteed PUSH_CONST(1) filter-passing count so the
     # existence gate still omits fully-filtered groups. Only int128 DENSE routes through
-    # here (Q1 reuses count(*) -> no emit; Q5 uses a separate finalize), so this extra
+    # here (Q1 reuses count(*), so no emit; Q5 uses a separate finalize), so this extra
     # metric appears only for the newly-routed grouped shapes.
     var grouped_count_m = -1
     if mode == STRAT_DENSE_GROUP and not is_float64:
@@ -6771,15 +6773,15 @@ def _pin_finalize_generic(
 
     var M = len(metric_offsets)
 
-    # FIX D (int128 DENSE_GROUP overrun guard): the int128 dense-group kernels
+    # Fix D (int128 DENSE_GROUP overrun guard): the int128 dense-group kernels
     # (seg_dense_kernel / _q1 / _q5 and their _pred variants) accumulate into a
-    # FIXED per-lane InlineArray[Int64, SEG_MAX_METRICS*SEG_MAX_METRICS] (== 64)
-    # indexed acc[g*M+m]. The DENSE strategy is chosen by group-key COLUMN count at
-    # plan time, NOT by the runtime distinct-group count G, so a high-cardinality
+    # fixed per-lane InlineArray[Int64, SEG_MAX_METRICS*SEG_MAX_METRICS] (== 64)
+    # indexed acc[g*M+m]. The DENSE strategy is chosen by group-key column count at
+    # plan time, not by the runtime distinct-group count G, so a high-cardinality
     # GROUP BY with many metrics can have G*M > 64 and overrun the accumulator
-    # (groups beyond floor(64/M) get all-zero aggregates -> silent wrong result).
+    # (groups beyond floor(64/M) get all-zero aggregates, a silent wrong result).
     # This is data-dependent (G is only known here, after the dense gid build), so
-    # it CANNOT be declined at plan time. Fail closed to CPU stock (return 3) when
+    # it cannot be declined at plan time. Fail closed to CPU stock (return 3) when
     # it would overflow. The f64 dense path is exempt: it already switches to the
     # unbounded global atomic kernel (dense_global, see _assemble) for G*M > 64.
     if mode == STRAT_DENSE_GROUP and not is_float64 and G * M > 64:
@@ -6790,12 +6792,12 @@ def _pin_finalize_generic(
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
     # the float64 VM. col_scale_of_slot already holds each slot's decimal scale.
-    # A1: when AGG-INPUT validity columns are packed (slots >= pass_slot+1), the f64
-    # metric programs OP_LOAD_COL them, and eval_program_f64 divides by col_div[slot]
-    # -- so col_div must cover those slots with 1.0 (validity is unscaled 0/1). Extend
-    # col_div to the FULL packed slot count (gid/pass gaps also 1.0, never loaded by a
+    # A1: when agg-input validity columns are packed (slots >= pass_slot+1), the f64
+    # metric programs OP_LOAD_COL them, and eval_program_f64 divides by col_div[slot],
+    # so col_div must cover those slots with 1.0 (validity is unscaled 0/1). Extend
+    # col_div to the full packed slot count (gid/pass gaps also 1.0, never loaded by a
     # metric). With no validity columns (n_valid_cols==0) col_div stays length
-    # n_numeric and gp.n_slots stays n_numeric -> byte-identical to before.
+    # n_numeric and gp.n_slots stays n_numeric, byte-identical to before.
     var col_div: List[Float64] = []
     var col_div_n = n_numeric if n_valid_cols == 0 else n_slots
     if is_float64:
@@ -6808,27 +6810,27 @@ def _pin_finalize_generic(
 
     # --- pass program: 1-op LOAD_COL(pass_slot) ---
     # Phase G Stage 2: the Q6 predicate-independent kernel evaluates the filter
-    # in-kernel from per-run bounds, so there is NO pass program (pass_len 0).
+    # in-kernel from per-run bounds, so there is no pass program (pass_len 0).
     var pass_prog: List[Int64] = [OP_LOAD_COL, Int64(pass_slot), Int64(0)]
     var pass_len_eff = 1
     if q6_pred_on or gen_pred_on or f64_pred_on:
         pass_prog = []
         pass_len_eff = 0
 
-    # NR3 (GPU_OP_FILTER_OR): AND the residual OR-of-equalities PASS-PROGRAM into the
+    # NR3 (GPU_OP_FILTER_OR): AND the residual OR-of-equalities pass program into the
     # host pass column. Find the fact GET carrying a pass_prog (NR3 attaches it to
     # GET ordinal 0; the build guard already restricts this to no-dims UNGROUPED/
-    # DENSE_GROUP int128 shapes). Append its resolved ops AFTER the host pass-column
+    # DENSE_GROUP int128 shapes). Append its resolved ops after the host pass-column
     # LOAD_COL, then OP_MUL: the VM computes (host_pass_col != 0) AND (OR-program != 0)
     # because every OR leaf is 0/1, OR chains via ADD (>=0, !=0 iff any), AND chains
-    # via MUL. We do NOT overwrite the host pass-column term -- the pushed range
+    # via MUL. We do not overwrite the host pass-column term; the pushed range
     # filters (if any) still gate. If there are zero pushed filters the host pass col
-    # is all-1 (see the pass-bake `else` above), so the result is just the OR program.
+    # is all-1 (see the pass-bake `else` above), so the result is only the OR program.
     #
-    # If an in-kernel-fpred path (q6/gen/f64) is active we have NO host pass program
-    # to AND into AND those paths do not consult get.pass_prog -> the OR predicate
-    # would be SILENTLY DROPPED. The build guard already declines f64 OR-filtered
-    # queries; for q6/gen we fail-closed here (return 8 -> CPU fallback) rather than
+    # If an in-kernel-fpred path (q6/gen/f64) is active we have no host pass program
+    # to AND into, and those paths do not consult get.pass_prog, so the OR predicate
+    # would be silently dropped. The build guard already declines f64 OR-filtered
+    # queries; for q6/gen we fail closed here (return 8, CPU fallback) rather than
     # drop the predicate.
     var fact_passget = -1
     for gi in range(len(d.gets)):
@@ -6857,7 +6859,7 @@ def _pin_finalize_generic(
 
     # --- per-candidate group-key cells (constant for the cache entry) ---
     # UNGROUPED: 1 candidate, no keys. DENSE_GROUP: n_groups candidates, the
-    # group-key strings ordered by gid (g -> order[g] -> didx -> gkey_vals).
+    # group-key strings ordered by gid (g, then order[g], then didx, then gkey_vals).
     # HASH_GROUP (transcendental): the integer fact key cell is placed at result
     # time from the kernel-discovered key (_assemble_hash_f64), so no per-candidate
     # cells are pre-baked here; n_keys==1, the cell is int64 (gk_is_str False).
@@ -6881,9 +6883,9 @@ def _pin_finalize_generic(
             gk_i64_vals.append(iv^)
 
     # --- upload the resident buffers once (no FK-join dims for this class) ---
-    # This class is UNGROUPED / DENSE_GROUP => STORAGE row order (no ORDER BY),
-    # so it is column-pool eligible. When GPU_OP_COLPOOL is on we dedup the per-
-    # column H2D via the pool and assemble cols_d by D2D repack; off => verbatim.
+    # This class is UNGROUPED / DENSE_GROUP, so rows are in STORAGE order (no ORDER BY)
+    # and it is column-pool eligible. When GPU_OP_COLPOOL is on we dedup the per-
+    # column H2D via the pool and assemble cols_d by D2D repack; when off, verbatim.
     var ctx = shared_device_context()
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
@@ -6894,8 +6896,8 @@ def _pin_finalize_generic(
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colptr_eligible(d):
-        # Phase 3: build a per-column POINTER TABLE; pooled slots read directly
-        # from the pool (no packed copy -> the VRAM win). Same lease/omit handling
+        # Phase 3: build a per-column pointer table; pooled slots read directly
+        # from the pool (no packed copy, which saves VRAM). Same lease/omit handling
         # + skip-mat backstop as the packed pool path below.
         var assemble_fail = False
         var derived_bufs: List[DeviceBuffer[DType.int64]] = []
@@ -6930,9 +6932,9 @@ def _pin_finalize_generic(
             omit_slot, pool_lease_keys, assemble_fail,
         )
         if assemble_fail:
-            # SKIP-MATERIALIZE backstop (landmine #4): an OMITTED column was not a
-            # guaranteed pool HIT. It was never scanned/fed, so we cannot rebuild
-            # it -> bail to CPU (nonzero rc -> C++ throws). Release all leases (the
+            # SKIP-MATERIALIZE backstop (landmine #4): an omitted column was not a
+            # guaranteed pool hit. It was never scanned/fed, so we cannot rebuild
+            # it: bail to CPU (nonzero rc, and C++ throws). Release all leases (the
             # non-omitted ensure-leases in pool_lease_keys + the materialize-time
             # omit leases) so they don't pin VRAM, then clear the omit leases.
             for li in range(len(pool_lease_keys)):
@@ -6947,9 +6949,9 @@ def _pin_finalize_generic(
             pass_col.free()
             row_gid.free()
             return 11
-        # SUCCESS: transfer the materialize-time omit leases into the per-signature
+        # Success: transfer the materialize-time omit leases into the per-signature
         # lease set so the GpuPinned owns them (released when it is evicted). Clear
-        # the exec-state copy (ownership moved -> no double release).
+        # the exec-state copy (ownership moved, so no double release).
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
         st.colpool_omit_leases = []
@@ -7003,8 +7005,8 @@ def _pin_finalize_generic(
     # GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: route this entry to the float64 accumulator.
     gp.is_float64 = is_float64
     gp.col_div = col_div^
-    # A1: col_div is length n_numeric (no validity cols) OR n_slots (validity cols
-    # packed). gp.n_slots (the f64 kernel's cdiv length) must MATCH col_div's length
+    # A1: col_div is length n_numeric (no validity cols) or n_slots (validity cols
+    # packed). gp.n_slots (the f64 kernel's cdiv length) must match col_div's length
     # so a metric loading a validity slot finds col_div[slot]==1.0 (not an overread).
     gp.n_slots = col_div_n
     gp.const_div = const_div^
@@ -7023,17 +7025,17 @@ def _pin_finalize_generic(
     gp.agg_valid_count_m = agg_valid_count_m^
     gp.kind = d.kind  # routes Q1/Q6 to the comptime-specialized kernels
     # Phase G Stage 2: record the constant-independent Q6 predicate slots so the
-    # WARM path can re-run the in-kernel filter with a fresh constant set.
+    # warm path can re-run the in-kernel filter with a fresh constant set.
     gp.q6_pred = q6_pred_on
     if q6_pred_on:
         gp.q6_pred_slots = [
             q6_spec.ship_slot, q6_spec.disc_slot, q6_spec.qty_slot
         ]
-    # Generalized Q1 / FLOAT64: cache the constant-independent fact-filter slots +
+    # Generalized Q1 / float64: cache the constant-independent fact-filter slots +
     # cmps (in descriptor order, == f_slot/f_cmp here). The bounds are threaded per
     # run. The int128 gen_pred path (gen_pred_on) and the f64 pred-independent path
-    # (f64_pred_on) share the SAME mechanism (in-kernel fpred over per-run bounds);
-    # _assemble routes by gp.is_float64. Either gate -> mark this entry pred-indep.
+    # (f64_pred_on) share the same mechanism (in-kernel fpred over per-run bounds);
+    # _assemble routes by gp.is_float64. Either gate marks this entry pred-indep.
     gp.gen_pred = gen_pred_on or f64_pred_on
     if gen_pred_on or f64_pred_on:
         var gslots: List[Int] = []
@@ -7048,8 +7050,8 @@ def _pin_finalize_generic(
     _pin2_track(sig, _fp)
 
     ref dst = m[key]
-    # The COLD path assembles with THIS query's bounds too (the kernel is the same
-    # code as WARM; q6_spec / gen-bounds carry the first constant set). For the f64
+    # The cold path assembles with this query's bounds too (the kernel is the same
+    # code as warm; q6_spec / gen-bounds carry the first constant set). For the f64
     # pred-independent path the bounds come from _f64_pred_bounds (kind-agnostic);
     # the int128 path uses _gen_pred_bounds (Q1/Q14 only). Both are descriptor-order.
     var gen_b0 = _f64_pred_bounds(d) if f64_pred_on else _gen_pred_bounds(d)
@@ -7063,10 +7065,10 @@ def _pin_finalize_generic(
 # handling here is exactly what Q3 (segreduce + dim-carried group keys) and Q5
 # (dense group on dim-carried n_name, 5 dims) will reuse.
 #
-# Builds, for each dim_edge, one or more DENSE int64 arrays indexed by the dim PK
+# Builds, for each dim_edge, one or more dense int64 arrays indexed by the dim PK
 # value (sized to max key + 1). The payload is the dim-derived value a program
 # needs:
-#   * a PROMO flag (p_type LIKE 'PROMO%')         -> OP_PROMO_PRED resolves to it
+#   * a promo flag (p_type LIKE 'PROMO%')         -> OP_PROMO_PRED resolves to it
 #   * a carried dim column (e.g. o_orderdate)      -> dim-side OP_LOAD_COL "
 #   * a per-dim 0/1 pass flag (dim filters)        -> ANDed into the row pass
 # All dim arrays are concatenated into one buffer + dim_offsets, exactly the
@@ -7212,13 +7214,13 @@ def _resolve_dim_program(
 # ===-------------------------------------------------------------------===#
 # TPC-H Q5 finalize (5 dims, DENSE_GROUP over a dim-carried VARCHAR n_name).
 #
-# Q5 has a correlated dim<->dim equality (c_nationkey == s_nationkey) coupling
-# customer and supplier on the SAME fact (lineitem) row, plus a VARCHAR group
+# Q5 has a correlated dim-to-dim equality (c_nationkey == s_nationkey) coupling
+# customer and supplier on the same fact (lineitem) row, plus a VARCHAR group
 # key (n_name) carried from nation and DENSE_GROUP over it. The fully generic
 # dim classifier can't express the correlated compare, so this is a dedicated
 # branch that mirrors the bespoke `EnsureQ5Pinned` (gpu_operator.cpp) exactly:
 #
-# HOST precomputes (built from the fed dim columns, all single-level so every
+# The host precomputes (built from the fed dim columns, all single-level so every
 # GPU gather is dim[fact_col] with a fact-column slot):
 #   * region:   regionkey whose r_name == r_name-filter-const.
 #   * nation:   nation_in_asia[nk]=(n_regionkey==asia), nation_name[nk] (string),
@@ -7254,9 +7256,9 @@ def _pin_finalize_q5(
     if key not in m:
         return 2
 
-    # WARM: re-run on the resident buffers + assemble from cached metadata. For
+    # Warm: re-run on the resident buffers + assemble from cached metadata. For
     # the Path B predicate-independent residency the resident dim arrays + gid are
-    # constant-INDEPENDENT; THIS query's region/date scalars are extracted from the
+    # constant-independent; this query's region/date scalars are extracted from the
     # live descriptor `d` + the cached region map and threaded into the re-run.
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
@@ -7271,7 +7273,7 @@ def _pin_finalize_q5(
             _assemble(dst, p2[sig])
         return 0
 
-    # COLD: build dim arrays + packed columns from fed host columns, upload once.
+    # Cold: build dim arrays + packed columns from fed host columns, upload once.
     ref st = m[key]
     var n = st.n_rows
     var q5_pred_on = _q5_pred_enabled(d)
@@ -7303,15 +7305,15 @@ def _pin_finalize_q5(
     var lsk_slot = col_slot["l_suppkey"]
 
     # =======================================================================
-    # Phase G Stage 2 (Path B): predicate-INDEPENDENT residency for Q5. The
-    # resident dim arrays + gid are the RAW (region/date-independent) forms and the
+    # Phase G Stage 2 (Path B): predicate-independent residency for Q5. The
+    # resident dim arrays + gid are the raw (region/date-independent) forms and the
     # region + orderdate window + cust_nation==supp_nation filter is evaluated
-    # IN-KERNEL from per-run scalars (o_lo/o_hi/asia_region), so DIFFERENT region/
-    # date constants reuse the SAME residency (warm-across-constants). This mirrors
+    # in the kernel from per-run scalars (o_lo/o_hi/asia_region), so different region/
+    # date constants reuse the same residency (warm across constants). This mirrors
     # the shipped Q6/Q1/Q14 mechanism. Built only when _q5_pred_enabled(d).
     # =======================================================================
     if q5_pred_on:
-        # --- nation: name[nk] + region[nk] for ALL nationkeys (region-independent).
+        # --- nation: name[nk] + region[nk] for all nationkeys (region-independent).
         var c_nk = _dim_src_col(st, de_nation, "n_nationkey")
         var c_nn = _dim_src_col(st, de_nation, "n_name")
         var c_nrk = _dim_src_col(st, de_nation, "n_regionkey")
@@ -7325,7 +7327,7 @@ def _pin_finalize_q5(
         # per-lane accumulator is sized SEG_MAX_METRICS*SEG_MAX_METRICS == 64 cells
         # (M==1 for Q5), so G must be <= 64. sf1 max nationkey == 24; if a larger
         # schema appears, fall back to the per-constant (ASIA-rank gid) path, which
-        # is still correct -- just not warm-across-constants.
+        # is still correct, only not warm across constants.
         var G = max_nk + 1
         if G > 64:
             q5_pred_on = False
@@ -7341,7 +7343,7 @@ def _pin_finalize_q5(
                 nation_region[nk] = _dim_col_val(st, de_nation, c_nrk, i)
                 nation_name[nk] = _dim_col_str(st, de_nation, c_nn, i)
 
-            # --- region map: r_name -> r_regionkey for ALL regions (region-indep). ---
+            # --- region map: r_name to r_regionkey for all regions (region-indep). ---
             var c_rk_p = _dim_src_col(st, de_region, "r_regionkey")
             var c_rn_p = _dim_src_col(st, de_region, "r_name")
             var rdn_p = st.dim_n_rows[de_region]
@@ -7388,7 +7390,7 @@ def _pin_finalize_q5(
                 if sn >= 0 and sn <= max_nk:
                     supp_region[sk] = nation_region[sn]
 
-            # --- orders: o_orderdate[ok] (RAW) + order_cust_nation[ok] (region/
+            # --- orders: o_orderdate[ok] (raw) + order_cust_nation[ok] (region/
             #     date-independent; no host order_pass bake). ---
             var c_ook = _dim_src_col(st, de_orders, "o_orderkey")
             var c_ock = _dim_src_col(st, de_orders, "o_custkey")
@@ -7411,7 +7413,7 @@ def _pin_finalize_q5(
                 if ck >= 0 and ck <= max_ck:
                     order_cust_nation[ok] = cust_nation[ck]
 
-            # --- pack the 4 dim arrays + offsets (FIXED indices 0..3):
+            # --- pack the 4 dim arrays + offsets (fixed indices 0..3):
             #     arr0=o_orderdate[ok], arr1=order_cust_nation[ok],
             #     arr2=supp_nation[sk], arr3=supp_region[sk]. ---
             var len0 = max_ok + 1
@@ -7437,12 +7439,12 @@ def _pin_finalize_q5(
             doff_host[3] = Int64(len0 + len1 + len2)
             doff_host[4] = Int64(total_dim)
 
-            # --- packed fact columns + the per-row gid column (RAW supp_nation
+            # --- packed fact columns + the per-row gid column (raw supp_nation
             #     [l_suppkey]; the in-kernel region gate zeroes non-region nations). ---
             var gid_slot = n_numeric
             var n_slots = n_numeric + 1
             var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
-            # RANK 3: parallelize the fact-column pack + gid gather (flag-gated).
+            # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
             var par_on = _parallel_finalize_on()
             var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
             var t_pp0 = perf_counter_ns() if pin_log else 0
@@ -7480,7 +7482,7 @@ def _pin_finalize_q5(
                     file=FileDescriptor(2),
                 )
 
-            # --- pass program: NONE (in-kernel predicate gates rows). ---
+            # --- pass program: none (in-kernel predicate gates rows). ---
             var pass_prog: List[Int64] = []
             var pass_len = 0
 
@@ -7503,7 +7505,7 @@ def _pin_finalize_q5(
             var M = 1
             var n_ops_total = plan.n_ops
 
-            # --- per-candidate (gid == raw nationkey) labels: n_name[gid] for ALL
+            # --- per-candidate (gid == raw nationkey) labels: n_name[gid] for all
             #     nationkeys; gid_to_nation is the identity. n_cand = G. ---
             var n_cols = len(d.out_types)
             var n_keys = len(d.group_keys)  # == 1 (n_name)
@@ -7522,9 +7524,9 @@ def _pin_finalize_q5(
                 gk_i64_vals.append(iv^)
 
             # --- upload the resident buffers once (DENSE_GROUP, 4 dim arrays). ---
-            # Q5 is DENSE_GROUP => STORAGE row order, so the fact columns are
+            # Q5 is DENSE_GROUP, so rows are in STORAGE order and the fact columns are
             # column-pool eligible. gid_slot (raw supp_nation[l_suppkey]) is a
-            # per-query derived slot (>= n_numeric) => NOT pooled, copied whole.
+            # per-query derived slot (>= n_numeric), so it is not pooled and is copied whole.
             var ctx = shared_device_context()
             var seg_off_dummy = alloc[Int64](1)
             seg_off_dummy[0] = 0
@@ -7532,11 +7534,11 @@ def _pin_finalize_q5(
             var resident: SegResident
             if _colptr_eligible(d):
                 # Phase 3 (Q5): pooled fact columns (incl. the l_orderkey/l_suppkey
-                # gather slots) read directly via a per-column POINTER TABLE -- no
+                # gather slots) read directly via a per-column pointer table, with no
                 # packed cols_d. The raw dim arrays stay a separate buffer, uploaded
                 # as usual; the per-query derived gid slot (>= n_numeric) is handled
-                # by the assembly's derived-buf loop. Q5 is NOT skip-mat-eligible, so
-                # the omit mask is all-False -> `assemble_fail` never trips here, but
+                # by the assembly's derived-buf loop. Q5 is not skip-mat-eligible, so
+                # the omit mask is all-False and `assemble_fail` never trips here, but
                 # we keep the same lease/omit handling + backstop as the packed path.
                 var omit_slot_q5 = _omit_slot_mask(st, numeric_matcols)
                 var assemble_fail = False
@@ -7565,7 +7567,7 @@ def _pin_finalize_q5(
                     dims_host, doff_host, n_dim_arrays,
                 )
             elif _colpool_on():
-                # Q5 is NOT skip-materialize-eligible (deferred): the omit mask is
+                # Q5 is not skip-materialize-eligible (deferred): the omit mask is
                 # all-False, so no column is ever pool-sourced and `_assemble_fail`
                 # stays False. We still pass them for the unified signature.
                 var omit_slot_q5 = _omit_slot_mask(st, numeric_matcols)
@@ -7631,7 +7633,7 @@ def _pin_finalize_q5(
             _pin2_track(sig, _fp5p)
 
             ref dst = m[key]
-            # COLD assembles with THIS query's scalars too (same kernel as WARM):
+            # Cold assembles with this query's scalars too (same kernel as warm):
             # resolve the region const against the just-built region map.
             var q5b0 = _q5_pred_params(d, q5_region_names, q5_region_keys)
             _assemble(dst, p2[sig], q5_bounds=q5b0^)
@@ -7693,13 +7695,13 @@ def _pin_finalize_q5(
     if G <= 0:
         nation_in_asia.free(); gid_of_nation.free()
         return 23
-    # FIX D (int128 DENSE_GROUP overrun guard): the Q5 dense kernel
+    # Fix D (int128 DENSE_GROUP overrun guard): the Q5 dense kernel
     # (seg_dense_kernel_q5 / _q5_pred) accumulates into a per-lane InlineArray of
     # SEG_MAX_METRICS*SEG_MAX_METRICS == 64 cells indexed acc[g*M+m]. Q5 has M==1,
     # so the bound is G <= 64. G == number of ASIA nations here (schema-bounded to
-    # ~25 for TPC-H), but a non-standard `nation` table could exceed it -> fail
+    # ~25 for TPC-H), but a non-standard `nation` table could exceed it, so fail
     # closed to CPU stock. (The pred-independent path above has the same G>64 guard,
-    # which falls to THIS per-constant path; the guard here is its backstop.)
+    # which falls back to this per-constant path; the guard here is its backstop.)
     if G > 64:
         nation_in_asia.free(); gid_of_nation.free()
         return 23
@@ -7824,7 +7826,7 @@ def _pin_finalize_q5(
     var gid_slot = n_numeric
     var n_slots = n_numeric + 1
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
-    # RANK 3: parallelize the fact-column pack + gid gather (flag-gated).
+    # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var t_pp0 = perf_counter_ns() if pin_log else 0
@@ -7908,8 +7910,8 @@ def _pin_finalize_q5(
         gk_i64_vals.append(iv^)
 
     # --- upload the resident buffers once (DENSE_GROUP, 4 dim arrays) ---
-    # DENSE_GROUP => STORAGE row order; fact columns are column-pool eligible.
-    # gid_slot (per-query derived supp-group) is >= n_numeric => copied whole.
+    # DENSE_GROUP uses STORAGE row order; fact columns are column-pool eligible.
+    # gid_slot (per-query derived supp-group) is >= n_numeric, so it is copied whole.
     var ctx = shared_device_context()
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
@@ -7989,10 +7991,10 @@ def _pin_finalize_generic_dims(
     if key not in m:
         return 2
 
-    # WARM: re-run on the resident buffers + assemble from cached metadata. For the
-    # generalized Q14 predicate-independent path the CURRENT query's fact-filter
+    # Warm: re-run on the resident buffers + assemble from cached metadata. For the
+    # generalized Q14 predicate-independent path the current query's fact-filter
     # bounds are threaded into the re-run (the resident columns + promo dim array
-    # are constant-independent; the kernel applies THIS query's shipdate range).
+    # are constant-independent; the kernel applies this query's shipdate range).
     var sig = _signature(d)
     ref p2 = _pin2_ptr()[]
     if sig in p2:
@@ -8008,12 +8010,12 @@ def _pin_finalize_generic_dims(
             )
         return 0
 
-    # COLD: build dim arrays + packed columns from fed host columns, upload once.
+    # Cold: build dim arrays + packed columns from fed host columns, upload once.
     ref st = m[key]
     var n = st.n_rows
     var n_dims_edges = len(d.dim_edges)
 
-    # --- fact numeric slot map (mat_cols order) -> packed-column slot ---
+    # --- fact numeric slot map (mat_cols order) to packed-column slot ---
     var col_slot = Dict[String, Int]()
     var numeric_matcols: List[Int] = []  # slot -> mat_cols idx
     for j in range(len(st.mat_cols)):
@@ -8027,9 +8029,9 @@ def _pin_finalize_generic_dims(
     var omit_slot = _omit_slot_mask(st, numeric_matcols)
 
     # Per-numeric-slot decimal scale (for AVG rescale; Q14 has no AVG). For an
-    # OMITTED slot st.cols[mj].type_tag is unset (0) -> recover the pooled type_tag
+    # omitted slot st.cols[mj].type_tag is unset (0), so recover the pooled type_tag
     # (landmine #2). Q14 has no AVG so this is precautionary here, but it keeps the
-    # generic-dims path airtight for any future AVG-bearing FK-join shape.
+    # generic-dims path correct for any future AVG-bearing FK-join shape.
     var col_scale_of_slot: List[Int64] = []
     for slot in range(n_numeric):
         var tt: Int64
@@ -8048,7 +8050,7 @@ def _pin_finalize_generic_dims(
             # (mirrors _pin_finalize_generic). The int128 grouped/dims AVG/SUM seeds
             # agg_scale from ret_scale directly in the dedicated int128 finalize
             # paths below and never reads col_scale_of_slot, so this is safe; it
-            # keeps any future AVG-bearing FK-join f64 shape airtight (no hardcoded
+            # keeps any future AVG-bearing FK-join f64 shape correct (no hardcoded
             # scale-2 10^(s-2) error). Omitted slots keep the scale-2 default.
             col_scale_of_slot.append(st.cols[numeric_matcols[slot]].dec_scale)
         else:
@@ -8065,9 +8067,9 @@ def _pin_finalize_generic_dims(
             if c.type_tag == TYPE_DECIMAL:
                 col_scale_of_slot[col_slot[p.col.column]] = c.scale
 
-    # Classify each dim_edge. A FACT-edge joins the fact table directly (its
-    # fact_key column is a materialized fact column -> a gather slot). A CHILD-edge
-    # joins ANOTHER dim instead (transitive dim->dim, e.g. Q3 customer joins orders
+    # Classify each dim_edge. A fact-edge joins the fact table directly (its
+    # fact_key column is a materialized fact column, giving a gather slot). A child-edge
+    # joins another dim instead (transitive dim-to-dim, e.g. Q3 customer joins orders
     # on o_custkey): there is no fact gather slot; the child is folded into its
     # parent dim's pass flag on host. `fk_slot_of_de[de]` = the fact gather slot
     # for a fact-edge, or -1 for a child-edge. `parent_de_of_de[de]` = the parent
@@ -8129,9 +8131,9 @@ def _pin_finalize_generic_dims(
     # NULL-on-empty (UNGROUPED dims, e.g. Q14): record a count-of-passing-rows
     # metric index so the assemble emits SQL NULL for sum/avg/min/max over an empty
     # filtered set (count stays 0). Reuse a COUNT_STAR metric if present; else emit
-    # one cheap count. Computed ONLY for STRAT_UNGROUPED so the grouped Q3 paths
-    # (SORT_SEGREDUCE / HASH_GROUP) keep their exact metric tape (-1 -> untouched;
-    # a grouped result never emits an empty group).
+    # one cheap count. Computed only for STRAT_UNGROUPED so the grouped Q3 paths
+    # (SORT_SEGREDUCE / HASH_GROUP) keep their exact metric tape (-1 leaves them
+    # untouched; a grouped result never emits an empty group).
     var ungrouped_count_m_dims = -1
     if d.strategy == STRAT_UNGROUPED:
         for ai in range(len(agg_kind)):
@@ -8148,7 +8150,7 @@ def _pin_finalize_generic_dims(
             ungrouped_count_m_dims = len(metric_offsets) - 1
     var M = len(metric_offsets)
 
-    # --- dim-carried GROUP-KEY arrays (SORT_SEGREDUCE) -> kind-1 carried ---
+    # --- dim-carried group-key arrays (SORT_SEGREDUCE), built as kind-1 carried ---
     # o_orderdate / o_shippriority live on the orders dim; gathered per output
     # segment by the fact group key's FK value. Build one kind-1 dim array per
     # dim-carried group key so result assembly can look it up by seg_key.
@@ -8169,28 +8171,28 @@ def _pin_finalize_generic_dims(
         )
         gkey_dim_arr.append(gai)
 
-    # --- dim pass-flag arrays (dim filters) -> ANDed into the row pass ---
-    # For each FACT-edge that carries dim filters (and/or absorbs a transitive
+    # --- dim pass-flag arrays (dim filters), ANDed into the row pass ---
+    # For each fact-edge that carries dim filters (and/or absorbs a transitive
     # child fold), build a 0/1 pass-flag dim array indexed by the dim PK and AND
-    # it into the pass program via OP_LOAD_DIM + OP_MUL. A CHILD-edge (a dim
-    # attached to another dim, e.g. Q3 customer->orders) is NOT ANDed directly;
-    # it is FOLDED on host into its parent fact-edge's pass array. So a fact-edge
-    # needs a pass array iff it has its own filters OR any child folds into it.
+    # it into the pass program via OP_LOAD_DIM + OP_MUL. A child-edge (a dim
+    # attached to another dim, e.g. Q3 customer to orders) is not ANDed directly;
+    # it is folded on host into its parent fact-edge's pass array. So a fact-edge
+    # needs a pass array iff it has its own filters or any child folds into it.
     var dim_pass_de: List[Int] = []  # dim-array idx of each fact-edge pass flag
     for de in range(n_dims_edges):
         if fk_slot_of_de[de] < 0:
             continue  # child edge: folded into its parent below, not ANDed here
-        # FK-EXISTENCE (audit Group E, case 2): force a pass array for EVERY
-        # fact->dim INNER edge, not only edges that carry a filter / child fold.
+        # FK existence (audit Group E, case 2): force a pass array for every
+        # fact-to-dim INNER edge, not only edges that carry a filter / child fold.
         # The kind-2 build below seeds the array to 0 for every PK slot and sets
         # 1 only for PKs that actually exist in the dim (and pass any filters), so
-        # ANDing it into the row pass via OP_LOAD_DIM+OP_MUL ELIMINATES fact rows
-        # whose FK has no matching dim row -- the INNER-join semantics the dense
+        # ANDing it into the row pass via OP_LOAD_DIM+OP_MUL removes fact rows
+        # whose FK has no matching dim row. That is the INNER-join semantics the dense
         # `dims[off+key]` gather otherwise silently violates for a non-covering
         # (partial) dim. Harmless for covering dims (Q14/Q3: every FK exists, so
-        # every present PK -> 1 -> all rows pass, a no-op). `needs_pass` is now
+        # every present PK is 1 and all rows pass, a no-op). `needs_pass` is now
         # unconditionally True for a fact-edge; the filter / child-fold scans below
-        # only affect WHAT the kind-2 build ANDs in, not WHETHER the array exists.
+        # only affect what the kind-2 build ANDs in, not whether the array exists.
         var needs_pass = True
         for gi in range(len(d.gets)):
             if d.gets[gi].table == d.dim_edges[de].dim_table and len(
@@ -8209,13 +8211,13 @@ def _pin_finalize_generic_dims(
             dim_pass_de.append(idx)
 
     # ------------------------------------------------------------------
-    # Transitive child folds. For each CHILD-edge (a dim attached to another dim,
+    # Transitive child folds. For each child-edge (a dim attached to another dim,
     # e.g. customer joins orders on o_custkey), build a dense 0/1 pass array
-    # indexed by the CHILD dim PK from the child's own filters (Q3:
+    # indexed by the child dim PK from the child's own filters (Q3:
     # is_building[c_custkey] = (c_mktsegment=='BUILDING')). The parent fact-edge's
     # kind-2 build below ANDs in is_building[parent_row's near_col value]. This is
     # the general "dim attached to a dim" mechanism: a child folds into its parent
-    # exactly like a fact-edge folds into the fact row pass, just one level up.
+    # exactly like a fact-edge folds into the fact row pass, one level up.
     # `child_pass_of_de[ce]` holds the array (empty for non-child edges).
     var child_pass_of_de: List[List[Int64]] = []
     for _ in range(n_dims_edges):
@@ -8315,7 +8317,7 @@ def _pin_finalize_generic_dims(
                 var pk = Int(_dim_col_val(st, de, 0, i))
                 arr[pk] = _dim_col_val(st, de, spec.src_col, i)
         else:  # kind == 2: synthetic 0/1 dim pass flag from dim filters
-            # Collect this dim's OWN filters as (src_col, cmp, const-lo) -> ANDed.
+            # Collect this dim's own filters as (src_col, cmp, const-lo), to be ANDed.
             var fcol: List[Int] = []
             var fcmp: List[Int64] = []
             var fk: List[Int64] = []
@@ -8328,7 +8330,7 @@ def _pin_finalize_generic_dims(
                     fcol.append(_dim_src_col(st, de, p.col.column))
                     fcmp.append(p.cmp)
                     fk.append(d.consts[p.const_id].lo)
-            # Transitive child folds attaching to THIS dim: gather each child's
+            # Transitive child folds attaching to this dim: gather each child's
             # near-side column (e.g. orders.o_custkey) value per row and AND in
             # the child's pass flag (is_building[o_custkey]).
             var cf_near_col: List[Int] = []  # parent dim src col of the FK
@@ -8378,11 +8380,11 @@ def _pin_finalize_generic_dims(
         doff_host[ax] = dim_offsets[ax]
 
     # Generalized Q14 (UNGROUPED) predicate-independent path: flag on + canonical
-    # Q14 shape (single fact column, all-range, no dim filters -> dim_pass_de is
-    # empty). When active, skip the host fact pass bake AND emit no pass program;
+    # Q14 shape (single fact column, all-range, no dim filters, so dim_pass_de is
+    # empty). When active, skip the host fact pass bake and emit no pass program;
     # the kernel evaluates the fact filter in-kernel from the resident column slot
     # + per-run bounds. The promo dim array (constant-independent) is still gathered
-    # by the METRIC programs, untouched. Only safe when there are no dim pass-flag
+    # by the metric programs, untouched. Only safe when there are no dim pass-flag
     # arrays to AND (guaranteed by _gen_pred_eligible's no-dim-filter rule).
     var gen_pred_on = (
         _gen_pred_enabled(d)
@@ -8392,7 +8394,7 @@ def _pin_finalize_generic_dims(
     )
 
     # --- host fact pass column (AND of fact range predicates), then AND in the
-    # dim pass-flag arrays via OP_LOAD_DIM in the pass PROGRAM (not the host col).
+    # dim pass-flag arrays via OP_LOAD_DIM in the pass program (not the host col).
     var pass_slot = n_numeric
     var n_slots = n_numeric + 1
     var pass_col = alloc[Int64](n if n > 0 else 1)
@@ -8411,8 +8413,8 @@ def _pin_finalize_generic_dims(
             f_cmp.append(p.cmp)
             f_k.append(d.consts[p.const_id].lo)
     var n_filters = len(f_slot)
-    # RANK 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
-    # is set (default off -> serial, byte-identical).
+    # Rank 3: parallelize the pack/pass host loops when GPU_OP_PARALLEL_FINALIZE
+    # is set (default off: serial, byte-identical).
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
     var t_pp0 = perf_counter_ns() if pin_log else 0
@@ -8421,7 +8423,7 @@ def _pin_finalize_generic_dims(
         for i in range(n):
             pass_col[i] = Int64(0)
     else:
-        # SKIP-MATERIALIZE airtight guard (see _pin_finalize_generic): omitting a
+        # SKIP-MATERIALIZE strict guard (see _pin_finalize_generic): omitting a
         # fact filter column is only safe when the in-kernel predicate replaces the
         # host bake (gen_pred_on). If we are on the host-bake path yet a filter slot
         # is omitted, fail closed (CPU fallback) rather than read an unfilled slot.
@@ -8438,8 +8440,8 @@ def _pin_finalize_generic_dims(
                 f_base.append(c.addr())
                 f_es.append(c.elem_size)
             # GPU_OP_NULLABLE: this grouped/join finalize path is outside the nullable
-            # safe slice (the C++ gate declines grouped/joins), so no validity fold --
-            # pass an empty list (nv == 0 -> byte-identical to before).
+            # safe slice (the C++ gate declines grouped/joins), so no validity fold:
+            # pass an empty list (nv == 0, byte-identical to before).
             _bake_pass_par(pass_col, n, f_base, f_es, f_cmp, f_k, List[Int]())
         else:
             for i in range(n):
@@ -8454,8 +8456,8 @@ def _pin_finalize_generic_dims(
     # --- pack the fact columns + pass column ---
     var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
-        # SKIP-MATERIALIZE: an OMITTED slot is sourced from the pool (D2D); its
-        # st.cols[mj] is UNFILLED, so DO NOT pack it (the host region is unread).
+        # SKIP-MATERIALIZE: an omitted slot is sourced from the pool (D2D); its
+        # st.cols[mj] is unfilled, so do not pack it (the host region is unread).
         if slot < len(omit_slot) and omit_slot[slot]:
             continue
         var mj = numeric_matcols[slot]
@@ -8503,20 +8505,20 @@ def _pin_finalize_generic_dims(
 
     # =====================================================================
     # HASH_GROUP branch (Q3 on NVIDIA / AMD): one-pass GPU hash-aggregate keyed
-    # by the integer fact group key (l_orderkey). No sort, no ORDER BY, no 1-warp
-    # -per-tiny-segment launch. The kernel atomic-accumulates each order's int64
+    # by the integer fact group key (l_orderkey). No sort, no ORDER BY, no
+    # 1-warp-per-tiny-segment launch. The kernel atomic-accumulates each order's int64
     # revenue into an open-addressing hash slot; we read back the occupied slots,
     # widen to int128 on host, gate emit on revenue>0 (== stock GROUP BY), and
     # look up the dim-carried group keys (o_orderdate / o_shippriority) by the
     # orderkey from the host carried dim arrays (constant within an orderkey).
     #
-    # EXACTNESS BOUND: each group's revenue must fit int64. Per-order revenue is
+    # Exactness bound: each group's revenue must fit int64. Per-order revenue is
     # SUM(l_extendedprice*(100-l_discount)) over an order's few lineitems: per
     # lineitem < 1e7(price,scale2) * 100 < 1e9, and orders have O(1..10) lineitems
-    # at TPC-H scale => well under 9.2e18 (int64 max). If a single group could
-    # overflow int64 the matcher must NOT route here (it would need int128
+    # at TPC-H scale, so well under 9.2e18 (int64 max). If a single group could
+    # overflow int64 the matcher must not route here (it would need int128
     # atomics, which this path does not provide). For the supported Q3 shape this
-    # holds by construction; the int128 widening on read-back keeps the OUTPUT
+    # holds by construction; the int128 widening on read-back keeps the output
     # decimal-exact.
     # =====================================================================
     if d.strategy == STRAT_HASH_GROUP and n_keys > 0:
@@ -8530,13 +8532,13 @@ def _pin_finalize_generic_dims(
             return 10
         var gk_slot = col_slot[fact_gk]
 
-        # Capacity bound on DISTINCT groups. The fact group key (l_orderkey) joins
+        # Capacity bound on distinct groups. The fact group key (l_orderkey) joins
         # to the orders dim, whose row count is a tight upper bound on the number
         # of distinct orderkeys among the fact rows (every fact group key value is
         # one orders PK). Prefer that; fall back to the fact row count `n` (always
         # a safe superset) if no dim carries the key. cap = next pow2 >= 2*bound
         # keeps the open-addressing load factor <= 0.5 so probe chains stay short
-        # AND keeps the device table + D->H read-back proportional to the group
+        # and keeps the device table + D2H read-back proportional to the group
         # universe, not the (much larger) fact row count.
         var group_bound = n  # safe fallback
         for gk in range(n_keys):
@@ -8569,20 +8571,20 @@ def _pin_finalize_generic_dims(
                 hash_gk_dim_arr.append(List[Int64]())
 
         # Upload resident buffers once (no seg offsets needed for hash).
-        # HASH_GROUP appends NO ORDER BY => STORAGE row order, so the fact columns
-        # (incl. the integer fact group key l_orderkey, read in storage order) are
-        # column-pool eligible. pass_slot is per-query derived => copied whole.
+        # HASH_GROUP appends no ORDER BY, so rows are in STORAGE order and the fact
+        # columns (incl. the integer fact group key l_orderkey, read in storage order)
+        # are column-pool eligible. pass_slot is per-query derived, so it is copied whole.
         var seg_off_dummy_h = alloc[Int64](1)
         seg_off_dummy_h[0] = 0
         var pool_lease_keys_h: List[String] = []
         var resident: SegResident
         if _colptr_eligible(d):
             # Phase 3 (Q3 HASH_GROUP): pooled fact columns (incl. the integer fact
-            # group key l_orderkey) read directly via a per-column POINTER TABLE --
-            # no packed cols_d. The host-baked pass column (per-query derived slot)
+            # group key l_orderkey) read directly via a per-column pointer table,
+            # with no packed cols_d. The host-baked pass column (per-query derived slot)
             # + the FK dim arrays stay separate buffers (handled by the assembly's
-            # derived-buf loop / uploaded as usual). Q3 is NOT skip-mat-eligible, so
-            # the omit mask is all-False -> `assemble_fail` never trips here, but we
+            # derived-buf loop / uploaded as usual). Q3 is not skip-mat-eligible, so
+            # the omit mask is all-False and `assemble_fail` never trips here, but we
             # keep the same lease/omit handling + backstop as the packed path.
             var assemble_fail = False
             var derived_bufs: List[DeviceBuffer[DType.int64]] = []
@@ -8607,7 +8609,7 @@ def _pin_finalize_generic_dims(
                 dims_host, doff_host, n_dim_arrays,
             )
         elif _colpool_on():
-            # HASH_GROUP (Q3) is NOT skip-materialize-eligible (excluded): omit_slot
+            # HASH_GROUP (Q3) is not skip-materialize-eligible (excluded): omit_slot
             # is all-False here, so nothing is pool-sourced and `_assemble_fail`
             # stays False. Passed for the unified signature.
             var assemble_fail = False
@@ -8681,11 +8683,11 @@ def _pin_finalize_generic_dims(
     # group key (l_orderkey); build segments from it, one warp per order, and
     # emit one output row per order with revenue > 0 (matching stock's
     # `if (r <= 0) continue` rule: an order appears iff it has >=1 lineitem
-    # passing l_shipdate>cutoff AND order_pass). Dim-carried group keys
+    # passing l_shipdate>cutoff and order_pass). Dim-carried group keys
     # (o_orderdate / o_shippriority) are gathered per segment by seg_key.
     # =====================================================================
     if d.strategy == STRAT_SORT_SEGREDUCE and n_keys > 0:
-        # The fact group key is the FIRST group key on the fact table; it is the
+        # The fact group key is the first group key on the fact table; it is the
         # sort column and the segment key. It must be a numeric fact column.
         var fact_gk = String("")
         for gk in range(n_keys):
@@ -8725,7 +8727,7 @@ def _pin_finalize_generic_dims(
         # Per-segment group-key cells (constant for the cache entry): the fact
         # group key == seg_key; dim-carried keys (o_orderdate / o_shippriority)
         # gathered now by seg_key from the dim arrays (which are about to be
-        # uploaded — read them on host while still alive). All int64 cells.
+        # uploaded, so read them on host while still alive). All int64 cells.
         var gk_is_str: List[Bool] = []
         for _ in range(n_keys):
             gk_is_str.append(False)
@@ -8758,7 +8760,7 @@ def _pin_finalize_generic_dims(
         seg_off_h.free()
         cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
 
-        # COUNT/SUM only here (no AVG) -> neutral scale/m1.
+        # COUNT/SUM only here (no AVG), so neutral scale/m1.
         var agg_scale: List[Int64] = []
         var agg_m1: List[Int] = []
         for ai in range(len(d.aggregates)):
@@ -8797,10 +8799,10 @@ def _pin_finalize_generic_dims(
         return 0
 
     # --- upload resident buffers once (UNGROUPED, n_dims = n_dim_arrays) ---
-    # UNGROUPED (Q14) appends NO ORDER BY => STORAGE row order, so the fact
+    # UNGROUPED (Q14) appends no ORDER BY, so rows are in STORAGE order and the fact
     # columns are column-pool eligible. pass_slot is per-query derived (copied
     # whole). (The SORT_SEGREDUCE branch above returned already; it is the only
-    # ineligible strategy here and stays VERBATIM -- it never pools.)
+    # ineligible strategy here and stays unchanged. It never pools.)
     var seg_off_dummy = alloc[Int64](1)
     seg_off_dummy[0] = 0
     var pool_lease_keys: List[String] = []
@@ -8833,9 +8835,9 @@ def _pin_finalize_generic_dims(
         )
     elif _colpool_on():
         # SKIP-MATERIALIZE (Q14 in scope): omit_slot carries the pool-resident
-        # fact columns omitted from the narrowed SELECT. On a non-HIT for an
-        # omitted slot the helper sets `assemble_fail` -> bail to CPU (the column
-        # was never scanned/fed, so we cannot rebuild it -> never wrong).
+        # fact columns omitted from the narrowed SELECT. On a non-hit for an
+        # omitted slot the helper sets `assemble_fail` and we bail to CPU (the column
+        # was never scanned/fed, so we cannot rebuild it; the result is never wrong).
         var assemble_fail = False
         var cols_d = _colpool_assemble_cols_d(
             ctx, d.fact_table, st, cols, n_slots, n, numeric_matcols,
@@ -8850,7 +8852,7 @@ def _pin_finalize_generic_dims(
             seg_off_dummy.free()
             cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
             return 11
-        # SUCCESS: transfer the materialize-time omit leases to the per-signature
+        # Success: transfer the materialize-time omit leases to the per-signature
         # set (GpuPinned owns them); clear the exec-state copy (no double release).
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -8923,7 +8925,7 @@ def _pin_finalize_generic_dims(
     _pin2_track(sig, _fpud)
 
     ref dst = m[key]
-    # COLD assembles with THIS query's bounds too (same kernel code as WARM).
+    # Cold assembles with this query's bounds too (same kernel code as warm).
     var gen_b0 = _gen_pred_bounds(d)
     _assemble(
         dst, p2[sig], Q6PredSpec(False, 0, 0, 0, 0, 0, 0, 0, 0), gen_b0^
@@ -8950,11 +8952,11 @@ def mojo_gpu_pin_finalize(
         # Route to the finalize for this shape, capturing its rc. The f64
         # transcendental paths (UNGROUPED/DENSE/HASH via _pin_finalize_generic) may
         # set m[key].domain_err on an out-of-domain NaN result (audit Group G); we
-        # remap that to a distinct rc AFTER a successful (rc==0) assemble so the C++
+        # remap that to a distinct rc after a successful (rc==0) assemble so the C++
         # side raises the matching OutOfRange error instead of emitting a silent nan.
         var rc: Int
 
-        # The shuttle drives the GENERIC kernels (run_segreduce + eval_program)
+        # The shuttle drives the generic kernels (run_segreduce + eval_program)
         # for every class. No-join (Q6 UNGROUPED / Q1 DENSE_GROUP):
         if len(d.dim_edges) == 0 and (
             d.strategy == STRAT_UNGROUPED or d.strategy == STRAT_DENSE_GROUP
@@ -8965,7 +8967,7 @@ def mojo_gpu_pin_finalize(
         # guard accepted it (the high-card decline is bypassed for transcendentals).
         # It has no dim_edges, so the generic no-dim finalize handles it (it routes
         # to the float64 HASH accumulator). Non-transcendental no-dim HASH never
-        # routes here (it is declined by _should_decline) -> returns 3 below.
+        # routes here (it is declined by _should_decline) and returns 3 below.
         elif (
             len(d.dim_edges) == 0
             and d.strategy == STRAT_HASH_GROUP
@@ -8973,14 +8975,14 @@ def mojo_gpu_pin_finalize(
         ):
             rc = _pin_finalize_generic(handle)
         # Q5 (5 dims, DENSE_GROUP over a dim-carried VARCHAR n_name, with a
-        # correlated dim<->dim equality cust_nation==supp_nation on the same fact
+        # correlated dim-to-dim equality cust_nation==supp_nation on the same fact
         # row): self-contained host-precompute + OP_EQ pass program + DENSE_GROUP
         # segreduce.
         elif d.kind == KIND_Q5 and d.strategy == STRAT_DENSE_GROUP:
             rc = _pin_finalize_q5(handle)
         # FK-join (Q14 UNGROUPED, Q3 SORT_SEGREDUCE / HASH_GROUP): generic
         # descriptor-driven path with on-GPU dim gather (OP_LOAD_DIM) +
-        # transitive dim->dim folds. HASH_GROUP is the NVIDIA/AMD Q3 path (one-
+        # transitive dim-to-dim folds. HASH_GROUP is the NVIDIA/AMD Q3 path (one-
         # pass GPU hash-aggregate instead of sort+segreduce).
         elif len(d.dim_edges) > 0 and (
             d.strategy == STRAT_UNGROUPED
@@ -8989,13 +8991,13 @@ def mojo_gpu_pin_finalize(
         ):
             rc = _pin_finalize_generic_dims(handle)
         else:
-            # Unsupported descriptor shape -> let the C++ side fall back to CPU.
+            # Unsupported descriptor shape: let the C++ side fall back to CPU.
             rc = 3
 
         # Audit Group G: a domain violation (sqrt of a negative / log of a non-
         # positive) on the transcendental f64 path poisoned the aggregate to NaN.
-        # Surface a DISTINCT rc so the C++ side raises the matching error (10=sqrt,
-        # 11=logarithm, 12=unspecified domain) -- matching stock DuckDB, which errors
+        # Surface a distinct rc so the C++ side raises the matching error (10=sqrt,
+        # 11=logarithm, 12=unspecified domain), matching stock DuckDB, which errors
         # rather than returning nan. Only after a successful assemble (rc==0); the
         # int128 / stats paths never set domain_err.
         if rc == 0:
@@ -9115,7 +9117,7 @@ def mojo_gpu_result_valid(
             return 1
         var idx = row * st.res_cols + col
         if idx >= len(st.res_valid):
-            return 1  # no validity mask emitted -> all valid (non-stat paths)
+            return 1  # no validity mask emitted: all valid (non-stat paths)
         return 1 if st.res_valid[idx] else 0
     except:
         return 1
@@ -9154,7 +9156,7 @@ def mojo_gpu_result_str(
 # ===-------------------------------------------------------------------===#
 # Phase C: GPU-direct native-storage segment decode (@export wrapper).
 #
-# Decodes ONE column segment (raw on-disk/pinned bytes) on the GPU into a host
+# Decodes one column segment (raw on-disk/pinned bytes) on the GPU into a host
 # out-buffer slice. The C++ side (gpu_native_decode_check) pins the segment via
 # BufferManager, hands us {raw bytes, seg_bytes, n_rows, codec, type} and a host
 # pointer to write the decoded values at `segment_start`. Bit-exact decode is
@@ -9162,7 +9164,7 @@ def mojo_gpu_result_str(
 #
 #   codec: 0 = UNCOMPRESSED fixed-width, 1 = BITPACKING (CONSTANT/FOR groups)
 #   type_code: 0 = int32, 1 = int64
-#   out_ptr: HOST buffer; we write n_rows decoded values of the given type.
+#   out_ptr: host buffer; we write n_rows decoded values of the given type.
 #
 # rc: 0 ok; 1 bad args; 2 unsupported type/codec; 3 internal error.
 # ===-------------------------------------------------------------------===#
