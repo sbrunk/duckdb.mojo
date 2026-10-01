@@ -1835,7 +1835,7 @@ def segreduce_run(
             out_d,
             grid_dim=n_seg, block_dim=WARP)
         var out_h = alloc[Int64](n_seg * M)
-        var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n_seg * M, owning=False)
+        var out_sub = out_d.create_sub_buffer[DType.int64](0, n_seg * M)
         ctx.enqueue_copy(out_h, out_sub)
         ctx.synchronize()
         for s in range(n_seg):
@@ -1935,7 +1935,7 @@ def segreduce_run(
                 part_d,
                 grid_dim=SEG_NBLOCKS, block_dim=WARP)
         var part_h = alloc[Int64](npart)
-        var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
+        var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
         ctx.enqueue_copy(part_h, part_sub)
         ctx.synchronize()
         for g in range(G):
@@ -2037,7 +2037,7 @@ def segreduce_run(
             part_d,
             grid_dim=SEG_NBLOCKS, block_dim=WARP)
     var part_h = alloc[Int64](npart)
-    var part_sub = DeviceBuffer(ctx, part_d.unsafe_ptr(), npart, owning=False)
+    var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
     ctx.enqueue_copy(part_h, part_sub)
     ctx.synchronize()
     for m in range(M):
@@ -2232,14 +2232,12 @@ def segreduce_run_f64(
             fpred_d, Int64(n_fpred),
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
     var fpart_h = alloc[Float64](nout)
-    var fpart_sub = DeviceBuffer(ctx, fpart_d.unsafe_ptr(), nout, owning=False)
+    var fpart_sub = fpart_d.create_sub_buffer[DType.float64](0, nout)
     ctx.enqueue_copy(fpart_h, fpart_sub)
     # DENSE: also read back the per-group passing-row counts (appended to result).
     var gcnt_h = alloc[Float64](gcnt_n)
     if mode == STRAT_DENSE_GROUP:
-        var gcnt_sub = DeviceBuffer(
-            ctx, gcnt_d.unsafe_ptr(), gcnt_n, owning=False
-        )
+        var gcnt_sub = gcnt_d.create_sub_buffer[DType.float64](0, gcnt_n)
         ctx.enqueue_copy(gcnt_h, gcnt_sub)
     ctx.synchronize()
     for x in range(nout):
@@ -2485,7 +2483,7 @@ def segreduce_run_hash_f64(
     var key_h = alloc[Int64](cap)
     var acc_h = alloc[Float64](cap * M)
     ctx.enqueue_copy(key_h, slot_key_d)
-    var acc_sub = DeviceBuffer(ctx, slot_facc_d.unsafe_ptr(), cap * M, owning=False)
+    var acc_sub = slot_facc_d.create_sub_buffer[DType.float64](0, cap * M)
     ctx.enqueue_copy(acc_h, acc_sub)
     ctx.synchronize()
 

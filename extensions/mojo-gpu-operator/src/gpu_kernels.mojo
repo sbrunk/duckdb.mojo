@@ -367,9 +367,10 @@ def mojo_gpu_cosine_run(
         # through its own pinned bounce buffer in one shot. (map_to_host is the
         # wrong tool here: it is bidirectional, DMAing device to host on enter, so
         # for a pure upload it is ~3.4x slower on PCIe; measured on RTX 4090.)
-        var in_sub = DeviceBuffer(
-            st.ctx, st.in_buf.unsafe_ptr(), n_rows * st.K, owning=False
-        )
+        # Views of device buffers must come from create_sub_buffer. A view built
+        # from a raw device pointer (DeviceBuffer(ctx, ptr, n, owning=False))
+        # works on CUDA, but Metal rejects copies from it ("Invalid source buffer").
+        var in_sub = st.in_buf.create_sub_buffer[DType.float32](0, n_rows * st.K)
         st.ctx.enqueue_copy(in_sub, emb)
         st.ctx.enqueue_function[cosine_kernel_warp](
             st.in_buf,
@@ -380,9 +381,7 @@ def mojo_gpu_cosine_run(
             st.qnorm,
             grid_dim=n_rows,
             block_dim=WARP)
-        var out_sub = DeviceBuffer(
-            st.ctx, st.out_buf.unsafe_ptr(), n_rows, owning=False
-        )
+        var out_sub = st.out_buf.create_sub_buffer[DType.float32](0, n_rows)
         st.ctx.enqueue_copy(out_ptr, out_sub)
         st.ctx.synchronize()
         return 0
@@ -772,12 +771,8 @@ def mojo_gpu_pin_query_topk_f16(
 
         var nblocks = _topk_nblocks(st.n_rows, k)
         var ncand = nblocks * k
-        var cand_dist_dev = DeviceBuffer(
-            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
-        )
-        var cand_id_dev = DeviceBuffer(
-            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
-        )
+        var cand_dist_dev = st.cand_dist_dev.create_sub_buffer[DType.float32](0, ncand)
+        var cand_id_dev = st.cand_id_dev.create_sub_buffer[DType.int64](0, ncand)
 
         st.ctx.enqueue_function[cosine_kernel_warp_f16](
             st.emb_dev,
@@ -1022,12 +1017,8 @@ def mojo_gpu_pin_query_topk(
         var ncand = nblocks * k
         # Sub-views over the resident candidate scratch (sized for TOPK_MAX at pin
         # time, so ncand <= cand_cap always); no per-call device allocation.
-        var cand_dist_dev = DeviceBuffer(
-            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
-        )
-        var cand_id_dev = DeviceBuffer(
-            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
-        )
+        var cand_dist_dev = st.cand_dist_dev.create_sub_buffer[DType.float32](0, ncand)
+        var cand_id_dev = st.cand_id_dev.create_sub_buffer[DType.int64](0, ncand)
 
         # Enqueue the whole pipeline on the stream, then a single synchronize
         # before the host merge: q H2D, distance kernel, partial top-k kernel,
@@ -1584,18 +1575,10 @@ def _run_topk_batch[
         if q0 + qcount > M:
             qcount = M - q0
         var ncand_tile = nblocks * qcount * k
-        var cd_view = DeviceBuffer(
-            ctx, cand_dist_dev.unsafe_ptr(), ncand_tile, owning=False
-        )
-        var cid_view = DeviceBuffer(
-            ctx, cand_id_dev.unsafe_ptr(), ncand_tile, owning=False
-        )
-        var md_view = DeviceBuffer(
-            ctx, merged_dist_dev.unsafe_ptr(), qcount * k, owning=False
-        )
-        var mid_view = DeviceBuffer(
-            ctx, merged_id_dev.unsafe_ptr(), qcount * k, owning=False
-        )
+        var cd_view = cand_dist_dev.create_sub_buffer[DType.float32](0, ncand_tile)
+        var cid_view = cand_id_dev.create_sub_buffer[DType.int64](0, ncand_tile)
+        var md_view = merged_dist_dev.create_sub_buffer[DType.float32](0, qcount * k)
+        var mid_view = merged_id_dev.create_sub_buffer[DType.int64](0, qcount * k)
 
         # Stage 1: fused distance + per-block per-query top-k (matrix read once).
         comptime if is_f16:
@@ -9198,7 +9181,7 @@ def _decode_segment_typed[
     ctx.synchronize()
 
     # Copy decoded values back into the caller's host out-buffer.
-    var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n_rows, owning=False)
+    var out_sub = out_d.create_sub_buffer[T](0, n_rows)
     ctx.enqueue_copy(out_ptr, out_sub)
     ctx.synchronize()
     return 0
