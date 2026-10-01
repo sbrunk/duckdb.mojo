@@ -5,9 +5,9 @@ scaled Int64 representation, matching DuckDB's native DECIMAL arithmetic path.
 
 TPC-H schema: all monetary columns are DECIMAL(15,2), stored internally as
 scaled Int64 (value × 10^2). DuckDB's own DECIMAL arithmetic works like this:
-  - add/sub → plain int64 add/sub (result: DECIMAL(16,2))
-  - multiply → plain int64 multiply (result: DECIMAL(18,4), scale = 2+2)
-  - divide  → cast to DOUBLE (even in standard DuckDB)
+  - add/sub: plain int64 add/sub (result: DECIMAL(16,2))
+  - multiply: plain int64 multiply (result: DECIMAL(18,4), scale = 2+2)
+  - divide: cast to DOUBLE (even in standard DuckDB)
 
 We use DECIMAL(18,4) as a universal input/output type. DuckDB implicitly casts
 narrower DECIMAL inputs (e.g. DECIMAL(15,2)) to DECIMAL(18,4).
@@ -27,14 +27,14 @@ from std import benchmark
 # ===--------------------------------------------------------------------===#
 # SIMD arithmetic kernels
 # ===--------------------------------------------------------------------===#
-# Pure SIMD functions with less boilerplate.  The vectorized loop (SIMD-width
-# batches + scalar tail) is generated automatically by set_simd_function /
+# Plain SIMD functions with little boilerplate. The vectorized loop (SIMD-width
+# batches plus a scalar tail) is generated automatically by set_simd_function /
 # from_simd_function using the hardware-optimal SIMD width.
 #
 # DECIMAL(15,2) is stored as Int64 internally (width 15 ≤ 18).
-# For add/sub the raw integers share the same scale, so we just add/sub.
+# For add/sub the raw integers share the same scale, so we add/sub them directly.
 # For multiply the scales add (2+2=4), stored in the output type metadata.
-# No scale adjustment (division) is needed — exactly matching DuckDB internals.
+# No scale adjustment (division) is needed, which matches DuckDB internals.
 
 
 def simd_add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
@@ -57,11 +57,11 @@ def simd_multiply[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w
 
 
 # For division and mixed DOUBLE expressions (Q14: 100.00 * sum(...) / sum(...)),
-# we keep DOUBLE since DuckDB itself casts DECIMAL→DOUBLE for '/'.
+# we keep DOUBLE since DuckDB itself casts DECIMAL to DOUBLE for '/'.
 
 
 def simd_divide_f64[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
-    """DOUBLE division — DuckDB uses DOUBLE for DECIMAL division too."""
+    """DOUBLE division. DuckDB uses DOUBLE for DECIMAL division too."""
     return a / b
 
 
@@ -79,7 +79,7 @@ def register_functions(conn: Connection) raises:
 
     var d18_4 = decimal_type(18, 4)
 
-    # --- mojo_add: (18,4) + (18,4) → (18,4) ---
+    # --- mojo_add: (18,4) + (18,4) -> (18,4) ---
     var add_fn = ScalarFunction()
     add_fn.set_name("mojo_add")
     add_fn.add_parameter(d18_4)
@@ -88,7 +88,7 @@ def register_functions(conn: Connection) raises:
     add_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_add]()
     add_fn.register(conn)
 
-    # --- mojo_subtract: (18,4) - (18,4) → (18,4) ---
+    # --- mojo_subtract: (18,4) - (18,4) -> (18,4) ---
     var sub_fn = ScalarFunction()
     sub_fn.set_name("mojo_subtract")
     sub_fn.add_parameter(d18_4)
@@ -97,8 +97,8 @@ def register_functions(conn: Connection) raises:
     sub_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_subtract]()
     sub_fn.register(conn)
 
-    # --- mojo_multiply: (18,4) × (18,4) → (18,4) ---
-    # Scale correction: (scale4 × scale4) / 10000 → scale4
+    # --- mojo_multiply: (18,4) * (18,4) -> (18,4) ---
+    # Scale correction: (scale 4 * scale 4) / 10000 gives scale 4
     var mul_fn = ScalarFunction()
     mul_fn.set_name("mojo_multiply")
     mul_fn.add_parameter(d18_4)
@@ -107,8 +107,8 @@ def register_functions(conn: Connection) raises:
     mul_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_multiply]()
     mul_fn.register(conn)
 
-    # --- mojo_divide: (DOUBLE, DOUBLE) → DOUBLE ---
-    # Division always goes through DOUBLE — types fully auto-derived.
+    # --- mojo_divide: (DOUBLE, DOUBLE) -> DOUBLE ---
+    # Division always goes through DOUBLE, so all types are derived automatically.
     ScalarFunction.from_simd_function[
         "mojo_divide", DType.float64, DType.float64, DType.float64, simd_divide_f64
     ](conn)
@@ -349,7 +349,7 @@ def main() raises:
     print("=" * 70)
 
     run_benchmark(
-        "TPC-H Q1 — Pricing Summary Report",
+        "TPC-H Q1: Pricing Summary Report",
         conn,
         Q1_STANDARD,
         Q1_MOJO,
@@ -358,7 +358,7 @@ def main() raises:
     )
 
     run_benchmark(
-        "TPC-H Q6 — Forecasting Revenue Change",
+        "TPC-H Q6: Forecasting Revenue Change",
         conn,
         Q6_STANDARD,
         Q6_MOJO,
@@ -367,7 +367,7 @@ def main() raises:
     )
 
     run_benchmark(
-        "TPC-H Q14 — Promotion Effect",
+        "TPC-H Q14: Promotion Effect",
         conn,
         Q14_STANDARD,
         Q14_MOJO,

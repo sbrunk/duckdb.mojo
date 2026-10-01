@@ -1,25 +1,26 @@
 # DuckDB Operator Replacement
 
-> **Status: reference implementation (superseded for production use).**
-> This was the original proof-of-concept for transparently intercepting DuckDB
-> queries from a Mojo/C++ extension. The two mechanisms it pioneered have since
-> been realized more directly elsewhere in this repo, so it is kept as a
-> documented reference rather than a recommended path:
+> Status: reference implementation, no longer the recommended path.
 >
-> - **Goal — run Mojo kernels in place of built-in functions:** use
->   [`extensions/mojo-kernel-overrides`](../mojo-kernel-overrides), which mutates
+> This was the original proof of concept for intercepting DuckDB queries from a
+> Mojo/C++ extension without changing the SQL. Its two ideas are now implemented
+> more directly elsewhere in this repo, so this package is kept as a documented
+> reference:
+>
+> - To run Mojo kernels in place of built-in functions, use
+>   [`extensions/mojo-kernel-overrides`](../mojo-kernel-overrides). It changes
 >   the built-in catalog entries directly (no optimizer pass, no name
->   indirection) and ships real Mojo SIMD kernels with stock fallback.
-> - **Technique — intercept and rewrite the plan during optimization:** the same
->   `OptimizerExtension::Register` entry point is used (far more powerfully) by
->   [`extensions/mojo-gpu-operator`](../mojo-gpu-operator), which matches whole plan
->   *shapes* and offloads subtrees to GPU kernels.
+>   indirection) and ships real Mojo SIMD kernels that fall back to stock DuckDB.
+> - To intercept and rewrite the plan during optimization, see
+>   [`extensions/mojo-gpu-operator`](../mojo-gpu-operator). It uses the same
+>   `OptimizerExtension::Register` entry point, but matches whole plan shapes
+>   and offloads subtrees to GPU kernels.
 >
-> What remains uniquely useful here is (1) a *generic* name→name function/operator
-> swap registry, and (2) the **cast-bridging + re-bind** technique for swapping in
-> a differently-typed replacement function — see
+> Two things here are not found elsewhere: (1) a generic registry that swaps one
+> function or operator name for another, and (2) the cast-bridging and re-bind
+> technique for swapping in a replacement function with different types. See
 > [The reusable technique](#the-reusable-technique-cast-bridging--re-bind) below.
-> The package still builds and is wired into the `full` pixi environment.
+> The package still builds and is part of the `full` pixi environment.
 
 Replace any scalar function or operator in DuckDB queries with custom implementations using the OptimizerExtension API.
 
@@ -51,7 +52,7 @@ pixi run test         # Compile extension and run tests
 pixi run -e source-build test  # Build DuckDB from source and test
 ```
 
-The default environment builds against conda-forge's `libduckdb-devel` v1.5.5 package (recommended). The `source-build` environment clones and builds DuckDB from source for testing custom builds or development versions.
+The default environment builds against conda-forge's `libduckdb-devel` v1.5.6 package (recommended). The `source-build` environment clones and builds DuckDB from source for testing custom builds or development versions.
 
 ## API Usage
 
@@ -135,41 +136,40 @@ register_operator_replacement(con);
 
 ## The reusable technique: cast-bridging + re-bind
 
-The non-obvious value of this package is *how* it swaps one bound function for
-another inside an already-bound logical plan without corrupting it. When the
+The most useful part of this package is how it swaps one bound function for
+another inside an already-bound logical plan without breaking it. When the
 `OptimizerExtension` callback finds a `BoundFunctionExpression` whose name is in
 the registry (see
 [`duckdb_operator_replacement.cpp`](duckdb_operator_replacement.cpp), the
-`ReplaceOperators` visitor), a naive `expr.function = replacement` is **not**
-enough — the surrounding plan was bound expecting the original function's types
+`ReplaceOperators` visitor), assigning `expr.function = replacement` is not
+enough, because the surrounding plan was bound for the original function's types
 and bind data. Three things have to be bridged:
 
 1. **Argument-type bridging.** The replacement overload is looked up with
-   `functions.GetFunctionByArguments(context, arg_types)`; if no compatible
-   overload exists the swap is skipped (the original is kept). Where a child's
-   type doesn't match the replacement's declared parameter type (e.g. a
-   `DECIMAL(15,2)` argument vs a `DECIMAL(18,4)` parameter), a
+   `functions.GetFunctionByArguments(context, arg_types)`. If no compatible
+   overload exists, the swap is skipped and the original is kept. Where a child's
+   type doesn't match the replacement's declared parameter type (for example a
+   `DECIMAL(15,2)` argument and a `DECIMAL(18,4)` parameter), a
    `BoundCastExpression::AddCastToType` wrapper is inserted on that child.
-   `AddCastToType` is a no-op when source == target, so it's safe to call
-   unconditionally.
+   `AddCastToType` does nothing when source and target are the same, so it is
+   safe to call every time.
 
 2. **Re-bind for the new `bind_info`.** The original `bind_info` was produced by
    the built-in's bind callback and has a different layout than the replacement's
    (here, the C-API wrapper expects a `CScalarFunctionInfo`). After assigning
    `expr.function = replacement`, the code re-runs `expr.function.bind(...)` to
-   rebuild `bind_info`. **Skipping this is a silent memory-layout mismatch that
-   crashes at execution**, not at plan time — the single most important detail.
+   rebuild `bind_info`. This is the most important step: without it the memory
+   layout silently mismatches, and the query crashes at execution, not at plan time.
 
 3. **Return-type bridging.** If the replacement's return type differs from the
-   original, the *whole* expression is wrapped in a final
-   `AddCastToType(..., original_return_type)` so parent expressions (which were
-   bound expecting the original type) stay valid. The execution engine also needs
+   original, the whole expression is wrapped in a final
+   `AddCastToType(..., original_return_type)`. This keeps parent expressions,
+   which were bound for the original type, valid. The execution engine also needs
    `expr.return_type` updated to the replacement's type so it allocates the
    correct output vector.
 
-This cast-bridge + re-bind sequence is the reference to consult if any other
-extension ever needs to remap a bound function to a differently-typed
-replacement.
+Use this cast-bridging and re-bind sequence as the reference if another
+extension needs to replace a bound function with one that has different types.
 
 ## Project Structure
 
@@ -221,8 +221,8 @@ pixi run -e source-build clean  # Remove all build artifacts including duckdb/
 
 Two environments are available:
 
-- **default**: Uses `libduckdb-devel==1.5.5` from conda-forge (fast, recommended)
-- **source-build**: Builds DuckDB v1.5.5 from source (for testing custom builds/dev versions)
+- **default**: Uses `libduckdb-devel==1.5.6` from conda-forge (fast, recommended)
+- **source-build**: Builds DuckDB v1.5.6 from source (for testing custom builds/dev versions)
 
 Use `-e source-build` flag to run commands in the source-build environment.
 

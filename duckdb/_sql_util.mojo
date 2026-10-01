@@ -6,7 +6,7 @@ can use it.
 
 
 def _quote_literal(value: String) -> String:
-    """Quote ``value`` as a DuckDB single-quoted **string literal** (``'...'``).
+    """Quote ``value`` as a DuckDB single-quoted string literal (``'...'``).
 
     Embedded single quotes are escaped by doubling them, per SQL string-literal
     rules. Used for interpolating values (file paths, filter constants) into
@@ -22,7 +22,7 @@ def _quote_literal(value: String) -> String:
 
 
 def _quote_ident(name: String) -> String:
-    """Quote ``name`` as a DuckDB double-quoted **identifier** (``"..."``).
+    """Quote ``name`` as a DuckDB double-quoted identifier (``"..."``).
 
     Embedded double quotes are escaped by doubling them. Used for table,
     view, and column names so that names containing spaces, reserved words,

@@ -1,6 +1,6 @@
-"""Q.Emb^T GEMM — block/warp-tiled tensor-core vs scalar-warp-dot.
+"""Q.Emb^T GEMM: block/warp-tiled tensor-core vs scalar-warp-dot.
 
-Computes S[M,N] = Q[M,K] . Emb[N,K]^T two ways and compares correctness + speed:
+Computes S[M,N] = Q[M,K] . Emb[N,K]^T two ways and compares correctness and speed:
   - tc_gemm_kernel: block/warp-tiled tensor-core MMA (fp16->fp32, m16n8k8,
     transpose_b). Structure adapted from MAX's matmul_kernel_tc:
       * BM x BN block tile staged once per BK chunk into shared via async copy
@@ -9,25 +9,27 @@ Computes S[M,N] = Q[M,K] . Emb[N,K]^T two ways and compares correctness + speed:
       * WM x WN warp tile; per-warp fp32 register accumulator
         (LayoutTensor row_major(WM/MMA_M, (WN*4)/MMA_N) in LOCAL space).
       * comptime triple-loop over (mma_k, mma_m, mma_n) issuing
-        c_reg.copy_from(mma.mma_op(load_a(...), load_b(...), c_reg)) — the
-        copy_from form is what actually ACCUMULATES across the K loop
-        (reassigning c_reg = mma_op(...) silently yields zeros).
+        c_reg.copy_from(mma.mma_op(load_a(...), load_b(...), c_reg)). The
+        copy_from form is what accumulates across the K loop (reassigning
+        c_reg = mma_op(...) silently yields zeros).
       * transpose_b=True: Emb is stored N x K (row = embedding), so it is staged
         as a BN x BK shared tile and load_b reads MMA_N x MMA_K fragments
-        directly — no explicit transpose needed.
+        directly, with no explicit transpose.
   - scalar_gemm_kernel: warp-cooperative scalar dot (one warp per output element,
-    lane-strided over K + warp.sum) — mirrors the current batched-kNN inner loop.
+    lane-strided over K + warp.sum). This mirrors the current batched-kNN inner
+    loop.
 
 Two regimes are measured:
-  * SMALL N (N=4096) kept L2-resident: isolates COMPUTE throughput. The output is
-    tiny (M=128) so the GPU is occupancy-bound, not compute-bound — this is the
-    "peak compute" probe and tops out ~54 TFLOP/s.
-  * LARGE N (N=1,048,576): Emb streams from HBM, matching the real kNN case. With
+  * Small N (N=4096), kept resident in L2: isolates compute throughput. The
+    output is tiny (M=128), so the GPU is limited by occupancy, not compute. This
+    is the "peak compute" probe and tops out at ~54 TFLOP/s.
+  * Large N (N=1,048,576): Emb streams from HBM, matching the real kNN case. With
     M=128 the arithmetic intensity is fixed at M=128 FLOP/byte of Emb read, so the
-    roofline cap is ~128 * 1008 GB/s ~= 129 TFLOP/s. We reach ~89 TFLOP/s here =
-    ~69% of HBM bandwidth: the kernel is HBM-bandwidth-bound on the Emb read, not
-    tensor-core-bound. (Confirmed by an M-scaling probe: doubling M to 256 keeps
-    TFLOP/s flat while time doubles -> throughput is set by streaming Emb.)
+    roofline cap is ~128 * 1008 GB/s ~= 129 TFLOP/s. We reach ~89 TFLOP/s here,
+    ~69% of HBM bandwidth: the kernel is limited by HBM bandwidth on the Emb
+    read, not by the tensor cores. (Confirmed by an M-scaling probe: doubling M
+    to 256 keeps TFLOP/s flat while time doubles, so streaming Emb sets the
+    throughput.)
 
 FLOPs = 2*M*N*K. Tile sizes chosen by sweep on an RTX 4090 (sm_89)."""
 
@@ -56,14 +58,14 @@ comptime NBIG = 1048576     # large-N (HBM-streaming, the real kNN case)
 comptime KD = 768           # K (embedding dim); avoid clashing with kNN's k
 comptime MMA_M = 16
 comptime MMA_N = 8
-comptime MMA_K = 8          # m16n8k8 — m16n8k16 fails instruction selection here
+comptime MMA_K = 8          # m16n8k8; m16n8k16 fails instruction selection here
 comptime ITERS = 50
 
 # Two tiles win in the two regimes (they pull in opposite directions):
-#   * SMALL N: the output is tiny, so SMALL blocks win (more blocks -> more SMs
+#   * Small N: the output is tiny, so small blocks win (more blocks keep more SMs
 #     busy). Best compute probe: BM=32/BN=64/BK=32, WM=16/WN=64, 2 warps.
-#   * LARGE N: BK=64 (deep K-staging: fewer barriers, more MMAs per shared load)
-#     and BM=128 (covers all of M=128 in one block-row -> maximal Q reuse across
+#   * Large N: BK=64 (deep K-staging: fewer barriers, more MMAs per shared load)
+#     and BM=128 (covers all of M=128 in one block-row, for maximal Q reuse along
 #     the long N axis) win. Best: BM=128/BN=128/BK=64, WM=64/WN=64, 4 warps.
 # Small-N tile ("peak compute"):
 comptime SBM = 32
@@ -158,7 +160,7 @@ def tc_gemm_kernel[
                     var a_reg = mma.load_a(A_mma_tile)
                     var b_reg = mma.load_b(B_mma_tile)
                     # copy_from accumulates into the persistent c_reg; a plain
-                    # `c_reg_m_n = mma.mma_op(...)` would NOT accumulate.
+                    # `c_reg_m_n = mma.mma_op(...)` would not accumulate.
                     var d_reg = mma.mma_op(a_reg, b_reg, c_reg_m_n)
                     c_reg_m_n.copy_from(d_reg)
 
@@ -239,7 +241,7 @@ def main() raises:
     var sd = s_tc.device_tensor()
 
     # ---- tensor-core GEMM (small N, L2-resident = "peak compute" probe) ----
-    #      uses the small-N-optimal tile (small blocks -> more SMs busy).
+    #      uses the best tile for small N (small blocks keep more SMs busy).
     var tc_ms = time_tc[M, N, SBM, SBN, SBK, SWM, SWN, qa.layout, eb.layout, s_tc.layout](
         ctx, qd, ed, sd
     )

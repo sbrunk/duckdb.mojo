@@ -1,9 +1,9 @@
 """Phase-B bit-exact test for the portable Mojo GPU native-storage decoders.
 
-Builds synthetic column segments in DuckDB's EXACT BITPACKING byte layout from a
-known host int32 / int64 array, uploads the raw bytes as uint8, runs the GPU
-decode kernel from `native_decode.mojo`, and ASSERTS the decoded output equals
-the original element-for-element.
+Builds synthetic column segments in DuckDB's BITPACKING byte layout from a known
+host int32 / int64 array, uploads the raw bytes as uint8, runs the GPU decode
+kernel from `native_decode.mojo`, and asserts that the decoded output equals the
+original element for element.
 
 Segment layout built here (matches duckdb/common/bitpacking.hpp +
 storage/compression/bitpacking.hpp + Sirius gpu_decode_bitpacking.cu):
@@ -11,10 +11,10 @@ storage/compression/bitpacking.hpp + Sirius gpu_decode_bitpacking.cu):
     [0..8)              uint64 metadata_end (offset of END of trailer in segment)
     ...group data...        FOR:      [T frame][T width][packed LSB-first]
                             CONSTANT: [T value]
-    ...trailer (REVERSED): entry K (group K) at metadata_end-(K+1)*4
+    ...trailer (reversed): entry K (group K) at metadata_end-(K+1)*4
                             low 24 bits = data_off, high 8 bits = BitpackingMode
 
-The host bit-packer is the exact inverse of `unpack_value` (LSB-first width-bit
+The host bit-packer is the inverse of `unpack_value` (LSB-first width-bit
 fields in a uint32 stream), so a correct decode round-trips bit-for-bit.
 
 Covers:
@@ -70,8 +70,8 @@ def min_width(maxv: UInt64) -> Int:
 
 
 # Pack `vals[0..count)` (each already a width-bit unsigned offset) LSB-first into
-# the uint32 stream `packed_bytes` starting at byte 0. This is the exact inverse
-# of `unpack_value`. `packed_bytes` must be zero-initialized and large enough
+# the uint32 stream `packed_bytes` starting at byte 0. This is the inverse of
+# `unpack_value`. `packed_bytes` must be zero-initialized and large enough
 # (ceil(count*width/32)*4 bytes + a guard word).
 def pack_lsb_first(
     packed: UnsafePointer[UInt32, MutAnyOrigin], vals: UnsafePointer[UInt64, MutAnyOrigin], count: Int, width: Int
@@ -100,7 +100,7 @@ def pack_lsb_first(
 # for type T from host values `vals[0..n)`. Returns (bytes_ptr, seg_bytes).
 # Each group uses FOR (frame=min over the group) unless all values in the group
 # are equal, in which case CONSTANT is emitted (exercising both modes from one
-# builder, exactly as DuckDB chooses per group).
+# builder, the same way DuckDB chooses per group).
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct BuiltSegment(Copyable, Movable):
@@ -192,7 +192,7 @@ def build_bitpacking_segment[
             offs.free()
             cursor += 2 * TBYTES + packed_words * 4
 
-    # Trailer: one uint32 per group, REVERSED. metadata_end = end of trailer.
+    # Trailer: one uint32 per group, in reverse order. metadata_end = end of trailer.
     var trailer_start = cursor
     var metadata_end = trailer_start + n_groups * 4
     for g in range(n_groups):
@@ -226,7 +226,7 @@ def _bits_t[T: DType](v: Scalar[T]) -> UInt64:
 # Build a single CONSTANT_DELTA BITPACKING segment in DuckDB byte layout.
 # Every metadata group is CONSTANT_DELTA: [T frame][T delta], decoded as
 # out[i] = frame + i*delta (group_offset resets to 0 per metadata group).
-# `vals` MUST already be the arithmetic series the caller chose so the decode
+# `vals` must already be the arithmetic series the caller chose so the decode
 # round-trips: vals[g0 + i] == frame_g + i*delta_g.  `frames`/`deltas` give the
 # per-group (frame, delta) used to generate them.
 # ---------------------------------------------------------------------------
@@ -272,7 +272,7 @@ def build_constant_delta_segment[
 # Build a single DELTA_FOR BITPACKING segment in DuckDB byte layout from target
 # output values `vals`. Each metadata group is DELTA_FOR:
 #   [T frame][T width][T delta_offset][packed deltas LSB-first]
-# This is the EXACT inverse of DuckDB's encoder (storage/compression/bitpacking.cpp
+# This is the inverse of DuckDB's encoder (storage/compression/bitpacking.cpp
 # BitpackingState::Flush + WriteDeltaFor) so the GPU decode round-trips:
 #   frame        = minimum_delta = min_{i in [1,rows)}(vals[g0+i] - vals[g0+i-1])
 #   delta_offset = vals[g0] - frame
@@ -550,7 +550,7 @@ def main() raises:
         ctx, "FOR int64 (2 groups, 1-row tail)", v64, n2, False
     ) and all_ok
 
-    # ---- FOR int32 with NEGATIVE frame (signed frame, two's-complement) ----
+    # ---- FOR int32 with a negative frame (signed frame, two's-complement) ----
     var n3 = 1000
     var v3 = alloc[Int32](n3)
     var st3 = UInt64(0x55)
@@ -660,7 +660,7 @@ def main() raises:
         ctx, "DELTA_FOR int32 (2 groups, short tail, increasing)", vf1, nf1
     ) and all_ok
 
-    # ---- DELTA_FOR int32: NON-monotonic (negative deltas mixed in) ----
+    # ---- DELTA_FOR int32: non-monotonic (negative deltas mixed in) ----
     var nf2 = 3000
     var vf2 = alloc[Int32](nf2)
     var stf2 = UInt64(0x13579)

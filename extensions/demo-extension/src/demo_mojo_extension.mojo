@@ -20,7 +20,6 @@ Load in DuckDB:
 
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 from duckdb.scalar_function import ScalarFunction
 
@@ -40,7 +39,7 @@ def add_numbers(a: Int64, b: Int64) -> Int64:
 # ===--------------------------------------------------------------------===#
 
 
-def init(conn: Connection[ApiLevel.EXT_STABLE]) raises:
+def init(conn: Connection) raises:
     """Register extension functions."""
     ScalarFunction.from_function[
         "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers

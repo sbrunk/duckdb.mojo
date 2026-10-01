@@ -1,14 +1,15 @@
 """Stage-2 execution-shuttle test for the Q6 query class (Mojo-only, needs GPU).
 
 Synthesizes a small lineitem-like dataset in host memory, hand-builds the Q6
-RawPlan tape (same style as raw_plan_roundtrip_test.mojo), then drives the FULL
+RawPlan tape (same style as raw_plan_roundtrip_test.mojo), then drives the full
 C-ABI shuttle by calling the @export functions in gpu_kernels.mojo directly:
 
     build_descriptor -> materialize_count/sql -> pin_begin -> feed_column x4
                      -> pin_finalize -> result_i128
 
 It computes a CPU int128 reference Q6 sum over the synthetic data with the same
-filter and asserts bit-exact equality with the GPU result. Prints ALL PASS.
+filter and asserts bit-exact equality with the GPU result. Prints "ALL PASS" on
+success.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -250,7 +251,7 @@ def main() raises:
         order_str += order[j]
     print("feed order:", order_str)
 
-    # pin_begin (COLD on first call).
+    # pin_begin (cold on first call).
     var pb = mojo_gpu_pin_begin(h)
     print("pin_begin:", pb, "(0=WARM, 1=COLD)")
 
@@ -304,7 +305,7 @@ def main() raises:
     print("CPU ref =", cpu, "  GPU =", gpu)
     assert_equal(gpu, cpu, "GPU Q6 sum != CPU reference (not bit-exact)")
 
-    # ---- WARM-path check: a second identical run should hit the pin cache. ----
+    # ---- Warm-path check: a second identical run should hit the pin cache. ----
     var handle2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     var h2 = UnsafePointer[NoneType, MutAnyOrigin](
         unsafe_from_address=handle2_int
@@ -313,7 +314,7 @@ def main() raises:
     var pb2 = mojo_gpu_pin_begin(h2)
     print("second pin_begin:", pb2, "(expect 0=WARM)")
     assert_equal(pb2, 0, "second identical query should be WARM")
-    # feed is skipped on WARM; finalize reuses the cached Q6State.
+    # feed is skipped on the warm run; finalize reuses the cached Q6State.
     var fr2 = mojo_gpu_pin_finalize(h2)
     assert_equal(fr2, 0, "warm pin_finalize rc")
     var rr2 = mojo_gpu_result_i128(h2, 0, 0, lo, hi)

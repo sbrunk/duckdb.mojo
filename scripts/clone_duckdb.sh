@@ -4,9 +4,9 @@
 #
 # The source lives in the `third_party/duckdb` git submodule, pinned to the
 # release tag the FFI bindings were generated against (see .gitmodules). This
-# script just initializes/updates that submodule (shallow), then sanity-checks
-# that the pinned version matches the installed `duckdb` so a forgotten bump
-# can't silently desync the bindings from the runtime library.
+# script initializes/updates that submodule (shallow), then checks that the
+# pinned version matches the installed `duckdb`, so a forgotten version bump
+# can't leave the bindings out of sync with the runtime library unnoticed.
 set -e
 
 DIR="third_party/duckdb"

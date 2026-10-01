@@ -52,7 +52,7 @@ def destroy_multi_col_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]) abi
 
 
 # ===--------------------------------------------------------------------===#
-# Simple table function: generate_series(n) -> produces integers 0..n-1
+# Simple table function: generate_series(n) produces the integers 0..n-1
 # ===--------------------------------------------------------------------===#
 
 
@@ -154,7 +154,7 @@ def multi_col_function(info: TableFunctionInfo, mut output: Chunk):
 
 
 # ===--------------------------------------------------------------------===#
-# No-parameter table function: static_table() -> produces fixed 2 rows
+# No-parameter table function: static_table() produces 2 fixed rows
 # ===--------------------------------------------------------------------===#
 
 

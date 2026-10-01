@@ -1,38 +1,38 @@
-"""FUSED Apple-Silicon (M1-M4) GPU kNN via the 8x8 `simdgroup_matrix` MMA.
+"""Fused Apple-Silicon (M1-M4) GPU kNN via the 8x8 `simdgroup_matrix` MMA.
 
 The Apple analogue of `tc_knn.mojo` (NVIDIA). It computes per-query top-k via a
 tiled MMA `Q.Emb^T` fused with a streaming per-query top-k, so the M x N
-similarity matrix is NEVER materialized -- only Emb is read, only M x k results
-are written. Cosine metric, unit-normalized inputs (the dominant real-embedding
-case); the same `(dist, rowid)` tie-break + stage-2 merge as the NVIDIA fused
+similarity matrix is never materialized: only Emb is read, and only M x k results
+are written. Cosine metric, unit-normalized inputs (the common case for real
+embeddings); the same `(dist, rowid)` tie-break + stage-2 merge as the NVIDIA fused
 kernel, so a result is bit-for-bit a scalar single-query top-k.
 
-The MMA core is the VERIFIED 8x8 `simdgroup_matrix` path from
+The MMA core is the verified 8x8 `simdgroup_matrix` path from
 `.repos/modular/.../apple/matmul_8x8.mojo` (bit-exact on this M3, K=64, fp16):
   * `llvm.air.simdgroup_matrix_8x8_multiply_accumulate`, FRAG8=2 elems/lane,
     32-thread simdgroup, `_frag8_layout` per-lane mapping.
   * A (queries) is M x K row-major; lane's 2 frag elems are consecutive K cols.
-  * B (embeddings) is N x K row-major -> we need Emb^T, so we gather the
+  * B (embeddings) is N x K row-major. We need Emb^T, so we gather the
     transposed fragment manually (slot s differs in the N index, row index is
     the K coordinate). This is exactly the `transpose_b=True` path in the 8x8
     reference, reused element-for-element.
 
 Everything Apple-specific is inside `comptime if has_apple_gpu_accelerator()`
-(host) / `comptime if is_apple_gpu()` (kernel target), so NOTHING here compiles
-for a NVIDIA / Metal-absent target -- mirroring the `tc_knn.mojo` gating. The
-`layout` package's `TensorCore` is NEVER touched (it has no Apple support); the
+(host) / `comptime if is_apple_gpu()` (kernel target), so nothing here compiles
+for an NVIDIA / Metal-absent target, mirroring the `tc_knn.mojo` gating. The
+`layout` package's `TensorCore` is never touched (it has no Apple support); the
 MMA is the raw `llvm_intrinsic`.
 
-Tile shape (one simdgroup per block, kept simple for correctness-first):
+Tile shape (one simdgroup per block, kept simple, correctness first):
   * MM=8 queries per launch-tile (the 8x8 MMA row dim), MN=8 embedding rows per
     MMA step. Each block grids over N in MN-chunks (grid-stride), MMAs the
     MM x MN S-tile (= Q-tile . Emb-chunk^T) into the simdgroup-matrix fp32
     accumulator across all K (K%8==0), then updates a per-query streaming top-k.
-  * Per-query top-k lives in SHARED memory (one (dist,id) buffer per query, kept
+  * Per-query top-k lives in shared memory (one (dist,id) buffer per query, kept
     ascending by (dist,rowid)); the 8 S-tile columns are scanned by lane 0 (the
     8x8 S-tile is tiny and the scan is the same threshold-insert as the NVIDIA
     register top-k). Stage 2 (`tc_apple_merge_kernel`) reduces each query's
-    NBLOCKS*k candidates to the final k -- identical to the NVIDIA merge.
+    NBLOCKS*k candidates to the final k, identical to the NVIDIA merge.
 """
 
 from std.sys import llvm_intrinsic
@@ -47,16 +47,16 @@ from std.math import sqrt
 
 
 # ===-------------------------------------------------------------------===#
-# 8x8 simdgroup-matrix primitives (VERIFIED on this M3, K=64, fp16, err=0).
+# 8x8 simdgroup-matrix primitives (verified on this M3, K=64, fp16, err=0).
 # Lifted from `.repos/modular/.../apple/matmul_8x8.mojo` (`_frag8_layout`,
 # `_mma8x8`); see apple_8x8_probe.mojo for the bit-exact validation.
 # ===-------------------------------------------------------------------===#
 comptime AP_MMA = 8  # 8x8x8 simdgroup-matrix shape
 comptime FRAG8 = 2  # 8x8 = 64 elems / 32 lanes = 2 per lane
 
-# QUERY-TILE AMORTIZATION: a block loads each 8-row Emb chunk ONCE and MMAs it
-# against AP_QSUB query-blocks of 8 queries -> AP_MM = AP_QSUB*8 queries share
-# each Emb-chunk read (the flash-attention / NVIDIA-BM=128 amortization). The
+# Query-tile amortization: a block loads each 8-row Emb chunk once and MMAs it
+# against AP_QSUB query-blocks of 8 queries, so AP_MM = AP_QSUB*8 queries share
+# each Emb-chunk read (the same amortization as flash attention and NVIDIA BM=128). The
 # fp32 accumulator is AP_QSUB FRAG8 vectors (one 8x8 S sub-tile per query-block).
 comptime AP_QSUB = 16  # query-blocks of 8 per Emb pass
 comptime AP_MM = AP_QSUB * AP_MMA  # 128 queries per M-tile
@@ -73,7 +73,7 @@ comptime AP_K_CAP = 16
 
 
 # Whether the Apple fused path supports this (K, k). K must be a multiple of the
-# 8x8 MMA K dim (8); the proven library dispatch uses k%16==0, so we require
+# 8x8 MMA K dim (8); the tested library dispatch uses k%16==0, so we require
 # K%16==0 to stay on the validated path. k must fit the shared top-k cap.
 def tc_knn_apple_supported(K: Int, k: Int) -> Bool:
     if k <= 0 or k > AP_K_CAP:
@@ -87,7 +87,7 @@ def tc_knn_apple_supported(K: Int, k: Int) -> Bool:
 
 
 def _frag8_layout(lane: Int) -> Tuple[Int, Int]:
-    """Apple 8x8 simdgroup-matrix per-lane layout (ground-truthed via Metal
+    """Apple 8x8 simdgroup-matrix per-lane layout (checked against Metal
     `thread_elements()`). Lane owns (row, col_base) and (row, col_base+1)."""
     return (
         ((lane & 6) >> 1) + ((lane & 16) >> 2),
@@ -168,7 +168,7 @@ def tc_apple_fused_knn_kernel(
             for q_i in range(AP_MM):
                 scnt[q_i] = 0
         # `scnt` is owned by lane 0 throughout, so no fence needed for it; but the
-        # `s_smem` S-tile IS written by all lanes and read by lane 0 each
+        # `s_smem` S-tile is written by all lanes and read by lane 0 each
         # iteration, so it needs a threadgroup barrier on both sides of the read
         # (lockstep is not a substitute for a threadgroup-memory fence).
 
@@ -177,10 +177,10 @@ def tc_apple_fused_knn_kernel(
         var n0 = Int(block_idx.x) * AP_MN
         while n0 < n_rows:
             # --- MMA: for this 8-row Emb chunk, compute the 8x8 S sub-tile for
-            # EACH of the AP_QSUB query-blocks. The B (Emb^T) fragment is loaded
-            # ONCE per K-step and reused across all query-blocks; only the A
+            # each of the AP_QSUB query-blocks. The B (Emb^T) fragment is loaded
+            # once per K-step and reused across all query-blocks; only the A
             # (query) fragment differs per block. So the Emb chunk is read once
-            # and shared by AP_MM = AP_QSUB*8 queries -- the amortization. ---
+            # and shared by AP_MM = AP_QSUB*8 queries. ---
             var acc = InlineArray[SIMD[DType.float32, FRAG8], AP_QSUB](
                 fill=SIMD[DType.float32, FRAG8](0)
             )
@@ -214,7 +214,7 @@ def tc_apple_fused_knn_kernel(
 
             # --- Streaming per-query top-k over this S-chunk (lane 0). ---
             # S[m, nn] = dot(query m, emb row n0+nn). Cosine distance epilogue +
-            # (dist, rowid) tie-break -- identical to tc_knn's cosine epilogue.
+            # (dist, rowid) tie-break, identical to tc_knn's cosine epilogue.
             if lane == 0:
                 for m in range(AP_MM):
                     var qn = qnorm[m]
@@ -259,7 +259,7 @@ def tc_apple_fused_knn_kernel(
             n0 += nstride
 
         # Emit this block's k candidates per query (lane 0 owns the buffers).
-        # Layout [(block*MM + m)*k + j] -- matches tc_merge / tc_apple_merge.
+        # Layout [(block*MM + m)*k + j], matching tc_merge / tc_apple_merge.
         if lane == 0:
             for m in range(AP_MM):
                 var cnt = Int(scnt[m])
@@ -275,7 +275,7 @@ def tc_apple_fused_knn_kernel(
 
 
 # ===-------------------------------------------------------------------===#
-# Stage 2: per-query merge of nblocks*k candidates -> final k. One simdgroup
+# Stage 2: per-query merge of nblocks*k candidates into the final k. One simdgroup
 # (one block) per query. Candidate layout [(block*MM + m)*k + j] matches stage
 # 1's emit. Apple-only via the in-kernel gate. Mirrors tc_merge_kernel but uses
 # lane 0 to do the serial merge (Apple has no warp shuffle helper here; the
@@ -351,9 +351,9 @@ def tc_apple_merge_kernel(
                 out_id[mq * k + j] = Int64(-1)
 
 
-# Per-row L2 norm of the fp16-resident matrix (one simdgroup per row, lane
-# -strided + manual reduce). `squared==0` returns the L2 norm (sqrt of sum of
-# (fp16-cast-to-fp32)^2) -- the SAME cosine denom as the scalar f16 path.
+# Per-row L2 norm of the fp16-resident matrix (one simdgroup per row,
+# lane-strided + manual reduce). `squared==0` returns the L2 norm (sqrt of sum of
+# (fp16-cast-to-fp32)^2), the same cosine denom as the scalar f16 path.
 # Apple-only via the in-kernel gate.
 def _tc_apple_enorm_kernel(
     emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],

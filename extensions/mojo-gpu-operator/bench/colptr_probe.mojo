@@ -1,16 +1,16 @@
-"""Phase 3 de-risk probe: device array of device pointers, dereferenced in-kernel.
+"""Phase 3 feasibility probe: device array of device pointers, dereferenced in-kernel.
 
-The whole Phase 3 (column-pointer-table) rewrite hinges on ONE unproven GPU
+The whole Phase 3 (column-pointer-table) rewrite depends on one unproven GPU
 primitive: a kernel reading `col_ptrs[slot][row]` where `col_ptrs` is a device
 buffer holding the raw device addresses of N separately-allocated device column
-buffers. This probe validates exactly that, in isolation, BEFORE touching any
-production kernel — and on whatever GPU it runs (must pass on Apple + NVIDIA).
+buffers. This probe checks that in isolation, before any production kernel is
+changed, on whatever GPU it runs on (it must pass on both Apple and NVIDIA).
 
 It allocates two separate int64 device buffers, captures their device addresses
 (`Int(buf.unsafe_ptr())`), uploads the address table to a third device buffer,
 and launches a kernel that reconstructs each pointer in-kernel
 (`UnsafePointer(unsafe_from_address=...)`) and gathers every element through the
-indirection. Success == the gathered values match the originals exactly.
+indirection. It succeeds if the gathered values match the originals exactly.
 
 Run:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -31,11 +31,11 @@ comptime S = 2  # number of columns (slots)
 
 # Kernel: for each (slot, row), reconstruct the slot's column pointer from the
 # address table and read element `row`, writing it to the packed output.
-# Comptime-parameterized + DEFAULTED kernel: the default (USE_PTR=False) path
-# reads the packed buffer; the [True] specialization uses the pointer table.
-# Validates that existing launches `enqueue_function[k]` (default) keep working
-# while `enqueue_function[k[True]]` selects the ptr path -- the mechanism the
-# production Phase 3 relies on to leave the packed kernels untouched.
+# The kernel has a comptime parameter with a default: the default (USE_PTR=False)
+# path reads the packed buffer, and the [True] specialization uses the pointer
+# table. This checks that existing `enqueue_function[k]` launches (default) keep
+# working while `enqueue_function[k[True]]` selects the pointer path. Production
+# Phase 3 relies on this to leave the packed kernels untouched.
 def gather[USE_PTR: Bool = False](
     cols: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
     col_ptrs: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],
@@ -80,7 +80,7 @@ def main() raises:
     ctx.enqueue_copy(b_d, b_h.unsafe_origin_cast[MutAnyOrigin]())
     ctx.synchronize()
 
-    # Capture their DEVICE addresses into a host table, upload as the pointer table.
+    # Capture their device addresses into a host table and upload it as the pointer table.
     var ptr_h = alloc[Int64](S)
     var addr_a = Int(a_d.unsafe_ptr())
     var addr_b = Int(b_d.unsafe_ptr())

@@ -26,7 +26,7 @@ from std.math import abs as math_abs
 
 def test_decimal_to_float64() raises:
     """Decimal.to_float64() converts correctly."""
-    # 12345 with scale=2 → 123.45
+    # 12345 with scale=2 is 123.45
     var d = Decimal(10, 2, Int128(12345))
     var f = d.to_float64()
     assert_almost_equal(f, 123.45, atol=1e-10)
@@ -76,7 +76,7 @@ def test_decimal_from_float32() raises:
 
 
 def test_decimal_roundtrip_float64() raises:
-    """Decimal → Float64 → Decimal round-trips."""
+    """Decimal to Float64 and back to Decimal round-trips."""
     var original = Decimal(18, 4, Int128(123456789))
     var f = original.to_float64()
     var restored = Decimal(18, 4, f)
@@ -112,7 +112,7 @@ def test_timestamp_from_seconds() raises:
 
 
 def test_timestamp_to_from_seconds_roundtrip() raises:
-    """Timestamp → seconds → Timestamp round-trips."""
+    """Timestamp to seconds and back to Timestamp round-trips."""
     var original = Timestamp(1_234_567_890)
     var seconds = original.to_seconds()
     var restored = Timestamp(seconds=seconds)
@@ -121,7 +121,7 @@ def test_timestamp_to_from_seconds_roundtrip() raises:
 
 def test_timestamp_to_timestamp_s() raises:
     """Timestamp.to_timestamp_s() truncates to seconds."""
-    var ts = Timestamp(2_500_000)  # 2.5 seconds → 2 seconds
+    var ts = Timestamp(2_500_000)  # 2.5 seconds becomes 2 seconds
     var ts_s = ts.to_timestamp_s()
     assert_equal(ts_s.seconds, Int64(2))
 
@@ -169,21 +169,21 @@ def test_timestamp_tz_to_timestamp() raises:
 
 
 def test_timestamp_cross_conversion_roundtrip() raises:
-    """Timestamp → TimestampS → Timestamp preserves seconds."""
+    """Timestamp to TimestampS and back to Timestamp preserves seconds."""
     var original = Timestamp(3_000_000)  # exactly 3 seconds
     var via_s = original.to_timestamp_s().to_timestamp()
     assert_equal(original.micros, via_s.micros)
 
 
 def test_timestamp_cross_conversion_ms_roundtrip() raises:
-    """Timestamp → TimestampMS → Timestamp preserves milliseconds."""
+    """Timestamp to TimestampMS and back to Timestamp preserves milliseconds."""
     var original = Timestamp(3_500_000)  # exactly 3500 ms
     var via_ms = original.to_timestamp_ms().to_timestamp()
     assert_equal(original.micros, via_ms.micros)
 
 
 def test_timestamp_cross_conversion_ns_roundtrip() raises:
-    """Timestamp → TimestampNS → Timestamp preserves microseconds."""
+    """Timestamp to TimestampNS and back to Timestamp preserves microseconds."""
     var original = Timestamp(3_500_000)
     var via_ns = original.to_timestamp_ns().to_timestamp()
     assert_equal(original.micros, via_ns.micros)
@@ -257,7 +257,7 @@ def test_interval_equatable() raises:
 
 
 def test_uuid_internal_roundtrip() raises:
-    """UUID → internal → UUID roundtrip."""
+    """UUID to internal representation and back to UUID."""
     var u = UUID(UInt128(0x0123456789ABCDEF))
     var internal = u._to_internal()
     var restored = UUID(internal=internal)
@@ -265,7 +265,7 @@ def test_uuid_internal_roundtrip() raises:
 
 
 def test_uuid_internal_roundtrip_large() raises:
-    """UUID → internal → UUID roundtrip with large value."""
+    """UUID to internal representation and back to UUID, with a large value."""
     var u = UUID(UInt128(340282366920938463463374607431768211455))  # max UInt128
     var internal = u._to_internal()
     var restored = UUID(internal=internal)
@@ -368,7 +368,7 @@ def test_bit_repr() raises:
 
 def test_bit_from_int32() raises:
     """Bit(Int32) matches DuckDB's INTEGER::BITSTRING cast."""
-    # SELECT 123::INTEGER::BITSTRING → 00000000000000000000000001111011
+    # SELECT 123::INTEGER::BITSTRING returns 00000000000000000000000001111011
     var b = Bit(Int32(123))
     assert_equal(len(b), 32)
     assert_equal(String(b), "00000000000000000000000001111011")
@@ -376,7 +376,7 @@ def test_bit_from_int32() raises:
 
 def test_bit_from_int32_negative() raises:
     """Bit(Int32) with negative value gives two's complement."""
-    # SELECT (-1)::INTEGER::BITSTRING → 11111111111111111111111111111111
+    # SELECT (-1)::INTEGER::BITSTRING returns 11111111111111111111111111111111
     var b = Bit(Int32(-1))
     assert_equal(len(b), 32)
     assert_equal(String(b), "11111111111111111111111111111111")

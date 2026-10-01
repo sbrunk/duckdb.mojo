@@ -1,10 +1,10 @@
-"""Stage-0 de-risk probe: confirm the GPU target-introspection API under the
+"""Stage-0 feasibility probe: confirm the GPU target-introspection API under the
 pinned Mojo compiler before refactoring kernels for portability.
 
-Resolves the plan's flagged risk: which symbols give (a) the warp size, (b) a
-HOST decision "does this machine have an NVIDIA/Apple GPU", and (c) an
-inside-kernel TARGET dispatch "am I being compiled for NVIDIA/AMD" (where
-64-bit atomics are available).
+Answers the open question from the plan: which symbols give (a) the warp size,
+(b) a host-side check "does this machine have an NVIDIA/Apple GPU", and (c) an
+in-kernel target check "am I being compiled for NVIDIA/AMD" (where 64-bit
+atomics are available).
 
 Run: pixi run mojo run extensions/mojo-gpu-operator/bench/platform_probe.mojo
 """
@@ -23,7 +23,7 @@ from std.sys.info import (
 )
 
 
-# Inside-kernel TARGET dispatch: is_* reflects the GPU we are compiled for.
+# In-kernel target dispatch: is_* reflects the GPU we are compiled for.
 # Writes a small tag per the target's atomics capability so we can confirm the
 # comptime branch compiles and runs on the actual device.
 def probe_kernel(out_buf: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
@@ -45,7 +45,7 @@ def probe_kernel(out_buf: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
 
 
 def main() raises:
-    # HOST decisions: has_* reflects the machine running this code.
+    # Host-side checks: has_* reflects the machine running this code.
     print("== host (has_*) ==")
     print("has_accelerator           :", has_accelerator())
     print("has_apple_gpu_accelerator :", has_apple_gpu_accelerator())

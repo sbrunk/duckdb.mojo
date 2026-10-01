@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/max_x.benchmark
-# description: ungrouped aggregate — MAX(x)
+# description: ungrouped aggregate: MAX(x)
 # group: [mojo_simd]
 
 name MAX(x)

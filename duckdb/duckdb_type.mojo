@@ -320,7 +320,7 @@ def _zpad(value: Int, width: Int) -> String:
 
 
 def _frac_str(micros_in: Int64) -> String:
-    """Fractional-second suffix for ``micros`` (0–999999): ``""`` or ``.ddd``.
+    """Fractional-second suffix for ``micros`` (0 to 999999): ``""`` or ``.ddd``.
 
     Trailing zeros are stripped, matching DuckDB's display (``.5`` not
     ``.500000``).
@@ -676,7 +676,7 @@ struct Bit(Copyable, Movable, Equatable, Writable, Sized):
     def _pack_bytes(v: UInt64, num_bytes: Int) -> List[UInt8]:
         """Pack an integer value into big-endian bytes with padding byte prefix."""
         var data = List[UInt8](capacity=num_bytes + 1)
-        data.append(UInt8(0))  # no padding — all widths are multiples of 8
+        data.append(UInt8(0))  # no padding, all widths are multiples of 8
         for i in range(num_bytes):
             var shift = UInt64((num_bytes - 1 - i) * 8)
             data.append(((v >> shift) & UInt64(0xFF)).cast[DType.uint8]())
@@ -1129,7 +1129,7 @@ def dtype_to_duckdb_type[dt: DType]() -> DuckDBType:
 def mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
     """Maps a Mojo scalar type to its corresponding DuckDB type at compile time.
 
-    Supports: Bool, Int8–Int64, UInt8–UInt64, Float32, Float64, Int, UInt,
+    Supports: Bool, Int8 to Int64, UInt8 to UInt64, Float32, Float64, Int, UInt,
     Int128, UInt128, String, Date, Time, TimeNS, Timestamp, TimestampS,
     TimestampMS, TimestampNS, TimestampTZ, TimeTZ, Interval, Decimal, UUID.
 

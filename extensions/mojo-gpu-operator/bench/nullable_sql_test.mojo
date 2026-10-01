@@ -1,20 +1,21 @@
 """GPU_OP_NULLABLE live-SQL end-to-end test (needs the GPU + the built extension).
 
 Unlike the q*_shuttle tests (which hand-build a tape and bypass the C++ matcher),
-this drives the FULL operator path through real SQL:
+this drives the full operator path through real SQL:
 
     LOAD extension -> optimizer match (SerializeMatchedPlan safe-slice gate) ->
     materialize -> feed_column + feed_validity -> _pin_finalize_generic validity
     fold into the host pass column -> result
 
-It builds a single fact table with NULLABLE columns (CTAS columns carry no NOT NULL
-constraint) holding a deterministic NULL pattern, then asserts every ungrouped
-SUM/AVG query matches a CPU reference computed IN MOJO with SQL NULL semantics
-(NULL agg-input / filter rows excluded; sum over zero non-NULL rows -> SQL NULL).
-The reference is the ground truth: if the operator read a NULL row's garbage data
-the assertion FAILS; if it correctly folds validity it PASSES; if it declines, stock
-DuckDB runs and is ALSO correct -- so run with GPU_OP_SHADOW=1 / GPU_OP_PIN_LOG=1 to
-confirm the operator actually ROUTED these (see bench harness).
+It builds a single fact table with nullable columns (CTAS columns carry no NOT NULL
+constraint) holding a deterministic NULL pattern, then asserts that every ungrouped
+SUM/AVG query matches a CPU reference computed in Mojo with SQL NULL semantics
+(rows with a NULL agg input or filter value are excluded; a sum over zero non-NULL
+rows gives SQL NULL). The reference is the ground truth: if the operator read a
+NULL row's garbage data the assertion fails, and if it correctly folds validity it
+passes. If it declines, stock DuckDB runs and is also correct, so run with
+GPU_OP_SHADOW=1 / GPU_OP_PIN_LOG=1 to confirm that the operator actually handled
+these queries (see bench harness).
 
 Run from the repo root with the extension built (`pixi run gpu-op-build`):
     GPU_OP_NULLABLE=1 pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -65,8 +66,9 @@ def main() raises:
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
 
-    # CTAS -> columns b/f/g are NULLABLE (no NOT NULL constraint) -> the operator's
-    # blanket NULL decline applies unless GPU_OP_NULLABLE relaxes it for this slice.
+    # With CTAS, columns b/f/g are nullable (no NOT NULL constraint), so the
+    # operator declines all NULL-capable input unless GPU_OP_NULLABLE relaxes that
+    # for this slice.
     _ = con.execute(
         String(
             "CREATE TABLE t AS SELECT"
@@ -102,12 +104,13 @@ def main() raises:
             if _b_val(i) > 500:
                 ref_sum_b_bgt500 += Int128(_b_val(i))
 
-    # avg over the FILTERED set (f > 50). The nullable slice routes SUM-with-INT128-
-    # result ONLY; AVG is NOT in the slice (DuckDB rewrites a nullable avg into a
-    # `sum` aggregate with a DOUBLE output + division projection -- ret_is_int128==0,
-    # so the gate declines it to stock). So avg here must equal stock's correct
-    # answer (it is NOT GPU-folded). See avg_ungrouped_probe.mojo for the separate
-    # pre-existing ungrouped-avg-as-sum-double default-on bug this fences out.
+    # avg over the filtered set (f > 50). The nullable slice only handles SUM with
+    # an INT128 result. AVG is not in the slice (DuckDB rewrites a nullable avg into
+    # a `sum` aggregate with a DOUBLE output plus a division projection, so
+    # ret_is_int128==0 and the gate hands it to stock). So avg here must equal
+    # stock's correct answer (it is not folded on the GPU). See
+    # avg_ungrouped_probe.mojo for the separate, older bug (ungrouped avg rewritten
+    # as a DOUBLE sum, on by default) that this keeps out.
     var ref_avg_b_f50 = Float64(ref_sum_b_f50) / Float64(ref_cnt_b_f50)
     var ref_avg_b = Float64(ref_sum_b) / Float64(ref_cnt_b)  # bare avg, non-NULL b
 
@@ -142,7 +145,8 @@ def main() raises:
     assert_equal(s3.value(), ref_sum_b_bgt500)
     print("[ok] sum(b) WHERE b>500           =", String(s3.value()))
 
-    # AVG now ROUTES (sum m0 + count m1 both pass-gated -> NULL-x excluded from both).
+    # AVG is now handled (sum m0 and count m1 are both pass-gated, so NULL-x is
+    # excluded from both).
     var a0 = con.execute("SELECT avg(b) FROM t WHERE f > 50").fetch_chunk().get[
         Optional[Float64]
     ](col=0, row=0)
@@ -160,7 +164,7 @@ def main() raises:
     assert_true((a1d if a1d >= 0 else -a1d) < 1e-6, "bare avg(b) routes + correct")
     print("[ok] avg(b)                       =", a1.value())
 
-    # avg over an all-NULL column -> SQL NULL (count 0 -> ungrouped_count_m marks NULL)
+    # avg over an all-NULL column gives SQL NULL (count 0, so ungrouped_count_m marks NULL)
     var ag = con.execute("SELECT avg(g) FROM t").fetch_chunk().get[
         Optional[Float64]
     ](col=0, row=0)
@@ -168,30 +172,30 @@ def main() raises:
     print("[ok] avg(g all-NULL)             = NULL")
 
     # ---- SQL NULL edge cases ------------------------------------------------
-    # all-NULL column -> sum over zero non-NULL rows -> SQL NULL
+    # all-NULL column: a sum over zero non-NULL rows gives SQL NULL
     var sg = con.execute("SELECT sum(g) FROM t").fetch_chunk().get[
         Optional[Int128]
     ](col=0, row=0)
     assert_true(not Bool(sg), "sum(all-NULL) must be SQL NULL")
     print("[ok] sum(g all-NULL)             = NULL")
 
-    # empty filter match -> SQL NULL (composes with the empty-sum NULL fix)
+    # empty filter match gives SQL NULL (works together with the empty-sum NULL fix)
     var se = con.execute(
         "SELECT sum(b) FROM t WHERE f > 1000000"
     ).fetch_chunk().get[Optional[Int128]](col=0, row=0)
     assert_true(not Bool(se), "empty-match sum must be SQL NULL")
     print("[ok] sum(b) WHERE f>1e6 (empty)  = NULL")
 
-    # ---- count(*) + multi-agg now ROUTE (A1 unified pass model) -- correct -------
-    # count(*) counts ALL rows (incl. NULL-b); routes as KIND_Q6 (single PUSH_CONST(1)).
+    # ---- count(*) and multi-agg are now handled correctly (A1 unified pass model) ----
+    # count(*) counts all rows (incl. NULL-b); routes as KIND_Q6 (single PUSH_CONST(1)).
     var c0 = con.execute("SELECT count(*) FROM t").fetch_chunk().get[Int64](
         col=0, row=0
     )
     assert_equal(Int(c0), ref_cnt_star)
     print("[ok] count(*)                     =", Int(c0))
 
-    # count(*), sum(b): count(*) counts ALL rows incl. NULL-b (unmultiplied metric),
-    # sum(b) excludes NULL-b (validity-multiplied) -> A1 routes both correctly.
+    # count(*), sum(b): count(*) counts all rows incl. NULL-b (unmultiplied metric),
+    # sum(b) excludes NULL-b (validity-multiplied), and A1 routes both correctly.
     var chunk = con.execute("SELECT count(*), sum(b) FROM t").fetch_chunk()
     var c1 = chunk.get[Int64](col=0, row=0)
     var s_mix = chunk.get[Optional[Int128]](col=1, row=0)

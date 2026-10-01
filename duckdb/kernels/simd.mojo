@@ -41,7 +41,7 @@ def klog10[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
 
 
 # ===--------------------------------------------------------------------===#
-# Pointer-based bulk kernels (raw FLAT buffers) — used by the C-ABI shim.
+# Pointer-based bulk kernels (raw FLAT buffers), used by the C-ABI shim.
 # ===--------------------------------------------------------------------===#
 
 def map_unary[
@@ -142,8 +142,8 @@ def reduce_sum_i128(
 # Vector-distance folds over two FLAT array buffers (dot / L2 / cosine).
 #
 # DuckDB's array_distance / array_inner_product / array_cosine_* are serial
-# single-accumulator scalar loops (`result += x*y`) — latency-bound, since an FP
-# reduction can't auto-vectorize without -ffast-math. These use `W`-wide SIMD
+# single-accumulator scalar loops (`result += x*y`). They are latency-bound, since
+# an FP reduction can't auto-vectorize without -ffast-math. These use `W`-wide SIMD
 # accumulators with a 2× unroll to break the dependency chain (the same
 # multi-accumulator trick as reduce_sum_i128). `array_dot` covers inner-product
 # (and, negated by the caller, negative_inner_product); `array_l2dist` covers
@@ -228,7 +228,7 @@ def array_cosine_sim[
 
 
 # ===--------------------------------------------------------------------===#
-# Nullable (validity-masked) reductions — the A1 mask-multiply model.
+# Nullable (validity-masked) reductions (the A1 mask-multiply model).
 #
 # DuckDB stores per-row validity as a bitmask (uint64 words, bit set = valid).
 # The non-masked kernels above require AllValid and otherwise fall back to stock.
@@ -394,14 +394,14 @@ def reduce_fsum_map_masked[
 
 
 # ===--------------------------------------------------------------------===#
-# Blocked multi-query brute-force kNN (item 4).
+# Blocked multi-query brute-force kNN.
 #
 # Register-tiled: process QT queries per embedding load so each embedding row's
-# bytes are reused across QT queries from registers (raising arithmetic intensity
-# — the per-pair dot is otherwise L1/L2 read-bound on the two vectors, so naive
-# M separate scans waste loads). ~1.85× (NEON) / ~2.76× (AVX-512) over naive.
-# Per-vector norms are precomputed by the caller: cosine -> L2 norms, l2 ->
-# squared norms, ip -> ignored. metric: 0=cosine_distance, 1=l2(array_distance),
+# bytes are reused across QT queries from registers. This raises arithmetic
+# intensity: the per-pair dot is otherwise L1/L2 read-bound on the two vectors,
+# so M separate naive scans waste loads. ~1.85× (NEON) / ~2.76× (AVX-512) over
+# naive. Per-vector norms are precomputed by the caller: L2 norms for cosine,
+# squared norms for l2, and none for ip. metric: 0=cosine_distance, 1=l2(array_distance),
 # 2=negative_inner_product. Maintains an ascending top-k (dist,id) per query.
 # Results match stock up to FP-summation-order tie-breaks at rank k.
 # ===--------------------------------------------------------------------===#

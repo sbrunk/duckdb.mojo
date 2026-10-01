@@ -1,4 +1,4 @@
-"""Tests for the typed API — list deserialization, nested lists, ARRAY, MAP, MAP as List[Struct], UNION, UNION-as-Variant."""
+"""Tests for the typed API: list deserialization, nested lists, ARRAY, MAP, MAP as List[Struct], UNION, UNION-as-Variant."""
 
 from duckdb import *
 from std.utils import Variant
@@ -160,7 +160,7 @@ def test_list_column_float64() raises:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Unified API — get for list types
+# Unified API: get for list types
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -172,7 +172,7 @@ def test_list_via_get() raises:
     result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
 
-    # T = List[Optional[Int32]] -> returns List[List[Optional[Int32]]]
+    # T = List[Optional[Int32]] returns List[List[Optional[Int32]]]
     var lists = chunk.get[List[Optional[Int32]]](col=0)
 
     assert_equal(len(lists), 2)
@@ -215,7 +215,7 @@ def test_list_via_get_with_nulls() raises:
 
 
 def test_nested_list() raises:
-    """Deserialize a LIST(LIST(INTEGER)) column — arbitrarily nested."""
+    """Deserialize a LIST(LIST(INTEGER)) column (arbitrarily nested)."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[][])")
     _ = con.execute(
@@ -474,7 +474,7 @@ def test_map_int_keys() raises:
 
 
 def test_map_with_mojo_int() raises:
-    """Deserialize a MAP using Dict[String, Int] — Mojo's native integer type.
+    """Deserialize a MAP using Dict[String, Int], Mojo's native integer type.
 
     Int is platform-dependent (64-bit on most modern systems). DuckDB's
     INTEGER is always 32-bit, so the values are widened on read.
@@ -490,7 +490,7 @@ def test_map_with_mojo_int() raises:
 
 
 def test_map_with_mojo_uint() raises:
-    """Deserialize a MAP using Dict[String, UInt] — Mojo's native unsigned integer.
+    """Deserialize a MAP using Dict[String, UInt], Mojo's native unsigned integer.
 
     UInt is platform-dependent (64-bit on most modern systems). Maps to
     UBIGINT on 64-bit platforms.
@@ -511,7 +511,7 @@ def test_map_with_mojo_uint() raises:
 
 
 def test_map_as_list_struct_single_row() raises:
-    """Deserialize a MAP as List[Struct] — the raw DuckDB representation.
+    """Deserialize a MAP as List[Struct], the raw DuckDB representation.
 
     DuckDB MAPs are internally LIST(STRUCT(key K, value V)),
     so they can also be accessed as List[MapEntryStrInt].
@@ -647,7 +647,7 @@ def test_union_with_null() raises:
 
 
 def test_variant_union_int_member() raises:
-    """Deserialize a UNION value as Variant — INTEGER member active."""
+    """Deserialize a UNION value as Variant with the INTEGER member active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
         "SELECT union_value(num := 42::INTEGER)::UNION(num INTEGER, str"
@@ -661,7 +661,7 @@ def test_variant_union_int_member() raises:
 
 
 def test_variant_union_str_member() raises:
-    """Deserialize a UNION value as Variant — VARCHAR member active."""
+    """Deserialize a UNION value as Variant with the VARCHAR member active."""
     con = DuckDB.connect(":memory:")
     result = con.execute(
         "SELECT union_value(str := 'hello')::UNION(num INTEGER, str"
@@ -725,7 +725,7 @@ def test_variant_union_three_members() raises:
 
 
 def test_variant_union_with_null() raises:
-    """Deserialize a UNION column as Optional[Variant] — NULL handling."""
+    """Deserialize a UNION column as Optional[Variant] (NULL handling)."""
     con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
     _ = con.execute("INSERT INTO t VALUES (1), (NULL), ('three')")

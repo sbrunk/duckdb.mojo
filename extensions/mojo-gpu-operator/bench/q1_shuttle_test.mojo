@@ -2,7 +2,7 @@
 
 Synthesizes a small lineitem-like dataset with a handful of distinct
 (l_returnflag, l_linestatus) combos, hand-builds the Q1 RawPlan tape (2 group
-keys + 8 aggregates + an `l_shipdate <= cutoff` filter), and drives the FULL
+keys + 8 aggregates + an `l_shipdate <= cutoff` filter), and drives the full
 C-ABI shuttle by calling the @export functions in gpu_kernels.mojo directly:
 
     build_descriptor -> materialize_count/sql -> pin_begin
@@ -12,7 +12,8 @@ C-ABI shuttle by calling the @export functions in gpu_kernels.mojo directly:
 
 It computes a CPU int128/double reference for every group x metric and asserts
 bit-exact equality for the 4 int128 sums + the count, and a tight float
-tolerance for the 3 avgs, with the group keys matching. Prints ALL PASS.
+tolerance for the 3 avgs, with the group keys matching. Prints "ALL PASS" on
+success.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -209,7 +210,7 @@ def build_q1_tape(mut b: TapeBuilder, ship_cutoff: Int):
 
 # Build a synthetic DuckDB string_t (16 bytes) for a short ASCII string into the
 # 16-byte slot at `slot` (already pointing at row i). Short strings (<=12 bytes,
-# always the case here -> single chars) are inlined.
+# always the case here since they are single chars) are inlined.
 def write_string_t(slot: UnsafePointer[UInt8, MutAnyOrigin], s: String):
     var n = s.byte_length()
     # length (little-endian uint32)
@@ -412,10 +413,10 @@ def main() raises:
                 h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE
             )
         elif name == "l_quantity":
-            # Feed the TRUE decimal scale (2), exactly as the C++ extension does via
+            # Feed the real decimal scale (2), as the C++ extension does via
             # DecimalType::GetScale. These columns are scale-2 raw int64s. (Earlier
             # this fed the default dec_scale=0 and relied on the finalize hardcoding
-            # scale 2 for plain AVG; that hardcode was a bug -- now the AVG honors
+            # scale 2 for plain AVG. That hardcoded value was a bug. AVG now uses
             # the fed scale, so the test must feed the real scale like production.)
             rc = mojo_gpu_feed_column(
                 h, 0, j, qty.bitcast[NoneType](), N, TYPE_DECIMAL, 2

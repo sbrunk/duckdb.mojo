@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate Mojo bindings for the DuckDB C API.
 
-This script generates libduckdb.mojo from the same JSON definition files used
-for duckdb.h header generation in the DuckDB codebase.
+This script generates libduckdb.mojo from the same YAML API spec (api_spec/v1)
+that DuckDB uses to generate duckdb.h and duckdb_extension.h.
 
 Usage:
     python scripts/generate_mojo_api.py [--duckdb-dir <path>]
@@ -14,79 +14,79 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
 from packaging.version import Version
 
 # ---------------------------------------------------------------------------
 # Paths relative to the DuckDB source tree
 # ---------------------------------------------------------------------------
-CAPI_FUNCTION_DEFINITION_FILES = "src/include/duckdb/main/capi/header_generation/functions/**/*.json"
-BASE_HEADER_TEMPLATE = "src/include/duckdb/main/capi/header_generation/header_base.hpp.template"
+# The YAML API spec: one file per module, plus metadata.yaml with the
+# primitive types, versions and the type-name prefix.
+API_SPEC_DIR = "api_spec/v1"
+API_SPEC_FILES = "api_spec/v1/**/*.yaml"
+API_SPEC_METADATA = "api_spec/v1/metadata.yaml"
+# Options for the extension header, including `version_floor`.
+API_SPEC_EXT_OPTIONS = "api_spec/v1/options/extension_header.yaml"
 
-# Extension API version definitions (stable + unstable)
-EXT_API_DEFINITION_PATTERN = "src/include/duckdb/main/capi/header_generation/apis/v1/*/*.json"
-EXT_API_EXCLUSION_FILE = "src/include/duckdb/main/capi/header_generation/apis/v1/exclusion_list.json"
+# The generated extension header. Used to check that the extension API struct
+# we build from the spec has the same field order as DuckDB's.
+EXT_HEADER = "src/include/duckdb_extension.h"
+
+# Extension C API version that Mojo extensions request. It is emitted as
+# `DUCKDB_EXTENSION_API_VERSION` (used by duckdb/extension.mojo) and must match
+# the `--capi-version` default in scripts/append_extension_metadata.py.
+# Functions that became stable in this version or earlier go into
+# `duckdb_ext_api_v1`. Functions added later (or still unstable) are left out of
+# the struct, which is safe because they come after it in DuckDB's layout. In
+# extension mode LibDuckDB binds them to stubs that abort when called.
+EXT_API_STABLE_VERSION = "v1.5.6"
 
 # Output file (relative to the workspace root)
 OUTPUT_FILE = "duckdb/libduckdb.mojo"
 
-# Groups in the order they appear in duckdb.h – maintained for easy diffing.
-ORIGINAL_FUNCTION_GROUP_ORDER = [
-    "open_connect",
-    "configuration",
-    "error_data",
-    "query_execution",
-    "safe_fetch_functions",
-    "helpers",
-    "date_time_timestamp_helpers",
-    "hugeint_and_uhugeint_helpers",
-    "decimal_helpers",
-    "prepared_statements",
-    "bind_values_to_prepared_statements",
-    "execute_prepared_statements",
-    "extract_statements",
-    "pending_result_interface",
-    "value_interface",
-    "logical_type_interface",
-    "data_chunk_interface",
-    "vector_interface",
-    "validity_mask_functions",
-    "scalar_functions",
-    "selection_vector_interface",
-    "aggregate_functions",
-    "table_functions",
-    "table_function_bind",
-    "table_function_init",
+# Spec modules in roughly the order they appear in duckdb.h. Modules not listed
+# here are appended at the end.
+MODULE_ORDER = [
+    "database",
+    "connection",
+    "query",
+    "datetime_helpers",
+    "prepared_statement",
+    "pending",
+    "value",
+    "logical_type",
+    "data_chunk",
+    "vector",
+    "scalar_function",
+    "aggregate_function",
     "table_function",
-    "replacement_scans",
-    "profiling_info",
+    "replacement_scan",
     "appender",
     "table_description",
-    "arrow_interface",
-    "threading_information",
-    "streaming_result_interface",
-    "cast_functions",
-    "expression_interface",
-    "file_system_interface",
-    "config_options_interface",
-    "copy_functions",
-    "catalog_interface",
-    "logging",
+    "arrow",
+    "threading",
+    "cast_function",
+    "expression",
+    "file_system",
+    "config_option",
+    "copy_function",
+    "catalog",
+    "log_storage",
 ]
 
 # ---------------------------------------------------------------------------
-# C-type  ->  Mojo-type  mappings for parameters and return values.
+# Mappings from C types to Mojo types for parameters and return values.
 #
 # Order matters: longest / most specific patterns first.
 # ---------------------------------------------------------------------------
 
-# These are "opaque pointer" types – in the C API they are
+# These are "opaque pointer" types. In the C API they are
 #   typedef struct _duckdb_xxx { void *internal_ptr; } *duckdb_xxx;
 # In Mojo we model them as  Pointer[_duckdb_xxx, MutUntrackedOrigin].
 OPAQUE_HANDLE_TYPES: set[str] = {
@@ -245,7 +245,7 @@ def _strip(s: str) -> str:
 # ---------------------------------------------------------------------------
 #
 # The raw C function-pointer types have to name a concrete origin, and for a
-# pointer that crosses the FFI boundary the only honest choice is the
+# pointer that crosses the FFI boundary the only correct choice is the
 # lifetime-erased `*AnyOrigin`. An erased origin is not accepted implicitly, so a
 # `LibDuckDB` wrapper that declared `MutAnyOrigin` directly would force every
 # caller to write `.as_unsafe_any_origin()`.
@@ -255,7 +255,8 @@ def _strip(s: str) -> str:
 # the C function pointer. That keeps the unsafe cast inside this generated
 # shim.
 
-# Erased origin in a generated pointer type -> origin trait to genericize over.
+# Maps an erased origin in a generated pointer type to the origin trait that the
+# wrapper is generic over.
 ERASED_ORIGINS = {
     "MutAnyOrigin": "MutOrigin",
     "ImmutAnyOrigin": "ImmOrigin",
@@ -292,7 +293,7 @@ def split_pointer_origin(mojo_type: str):
 
 
 # ---------------------------------------------------------------------------
-# C-type → Mojo-type conversion
+# Conversion from C types to Mojo types
 # ---------------------------------------------------------------------------
 
 def c_type_to_mojo(c_type: str, *, is_return: bool = False) -> str:
@@ -313,7 +314,7 @@ def c_type_to_mojo(c_type: str, *, is_return: bool = False) -> str:
     if t == "struct ArrowArray *":
         return "Pointer[NoneType, MutAnyOrigin]"
 
-    # ---- pointer-to-pointer:  char ** → Pointer[Pointer[c_char, …], …]
+    # ---- pointer-to-pointer:  char ** becomes Pointer[Pointer[c_char, ...], ...]
     if t in ("char **",):
         return "Pointer[Pointer[c_char, MutAnyOrigin], MutAnyOrigin]"
 
@@ -393,76 +394,179 @@ def c_type_to_mojo(c_type: str, *, is_return: bool = False) -> str:
     if t.startswith("struct "):
         return t  # leave as-is; rarely used directly
 
-    print(f"WARNING: unknown C type '{t}' — passing through as-is", file=sys.stderr)
+    print(f"WARNING: unknown C type '{t}', passing through as-is", file=sys.stderr)
     return t
 
 
 # ---------------------------------------------------------------------------
-# Parsing JSON definitions (same logic as generate_c_api.py)
+# Parsing the YAML API spec
 # ---------------------------------------------------------------------------
 
+def _load_spec(duckdb_dir: str) -> tuple[dict, list[dict]]:
+    """Load the spec metadata (with the extension header options merged in)
+    and every module file of the API spec."""
+    with open(os.path.join(duckdb_dir, API_SPEC_METADATA), "r") as f:
+        metadata = yaml.safe_load(f)
+    with open(os.path.join(duckdb_dir, API_SPEC_EXT_OPTIONS), "r") as f:
+        metadata.update(yaml.safe_load(f))
+    modules: list[dict] = []
+    pattern = os.path.join(duckdb_dir, API_SPEC_FILES)
+    for fpath in sorted(glob.glob(pattern, recursive=True)):
+        with open(fpath, "r") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict) and "module" in data:
+            modules.append(data)
+    return metadata, modules
+
+
+def _c_type_names(metadata: dict, modules: list[dict]) -> dict[str, str]:
+    """Map spec type names (e.g. `database`, `i64`) to C type names."""
+    prefix = metadata["prefix"]
+    names: dict[str, str] = {p["name"]: p["c_type"] for p in metadata["primitives"]}
+    for module in modules:
+        for section in ("handles", "callbacks", "structs", "enums", "aliases"):
+            for name, decl in (module.get(section) or {}).items():
+                if section == "aliases" and decl.get("qualified"):
+                    # Spelled without the prefix in C (e.g. `sel_t`).
+                    names[name] = name
+                elif name.isupper():
+                    # Enum tags keep their upper case (e.g. `DUCKDB_TYPE`).
+                    names[name] = prefix.upper() + name
+                else:
+                    names[name] = prefix + name
+    return names
+
+
+def _render_c_type(type_names: dict[str, str], base: str, indirection: int, const: bool) -> str:
+    """Render a spec type as a C type string, e.g. `const char *`."""
+    if base not in type_names:
+        raise ValueError(f"unknown type '{base}' in API spec")
+    c_type = type_names[base]
+    if const:
+        c_type = f"const {c_type}"
+    if indirection:
+        c_type = f"{c_type} {'*' * indirection}"
+    return c_type
+
+
+def _stable_since(lifecycle: list) -> str | None:
+    """Return the earliest version in which a function was stable, if any."""
+    versions = [v for state, v, *_ in lifecycle if state == "stable"]
+    return min(versions, key=Version) if versions else None
+
+
 def parse_capi_function_definitions(duckdb_dir: str):
-    """Parse all function group JSON files and return (groups_ordered, function_map)."""
-    pattern = os.path.join(duckdb_dir, CAPI_FUNCTION_DEFINITION_FILES)
-    function_files = sorted(glob.glob(pattern, recursive=True))
+    """Parse the API spec and return (groups_ordered, function_map).
+
+    Each group is a dict with keys ``group`` (module name) and ``entries``.
+    Each entry has ``name``, ``params`` (list of ``{type, name}`` with C type
+    strings), ``return_type`` (C type string), ``comment`` (``{description,
+    deprecated}``) plus the spec's ``offset`` and ``lifecycle``.
+    """
+    metadata, modules = _load_spec(duckdb_dir)
+    prefix = metadata["prefix"]
+    type_names = _c_type_names(metadata, modules)
 
     function_groups: list[dict] = []
     function_map: dict[str, dict] = {}
 
-    for fpath in function_files:
-        with open(fpath, "r") as f:
-            data = json.load(f)
-        function_groups.append(data)
-        for entry in data.get("entries", []):
-            function_map[entry["name"]] = entry
-
-    # Re-order to match ORIGINAL_FUNCTION_GROUP_ORDER
-    groups_by_name = {g["group"]: g for g in function_groups}
-    ordered: list[dict] = []
-    for name in ORIGINAL_FUNCTION_GROUP_ORDER:
-        if name in groups_by_name:
-            ordered.append(groups_by_name[name])
-    # Append any groups not in the original order
-    seen = set(ORIGINAL_FUNCTION_GROUP_ORDER)
-    for g in function_groups:
-        if g["group"] not in seen:
-            ordered.append(g)
-
-    return ordered, function_map
-
-
-def parse_ext_api_definitions(duckdb_dir: str):
-    """Parse the extension API version JSON files.
-
-    Returns a list of version dicts, in order: stable versions sorted by
-    semver, then unstable versions sorted alphabetically — matching the
-    ordering used by DuckDB's ``generate_c_api.py``.
-
-    Each dict has keys ``version`` (str) and ``entries`` (list[str] of
-    function names).
-    """
-    pattern = os.path.join(duckdb_dir, EXT_API_DEFINITION_PATTERN)
-    api_definitions: dict[str, dict] = {}
-    stable_versions: list[str] = []
-    unstable_versions: list[str] = []
-
-    for fpath in glob.glob(pattern):
-        # Skip the exclusion list file.
-        if fpath.endswith("exclusion_list.json"):
+    for module in modules:
+        functions = module.get("functions") or {}
+        if not functions:
             continue
-        with open(fpath, "r") as f:
-            obj = json.load(f)
-        ver = obj["version"]
-        api_definitions[ver] = obj
-        if ver.startswith("unstable_"):
-            unstable_versions.append(ver)
-        else:
-            stable_versions.append(ver)
+        entries: list[dict] = []
+        for short_name, fn in functions.items():
+            params = [
+                {
+                    "name": pname,
+                    "type": _render_c_type(
+                        type_names, p["type"], p.get("indirection", 0), p.get("const", False)
+                    ),
+                }
+                for pname, p in (fn.get("parameters") or {}).items()
+            ]
+            entry = {
+                "name": prefix + short_name,
+                "params": params,
+                "return_type": _render_c_type(
+                    type_names,
+                    fn["return_type"],
+                    fn.get("return_pointer", 0),
+                    fn.get("return_const", False),
+                ),
+                "comment": {
+                    "description": fn.get("description", ""),
+                    # The first lifecycle entry is the current state.
+                    "deprecated": fn["lifecycle"][0][0] == "deprecated",
+                },
+                "offset": fn.get("offset"),
+                "lifecycle": fn["lifecycle"],
+            }
+            entries.append(entry)
+            function_map[entry["name"]] = entry
+        function_groups.append({"group": module["module"], "entries": entries})
 
-    stable_versions.sort(key=Version)
-    unstable_versions.sort()
+    # Re-order to match MODULE_ORDER
+    groups_by_name = {g["group"]: g for g in function_groups}
+    ordered = [groups_by_name[name] for name in MODULE_ORDER if name in groups_by_name]
+    ordered += [g for g in function_groups if g["group"] not in MODULE_ORDER]
 
-    return [api_definitions[v] for v in (stable_versions + unstable_versions)]
+    return ordered, function_map, metadata
+
+
+def parse_ext_api_definitions(function_map: dict[str, dict], metadata: dict):
+    """Build the extension API struct layout from the spec.
+
+    Every function with an ``offset`` has a slot in the function pointer struct,
+    at that position. Slots are grouped into version bands: the version in
+    which the function became stable, raised to the spec's ``version_floor``
+    (the struct did not exist before that).
+
+    Returns a list of band dicts in struct order, each with keys ``version``
+    (str), ``stable`` (whether stable extensions get it, see
+    ``EXT_API_STABLE_VERSION``) and ``entries`` (list[str] of function names).
+    """
+    floor = Version(metadata["version_floor"])
+    slots = sorted(
+        (e for e in function_map.values() if e["offset"] is not None),
+        key=lambda e: e["offset"],
+    )
+    offsets = [e["offset"] for e in slots]
+    if offsets != list(range(len(offsets))):
+        raise ValueError("extension API offsets are not contiguous")
+
+    bands: list[dict] = []
+    for entry in slots:
+        since = _stable_since(entry["lifecycle"])
+        if since is None:
+            raise ValueError(f"{entry['name']} has a struct slot but was never stable")
+        version = "v" + str(max(Version(since), floor))
+        if bands and Version(version) < Version(bands[-1]["version"]):
+            raise ValueError(f"{entry['name']} is out of version order in the struct")
+        if not bands or bands[-1]["version"] != version:
+            bands.append({
+                "version": version,
+                "stable": Version(version) <= Version(EXT_API_STABLE_VERSION),
+                "entries": [],
+            })
+        bands[-1]["entries"].append(entry["name"])
+    return bands
+
+
+def check_ext_api_layout(duckdb_dir: str, ext_api_definitions: list[dict]) -> None:
+    """Check the struct layout against DuckDB's generated duckdb_extension.h."""
+    with open(os.path.join(duckdb_dir, EXT_HEADER), "r") as f:
+        header = f.read()
+    m = re.search(r"typedef struct \{(.*?)\} duckdb_ext_api_v1;", header, re.DOTALL)
+    if m is None:
+        raise ValueError(f"duckdb_ext_api_v1 not found in {EXT_HEADER}")
+    expected = re.findall(r"\(\*(\w+)\)\(", m.group(1))
+    actual = [name for band in ext_api_definitions for name in band["entries"]]
+    if expected != actual:
+        raise ValueError(
+            f"extension API struct layout differs from {EXT_HEADER} "
+            f"({len(actual)} fields generated, {len(expected)} in the header)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -555,21 +659,22 @@ def headline_capitalize(s: str) -> str:
 
 def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
     """Generate the complete libduckdb.mojo content."""
-    groups, function_map = parse_capi_function_definitions(duckdb_dir)
+    groups, function_map, metadata = parse_capi_function_definitions(duckdb_dir)
 
-    # Parse extension API version definitions
-    ext_api_definitions = parse_ext_api_definitions(duckdb_dir)
+    # Build the extension API struct layout and check it against DuckDB's header
+    ext_api_definitions = parse_ext_api_definitions(function_map, metadata)
+    check_ext_api_layout(duckdb_dir, ext_api_definitions)
 
-    # Build function_name → version map for version tags
+    # Map each function name to its version, for version tags
     ext_api_version_map: dict[str, str] = {}
     for api_ver in ext_api_definitions:
         for fn_name in api_ver["entries"]:
             ext_api_version_map[fn_name] = api_ver["version"]
 
-    # Build stable function names list (non-unstable versions)
+    # Build stable function names list
     stable_fn_names: set[str] = set()
     for api_ver in ext_api_definitions:
-        if not api_ver["version"].startswith("unstable_"):
+        if api_ver["stable"]:
             stable_fn_names.update(api_ver["entries"])
 
     # Collect non-deprecated functions we want to generate
@@ -583,7 +688,7 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
         if not entries:
             continue
         all_entries.extend(entries)
-        grouped_entries.append((group["group"], group.get("description", ""), entries))
+        grouped_entries.append((group["group"], "", entries))
 
     out = []
     
@@ -599,7 +704,7 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
     out.append(_generate_types(duckdb_dir))
     out.append("")
 
-    # ---- Extension API structs (duckdb_ext_api_v1, duckdb_ext_api_v1_unstable) ----
+    # ---- Extension API struct (duckdb_ext_api_v1) ----
     out.append(_generate_ext_api_structs(ext_api_definitions, function_map))
     out.append("")
 
@@ -613,6 +718,9 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 
     # ---- comptime _dylib_function declarations ----
     out.append(_generate_dylib_declarations(grouped_entries, ext_api_version_map))
+
+    # ---- Stubs for functions newer than the extension API version ----
+    out.append(_generate_missing_stubs(grouped_entries, stable_fn_names))
 
     return "\n".join(out)
 
@@ -636,16 +744,11 @@ from std.memory import Pointer
 # ===-----------------------------------------------------------------------===#"""
 
 
-def _read_template(duckdb_dir: str) -> str:
-    """Read the header_base.hpp.template file."""
-    template_path = os.path.join(duckdb_dir, BASE_HEADER_TEMPLATE)
-    with open(template_path, "r") as f:
-        return f.read()
-
-
 def _generate_enums(duckdb_dir: str) -> str:
-    """Generate Mojo enum definitions from the C header template."""
-    content = _read_template(duckdb_dir)
+    """Generate Mojo enum definitions from the enums in the API spec."""
+    metadata, modules = _load_spec(duckdb_dir)
+    type_names = _c_type_names(metadata, modules)
+    value_prefix = metadata["prefix"].upper()
     lines: list[str] = []
 
     lines.append("")
@@ -654,55 +757,44 @@ def _generate_enums(duckdb_dir: str) -> str:
     lines.append("# ===--------------------------------------------------------------------===#")
     lines.append("")
 
-    # Match typedef enum blocks with an optional immediately preceding //! comment.
-    # We use a two-pass approach: first find all enum blocks, then look for
-    # preceding comments.
-    enum_pattern = re.compile(
-        r"typedef\s+enum\s+(\w+)\s*\{(.*?)\}\s*(\w+)\s*;",
-        re.DOTALL,
-    )
+    # C code uses the lower-case alias of an enum where one exists (e.g.
+    # `duckdb_type` for `enum DUCKDB_TYPE`), so emit the enum under that name.
+    alias_for: dict[str, str] = {}
+    for module in modules:
+        for name, alias in (module.get("aliases") or {}).items():
+            alias_for[alias.get("underlying", "")] = type_names[name]
 
-    for m in enum_pattern.finditer(content):
-        enum_name = m.group(3).strip()
-        body = m.group(2)
-
-        # Look for //! comment lines immediately before this typedef
-        # Walk backwards from the match start to find consecutive //! lines
-        pre = content[:m.start()].rstrip()
-        comment_lines: list[str] = []
-        for candidate in reversed(pre.split("\n")):
-            stripped = candidate.strip()
-            if stripped.startswith("//!"):
-                comment_lines.insert(0, stripped[3:].strip())
-            elif stripped.startswith("//") and not stripped.startswith("//="):
-                # Allow plain // comment lines in the block too
-                comment_lines.insert(0, stripped[2:].strip())
-            elif stripped == "":
-                break
-            else:
-                break
-
-        if comment_lines:
-            lines.append(f"#! {' '.join(comment_lines)}")
-        lines.append(f"comptime {enum_name} = Int32")
-
-        # Parse each member: handle both "// comment\n MEMBER = N" and "MEMBER = N"
-        member_pat = re.compile(r"(?://\s*([^\n]*)\n\s*)?(\w+)\s*=\s*(\d+)")
-        for mm in member_pat.finditer(body):
-            member_comment = mm.group(1)
-            member_name = mm.group(2)
-            member_value = mm.group(3)
-            if member_comment:
-                lines.append(f"# {member_comment.strip()}")
-            lines.append(f"comptime {member_name} = {member_value}")
+    def emit(c_name: str, description: str, values: list[tuple[str, int, str]]):
+        if description:
+            lines.append(f"#! {' '.join(description.split())}")
+        lines.append(f"comptime {c_name} = Int32")
+        for value_name, value, value_description in values:
+            if value_description:
+                lines.append(f"# {' '.join(value_description.split())}")
+            lines.append(f"comptime {value_name} = {value}")
         lines.append("")
+
+    enums = [(name, decl) for module in modules for name, decl in (module.get("enums") or {}).items()]
+    for i, (name, decl) in enumerate(enums):
+        values = [
+            (value_prefix + value_name, v["value"], v.get("description", ""))
+            for value_name, v in decl["values"].items()
+        ]
+        emit(alias_for.get(name, type_names[name]), decl.get("description", ""), values)
+        if i == 0:
+            # duckdb_state is written by hand in C (its values do not follow the
+            # naming scheme), so the spec only lists it as a primitive.
+            emit(
+                "duckdb_state",
+                "An enum over the returned state of different functions.",
+                [("DuckDBSuccess", 0, ""), ("DuckDBError", 1, "")],
+            )
 
     return "\n".join(lines)
 
 
 def _generate_types(duckdb_dir: str) -> str:
-    """Generate Mojo type definitions from the C header template."""
-    content = _read_template(duckdb_dir)
+    """Generate Mojo type definitions (written by hand, mirroring duckdb.h)."""
     lines: list[str] = []
 
     # ---- General type definitions ----
@@ -1192,7 +1284,7 @@ def _generate_libduckdb_struct(
     lines.append("")
 
     # ---- var declarations ----
-    # Include ALL original functions (for ext API compatibility)
+    # Include all original functions (for ext API compatibility)
     for name in all_fn_names:
         lines.append(f"    var _{name}: _{name}.fn_type")
     lines.append("")
@@ -1200,7 +1292,7 @@ def _generate_libduckdb_struct(
     def _emit_init_body(lines: list[str], fn_loader: dict[str, str]):
         """Emit function loading for an __init__ body.
 
-        fn_loader maps function name → load expression.
+        fn_loader maps each function name to its load expression.
         """
         # If no loader expression calls .load(), we don't need try/except.
         has_dlsym_fallback = any(name not in fn_loader for name in all_fn_names)
@@ -1225,23 +1317,17 @@ def _generate_libduckdb_struct(
 
     # ---- __init__ (from stable ext API struct) ----
     lines.append("    def __init__(out self, api: Pointer[duckdb_ext_api_v1, ImmUntrackedOrigin]):")
-    lines.append("        \"\"\"Initialize LibDuckDB from a stable DuckDB extension API struct pointer.")
+    lines.append("        \"\"\"Initialize LibDuckDB from a DuckDB extension API struct pointer.")
     lines.append("")
-    lines.append("        This constructor is used when loaded as a DuckDB extension")
-    lines.append("        with the stable API. Stable functions are read from the struct;")
-    lines.append("        unstable functions fall back to dlsym (available in the extension's")
-    lines.append("        address space). Use the unstable constructor to avoid dlsym entirely.\"\"\"")
-    stable_loader = {name: f"api[].{name}" for name in all_fn_names if name in stable_fn_names}
-    _emit_init_body(lines, stable_loader)
-
-    # ---- __init__ (from unstable ext API struct) ----
-    lines.append("    def __init__(out self, api: Pointer[duckdb_ext_api_v1_unstable, ImmUntrackedOrigin]):")
-    lines.append("        \"\"\"Initialize LibDuckDB from an unstable DuckDB extension API struct pointer.")
-    lines.append("")
-    lines.append("        This constructor is used when loaded as a DuckDB extension")
-    lines.append("        with the unstable API. All functions are read from the struct.\"\"\"")
-    unstable_loader = {name: f"api[].{name}" for name in all_fn_names}
-    _emit_init_body(lines, unstable_loader)
+    lines.append("        This constructor is used when loaded as a DuckDB extension.")
+    lines.append("        Functions are read from the struct. A function newer than the")
+    lines.append("        requested API version is bound to a stub that aborts when called,")
+    lines.append("        so the extension still loads as long as it does not use it.\"\"\"")
+    ext_loader = {
+        name: f"api[].{name}" if name in stable_fn_names else f"_missing_{name}"
+        for name in all_fn_names
+    }
+    _emit_init_body(lines, ext_loader)
 
     # ---- move-init ----
     lines.append("    def __init__(out self, *, deinit move: Self):")
@@ -1341,65 +1427,79 @@ def _generate_ext_api_structs(
     ext_api_definitions: list[dict],
     function_map: dict[str, dict],
 ) -> str:
-    """Generate the ``duckdb_ext_api_v1`` and ``duckdb_ext_api_v1_unstable`` structs.
+    """Generate the ``duckdb_ext_api_v1`` struct and ``DUCKDB_EXTENSION_API_VERSION``.
 
-    ``duckdb_ext_api_v1`` contains only fields from stable API versions.
-    ``duckdb_ext_api_v1_unstable`` is the full superset (stable prefix, then
-    unstable appendages) — a pointer bitcast from a full API struct is safe
-    because the stable fields are a prefix of the unstable layout.
+    The struct holds the bands up to ``EXT_API_STABLE_VERSION``. Later bands
+    come after them in DuckDB's layout, so the struct is a prefix of the one
+    DuckDB hands out and a pointer bitcast to it is safe.
 
     Parameters:
         ext_api_definitions: Ordered version defs from ``parse_ext_api_definitions``.
-        function_map: name→entry dict from ``parse_capi_function_definitions``.
+        function_map: dict from name to entry, from ``parse_capi_function_definitions``.
     """
-    # Collect stable and all entries in struct order.
-    stable_fields: list[tuple[str, str, dict]] = []  # (version, name, entry)
-    all_fields: list[tuple[str, str, dict]] = []      # (version, name, entry)
-
+    fields: list[tuple[str, str, dict]] = []  # (version, name, entry)
     for api_ver in ext_api_definitions:
-        version = api_ver["version"]
-        is_unstable = version.startswith("unstable_")
+        if not api_ver["stable"]:
+            print(
+                f"NOTE: {len(api_ver['entries'])} extension API functions of band "
+                f"{api_ver['version']} are newer than {EXT_API_STABLE_VERSION} and "
+                f"are bound to stubs in extension mode",
+                file=sys.stderr,
+            )
+            continue
         for fn_name in api_ver["entries"]:
-            if fn_name not in function_map:
-                print(
-                    f"WARNING: ext API entry '{fn_name}' (version {version}) "
-                    f"not found in function definitions — skipping",
-                    file=sys.stderr
-                )
-                continue
-            entry = function_map[fn_name]
-            all_fields.append((version, fn_name, entry))
-            if not is_unstable:
-                stable_fields.append((version, fn_name, entry))
+            fields.append((api_ver["version"], fn_name, function_map[fn_name]))
 
-    def _emit_struct(name: str, fields: list[tuple[str, str, dict]]) -> list[str]:
-        lines: list[str] = []
-        lines.append("")
-        lines.append("")
-        lines.append("@fieldwise_init")
-        lines.append(f"struct {name}:")
-        lines.append(f'    """DuckDB Extension C API function pointer table ({name}).')
-        lines.append("")
-        lines.append(f"    Contains {len(fields)} function pointers.")
-        lines.append('    """')
+    lines: list[str] = [format_section_header("Extension API Struct")]
+    lines.append("")
+    lines.append(f'comptime DUCKDB_EXTENSION_API_VERSION = "{EXT_API_STABLE_VERSION}"')
+    lines.append('"""The extension C API version whose function pointer struct is `duckdb_ext_api_v1`."""')
+    lines.append("")
+    lines.append("")
+    lines.append("@fieldwise_init")
+    lines.append("struct duckdb_ext_api_v1:")
+    lines.append('    """DuckDB Extension C API function pointer table (duckdb_ext_api_v1).')
+    lines.append("")
+    lines.append(f"    Contains {len(fields)} function pointers.")
+    lines.append('    """')
+    current_version: str | None = None
+    for version, fn_name, entry in fields:
+        if version != current_version:
+            lines.append("")
+            lines.append(f"    # --- {version} ---")
+            current_version = version
+        lines.append(f"    var {fn_name}: {_ext_api_fn_type(entry)}")
+    lines.append("")
+    return "\n".join(lines)
 
-        current_version: str | None = None
-        for version, fn_name, entry in fields:
-            if version != current_version:
-                lines.append("")
-                lines.append(f"    # --- {version} ---")
-                current_version = version
-            fn_type = _ext_api_fn_type(entry)
-            lines.append(f"    var {fn_name}: {fn_type}")
 
+def _generate_missing_stubs(
+    grouped_entries: list[tuple[str, str, list[dict]]],
+    stable_fn_names: set[str],
+) -> str:
+    """Generate stubs for functions that are not in ``duckdb_ext_api_v1``.
+
+    In extension mode these functions are bound to the stubs instead of being
+    looked up with dlsym: ``libduckdb`` may not be loadable by name in the host
+    process, and a failed dlopen would abort while the extension loads.
+    """
+    missing = [e for _, _, entries in grouped_entries for e in entries if e["name"] not in stable_fn_names]
+    if not missing:
+        return ""
+    lines: list[str] = [format_section_header("Stubs for functions newer than the extension API version")]
+    for entry in missing:
+        name = entry["name"]
+        params = ", ".join(
+            f"a{i}: {c_type_to_mojo(p['type'].strip())}" for i, p in enumerate(entry.get("params", []))
+        )
+        ret = c_type_to_mojo(entry["return_type"], is_return=True)
         lines.append("")
-        return lines
-
-    out_lines: list[str] = []
-    out_lines.append(format_section_header("Extension API Structs"))
-    out_lines.extend(_emit_struct("duckdb_ext_api_v1", stable_fields))
-    out_lines.extend(_emit_struct("duckdb_ext_api_v1_unstable", all_fields))
-    return "\n".join(out_lines)
+        lines.append(f'def _missing_{name}({params}) abi("C") -> {ret}:')
+        lines.append(
+            f'    abort("{name} is not part of extension API version {EXT_API_STABLE_VERSION}")'
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _generate_dylib_declarations(
@@ -1408,7 +1508,7 @@ def _generate_dylib_declarations(
 ) -> str:
     """Generate the comptime _dylib_function declarations.
 
-    If *ext_api_version_map* is provided (name→version), a comment tag like
+    If *ext_api_version_map* is provided (name to version), a comment tag like
     ``# [ext_api: v1.2.0]`` is emitted before each matching declaration.
     """
     lines: list[str] = []

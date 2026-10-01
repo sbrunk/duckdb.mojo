@@ -1,5 +1,5 @@
-// mojo_overrides — a DuckDB C++ extension that dispatches selected built-in
-// scalar/aggregate functions to Mojo SIMD kernels, WITHOUT patching DuckDB.
+// mojo_overrides: a DuckDB C++ extension that dispatches selected built-in
+// scalar/aggregate functions to Mojo SIMD kernels, without patching DuckDB.
 //
 // At load (`mojo_overrides_duckdb_cpp_init`) it mutates the built-in catalog
 // function entries in place: it captures each original function pointer (used as
@@ -75,7 +75,8 @@ void mojo_knn_l2_f32(const float *q, const float *nrm_q, int64_t m, const float 
                      int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
 void mojo_knn_ip_f32(const float *q, const float *nrm_q, int64_t m, const float *e, const float *nrm_e, int64_t n,
                      int64_t d, int64_t k, int64_t *out_ids, float *out_dists);
-// fused sum-of-transcendental (item 2): plain returns sum; masked returns sum + valid count.
+// fused sum-of-transcendental: the plain version returns the sum, the masked
+// version returns the sum and the valid count.
 double mojo_fsum_sqrt_f64(const double *, int64_t);
 double mojo_fsum_sin_f64(const double *, int64_t);
 double mojo_fsum_cos_f64(const double *, int64_t);
@@ -120,7 +121,7 @@ struct MinMaxF {
 	float value;
 	bool isset;
 };
-// SumState<hugeint_t> / AvgState<hugeint_t> — the INT128 / high-precision DECIMAL
+// SumState<hugeint_t> / AvgState<hugeint_t>: the INT128 / high-precision DECIMAL
 // accumulator layouts (verified by runtime state_size checks). hugeint_t is
 // {uint64_t lower; int64_t upper}, so both states are 24 bytes.
 struct SumStateHugeint {
@@ -185,7 +186,7 @@ static inline bool IsFlat(Vector &v) {
 	return v.GetVectorType() == VectorType::FLAT_VECTOR;
 }
 // Validity bitmask words (uint64, bit set = valid). Only valid to call when
-// !AllValid() (otherwise GetData() may be null — but we always gate on that).
+// !AllValid(). Otherwise GetData() may be null, but callers always check this first.
 static inline const uint64_t *ValidWords(Vector &v) {
 	return reinterpret_cast<const uint64_t *>(FlatVector::Validity(v).GetData());
 }
@@ -354,7 +355,7 @@ static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_
 }
 
 // DECIMAL sum/avg are bind-dispatched (the concrete per-internal-type function is
-// produced at bind time, like min/max) → wrap the bind, swap the resolved
+// produced at bind time, like min/max). So we wrap the bind and swap the resolved
 // simple_update only when it resolves to the INT128 state (24-byte hugeint state).
 static bind_aggregate_function_t g_orig_sum_dec_bind = nullptr, g_orig_avg_dec_bind = nullptr;
 
@@ -455,7 +456,7 @@ static void OverrideScalar(Catalog &cat, ClientContext &ctx, const char *name, s
 // array_distance / array_inner_product / array_cosine_* fold two arrays to a
 // scalar per row via a serial single-accumulator scalar loop in stock DuckDB.
 // We swap the per-overload `function` pointer for a wrapper that mirrors
-// ArrayGenericFold exactly (NULL-row -> NULL, NULL child element -> throw,
+// ArrayGenericFold exactly (a NULL row gives NULL, a NULL child element throws,
 // constant-vector result when count==1) and only swaps the inner reduction for a
 // SIMD kernel. The caller-side POST transform derives negative_inner_product
 // (-x) and cosine_distance (1 - x) from the dot / cosine_sim kernels.
@@ -537,12 +538,13 @@ static void OverrideArrayFold(Catalog &cat, ClientContext &ctx, const char *name
 	}
 }
 
-// ===================== item 2: fused sum/avg(transcendental) =====================
+// ======================== fused sum/avg(transcendental) ========================
 // An OptimizerExtension rewrites ungrouped sum(f(col)) / avg(f(col)) for the
-// transcendental f's into a custom aggregate that applies f and reduces in ONE
-// pass (no intermediate vector). Modest CPU win (~1.1-1.3x; fusion mostly helps
-// the GPU), but it builds the optimizer-rewrite infra (the foundation item 5
-// reuses to route shapes to CPU/GPU backends). Disable with MOJO_OVERRIDES_NO_FUSE.
+// transcendental functions f into a custom aggregate that applies f and reduces
+// in one pass (no intermediate vector). The CPU gain is small (about 1.1 to 1.3x;
+// fusion mostly helps on the GPU), but it sets up the optimizer-rewrite code that
+// is reused to route query shapes to CPU/GPU backends. Disable with
+// MOJO_OVERRIDES_NO_FUSE.
 
 struct FusedState {
 	double value;
@@ -662,7 +664,8 @@ static bool IsFusableTranscendental(const std::string &f) {
 }
 
 // Build the fused aggregate, taking ownership of `inner` (the transcendental's
-// argument). Only called when IsFusableTranscendental(fname) — always returns.
+// argument). Only called when IsFusableTranscendental(fname), so it always returns
+// a result.
 static unique_ptr<Expression> BuildFusedAgg(const std::string &fname, bool is_avg, unique_ptr<Expression> inner,
                                             const std::string &alias) {
 #define MOJO_FUSE_CASE(NM, PLAIN, MASKED, SF)                                                                          \
@@ -722,10 +725,11 @@ static void MojoFuseOptimize(OptimizerExtensionInput &, unique_ptr<LogicalOperat
 // ============================ mojo_knn table function ============================
 // Blocked multi-query brute-force kNN over two FLOAT[K] ARRAY columns:
 //   SELECT * FROM mojo_knn('emb','v','queries','qv', 10, metric:='cosine');
-// -> (query_rowid BIGINT, rowid BIGINT, dist FLOAT). query_rowid / rowid are the
-// 0-based positional row indices in the query / embedding tables. CPU SIMD,
-// dependency-free; the batch (multi-query) case the single-row array overrides
-// can't accelerate. Exact up to FP tie-breaks at rank k.
+// returns (query_rowid BIGINT, rowid BIGINT, dist FLOAT). query_rowid / rowid are
+// the 0-based positional row indices in the query / embedding tables. It runs on
+// the CPU with SIMD and has no extra dependencies. It covers the batch
+// (multi-query) case that the single-row array overrides can't speed up. Results
+// are exact except for floating-point ties at rank k.
 
 static const int64_t MOJO_KNN_KMAX = 4096;
 
@@ -808,7 +812,7 @@ static unique_ptr<FunctionData> MojoKnnBind(ClientContext &context, TableFunctio
 	auto bd = make_uniq<MojoKnnBindData>();
 	if (N == 0 || M == 0 || eK == 0) { return std::move(bd); }
 
-	// Per-vector norms: cosine -> L2 norm, l2 -> squared norm, ip -> unused (0).
+	// Per-vector norms: L2 norm for cosine, squared norm for l2, unused (0) for ip.
 	std::vector<float> enrm(N, 0.0f), qnrm(M, 0.0f);
 	if (metric != 2) {
 		for (idx_t i = 0; i < N; i++) {
@@ -886,7 +890,7 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 	g_k_min32 = mojo_min_f32;
 	g_k_max32 = mojo_max_f32;
 
-	// item 2: register the fused sum/avg(transcendental) optimizer rewrite (opt-out).
+	// Register the fused sum/avg(transcendental) optimizer rewrite (on unless disabled).
 	if (!std::getenv("MOJO_OVERRIDES_NO_FUSE")) {
 		OptimizerExtension ext;
 		ext.optimize_function = MojoFuseOptimize;
@@ -905,7 +909,7 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		OverrideScalar(cat, ctx, "exp", Mojo_exp, g_orig_exp);
 		OverrideScalar(cat, ctx, "log10", Mojo_log10, g_orig_log10);
 
-		// sum/avg have concrete per-type overloads in the catalog → override simple_update directly.
+		// sum/avg have concrete per-type overloads in the catalog, so override simple_update directly.
 		auto agg = [&](const char *name, aggregate_simple_update_t wrap, aggregate_simple_update_t &orig,
 		               size_t mirror) {
 			auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
@@ -920,7 +924,7 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		agg("sum", MojoSum, g_orig_sum, sizeof(SumStateM));
 		agg("avg", MojoAvg, g_orig_avg, sizeof(AvgStateM));
 
-		// HUGEINT sum/avg: concrete per-type overload → override simple_update directly.
+		// HUGEINT sum/avg: concrete per-type overload, so override simple_update directly.
 		auto aggI128 = [&](const char *name, aggregate_simple_update_t wrap, aggregate_simple_update_t &orig,
 		                   size_t mirror) {
 			auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
@@ -935,11 +939,11 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		aggI128("sum", MojoSumHugeint, g_orig_sum_i128, sizeof(SumStateHugeint));
 		aggI128("avg", MojoAvgHugeint, g_orig_avg_i128, sizeof(AvgStateHugeint));
 
-		// DECIMAL(19..38) sum/avg resolve to the same INT128 state at bind → wrap the bind.
+		// DECIMAL(19..38) sum/avg resolve to the same INT128 state at bind, so wrap the bind.
 		WrapDecimalAggBind(cat, ctx, "sum", MojoSumDecimalBind, g_orig_sum_dec_bind);
 		WrapDecimalAggBind(cat, ctx, "avg", MojoAvgDecimalBind, g_orig_avg_dec_bind);
 
-		// min/max are bind-dispatched (ANY->ANY) → wrap the bind to swap f64/f32 simple_update.
+		// min/max are bind-dispatched (ANY->ANY), so wrap the bind to swap f64/f32 simple_update.
 		WrapMinMaxBind(cat, ctx, "min", MojoMinBind, g_orig_min_bind);
 		WrapMinMaxBind(cat, ctx, "max", MojoMaxBind, g_orig_max_bind);
 
@@ -960,7 +964,7 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		                  MojoArrayFold<float, mojo_array_cosine_sim_f32, FoldPost::ONE_MINUS>,
 		                  MojoArrayFold<double, mojo_array_cosine_sim_f64, FoldPost::ONE_MINUS>);
 
-		// blocked multi-query kNN table function (item 4).
+		// blocked multi-query kNN table function.
 		RegisterMojoKnn(cat, ctx);
 	});
 	fprintf(stderr, "[mojo_overrides] installed (kernels linked in)\n");

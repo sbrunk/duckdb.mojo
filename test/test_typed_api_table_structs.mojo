@@ -104,15 +104,15 @@ def test_table_struct_with_nulls() raises:
     var result = con.execute("SELECT name, age, active FROM users")
     var chunk = result.fetch_chunk()
 
-    # Row 0: all non-null -> succeeds
+    # Row 0: all non-null, succeeds
     var user0 = chunk.get[UserRecord](row=0)
     assert_equal(user0.name, "Alice")
 
-    # Row 1: name is NULL -> raises
+    # Row 1: name is NULL, raises
     with assert_raises():
         _ = chunk.get[UserRecord](row=1)
 
-    # Row 2: age is NULL -> raises
+    # Row 2: age is NULL, raises
     with assert_raises():
         _ = chunk.get[UserRecord](row=2)
 
@@ -289,7 +289,7 @@ def test_materialized_struct_with_nulls_raises() raises:
     var user = result.get[UserRecord](row=0)
     assert_equal(user.name, "Alice")
 
-    # Row 1 has NULL name -> raises
+    # Row 1 has a NULL name, so this raises
     with assert_raises():
         _ = result.get[UserRecord](row=1)
 

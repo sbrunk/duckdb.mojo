@@ -1,31 +1,31 @@
-"""SKIP-MATERIALIZE all-resident edge test (Mojo-only, needs GPU).
+"""Skip-materialize all-resident edge test (Mojo-only, needs GPU).
 
-Exercises landmine #1 (the all-fact-columns-resident -> 0-column SELECT path) of
-the skip-materialize follow-up directly at the Mojo C-ABI level, where the CLI
-cannot reach it: with predicate-independent residency a repeated Q6 is a WARM hit
-(pin_begin returns 0, skipping the cold feed entirely), so the natural CLI flow
-never drives a COLD finalize with EVERY fact column already pooled. This test
-forces exactly that state by:
+Exercises pitfall #1 of the skip-materialize follow-up (the path where all fact
+columns are resident, giving a 0-column SELECT) directly at the Mojo C-ABI level,
+where the CLI cannot reach it. Because residency does not depend on the
+predicate, a repeated Q6 is a warm hit (pin_begin returns 0 and skips the cold
+feed entirely), so the normal CLI flow never runs a cold finalize with every fact
+column already pooled. This test forces that state by:
 
-  1. Driving a full COLD Q6 shuttle (build->materialize->feed x4->finalize) under
+  1. Driving a full cold Q6 shuttle (build, materialize, feed x4, finalize) under
      GPU_OP_COLPOOL=2 + GPU_OP_NATIVE_DECODE=1 so the 4 fact columns
-     (l_shipdate/l_discount/l_quantity/l_extendedprice) are UPLOADED into the pool
+     (l_shipdate/l_discount/l_quantity/l_extendedprice) are uploaded into the pool
      and stay leased by the cached residency.
-  2. Building a SECOND Q6 descriptor (a fresh handle => fresh exec state) and
+  2. Building a second Q6 descriptor (a fresh handle, so fresh exec state) and
      calling materialize_sql(0). Because all 4 columns are now pool-resident, the
-     narrowed SELECT must OMIT ALL of them -> a 0-COLUMN projection ("SELECT  FROM
-     lineitem") AND materialize_sql must seed st.n_rows from the resident row count
-     (so the C++ side can skip the illegal 0-column query and the finalize still
-     knows n).
+     narrowed SELECT must omit all of them, giving a 0-column projection ("SELECT
+     FROM lineitem"), and materialize_sql must seed st.n_rows from the resident row
+     count (so the C++ side can skip the illegal 0-column query and the finalize
+     still knows n).
 
-It then asserts: the narrowed SQL has an EMPTY projection (the C++ empty-projection
-detector's trigger), and that running the FULL shuttle for that 2nd query (it is a
-WARM hit, so feed is skipped) still yields the bit-exact Q6 sum. This validates the
-Mojo half of the n_rows landmine; the C++ "skip the 0-column Connection::Query +
-feed_rowcount" half is a direct consequence and is covered by the partial-omit
-end-to-end CLI path (Q14-after-Q6 omits 3 of 4 columns).
+It then asserts that the narrowed SQL has an empty projection (what triggers the
+C++ empty-projection check), and that running the full shuttle for that second
+query (a warm hit, so feed is skipped) still yields the bit-exact Q6 sum. This
+covers the Mojo half of the n_rows pitfall. The C++ half ("skip the 0-column
+Connection::Query + feed_rowcount") follows directly from it and is covered by
+the partial-omit end-to-end CLI path (Q14 after Q6 omits 3 of 4 columns).
 
-Run from the repo root (the flags MUST be set so skip-materialize is active):
+Run from the repo root (the flags must be set so skip-materialize is active):
     GPU_OP_COLPOOL=2 GPU_OP_NATIVE_DECODE=1 pixi run mojo run \
         -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/skipmat_allresident_test.mojo
@@ -256,7 +256,7 @@ def main() raises:
     var cap = 512
     var sql_buf = alloc[UInt8](cap)
 
-    # ---- run #1: COLD, uploads all 4 fact columns into the pool ----
+    # ---- run #1: cold, uploads all 4 fact columns into the pool ----
     var h1_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h1_int != 0, "build #1 returned 0")
     var h1 = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h1_int)
@@ -283,7 +283,7 @@ def main() raises:
     assert_equal(gpu1, cpu, "run #1 GPU sum != CPU")
 
     # ---- run #2: a fresh handle. All 4 cols are now pool-resident, so the
-    # narrowed SELECT must OMIT ALL of them (0-column projection) and the
+    # narrowed SELECT must omit all of them (0-column projection) and the
     # materialize must seed n_rows so the C++ side can skip the illegal query. ----
     var h2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h2_int != 0, "build #2 returned 0")
@@ -303,10 +303,10 @@ def main() raises:
         "FROM lineitem" in sql2, "run #2 SQL must still name the fact table"
     )
 
-    # The C++ side would here SKIP the (illegal 0-column) query and rely on the
-    # n_rows materialize_sql seeded. We exercise feed_rowcount the same way C++
-    # does for the partial case (idempotent / unconditional), then finalize. run #2
-    # is a WARM hit (same signature as run #1) so finalize re-runs on the resident
+    # At this point the C++ side would skip the (illegal 0-column) query and rely
+    # on the n_rows that materialize_sql seeded. We call feed_rowcount the same way
+    # C++ does for the partial case (idempotent / unconditional), then finalize.
+    # Run #2 is a warm hit (same signature as run #1) so finalize re-runs on the resident
     # buffers; the result must still be bit-exact.
     assert_equal(
         Int(mojo_gpu_feed_rowcount(h2, N)), 0, "feed_rowcount rc"

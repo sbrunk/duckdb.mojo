@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/min_x.benchmark
-# description: ungrouped aggregate — MIN(x)
+# description: ungrouped aggregate: MIN(x)
 # group: [mojo_simd]
 
 name MIN(x)

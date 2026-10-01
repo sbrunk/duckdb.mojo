@@ -1,6 +1,5 @@
 from duckdb._libduckdb import *
 from duckdb.api import _get_duckdb_interface
-from duckdb.api_level import ApiLevel
 from duckdb.logical_type import LogicalType
 from duckdb.connection import Connection
 from duckdb.duckdb_type import dtype_to_duckdb_type
@@ -64,7 +63,7 @@ struct FunctionInfo:
     def get_bind_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during the bind phase.
         
-        Note that the bind data is read-only during execution.
+        The bind data is read-only during execution.
         
         Returns:
             Pointer to the bind data.
@@ -89,20 +88,13 @@ struct FunctionInfo:
         )
 
 
-struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
+struct ScalarFunction(Movable):
     """A scalar function that can be registered in DuckDB.
 
     Functions are written using high-level Mojo types (FunctionInfo, Chunk, Vector)
-    which provide better ergonomics and type safety. The API automatically handles
+    which are easier to use and type safe. The API automatically handles
     conversion from low-level FFI types.
 
-    The ``api_level`` parameter gates access to unstable C API methods
-    (e.g. ``set_bind``) at compile time.  The default (``CLIENT``) allows
-    everything; pass ``EXT_STABLE`` to forbid unstable calls.
-
-    Parameters:
-        api_level: API surface available.  Defaults to ``ApiLevel.CLIENT``.
-    
     Example:
     ```mojo
     from duckdb import Connection, DuckDBType
@@ -232,13 +224,8 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         - Set the return type dynamically
         - Store bind data for use during execution
 
-        **Requires unstable API** — blocked at compile time for
-        ``ApiLevel.EXT_STABLE`` extensions.
-
         * bind: The bind function callback.
         """
-        comptime assert Self.api_level.includes_unstable(), "ScalarFunction.set_bind requires the unstable API or client mode"
-        
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_bind(self._function, bind)
 
@@ -489,7 +476,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
 
         self.set_function[wrapper]()
 
-    def register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection) raises:
         """Registers the scalar function within the given connection.
 
         The function requires at least a name, a function, and a return type.
@@ -514,7 +501,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         Out: DType,
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a zero-parameter scalar function.
 
         Eliminates boilerplate by deriving DuckDB types from Mojo `DType` parameters.
@@ -552,7 +539,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         func: def(FunctionInfo, mut Chunk, mut Vector) thin -> None,
         In1: DType,
         Out: DType,
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a unary scalar function.
 
         Deriving DuckDB types from Mojo `DType` parameters.
@@ -595,7 +582,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         In2: DType,
         Out: DType,
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a binary scalar function.
 
         Parameters:
@@ -640,7 +627,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         In3: DType,
         Out: DType,
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a ternary scalar function.
 
         Parameters:
@@ -670,7 +657,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: def(Scalar[In1]) thin -> Scalar[Out],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a scalar function from a simple row-at-a-time function.
 
         Automatically generates a vectorized wrapper that loops over chunk rows,
@@ -714,7 +701,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: def(Scalar[In1]) thin -> Scalar[Out],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a scalar function from a simple row-at-a-time function.
 
         Parameters:
@@ -745,7 +732,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: def(Scalar[In1], Scalar[In2]) thin -> Scalar[Out],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a binary scalar function from a simple row-at-a-time function.
 
         Returns the configured ScalarFunction without registering it.
@@ -789,7 +776,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: def(Scalar[In1], Scalar[In2]) thin -> Scalar[Out],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a binary scalar function from a simple row-at-a-time function.
 
         Parameters:
@@ -824,7 +811,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: def[width: SIMDLength] (SIMD[In1, width]) thin -> SIMD[Out, width],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -857,7 +844,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In1: DType,
         Out: DType,
         func: def[width: SIMDLength] (SIMD[In1, width]) thin -> SIMD[Out, width],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a scalar function from a SIMD-vectorized function.
 
         Parameters:
@@ -888,7 +875,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: def[width: SIMDLength] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a binary scalar function from a SIMD-vectorized function.
 
         Returns the configured ScalarFunction without registering it.
@@ -924,7 +911,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         In2: DType,
         Out: DType,
         func: def[width: SIMDLength] (SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a binary scalar function from a SIMD-vectorized function.
 
         Parameters:
@@ -956,7 +943,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a unary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
@@ -990,7 +977,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a unary scalar function from a stdlib math function.
 
         Parameters:
@@ -1017,7 +1004,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ]() -> ScalarFunction[ApiLevel.CLIENT]:
+    ]() -> ScalarFunction:
         """Create a binary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
@@ -1050,7 +1037,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         name: StringLiteral,
         D: DType,
         func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a binary scalar function from a stdlib math function.
 
         Parameters:
@@ -1088,7 +1075,7 @@ struct ScalarFunction[api_level: ApiLevel = ApiLevel.CLIENT](Movable):
         """Gets the bind data set during binding.
         
         This can be called during function execution to access data stored during binding.
-        Note that the bind data is read-only.
+        The bind data is read-only.
 
         * info: The function info object.
         * returns: The bind data pointer.
@@ -1245,7 +1232,7 @@ struct ScalarFunctionSet(Movable):
     def add_function(self, function: ScalarFunction) raises:
         """Adds a scalar function as a new overload to the function set.
 
-        IMPORTANT: The function must have its name set to match the function set's name
+        The function must have its name set to match the function set's name
         using set_name() before being added to the set.
 
         DuckDB copies the function internally, so the original ScalarFunction
@@ -1262,7 +1249,7 @@ struct ScalarFunctionSet(Movable):
         if status != DuckDBSuccess:
             raise Error("Failed to add function to set - overload may already exist")
 
-    def register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection) raises:
         """Registers the scalar function set within the given connection.
 
         The set requires at least one valid overload.

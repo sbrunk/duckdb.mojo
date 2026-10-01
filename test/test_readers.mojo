@@ -3,7 +3,7 @@ from std.testing import assert_equal, assert_true, assert_raises
 from std.testing.suite import TestSuite
 
 
-def _write_csv(con: Connection[ApiLevel.CLIENT], path: String) raises:
+def _write_csv(con: Connection, path: String) raises:
     _ = con.execute(
         "CREATE OR REPLACE TABLE src AS SELECT * FROM (VALUES (1,'a'),(2,'b'),(3,'c')) t(i,s)"
     )

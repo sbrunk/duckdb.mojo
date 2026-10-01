@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/cos.benchmark
-# description: Mojo SIMD patch target — cos(x)
+# description: Mojo SIMD patch target: cos(x)
 # group: [mojo_simd]
 
 name cos(x)

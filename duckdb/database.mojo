@@ -9,8 +9,8 @@ def _null_ptr[T: AnyType, origin: Origin]() -> Pointer[T, origin]:
 
     Mojo 1.0.0b2+ forbids `UnsafePointer(unsafe_from_address=0)`. For C APIs
     that interpret NULL as a sentinel (e.g. `duckdb_open_ext` with `config=NULL`
-    meaning "use defaults"), we reinterpret a `None` Optional — which uses the
-    null address as its niche — as the raw pointer.
+    meaning "use defaults"), we reinterpret a `None` Optional (which uses the
+    null address as its niche) as the raw pointer.
     """
     var opt: Optional[Pointer[T, origin]] = None
     return Pointer(to=opt).unsafe_bitcast[Pointer[T, origin]]()[]
@@ -22,7 +22,7 @@ struct Database(Movable):
 
     def __init__(out self, path: Optional[String] = None) raises:
         ref libduckdb = DuckDB().libduckdb()
-        # NULL handle — duckdb_open_ext populates it via out-param. If
+        # NULL handle. duckdb_open_ext fills it in via an out-param. If
         # construction raises after this, __deinit__'s duckdb_close becomes a
         # safe no-op on NULL.
         self._db = _null_ptr[duckdb_database.T, MutUntrackedOrigin]()
@@ -49,7 +49,7 @@ struct Database(Movable):
             config: Startup configuration.
         """
         ref libduckdb = DuckDB().libduckdb()
-        # NULL handle — duckdb_open_ext populates it via out-param.
+        # NULL handle. duckdb_open_ext fills it in via an out-param.
         self._db = _null_ptr[duckdb_database.T, MutUntrackedOrigin]()
         self._is_owned = True
         var db_addr = Pointer(to=self._db)
@@ -67,7 +67,7 @@ struct Database(Movable):
     def __init__(out self, *, _handle: duckdb_database):
         """Wrap an existing database handle without taking ownership.
 
-        The caller retains ownership — the handle will not be closed
+        The caller keeps ownership: the handle will not be closed
         when this Database is destroyed.
 
         Args:

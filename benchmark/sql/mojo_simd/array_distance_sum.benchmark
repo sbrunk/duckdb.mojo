@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/array_distance_sum.benchmark
-# description: kernel-isolating — SUM(array_distance) over 200k x 768 f32
+# description: SUM(array_distance) over 200k x 768 f32 (isolates the kernel)
 # group: [mojo_simd]
 
 name array_distance sum

@@ -1,8 +1,8 @@
 """Round-trip test for the RawPlan -> descriptor boundary (pure Mojo, no GPU).
 
-Hand-builds 5 TPC-H query tapes following RAW_PLAN_CONTRACT.md, then asserts the
-matcher brain (`build_descriptor_impl`) classifies each correctly. Imports
-`descriptor` directly -- needs neither the GPU nor the built dylib.
+Hand-builds 5 TPC-H query tapes following RAW_PLAN_CONTRACT.md, then asserts that
+the matcher (`build_descriptor_impl`) classifies each one correctly. Imports
+`descriptor` directly, so it needs neither the GPU nor the built dylib.
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
@@ -86,9 +86,9 @@ struct TapeBuilder(Movable):
         self.lens.append(s.byte_length())
         return len(self.names) - 1
 
-    # Emit the STRING_TABLE section (call AFTER all strings interned upstream is
-    # not required because we build the tape section-by-section; instead the
-    # caller emits the table at the right spot by reading offs/lens).
+    # Emit the STRING_TABLE section. It does not have to be called after all
+    # strings are interned, because we build the tape section by section; the
+    # caller emits the table at the right spot by reading offs/lens.
     def emit_string_table(mut self):
         self.puti(len(self.names))
         for i in range(len(self.names)):
@@ -446,7 +446,7 @@ def check(
     exp_dims: Int,
     exp_aggs: Int,
 ) raises:
-    # force_highcard=True so we validate CLASSIFICATION for every shape (incl. Q3's
+    # force_highcard=True so we check the classification for every shape (incl. Q3's
     # high-cardinality group-by), independent of the cost policy that otherwise
     # declines high-card group-by to keep it on the CPU.
     var maybe = build_descriptor_impl(r, force_highcard=True)

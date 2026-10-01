@@ -53,7 +53,7 @@ struct LogicalType[is_owned: Bool, origin: ImmOrigin](ImplicitlyCopyable & Equat
                 # Take ownership of the pointer before list_type's destructor runs
                 self._logical_type = list_type._logical_type
                 # Prevent list_type from destroying the pointer we just took.
-                # Null sentinel — duckdb_destroy_logical_type is a no-op on NULL.
+                # Null sentinel: duckdb_destroy_logical_type is a no-op on NULL.
                 list_type._logical_type = _null_ptr[duckdb_logical_type.T, MutUntrackedOrigin]()
             elif copy.get_type_id() == DuckDBType.array:
                 # Deep copy array type: recreate from child type and size

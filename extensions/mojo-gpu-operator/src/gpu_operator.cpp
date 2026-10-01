@@ -76,7 +76,7 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Mojo kernel C-ABI (gpu_kernels.mojo -> gpu_kernels.o, linked into this .so).
+// Mojo kernel C-ABI (gpu_kernels.mojo compiled to gpu_kernels.o, linked into this .so).
 // init returns the handle as an integer address (0 == failure).
 // ---------------------------------------------------------------------------
 extern "C" {
@@ -105,16 +105,16 @@ int32_t mojo_gpu_pin_query_topk(void *handle, const float *q, int64_t k,
 void mojo_gpu_pin_free(void *handle);
 // fp16 pin-resident engine: same contract as the fp32 trio above, but the
 // resident matrix is stored as float16 (~1.6-1.8x faster top-k, half the VRAM,
-// recall >=0.99 on normalized embeddings). fp16 handles MUST be freed with
+// recall >=0.99 on normalized embeddings). fp16 handles must be freed with
 // mojo_gpu_pin_free_f16, never the fp32 free.
 int64_t mojo_gpu_pin_f16(const float *emb, int64_t n_rows, int64_t K);
 int32_t mojo_gpu_pin_query_topk_f16(void *handle, const float *q, int64_t k,
                                     int64_t *out_ids, float *out_dists);
 void mojo_gpu_pin_free_f16(void *handle);
-// TRUE batched exact top-k: score M query vectors (row-major M*K floats) against
-// the resident matrix, reading that matrix ONCE per query-tile (not once per
+// True batched exact top-k: score M query vectors (row-major M*K floats) against
+// the resident matrix, reading that matrix once per query-tile (not once per
 // query). out_ids/out_dists are caller-allocated, length M*k, row-major
-// [query*k + slot]; padded slots carry id = -1. Returns the SAME exact (ids,
+// [query*k + slot]; padded slots carry id = -1. Returns the same exact (ids,
 // dists) as M single-query calls. rc: 0 ok; 1 null handle; 2 bad k/M; 3 internal.
 int32_t mojo_gpu_pin_query_topk_batch(void *handle, const float *qs, int64_t M,
                                       int64_t k, int64_t *out_ids, float *out_dists);
@@ -122,7 +122,7 @@ int32_t mojo_gpu_pin_query_topk_batch_f16(void *handle, const float *qs, int64_t
                                           int64_t k, int64_t *out_ids, float *out_dists);
 // Batched fp16 top-k with an explicit metric: 0 = cosine (array_cosine_distance),
 // 1 = L2 / squared-euclidean (array_distance), 2 = inner-product
-// (array_negative_inner_product / -dot). metric != 0 is ONLY implemented on the
+// (array_negative_inner_product / -dot). metric != 0 is only implemented on the
 // fused tensor-core path (GPU_OP_TENSORCORE on an NVIDIA build, supported K/k);
 // otherwise it returns rc != 0 so the caller can fall back to stock DuckDB.
 int32_t mojo_gpu_pin_query_topk_batch_f16_metric(void *handle, const float *qs, int64_t M,
@@ -156,7 +156,7 @@ int64_t mojo_q1_pin_alloc(int64_t n_rows, uint8_t **gid_h, int64_t **qty_h,
                           int64_t **ext_h, int64_t **disc_h, int64_t **tax_h,
                           int32_t **ship_h);
 int32_t mojo_q1_pin_upload(void *handle, int64_t n_groups, int32_t timing);
-// TPC-H Q14 engine: GPU hash-probe FK join (lineitem -> part) + probe-side
+// TPC-H Q14 engine: GPU hash-probe FK join (lineitem to part) + probe-side
 // exact-decimal aggregation. The C++ side builds the open-addressing hash table
 // (host) and passes keys[]+promo[] (size = pow2) plus the 4 probe columns.
 int64_t mojo_q14_pin(const int64_t *ht_keys, const uint8_t *ht_promo, int64_t ht_size,
@@ -188,7 +188,7 @@ void mojo_q3_free(void *handle);
 // materializes lineitem ORDERED BY l_orderkey, builds the distinct-orderkey list
 // (seg_key) + seg_offset[] (start row of each order, seg_offset[n_seg]=n_rows) in
 // one pass, pins them + order_pass + the sorted probe columns. query2 returns one
-// int64 revenue per segment (scale-4); the host maps s -> orderkey via seg_key.
+// int64 revenue per segment (scale-4); the host maps s to orderkey via seg_key.
 int64_t mojo_q3_pin2(const uint8_t *order_pass, const int64_t *seg_offset,
                      const int64_t *seg_key, const int32_t *ship, const int64_t *ext,
                      const int64_t *disc, int64_t n_rows, int64_t n_seg,
@@ -231,7 +231,7 @@ int64_t mojo_q5_pin_alloc(const uint8_t *order_pass, const int32_t *order_cust_n
                           int64_t **ext_h, int64_t **disc_h);
 int32_t mojo_q5_pin_upload(void *handle, int32_t timing);
 
-// RawPlan -> descriptor boundary (descriptor.mojo). Stage-1 shadow validation:
+// Boundary between RawPlan and descriptor (descriptor.mojo). Stage-1 shadow validation:
 // C++ flattens a matched LogicalAggregate subtree into the RawPlan wire form and
 // Mojo parses+classifies it. The handle is an opaque int64 pointer (0 = reject).
 int64_t mojo_gpu_build_descriptor(const int64_t *tape, int64_t tape_len,
@@ -246,7 +246,7 @@ int64_t mojo_gpu_desc_is_transcendental(void *handle);
 // covar/corr/regr_*). Enables routing for an otherwise KIND_UNKNOWN stat plan.
 int64_t mojo_gpu_desc_is_stats(void *handle);
 // A1 (GPU_OP_NULLABLE): 1 iff UNGROUPED int-path multi/aggregate (all SUM/AVG/count(*),
-// not f64). Enables routing for an int multi-aggregate plan whose KIND is UNKNOWN.
+// not f64). Enables routing for an int multi-aggregate plan whose kind is UNKNOWN.
 int64_t mojo_gpu_desc_a1_ungrouped_ok(void *handle);
 // GPU_OP_NULLABLE_GROUPED: 1 iff DENSE_GROUP int-path all-{SUM,AVG,count(*)} aggregate.
 int64_t mojo_gpu_desc_a1_grouped_ok(void *handle);
@@ -262,23 +262,23 @@ int64_t mojo_gpu_desc_out_arity(void *handle);
 int64_t mojo_gpu_desc_out_type(void *handle, int64_t i, int64_t *tag, int64_t *scale, int64_t *width);
 int64_t mojo_gpu_desc_materialize_count(void *handle);
 int64_t mojo_gpu_desc_materialize_sql(void *handle, int64_t i, uint8_t *out, int64_t cap); // full byte len
-int64_t mojo_gpu_pin_begin(void *handle);             // 0=WARM, 1=COLD
+int64_t mojo_gpu_pin_begin(void *handle);             // 0=warm, 1=cold
 int64_t mojo_gpu_feed_column(void *handle, int64_t req_i, int64_t col_j, void *ptr,
                              int64_t n_rows, int64_t type_tag,
                              int64_t dec_scale);   // 0 ok (dec_scale: GPU_OP_STATS)
 // GPU_OP_NULLABLE: feed a per-row validity byte array (1=valid, 0=NULL) for one
-// column, same (req_i, col_j) addressing as feed_column. Called AFTER feed_column
-// only for columns that held a NULL; absent => column is all-valid. 0 ok.
+// column, same (req_i, col_j) addressing as feed_column. Called after feed_column
+// only for columns that held a NULL; if absent the column is all-valid. 0 ok.
 int64_t mojo_gpu_feed_validity(void *handle, int64_t req_i, int64_t col_j,
                                void *ptr, int64_t n_rows);
-// SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): set st.n_rows for the FACT request
+// SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): set st.n_rows for the fact request
 // unconditionally (called for request 0 before the feed loop with res->RowCount()).
-// When the narrowed SELECT omits ALL fact columns this is the only n_rows source.
+// When the narrowed SELECT omits all fact columns this is the only n_rows source.
 int64_t mojo_gpu_feed_rowcount(void *handle, int64_t n_rows);     // 0 ok
-// SKIP-MATERIALIZE active for THIS query (1) or not (0): pool on + sub-flag on +
+// SKIP-MATERIALIZE active for this query (1) or not (0): pool on + sub-flag on +
 // in-scope ungrouped predicate-independent class (Q6/Q14). When 1 the C++ side
-// uses the narrowed SQL feed (NOT the GPU-direct fact feed) and calls
-// feed_rowcount before the feed loop. 0 => Phase 1 / verbatim behavior.
+// uses the narrowed SQL feed (not the GPU-direct fact feed) and calls
+// feed_rowcount before the feed loop. 0 means Phase 1 / verbatim behavior.
 int64_t mojo_gpu_skipmat_active(void *handle);
 int64_t mojo_gpu_pin_finalize(void *handle);          // 0 ok
 int64_t mojo_gpu_result_rows(void *handle);
@@ -291,11 +291,11 @@ int64_t mojo_gpu_result_str(void *handle, int64_t row, int64_t col, uint8_t *out
 // int128 / transcendental result readback is byte-identical.
 int64_t mojo_gpu_result_valid(void *handle, int64_t row, int64_t col);
 // Phase 1 column pool (GPU_OP_COLPOOL): monotonic count of bytes pushed H2D on
-// pool misses. The dedup proof reads the DELTA across queries (a shared column
-// uploaded once => later queries add nothing). Surfaced to SQL by the
+// pool misses. The dedup check reads the delta across queries (once a shared column
+// is uploaded, later queries add nothing). Surfaced to SQL by the
 // gpu_colpool_status() table function for the measurement.
 int64_t mojo_gpu_colpool_uploaded_bytes();
-// Current RESIDENT bytes held by the pool (sum of pooled-column footprints) and
+// Current resident bytes held by the pool (sum of pooled-column footprints) and
 // by the tracked aggregate residency (_pin2). For the VRAM-bound assertion.
 int64_t mojo_gpu_colpool_pool_bytes();
 int64_t mojo_gpu_colpool_pin2_bytes();
@@ -310,14 +310,15 @@ int64_t mojo_gpu_colpool_costaware();
 
 namespace duckdb {
 
-// NR1 (decline -> SIMD overrides): defined in
+// NR1 (declined queries fall to the SIMD overrides): defined in
 // extensions/mojo-kernel-overrides/src/mojo_overrides.cpp, compiled + linked into
 // this .so by build.sh. It mutates the built-in catalog so the Mojo SIMD kernels
 // (sqrt/sin/cos/ln/exp/log10 + sum/avg/min/max, with stock fallback) replace the
 // built-ins in place. Because that is catalog-level and orthogonal to our
-// optimizer pass, any query this operator DECLINES then runs through the override
-// kernels before stock -- turning "decline = parity" into "decline = still beat
-// DuckDB" on the shapes the SIMD kernels win (min/max, transcendental, INT128 sum).
+// optimizer pass, any query this operator declines then runs through the override
+// kernels before stock. So a declined query is still faster than stock DuckDB
+// (instead of only matching it) on the shapes the SIMD kernels win (min/max,
+// transcendental, INT128 sum).
 void RegisterMojoOverrides(DatabaseInstance &db);
 
 namespace {
@@ -395,7 +396,7 @@ public:
       rc = mojo_gpu_cosine_run(gstate.handle, emb, NumericCast<int64_t>(n), out);
     }
     if (rc != 0) {
-      // GPU unavailable / errored / over capacity -> CPU fallback.
+      // GPU unavailable / errored / over capacity: CPU fallback.
       cpu_cosine(emb, n, K, query.data(), qnorm, out);
     }
     return OperatorResultType::NEED_MORE_INPUT;
@@ -474,7 +475,7 @@ bool MatchCosineProjection(LogicalProjection &proj) {
 
 // Stage-1 shadow validation (defined after the join-tree helpers). Serializes a
 // LogicalAggregate to the RawPlan wire form, hands it to the Mojo descriptor
-// builder, and logs the classification. Pure side-effect (stderr): NEVER mutates
+// builder, and logs the classification. Pure side-effect (stderr): never mutates
 // the plan, so it cannot change what the optimizer emits.
 void ShadowValidateAggregate(LogicalAggregate &agg);
 
@@ -482,7 +483,7 @@ void ShadowValidateAggregate(LogicalAggregate &agg);
 // + the LogicalGpuAgg/PhysicalGpuAgg classes). On by default; returns true and
 // replaces *node with a descriptor-driven LogicalGpuAgg when the matched plan's
 // descriptor kind is buildable. GPU_OP_GENERIC=off disables all GPU aggregate
-// offload -> the node is left untouched and runs on stock DuckDB CPU.
+// offload; the node is then left untouched and runs on stock DuckDB CPU.
 bool TryRouteGeneric(unique_ptr<LogicalOperator> &node);
 static bool BelowGpuCrossover(const LogicalOperator &node);  // item 5 crossover
 
@@ -493,7 +494,7 @@ void OptimizeNode(unique_ptr<LogicalOperator> &node) {
 
   // Shadow validation (zero behavior change): for every aggregate node, when
   // GPU_OP_SHADOW is set, build a RawPlan descriptor and log its classification
-  // BEFORE the real matchers run. All exceptions swallowed; plan untouched.
+  // before the real matchers run. All exceptions swallowed; plan untouched.
   if (node->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY &&
       std::getenv("GPU_OP_SHADOW")) {
     try {
@@ -505,19 +506,19 @@ void OptimizeNode(unique_ptr<LogicalOperator> &node) {
 
   // Generic GPU aggregate operator (on by default): when the node's descriptor
   // class is buildable, route it through the descriptor-driven LogicalGpuAgg.
-  // GPU_OP_GENERIC=off (or a non-buildable class) is a no-op -> the node falls
+  // GPU_OP_GENERIC=off (or a non-buildable class) is a no-op, and the node falls
   // through to stock DuckDB CPU execution (the bespoke MatchQ* path is gone).
   if (node->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
     try {
       if (TryRouteGeneric(node)) { return; }
     } catch (...) {
-      // leave node untouched -> stock DuckDB CPU execution
+      // leave node untouched, so stock DuckDB CPU executes it
     }
   }
 
   if (node->type == LogicalOperatorType::LOGICAL_PROJECTION) {
     auto &proj = node->Cast<LogicalProjection>();
-    // item 5: small-N cosine loses to the CPU array_cosine_distance override -> decline.
+    // item 5: small-N cosine loses to the CPU array_cosine_distance override, so decline.
     if (MatchCosineProjection(proj) && !BelowGpuCrossover(proj)) {
       auto cosine_expr = std::move(proj.expressions[0]);
       auto repl = make_uniq<LogicalGpuCosine>(proj.table_index, std::move(cosine_expr));
@@ -543,29 +544,29 @@ void OptimizeNode(unique_ptr<LogicalOperator> &node) {
 //   STATISTICS_PROPAGATION - on a multi-table FK-join (our Q3/Q5 class) it derives
 //     a redundant range filter from the join-key statistics (e.g. `c_custkey<=N`
 //     when customer is joined to orders) and leaves it as a residual LOGICAL_FILTER
-//     operator INSIDE the join tree, above the dimension scan. CollectJoinTree
+//     operator inside the join tree, above the dimension scan. CollectJoinTree
 //     descends the join tree but only serializes GET.table_filters, never a
-//     standalone LogicalFilter's predicate -- so (post the CollectJoinTree guard
-//     that now bails on any non-empty residual filter rather than silently drop it)
+//     standalone LogicalFilter's predicate. So (since the CollectJoinTree guard
+//     now bails on any non-empty residual filter rather than silently drop it)
 //     such a tree is rejected and the offload is lost, even though the filter is a
 //     tautology implied by the join. Disabling the pass removes the redundant
 //     filter, restoring a clean Aggregate-over-INNER-join-tree the matcher can
-//     serialize. Verified: a Q3-shaped GROUP BY o_shippriority (DENSE_GROUP, NOT
-//     cost-declined) serializes only with this pass disabled. NOTE: this pass also
-//     folds an *ungrouped* MIN/MAX over an unfiltered column into a constant
-//     (EXPRESSION_GET + DUMMY_SCAN, no Aggregate node) -- but that fold is a free
-//     zone-map read that beats any GPU scan, so we deliberately do NOT fight it;
+//     serialize. Verified: a Q3-shaped GROUP BY o_shippriority (DENSE_GROUP, not
+//     cost-declined) serializes only with this pass disabled. This pass also
+//     folds an ungrouped MIN/MAX over an unfiltered column into a constant
+//     (EXPRESSION_GET + DUMMY_SCAN, no Aggregate node). That fold is a free
+//     zone-map read that beats any GPU scan, so we deliberately leave it alone;
 //     the SUM-based scalar aggregates we offload (Q6/Q14) never fold.
 //
-// IN_CLAUSE and LATE_MATERIALIZATION are deliberately left ENABLED: an `x IN (...)`
+// IN_CLAUSE and LATE_MATERIALIZATION are deliberately left enabled. An `x IN (...)`
 // filter rewrites to either a residual OR-filter or a MARK-join + CHUNK_GET, both of
 // which CollectJoinTree already rejects (non-INNER join / non-GET leaf / residual
-// filter) -> safe CPU fallback, identical with or without the pass; and
+// filter), giving a safe CPU fallback that is identical with or without the pass.
 // LATE_MATERIALIZATION only fires on LIMIT/TOP_N/SAMPLE roots over PROJECTION/FILTER/
 // GET chains (an Aggregate breaks the chain), so it can never rewrite inside our
-// matched aggregate subtree -- the ORDER BY/LIMIT always sits ABOVE the aggregate and
+// matched aggregate subtree: the ORDER BY/LIMIT always sits above the aggregate and
 // stays with DuckDB. (Sirius disables all four because its rebind path executes the
-// ENTIRE plan on GPU; we only replace the aggregate subtree and leave the rest to CPU.)
+// entire plan on GPU; we only replace the aggregate subtree and leave the rest to CPU.)
 //
 // We remember the original set per-thread (the binder runs both hooks on the same
 // thread for one plan), keyed by context pointer for re-entrancy safety (the generic
@@ -579,10 +580,10 @@ thread_local std::unordered_map<const ClientContext *, SavedDisabled> g_saved_di
 // The ClientContext currently being optimized, published by GpuCosineOptimize for
 // the duration of OptimizeNode so the join-uniqueness check (Part 2 of audit Group
 // E) can issue a bounded nested probe (count(*) == count(DISTINCT key)) on a dim
-// table whose join key is NOT covered by a declared PRIMARY KEY / UNIQUE
-// constraint. nullptr outside an optimize pass -> the check then fail-closes on any
+// table whose join key is not covered by a declared PRIMARY KEY / UNIQUE
+// constraint. nullptr outside an optimize pass; the check then fails closed on any
 // non-constraint dim key (declines the offload). Set/cleared on the same thread the
-// optimizer runs on; the nested probe runs on a FRESH Connection (its own
+// optimizer runs on; the nested probe runs on a fresh Connection (its own
 // ClientContext), so it does not collide with this pointer or g_saved_disabled.
 thread_local ClientContext *g_gpu_op_context = nullptr;
 
@@ -599,7 +600,7 @@ void GpuPreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> 
     opts.disabled_optimizers.insert(OptimizerType::COMPRESSED_MATERIALIZATION);
     // Stop the FK-join statistics pass from injecting redundant range filters
     // (e.g. `c_custkey<=N`) as residual LogicalFilter operators inside the join
-    // tree, which CollectJoinTree must reject (it can't serialize them) -- see the
+    // tree, which CollectJoinTree must reject (it can't serialize them). See the
     // block comment above. Keeps the Q3/Q5 join trees clean and serializable.
     opts.disabled_optimizers.insert(OptimizerType::STATISTICS_PROPAGATION);
   } catch (...) {
@@ -645,7 +646,7 @@ void RegisterGpuOperator(DatabaseInstance &db) {
 //
 // The first call materializes <column> from <table>, uploads it to a resident
 // GPU buffer, and caches the handle keyed by "table.column". Subsequent calls
-// (any query vector) reuse the resident buffer — the upload is paid once. This
+// (any query vector) reuse the resident buffer, so the upload is paid once. This
 // exposes the pin-resident win from SQL, correctly under any threading (the TF
 // controls its own scan), unlike folding pinning into the streaming operator.
 // ---------------------------------------------------------------------------
@@ -665,11 +666,11 @@ struct PinEntry {
 // configurable budget and evicts the least-recently-used *evictable* entry to
 // make room, freeing its DeviceBuffers via the Mojo free entry points.
 //
-// Correctness: eviction is always safe. A pin is pure cache — a query that finds
-// its key missing simply rebuilds it (materialize + upload = the COLD path,
-// slower but identical results). The ONE thing eviction must never do is free a
+// Correctness: eviction is always safe. A pin is pure cache: a query that finds
+// its key missing rebuilds it (materialize + upload = the cold path,
+// slower but identical results). The one thing eviction must never do is free a
 // buffer a query is actively reading: a `Bind` fetches the handle under the lock,
-// then runs the GPU query OUTSIDE the lock, so a concurrent evict could otherwise
+// then runs the GPU query outside the lock, so a concurrent evict could otherwise
 // free the buffer mid-query (use-after-free). We guard that with a per-entry
 // in-use refcount (`PinLease`, RAII): an in-use entry (refcount > 0) is never
 // evicted; it stays resident until its query finishes, then becomes evictable.
@@ -683,7 +684,7 @@ struct ResidentPin {
   PinKind kind = PinKind::FP32;
   size_t bytes = 0;          // approximate resident VRAM footprint
   uint64_t last_use = 0;     // monotonic tick of last access (LRU ordering)
-  int refcount = 0;          // > 0 => a query is in flight; do not evict
+  int refcount = 0;          // > 0 means a query is in flight; do not evict
 };
 
 std::mutex g_pin_mu;
@@ -737,7 +738,7 @@ size_t PinFootprintBytes(idx_t n_rows, idx_t K, PinKind kind) {
   return emb + scratch + cand;
 }
 
-// Evict the least-recently-used EVICTABLE (refcount == 0) entry. Returns true if
+// Evict the least-recently-used evictable (refcount == 0) entry. Returns true if
 // one was freed, false if no evictable entry remains. Caller holds g_pin_mu.
 bool EvictOneLRU() {
   auto victim = g_pins.end();
@@ -820,7 +821,7 @@ void *PinWithBudget(const std::string &who, PinKind kind, const float *host,
   size_t need = PinFootprintBytes(n_rows, K, kind);
   size_t budget = PinBudgetBytes();
   // Make room up-front: evict LRU evictable entries until this pin fits under the
-  // budget (or nothing more is evictable — then we still try, OOM-retry catches
+  // budget (or nothing more is evictable; then we still try, and OOM-retry catches
   // the actual device limit). budget == 0 means unbounded: skip pre-eviction.
   if (budget != 0) {
     while (g_pin_bytes_resident + need > budget) {
@@ -845,8 +846,8 @@ void *PinWithBudget(const std::string &who, PinKind kind, const float *host,
 }
 
 // Materialize + pin a column (fp32 or fp16) if not already resident, returning a
-// PinLease that keeps it in-use (uneviGCtable) for the query's lifetime. Keyed by
-// "table.column" (fp32) / "table.column#f16" (fp16) in the single LRU registry —
+// PinLease that keeps it in-use (unevictable) for the query's lifetime. Keyed by
+// "table.column" (fp32) / "table.column#f16" (fp16) in the single LRU registry;
 // the suffix keeps the two precisions from colliding. A column queried at both
 // precisions ends up with two resident copies (accepted: the cost of supporting
 // both without a re-upload). fp32 handles free with mojo_gpu_pin_free, fp16 with
@@ -864,7 +865,7 @@ PinLease EnsurePinnedLeased(ClientContext &context, const std::string &table,
       return PinLease(key, PinEntry{it->second.handle, it->second.n_rows, it->second.K});
     }
   }
-  // COLD: materialize OUTSIDE the lock (it issues a nested Connection::Query),
+  // Cold: materialize outside the lock (it issues a nested Connection::Query),
   // then re-lock to install. A concurrent pin of the same key may have raced us;
   // if so, drop our buffer and use theirs.
   vector<float> host;
@@ -880,7 +881,7 @@ PinLease EnsurePinnedLeased(ClientContext &context, const std::string &table,
   }
   size_t bytes = 0;
   void *handle = PinWithBudget(who, kind, host.data(), n_rows, K, bytes);
-  if (!handle) { return PinLease(); }  // null lease -> caller throws
+  if (!handle) { return PinLease(); }  // null lease; caller throws
   ResidentPin e;
   e.handle = handle;
   e.n_rows = n_rows;
@@ -895,7 +896,7 @@ PinLease EnsurePinnedLeased(ClientContext &context, const std::string &table,
 }
 
 // Backwards-compatible thin wrappers used by the cosine table functions. Each
-// returns a PinLease; the caller MUST keep it alive until the GPU query finishes
+// returns a PinLease; the caller must keep it alive until the GPU query finishes
 // (the lease is the in-use guard against concurrent eviction).
 PinLease EnsurePinned(ClientContext &context, const std::string &table, const std::string &column) {
   return EnsurePinnedLeased(context, table, column, PinKind::FP32, "gpu_cosine");
@@ -923,7 +924,7 @@ unique_ptr<FunctionData> GpuCosineBind(ClientContext &context, TableFunctionBind
   auto &qkids = ListValue::GetChildren(input.inputs[2]);
 
   // The lease keeps the resident pin in-use (un-evictable) until it goes out of
-  // scope at the end of Bind — i.e. for the whole GPU query below.
+  // scope at the end of Bind, i.e. for the whole GPU query below.
   auto lease = EnsurePinned(context, table, column);
   auto &pe = lease.entry;
   if (!pe.handle) { throw InvalidInputException("gpu_cosine: GPU pin failed"); }
@@ -1002,9 +1003,9 @@ unique_ptr<FunctionData> GpuCosineTopkBind(ClientContext &context, TableFunction
                                 "], got " + std::to_string(k));
   }
 
-  // precision named parameter (default 'fp16'): 'fp16' -> half-precision resident
-  // path (~1.6-1.8x faster, half the VRAM, recall >=0.99 on normalized
-  // embeddings); 'fp32'/'exact' -> the full-precision EnsurePinned path. Unknown
+  // precision named parameter (default 'fp16'): 'fp16' selects the half-precision
+  // resident path (~1.6-1.8x faster, half the VRAM, recall >=0.99 on normalized
+  // embeddings); 'fp32'/'exact' selects the full-precision EnsurePinned path. Unknown
   // values are rejected.
   bool use_fp16 = true;
   auto np = input.named_parameters.find("precision");
@@ -1082,9 +1083,9 @@ void RegisterGpuCosineTopkTableFunction(ExtensionLoader &loader) {
 }
 
 // ---------------------------------------------------------------------------
-// gpu_cosine_topk_batch() table function: TRUE batched kNN. vss_join-style — the
-// QUERY SET comes from a table column (also FLOAT[K] ARRAY), so M queries are
-// scored against the resident emb matrix in ONE batched kernel call that reads
+// gpu_cosine_topk_batch() table function: true batched kNN, in the style of
+// vss_join. The query set comes from a table column (also FLOAT[K] ARRAY), so M queries are
+// scored against the resident emb matrix in one batched kernel call that reads
 // the matrix once per query-tile (the regime where the GPU decisively beats a
 // per-query index: HNSW can't use its index for batched queries at all).
 //
@@ -1132,7 +1133,7 @@ unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFun
 
   // Optional metric named param. Default cosine (0). L2 (1) = array_distance /
   // squared euclidean; ip (2) = inner-product (array_negative_inner_product /
-  // -dot). Non-cosine is ONLY implemented on the FUSED tensor-core path
+  // -dot). Non-cosine is only implemented on the fused tensor-core path
   // (fp16 + GPU_OP_TENSORCORE on an NVIDIA build + supported K/k); requesting it
   // with fp32 precision is a usage error (there is no scalar non-cosine path).
   int64_t metric = 0;
@@ -1179,7 +1180,7 @@ unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFun
     return std::move(bd);
   }
 
-  // ONE batched kernel call: M*k results row-major [query*k + slot].
+  // One batched kernel call: M*k results row-major [query*k + slot].
   vector<int64_t> out_ids(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
   vector<float> out_dists(NumericCast<idx_t>(M) * NumericCast<idx_t>(k));
   int32_t rc;
@@ -1301,7 +1302,7 @@ bool IsPromoPredicate(const Expression &e, const std::vector<LogicalGet *> &gets
 // wrapped in a stats-derived LOGICAL_FILTER, e.g. `c_custkey<=149999`). We walk
 // the tree collecting every GET and every equi-condition (as resolved
 // table.column name pairs), then the per-query matcher checks the exact set of
-// tables / conditions / filters and bails (-> CPU) on any deviation.
+// tables / conditions / filters and bails (to CPU) on any deviation.
 // ===========================================================================
 
 // One equi-join condition resolved to (table,col) on each side.
@@ -1311,7 +1312,7 @@ struct JoinEq {
 
 // Recursively collect GETs + equi-conditions from an INNER-join tree. Descends
 // through LOGICAL_COMPARISON_JOIN(INNER) and LOGICAL_FILTER; a LOGICAL_GET is a
-// leaf. Any other node type -> return false (unsupported shape). Conditions are
+// leaf. Any other node type returns false (unsupported shape). Conditions are
 // resolved lazily (we keep raw refs here; resolution happens after all GETs are
 // known so ResolveJoinColref can see every table_index).
 struct JoinTree {
@@ -1327,11 +1328,11 @@ bool CollectJoinTree(LogicalOperator *op, JoinTree &out) {
   case LogicalOperatorType::LOGICAL_FILTER:
     if (op->children.size() != 1) { return false; }
     // A LOGICAL_FILTER operator inside the join tree carries residual predicates
-    // that are NOT pushed into any GET's table_filters (e.g. a cross-column
+    // that are not pushed into any GET's table_filters (e.g. a cross-column
     // disjunction `p_size>40 OR p_retailprice<10`, or the OR-conjunction the
     // IN_CLAUSE rewrite leaves above a scan). SerializeMatchedPlan only reads
     // GET.table_filters and never serializes a LogicalFilter's expressions, so
-    // descending past a non-empty filter would SILENTLY DROP its predicate and
+    // descending past a non-empty filter would silently drop its predicate and
     // produce a wrong aggregate. Bail to stock DuckDB CPU unless the filter is a
     // pure pass-through (no expressions). Verified: a Q14-shape join with a
     // residual `(l_quantity>30 OR l_extendedprice<1000)` builds a routable
@@ -1390,22 +1391,22 @@ LogicalGet *FindGet(const JoinTree &jt, const char *table_name) {
 }
 
 // ===========================================================================
-// JOIN-UNIQUENESS GATE (audit Group E, case 1: SILENT WRONG RESULT).
+// Join-uniqueness gate (audit Group E, case 1: silent wrong result).
 //
-// The engine lowers every FK->dim INNER join as a dense per-key gather
-// dims[off + key] -- ONE dim row per fact row. That is only correct when the
-// DIM side of the join key is UNIQUE; against a non-unique build side a true
+// The engine lowers every FK-to-dim INNER join as a dense per-key gather
+// dims[off + key], one dim row per fact row. That is only correct when the
+// dim side of the join key is unique; against a non-unique build side a true
 // many-to-many join collapses to 1x (the gather picks one dim row) and the
-// aggregate comes out too low. So we accept a fact->dim edge ONLY when the
-// dim-side join column is PROVABLY unique. Fail-closed: if we can't prove it,
-// DECLINE the whole offload (-> stock DuckDB CPU, which is correct).
+// aggregate comes out too low. So we accept a fact-to-dim edge only when the
+// dim-side join column is provably unique. Fail-closed: if we can't prove it,
+// decline the whole offload (stock DuckDB CPU runs it correctly).
 //
 // Two signals, cheapest first:
 //   (1) a declared PRIMARY KEY / UNIQUE single-column constraint on the dim
-//       column (covers user tables that declare keys -- no probe needed); then
-//   (2) an EXACT distinct-count probe: count(*) == count(DISTINCT <col>) over
+//       column (covers user tables that declare keys; no probe needed); then
+//   (2) an exact distinct-count probe: count(*) == count(DISTINCT <col>) over
 //       the dim table, run on a fresh nested Connection. This is needed because
-//       the tpch extension's dbgen creates the TPC-H tables with ONLY NOT NULL
+//       the tpch extension's dbgen creates the TPC-H tables with only NOT NULL
 //       constraints (no PRIMARY KEY), and DuckDB's HLL approx-distinct stat is
 //       far too inaccurate at scale to use as a uniqueness oracle (e.g. sf1
 //       o_orderkey: 1.5M distinct reported as ~1.49M, p_partkey 200k as ~156k).
@@ -1427,9 +1428,9 @@ bool ColHasUniqueConstraint(LogicalGet *g, const std::string &col_name) {
   return false;
 }
 
-// Cheap CURRENT exact row count for the dim table behind `g`, WITHOUT a scan:
+// Cheap current exact row count for the dim table behind `g`, without a scan:
 // read it straight off the storage row-group collection (DataTable::GetTotalRows,
-// which is just row_groups->GetTotalRows() -- a counter, no I/O). Used as the
+// which is only row_groups->GetTotalRows(), a counter with no I/O). Used as the
 // cache-validity stamp for the uniqueness probe below. Returns -1 if a cheap
 // exact count is unavailable (non-duck/virtual table, no storage); callers then
 // fall back to keying the cache on estimated_cardinality (weaker for DML-safety).
@@ -1445,11 +1446,11 @@ int64_t DimTableExactRowCount(LogicalGet *g) {
   }
 }
 
-// Session cache for the EXACT-distinct uniqueness probe. The optimizer re-runs on
+// Session cache for the exact-distinct uniqueness probe. The optimizer re-runs on
 // every query compilation, so without this the count(DISTINCT <col>) probe over a
-// 1.5M-row dim (orders) re-executes on EVERY warm Q5 iteration (~5-6ms each),
-// eroding the warm win the operator exists for. We cache the verdict ALONGSIDE the
-// dim table's row count AT PROBE TIME, keyed per (database, table, column): a
+// 1.5M-row dim (orders) re-executes on every warm Q5 iteration (~5-6ms each),
+// eating into the warm speedup the operator exists for. We cache the verdict together
+// with the dim table's row count at probe time, keyed per (database, table, column): a
 // subsequent probe is a cache hit only if the row count still matches, so any DML
 // that changes the row count (insert/delete) invalidates the entry and forces a
 // re-probe.
@@ -1459,9 +1460,9 @@ int64_t DimTableExactRowCount(LogicalGet *g) {
 // and avoids cross-thread locking. The cache is keyed per DatabaseInstance pointer
 // to avoid cross-db collisions when one process attaches several databases.
 //
-// RESIDUAL CAVEAT (documented, accepted): a delete+insert (or update) that keeps
-// the row count IDENTICAL while changing the column's uniqueness would reuse a
-// stale verdict. This gate is a heuristic safety net (it only ever DECLINES an
+// Remaining caveat (documented, accepted): a delete+insert (or update) that keeps
+// the row count identical while changing the column's uniqueness would reuse a
+// stale verdict. This gate is a heuristic safety net (it only ever declines an
 // offload to fall back to correct stock DuckDB), and analytic dim tables are
 // effectively static, so this edge is acceptable.
 struct UniqProbeEntry {
@@ -1513,8 +1514,8 @@ bool ColIsExactUniqueProbe(ClientContext *ctx, const std::string &table,
   };
   if (!plain_ident(table) || !plain_ident(col)) { return false; }
   // The nested query re-enters our optimize hook, which sets g_gpu_op_context to
-  // its own (fresh) context and clears it to nullptr on exit -- save/restore the
-  // outer pass's pointer so sibling aggregate nodes in the SAME outer plan still
+  // its own (fresh) context and clears it to nullptr on exit, so save/restore the
+  // outer pass's pointer so sibling aggregate nodes in the same outer plan still
   // see a valid context after this probe returns.
   ClientContext *saved_ctx = g_gpu_op_context;
   try {
@@ -1526,10 +1527,10 @@ bool ColIsExactUniqueProbe(ClientContext *ctx, const std::string &table,
     auto chunk = res->Fetch();
     if (!chunk || chunk->size() == 0) { return false; }
     auto v = chunk->GetValue(0, 0);
-    if (v.IsNull()) { return false; }            // empty table -> can't prove
+    if (v.IsNull()) { return false; }            // empty table: can't prove
     bool result = v.GetValue<bool>();
     // Cache the real probe verdict against the row count we probed at. (Error /
-    // empty / non-ident paths above intentionally do NOT cache: they are transient
+    // empty / non-ident paths above intentionally do not cache: they are transient
     // fail-closed returns, re-checked next time.)
     g_uniq_probe_cache[key] = UniqProbeEntry{result, current_rowcount};
     return result;
@@ -1539,30 +1540,30 @@ bool ColIsExactUniqueProbe(ClientContext *ctx, const std::string &table,
   }
 }
 
-// Require that every DIRECT fact->dim join edge gathers from a UNIQUE build key.
-// The engine lowers a fact->dim INNER join as a dense per-key gather
-// dims[off + fact_fk] (one dim row per FACT row); against a non-unique dim build
+// Require that every direct fact-to-dim join edge gathers from a unique build key.
+// The engine lowers a fact-to-dim INNER join as a dense per-key gather
+// dims[off + fact_fk] (one dim row per fact row); against a non-unique dim build
 // side a true many-to-many join silently collapses to 1x and the aggregate comes
-// out too low (audit Group E, case 1). So we DECLINE the offload unless the
-// dim-side key of every fact->dim edge is provably unique.
+// out too low (audit Group E, case 1). So we decline the offload unless the
+// dim-side key of every fact-to-dim edge is provably unique.
 //
-// We gate ONLY edges with the fact table on one side (the dim is the OTHER side's
-// table/column). dim<->dim conditions are deliberately NOT gated here:
+// We gate only edges with the fact table on one side (the dim is the other side's
+// table/column). Dim-to-dim conditions are deliberately not gated here:
 //   * a same-row correlated equality (Q5 c_nationkey=s_nationkey) is applied as a
 //     row filter (OP_EQ), introduces no fanout; and
-//   * a transitive dim<->dim edge (e.g. nation attaching via customer.c_nationkey)
-//     can name a non-key column on a dim that is NOT how that dim is actually
-//     gathered -- gating it would over-decline Q5 (which executes on the bespoke
-//     KIND_Q5 path, not the generic dense gather). Q5's two FACT edges
-//     (l_orderkey->o_orderkey, l_suppkey->s_suppkey) ARE gated and unique.
+//   * a transitive dim-to-dim edge (e.g. nation attaching via customer.c_nationkey)
+//     can name a non-key column on a dim that is not how that dim is actually
+//     gathered. Gating it would over-decline Q5 (which executes on the bespoke
+//     KIND_Q5 path, not the generic dense gather). Q5's two fact edges
+//     (l_orderkey->o_orderkey, l_suppkey->s_suppkey) are gated and unique.
 //
 // fact = max estimated_cardinality GET (== descriptor.mojo). Fail-closed on any
-// unresolved fact-edge dim table. Q5/Q14/Q3 keep routing: their fact->dim keys
+// unresolved fact-edge dim table. Q5/Q14/Q3 keep routing: their fact-to-dim keys
 // (o_orderkey, s_suppkey, p_partkey) pass the exact-distinct probe (dbgen tables
-// carry NO PK constraint, so the constraint fast-path alone would not suffice).
+// carry no PK constraint, so the constraint fast-path alone would not suffice).
 bool JoinDimKeysProvablyUnique(const JoinTree &jt,
                                const std::vector<JoinEq> &eqs) {
-  if (eqs.empty()) { return true; }  // single GET -> no join -> nothing to gate
+  if (eqs.empty()) { return true; }  // single GET: no join, nothing to gate
   bool dbg = (std::getenv("GPU_OP_UNIQ_DEBUG") != nullptr);
   // Snapshot the optimize-pass context once: the exact-distinct probe runs a
   // nested query whose own optimize hook resets g_gpu_op_context to nullptr, so
@@ -1591,7 +1592,7 @@ bool JoinDimKeysProvablyUnique(const JoinTree &jt,
     fprintf(stderr, "\n");
   }
 
-  // Gate each DIRECT fact->dim edge (fact on exactly one side).
+  // Gate each direct fact-to-dim edge (fact on exactly one side).
   for (auto &e : eqs) {
     std::string dim_table, dim_col;
     if (e.lt == fact_table && e.rt != fact_table) {
@@ -1599,10 +1600,10 @@ bool JoinDimKeysProvablyUnique(const JoinTree &jt,
     } else if (e.rt == fact_table && e.lt != fact_table) {
       dim_table = e.lt; dim_col = e.lc;
     } else {
-      continue;  // dim<->dim (or fact-self) edge: not a direct fact gather here
+      continue;  // dim-to-dim (or fact-self) edge: not a direct fact gather here
     }
     LogicalGet *dim_g = FindGet(jt, dim_table.c_str());
-    if (!dim_g) { return false; }  // unresolved fact-edge dim -> fail-closed
+    if (!dim_g) { return false; }  // unresolved fact-edge dim: fail closed
     if (ColHasUniqueConstraint(dim_g, dim_col)) {
       if (dbg) { fprintf(stderr, "[gpu-uniq] %s.%s constraint-unique\n",
                          dim_table.c_str(), dim_col.c_str()); }
@@ -1617,7 +1618,7 @@ bool JoinDimKeysProvablyUnique(const JoinTree &jt,
     if (dbg) { fprintf(stderr, "[gpu-uniq] %s.%s ctx=%p rows=%lld probe-unique=%d\n",
                        dim_table.c_str(), dim_col.c_str(), (void *)ctx,
                        (long long)dim_rows, (int)probed); }
-    if (!probed) { return false; }  // fact-edge dim key not unique -> decline
+    if (!probed) { return false; }  // fact-edge dim key not unique: decline
   }
   return true;
 }
@@ -1672,7 +1673,7 @@ bool IsRevenueExpr(const Expression &e, const JoinTree &jt) {
 // Flattens a matched DuckDB LogicalAggregate subtree into the ABI-neutral
 // RawPlan wire form (a flat int64 "tape" + a uint8 "blob" of interned strings,
 // sections in the fixed order from RAW_PLAN_CONTRACT.md), so the Mojo side
-// (descriptor.mojo) can parse + classify it. This emits ONLY the descriptor;
+// (descriptor.mojo) can parse + classify it. This emits only the descriptor;
 // it never touches the plan. See raw_plan.h for the tag constants.
 // ===========================================================================
 namespace rp = mojo_gpu_rawplan;
@@ -1721,7 +1722,7 @@ struct RawPlanBuilder {
   // single-table residual OR-of-equalities LogicalFilter, the postfix program
   // (reusing the aggregate `Op` type) the on-GPU expr-VM AND-composes into the
   // GET's pass program. `get_ordinal` indexes GETS in emit order. Empty (n_pass=0)
-  // unless the flag is on AND the residual filter serialized -> default byte-identical.
+  // unless the flag is on and the residual filter serialized, so the default is byte-identical.
   struct PassProg { int64_t get_ordinal; std::vector<Op> ops; };
   std::vector<PassProg> pass_programs;
 
@@ -1807,7 +1808,7 @@ struct RawPlanBuilder {
         tape.push_back(op.op_tag); tape.push_back(op.a); tape.push_back(op.b);
       }
     }
-    // PASS_PROGRAMS (NR3, trailing additive). n_pass==0 by default -> the reader
+    // PASS_PROGRAMS (NR3, trailing additive). n_pass==0 by default, so the reader
     // sees the same trailing token a flag-off build emits (no layout change).
     tape.push_back((int64_t)pass_programs.size());
     for (auto &pp : pass_programs) {
@@ -1833,7 +1834,7 @@ void MapType(const LogicalType &t, int64_t &tag, int64_t &scale, int64_t &width)
   case LogicalTypeId::BIGINT:   tag = rp::TYPE_BIGINT; break;
   case LogicalTypeId::HUGEINT:  tag = rp::TYPE_HUGEINT; break;
   // Unsigned integer result types (GPU_OP_STATS only: DuckDB's regr_count returns
-  // UINTEGER / UBIGINT). PRESERVE the exact type -- LogicalGpuAgg replaces the whole
+  // UINTEGER / UBIGINT). Preserve the exact type: LogicalGpuAgg replaces the whole
   // aggregate node, so its declared output schema must match what the parent plan
   // expects (mapping these to BIGINT would mismatch a UINT32 parent vector).
   case LogicalTypeId::UTINYINT:  tag = rp::TYPE_UTINYINT; break;
@@ -1867,8 +1868,8 @@ int64_t MapCmp(ExpressionType cmp) {
   }
 }
 
-// GPU_OP_TRANSCENDENTAL / GPU_OP_STATS are DEFAULT-ON (opt-out), mirroring
-// GPU_OP_GENERIC: unset => enabled; "off"/"0"/"none" => disabled. These f64 win
+// GPU_OP_TRANSCENDENTAL / GPU_OP_STATS are on by default (opt-out), mirroring
+// GPU_OP_GENERIC: unset means enabled; "off"/"0"/"none" means disabled. These f64 win
 // classes are NVIDIA-only (the Mojo descriptor scope guard declines on Metal/AMD and
 // on unsupported shapes) and fail-closed across the correctness envelope hardened in
 // this series (NULL columns, fractional DOUBLE consts, DECIMAL scale!=2, INT128-backed
@@ -1883,43 +1884,43 @@ static bool GpuOpFlagOn(const char *name) {
 
 // NR3 (GPU_OP_FILTER_OR): route a single-table residual LogicalFilter that is an
 // OR-of-equalities (and small sparse IN, which DuckDB lowers to OR-of-equalities)
-// over INTEGER/DATE columns, serialized into an expression-VM PASS-PROGRAM. This
-// flag is DEFAULT-OFF (presence-only, like GPU_OP_NATIVE_DECODE): unset => OFF,
-// so the descent capture below is skipped and behavior is BYTE-IDENTICAL to today.
+// over INTEGER/DATE columns, serialized into an expression-VM pass program. This
+// flag is off by default (presence-only, like GPU_OP_NATIVE_DECODE): when unset it
+// is off, so the descent capture below is skipped and behavior is byte-identical to today.
 static bool GpuOpFilterOrOn() { return std::getenv("GPU_OP_FILTER_OR") != nullptr; }
 
-// GPU_OP_NULLABLE (default-ON; opt out with off/0/none, like GPU_OP_TRANSCENDENTAL/
-// GPU_OP_STATS): the A1 unified pass model routes the provably-safe nullable slice --
+// GPU_OP_NULLABLE (on by default; opt out with off/0/none, like GPU_OP_TRANSCENDENTAL/
+// GPU_OP_STATS): the A1 unified pass model routes the provably-safe nullable slice:
 // UNGROUPED single-table count(*) / SUM / AVG / multi-aggregate over nullable agg/filter
 // columns (int128 SUM/AVG/count(*) via per-metric validity multiply + per-agg
 // validity-count NULL-on-empty; f64 transcendental/stats single-agg via validity-in-pass).
 // Filter-col validity folds into the host pass column; count(*) is unmultiplied. Every
-// other nullable shape fail-closes at the gate -> stock. Validated bit-exact vs stock on
+// other nullable shape fails closed at the gate and runs on stock. Validated bit-exact vs stock on
 // Apple + RTX 4090 across an adversarial sweep; flipped default-on after that hardening.
 static bool GpuOpNullableOn() { return GpuOpFlagOn("GPU_OP_NULLABLE"); }
 
-// GPU_OP_NULLABLE_GROUPED (default-ON; opt out with off/0/none): extend the nullable
-// slice to a DENSE GROUP BY with NOT-NULL group key(s) over nullable agg/filter columns
+// GPU_OP_NULLABLE_GROUPED (on by default; opt out with off/0/none): extend the nullable
+// slice to a DENSE GROUP BY with NOT NULL group key(s) over nullable agg/filter columns
 // (int path: SUM/AVG/count(*)). The A1 per-metric validity multiply + per-group
 // validity-count NULL marking + the dense filter-count existence gate (all per-group)
-// handle it with no new kernel. A nullable GROUP KEY stays declined (it would form its
+// handle it with no new kernel. A nullable group key stays declined (it would form its
 // own SQL NULL group). Same default-on rationale + validation as GPU_OP_NULLABLE.
 static bool GpuOpNullableGroupedOn() {
   return GpuOpFlagOn("GPU_OP_NULLABLE_GROUPED");
 }
 
 // NR1 (GPU_OP_OVERRIDES): co-install the Mojo SIMD catalog overrides at LOAD so
-// queries this operator declines use the Mojo kernels before stock. DEFAULT-OFF
-// (presence-only, like GPU_OP_FILTER_OR): unset => the catalog is untouched and
-// behavior is BYTE-IDENTICAL to today (GPU-accept paths are unaffected either way
-// -- they're rewritten to GPU before the catalog scalar/agg functions run). Set
+// queries this operator declines use the Mojo kernels before stock. Off by default
+// (presence-only, like GPU_OP_FILTER_OR): when unset the catalog is untouched and
+// behavior is byte-identical to today (GPU-accept paths are unaffected either way,
+// since they're rewritten to GPU before the catalog scalar/agg functions run). Set
 // GPU_OP_OVERRIDES=1 to enable. Flip default-on only after the both-platform
 // composition gate (accepted=GPU, declined=override-kernel, all == stock).
 static bool GpuOpOverridesOn() { return std::getenv("GPU_OP_OVERRIDES") != nullptr; }
 
-// item 5 (GPU<->CPU crossover): below GPU_OP_MIN_ROWS input rows, the GPU
+// item 5 (GPU/CPU crossover): below GPU_OP_MIN_ROWS input rows, the GPU
 // pin/transfer overhead loses to the co-installed CPU SIMD kernels
-// (GPU_OP_OVERRIDES) -- so DECLINE the offload and let the CPU tier (or stock)
+// (GPU_OP_OVERRIDES), so decline the offload and let the CPU tier (or stock)
 // run it. Default 50000 input rows; GPU_OP_MIN_ROWS=0 disables the crossover
 // (GPU takes every matched shape, the prior behavior).
 static int64_t GpuOpMinRows() {
@@ -1932,7 +1933,7 @@ static int64_t GpuOpMinRows() {
 }
 // Estimated rows feeding `node` (max child cardinality == fact-scan estimate for
 // an aggregate/projection over a scan). The node's own estimated_cardinality is
-// the OUTPUT (e.g. 1 for an ungrouped aggregate), so we look at the input.
+// the output (e.g. 1 for an ungrouped aggregate), so we look at the input.
 static bool BelowGpuCrossover(const LogicalOperator &node) {
   int64_t min_rows = GpuOpMinRows();
   if (min_rows <= 0) { return false; }
@@ -1973,10 +1974,10 @@ int64_t AddValueConst(RawPlanBuilder &b, const Value &v) {
   case LogicalTypeId::DOUBLE:
   case LogicalTypeId::FLOAT: {
     // The const tape stores a scaled int64 + a divisor; a DOUBLE/FLOAT carries no
-    // decimal scale, so only INTEGER-VALUED doubles round-trip exactly. Refuse a
-    // fractional double (return -1 -> caller fails closed) rather than silently
+    // decimal scale, so only integer-valued doubles round-trip exactly. Refuse a
+    // fractional double (return -1 so the caller fails closed) rather than silently
     // llround-ing it: e.g. sum(sqrt(x)*1.5) would otherwise emit *2, exp(x*0.3)
-    // would emit *0. (Fractional DECIMAL literals are unaffected — they take the
+    // would emit *0. (Fractional DECIMAL literals are unaffected: they take the
     // scale-aware DECIMAL case above and round-trip exactly via col/const_div.)
     double d = v.GetValue<double>();
     double rr = (double)llround(d);
@@ -1994,7 +1995,7 @@ int64_t AddValueConst(RawPlanBuilder &b, const Value &v) {
 // unfamiliar sub-expression (e.g. a transcendental function the GPU expr-VM has
 // no opcode for) so the caller declines the whole offload instead of silently
 // emitting a wrong (zero) program. (Previously: emitted PUSH_CONST(0), which made
-// sum(sqrt(col)) compute sum(0)=0 — a silent correctness bug.)
+// sum(sqrt(col)) compute sum(0)=0, a silent correctness bug.)
 bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
                  std::vector<RawPlanBuilder::Op> &prog,
                  optional_ptr<LogicalProjection> proj = nullptr) {
@@ -2002,7 +2003,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   if (cls == ExpressionClass::BOUND_COLUMN_REF) {
     // If the colref points into the arithmetic projection (Q1: the aggregate's
     // argument lives in the inner PROJECTION, not the GET), substitute that
-    // projection expression and recurse — it may itself be arithmetic
+    // projection expression and recurse; it may itself be arithmetic
     // (l_extendedprice*(1-l_discount)) or a plain GET colref (l_quantity).
     auto &ref = e.Cast<BoundColumnRefExpression>();
     if (proj && ref.binding.table_index == proj->table_index) {
@@ -2012,12 +2013,12 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       }
     }
     // GPU_OP_TRANSCENDENTAL / GPU_OP_STATS: the float64 expr-VM reconstructs each
-    // column's TRUE double from its SCALED-INT64 storage via col_div (= 10^scale),
-    // which is exactly right for DECIMAL/INTEGER/…/HUGEINT columns. A NATIVE
+    // column's true double from its scaled-int64 storage via col_div (= 10^scale),
+    // which is exactly right for DECIMAL/INTEGER/…/HUGEINT columns. A native
     // FLOAT/DOUBLE column is stored as raw IEEE bits (not a scaled int), so
     // `Float64(raw_int64_bits) / col_div` would read garbage. The VM has no
-    // bit-reinterpret path, so fail-closed on native-float source columns ->
-    // the whole plan declines to stock CPU (correct, just not accelerated).
+    // bit-reinterpret path, so fail closed on native-float source columns and
+    // the whole plan declines to stock CPU (correct, only not accelerated).
     if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
         GpuOpFlagOn("GPU_OP_STATS")) {
       auto pt = ref.return_type.InternalType();
@@ -2025,20 +2026,20 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
         return false;
       }
     }
-    // WIDTH GATE (FIX 1, Group A): the aggregate-INPUT materialize/feed path reads
+    // Width gate (fix 1, Group A): the aggregate-input materialize/feed path reads
     // each fed column at a fixed byte stride keyed off its physical type, and the
     // plain int aggregate kernels only consume INT32 (4B) or INT64 (8B) columns.
-    // A column whose internal type is NOT one of those is read at the wrong stride
-    // -> garbage, OR throws "unsupported materialized column physical type" in the
-    // feed switch (routed-then-error). Fail-closed here so the whole offload
-    // declines to correct stock CPU. (FLOAT/DOUBLE are already declined just above
+    // A column whose internal type is not one of those is read at the wrong stride
+    // (garbage), or throws "unsupported materialized column physical type" in the
+    // feed switch (routed, then error). Fail-closed here so the whole offload
+    // declines to correct stock CPU. (FLOAT/DOUBLE are already declined above
     // under the f64 flags; the f64 CAST path independently declines INT128 below.)
     //   * DECIMAL: require INT64 backing (precision 10..18). This declines
-    //     DECIMAL(1..9) [INT16/INT32-backed] AND DECIMAL(19..38) [INT128-backed].
-    //     TPC-H DECIMAL(15,2) is INT64-backed -> STILL routes.
+    //     DECIMAL(1..9) [INT16/INT32-backed] and DECIMAL(19..38) [INT128-backed].
+    //     TPC-H DECIMAL(15,2) is INT64-backed and still routes.
     //   * else (integer/other numeric): require INT32 or INT64. This declines
     //     TINYINT (INT8), SMALLINT (INT16), HUGEINT (INT128). INTEGER (INT32) and
-    //     BIGINT (INT64) -> STILL route.
+    //     BIGINT (INT64) still route.
     {
       auto wpt = ref.return_type.InternalType();
       if (ref.return_type.id() == LogicalTypeId::DECIMAL) {
@@ -2057,7 +2058,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   }
   if (cls == ExpressionClass::BOUND_CONSTANT) {
     int64_t cid = AddValueConst(b, e.Cast<BoundConstantExpression>().value);
-    if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) -> fail-closed
+    if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT): fail closed
     prog.push_back({rp::OP_PUSH_CONST, cid, 0});
     return true;
   }
@@ -2074,13 +2075,13 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       prog.push_back({binop, 0, 0});
       return true;
     }
-    // Power with an INTEGER-VALUED CONSTANT exponent (flag GPU_OP_TRANSCENDENTAL).
-    // power(x, K) -> <base program>, PUSH_CONST(K), OP_POW; the float64 VM computes
-    // it by exact binary exponentiation (pure multiplies — bit-faithful for any base
-    // sign). ONLY integer-valued constant exponents are emitted: the f64 const tape
+    // Power with an integer-valued constant exponent (flag GPU_OP_TRANSCENDENTAL).
+    // power(x, K) becomes <base program>, PUSH_CONST(K), OP_POW; the float64 VM computes
+    // it by exact binary exponentiation (pure multiplies, bit-exact for any base
+    // sign). Only integer-valued constant exponents are emitted: the f64 const tape
     // rounds doubles to int (AddValueConst/llround), so a fractional exponent would be
-    // silently wrong -> fail-closed (decline) on fractional or non-constant (column)
-    // exponents. Returns DOUBLE -> routed to the f64 accumulator like the unary ops.
+    // silently wrong. We fail closed (decline) on fractional or non-constant (column)
+    // exponents. Returns DOUBLE, so it is routed to the f64 accumulator like the unary ops.
     if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") &&
         (nm == "pow" || nm == "power") && fn.children.size() == 2) {
       const Expression *ec = fn.children[1].get();
@@ -2095,37 +2096,37 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
           if (r == d && std::fabs(r) <= 64.0) {
             if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
             int64_t cid = AddValueConst(b, ev);
-            if (cid < 0) { return false; }  // (integer-valued -> never; defensive)
+            if (cid < 0) { return false; }  // (never for integer values; defensive)
             prog.push_back({rp::OP_PUSH_CONST, cid, 0});
             prog.push_back({rp::OP_POW, 0, 0});
             return true;
           }
         }
       }
-      // fractional / non-constant exponent -> fall through -> fail-closed (decline)
+      // fractional / non-constant exponent: fall through and fail closed (decline)
     }
     // Transcendental unary functions (flag GPU_OP_TRANSCENDENTAL only). Maps a
     // 1-child sqrt/exp/ln(or log)/log10/sin/cos to the matching OP_* opcode, which
-    // ONLY the float64 expr-VM handles (sum/avg of f(col) -> DOUBLE). When the flag
-    // is off these stay UNRECOGNIZED -> fail-closed (decline, prior behavior).
+    // only the float64 expr-VM handles (sum/avg of f(col) gives DOUBLE). When the flag
+    // is off these stay unrecognized and fail closed (decline, prior behavior).
     // The scope guard (UNGROUPED-only + DOUBLE accumulator) is enforced on the Mojo
-    // side (build_descriptor_impl + finalize); anything else declines -> CPU.
+    // side (build_descriptor_impl + finalize); anything else declines to CPU.
     if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") && fn.children.size() == 1) {
       int64_t uop = 0;
       // DuckDB semantics: ln(x)=natural log; log(x)==log10(x)=base-10; log10(x)
-      // base-10. (Verified: SELECT ln(10),log(10),log10(10) -> 2.302,1.0,1.0.)
+      // base-10. (Verified: SELECT ln(10),log(10),log10(10) returns 2.302,1.0,1.0.)
       if (nm == "sqrt") { uop = rp::OP_SQRT; }
       else if (nm == "exp") { uop = rp::OP_EXP; }
       else if (nm == "ln") { uop = rp::OP_LN; }
       else if (nm == "log10" || nm == "log") { uop = rp::OP_LOG10; }
       else if (nm == "log2") { uop = rp::OP_LOG2; }
-      // FIX 4 (Group F): sin/cos are computed in FLOAT32 on NVIDIA (the f64 expr-VM
-      // casts to f32 -- NVIDIA has no precise f64 sin/cos PTX), giving rel-err
-      // ~5e-7, well outside the aggregate's exactness tolerance -> SILENT WRONG
-      // RESULTS for sum(sin(x))/sum(cos(x)). The other transcendentals (sqrt/exp/
-      // ln/log10/log2/pow) ARE f64-precise and keep routing. Do NOT map sin/cos to
-      // an opcode -> they stay UNRECOGNIZED -> EmitProgram fails closed -> the whole
-      // plan declines to stock CPU. (On Apple sin/cos already decline via the
+      // Fix 4 (Group F): sin/cos are computed in float32 on NVIDIA (the f64 expr-VM
+      // casts to f32 because NVIDIA has no precise f64 sin/cos PTX), giving rel-err
+      // ~5e-7, well outside the aggregate's exactness tolerance. That would give
+      // silently wrong results for sum(sin(x))/sum(cos(x)). The other transcendentals
+      // (sqrt/exp/ln/log10/log2/pow) are f64-precise and keep routing. Do not map
+      // sin/cos to an opcode: they stay unrecognized, EmitProgram fails closed, and
+      // the whole plan declines to stock CPU. (On Apple sin/cos already decline via the
       // dispatcher, so this is a no-op there; the win we keep is NVIDIA-only.)
       // else if (nm == "sin") { uop = rp::OP_SIN; }  // declined: f32-only, imprecise
       // else if (nm == "cos") { uop = rp::OP_COS; }  // declined: f32-only, imprecise
@@ -2141,7 +2142,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     auto &ce = e.Cast<BoundCaseExpression>();
     if (ce.case_checks.size() == 1) {
       auto &chk = ce.case_checks[0];
-      // PROMO predicate -> OP_PROMO_PRED(p_type table_strid, col_strid).
+      // PROMO predicate becomes OP_PROMO_PRED(p_type table_strid, col_strid).
       if (IsPromoPredicate(*chk.when_expr, jt.gets)) {
         auto &pf = chk.when_expr->Cast<BoundFunctionExpression>();
         auto col = ResolveJoinColref(pf.children[0]->Cast<BoundColumnRefExpression>(), jt.gets);
@@ -2158,15 +2159,15 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   }
   // Transparent numeric CAST pass-through (flag GPU_OP_TRANSCENDENTAL only).
   // DuckDB wraps the transcendental's argument in a CAST (e.g. sqrt(CAST(
-  // l_extendedprice AS DOUBLE))). The float64 expr-VM reconstructs the TRUE double
+  // l_extendedprice AS DOUBLE))). The float64 expr-VM reconstructs the true double
   // of every column from its scaled-int64 storage via col_div (= 10^scale), which
-  // is EXACTLY a DECIMAL/INTEGER -> DOUBLE/FLOAT cast. So emitting the child's
+  // is exactly a DECIMAL/INTEGER to DOUBLE/FLOAT cast. So emitting the child's
   // program unchanged is value-correct; the cast becomes a no-op at the VM level.
   // Restricted to numeric source+target (the only thing the VM models) and to the
   // flag, so the int128 path is untouched. Anything else still fails closed.
-  // GPU_OP_STATS uses the SAME f64 expr-VM (col_div reconstructs the true double
-  // from scaled-int64 storage), so the DECIMAL->DOUBLE cast DuckDB wraps a stat
-  // argument in is likewise a value-level no-op -> pass the child through.
+  // GPU_OP_STATS uses the same f64 expr-VM (col_div reconstructs the true double
+  // from scaled-int64 storage), so the DECIMAL to DOUBLE cast DuckDB wraps a stat
+  // argument in is likewise a value-level no-op. Pass the child through.
   if ((GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
        GpuOpFlagOn("GPU_OP_STATS")) &&
       cls == ExpressionClass::BOUND_CAST) {
@@ -2180,10 +2181,10 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
              id == LogicalTypeId::TINYINT || id == LogicalTypeId::HUGEINT;
     };
     if (is_num(tid) && is_num(sid)) {
-      // The float64 VM reconstructs each operand from a SCALED INT64; an INT128-backed
-      // source (DECIMAL precision>18, or HUGEINT) does not fit int64 -> reading it as
+      // The float64 VM reconstructs each operand from a scaled int64; an INT128-backed
+      // source (DECIMAL precision>18, or HUGEINT) does not fit int64, so reading it as
       // int64 truncates/misreads it (e.g. sum(sqrt(DECIMAL(38,4))) came out ~2x wrong).
-      // Fail-closed -> decline to stock. (The int128 aggregate paths read hugeint
+      // Fail closed and decline to stock. (The int128 aggregate paths read hugeint
       // correctly; only this f64 expr-VM is int64-limited. A 16-byte-aware f64 feed
       // that keeps the win on wide decimals is a follow-up.)
       if (ce.child->return_type.InternalType() == PhysicalType::INT128) {
@@ -2193,7 +2194,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     }
   }
 
-  // Unfamiliar (e.g. sqrt/exp/ln — no GPU expr-VM opcode): fail-closed so the
+  // Unfamiliar (e.g. sqrt/exp/ln with no GPU expr-VM opcode): fail closed so the
   // caller declines the offload to stock/overrides rather than emitting sum(0).
   return false;
 }
@@ -2207,7 +2208,7 @@ int64_t MapAggKind(const std::string &name) {
   if (name == "max") { return rp::AGG_MAX; }
   // Statistical aggregates (flag GPU_OP_STATS only). All DOUBLE-result, derived
   // closed-form on the host from the shared sums the f64 seg kernels accumulate.
-  // When the flag is off these return 0 -> the agg-emit loop fails closed (the
+  // When the flag is off these return 0 and the agg-emit loop fails closed (the
   // whole plan declines to stock CPU), so the default build is byte-identical.
   if (GpuOpFlagOn("GPU_OP_STATS")) {
     if (name == "stddev_samp" || name == "stddev") { return rp::AGG_STDDEV_SAMP; }
@@ -2275,14 +2276,14 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
 }
 
 // NR3 (GPU_OP_FILTER_OR): serialize a residual single-table filter expression
-// into a postfix PASS-PROGRAM (the same `Op` tape the aggregates use). FAIL-CLOSED
-// (return false -> caller declines the whole offload) on ANYTHING outside the safe
-// envelope; never drop a predicate. Handles ONLY:
-//   - CONJUNCTION_OR  -> children chained with OP_ADD (!=0 iff any branch passes;
-//                        every leaf is 0/1 so the sum is >=0 and !=0 iff some leaf is 1).
-//   - CONJUNCTION_AND -> children chained with OP_MUL (!=0 iff all branches pass).
+// into a postfix pass program (the same `Op` tape the aggregates use). Fails closed
+// (returns false, so the caller declines the whole offload) on anything outside the
+// safe envelope; never drop a predicate. Handles only:
+//   - CONJUNCTION_OR:  children chained with OP_ADD (!=0 iff any branch passes;
+//                      every leaf is 0/1 so the sum is >=0 and !=0 iff some leaf is 1).
+//   - CONJUNCTION_AND: children chained with OP_MUL (!=0 iff all branches pass).
 //   - COMPARE_{EQUAL,NOTEQUAL,LESSTHAN,LESSTHANOREQUALTO,GREATERTHAN,
-//     GREATERTHANOREQUALTO} -> col<op>const over THIS GET on an INTEGER/DATE column:
+//     GREATERTHANOREQUALTO}: col<op>const over this GET on an INTEGER/DATE column:
 //                        LOAD_COL slot; PUSH_CONST const_id; OP_{EQ,NE,LT,LE,GT,GE}
 //                        (each pushes 0/1). This lets an OR-of-RANGE / inequality
 //                        residual filter (a<10 OR a>95, BETWEEN as AND-of-ranges,
@@ -2291,10 +2292,10 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
 // AddValueConst exactly as the aggregate EmitProgram does. `op_count` is bumped per
 // emitted op and the whole thing declines if it exceeds 64 (stack stays <=2..3 by
 // construction; the cap bounds the program size). VARCHAR/DECIMAL/BIGINT/BOOLEAN
-// colrefs and any non-{EQ,NE,LT,LE,GT,GE} comparison / non-constant side fail-closed
-// (so a VARCHAR const never reaches AddValueConst -- which would silently intern a
-// str_id and compare vs 0 down the int eval path). When the COLUMN is on the RIGHT
-// of an inequality (`5 > a`), the comparator is INVERTED (LT<->GT, LE<->GE; EQ/NE
+// colrefs and any non-{EQ,NE,LT,LE,GT,GE} comparison / non-constant side fail closed
+// (so a VARCHAR const never reaches AddValueConst, which would silently intern a
+// str_id and compare vs 0 down the int eval path). When the column is on the right
+// of an inequality (`5 > a`), the comparator is inverted (LT<->GT, LE<->GE; EQ/NE
 // symmetric) so the emitted LOAD_COL;PUSH_CONST;<op> keeps lhs=column, rhs=const.
 bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
               RawPlanBuilder &b, std::vector<RawPlanBuilder::Op> &prog,
@@ -2318,13 +2319,13 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     return true;
   }
   if (cls == ExpressionClass::BOUND_COMPARISON) {
-    // Map the DuckDB comparison type -> the emittable int expr-VM opcode. Only the
+    // Map the DuckDB comparison type to the emittable int expr-VM opcode. Only the
     // six 0/1 range/equality comparisons are supported; anything else (DISTINCT_FROM,
-    // NOT_DISTINCT_FROM, IN-as-comparison, ...) fails-closed below. The mapping is
-    // written for column-on-LEFT (lhs=col, rhs=const); when the column is on the
-    // RIGHT we INVERT it (5 > a == a < 5), so LT<->GT and LE<->GE swap, EQ/NE stay.
+    // NOT_DISTINCT_FROM, IN-as-comparison, ...) fails closed below. The mapping is
+    // written for column on the left (lhs=col, rhs=const); when the column is on the
+    // right we invert it (5 > a == a < 5), so LT<->GT and LE<->GE swap, EQ/NE stay.
     auto &cmp = e.Cast<BoundComparisonExpression>();
-    // One side a colref on THIS get, the other a bound constant (either order).
+    // One side a colref on this get, the other a bound constant (either order).
     const Expression *col_side = nullptr;
     const Expression *const_side = nullptr;
     bool col_on_right = false;
@@ -2336,10 +2337,10 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
       col_side = cmp.right.get(); const_side = cmp.left.get();
       col_on_right = true;
     } else {
-      return false;  // colref-vs-colref / function side / etc. -> decline
+      return false;  // colref-vs-colref / function side / etc.: decline
     }
     // Resolve the opcode for the canonical (col <op> const) orientation, inverting
-    // the comparator when the column was on the RIGHT so lhs=column, rhs=const holds.
+    // the comparator when the column was on the right so lhs=column, rhs=const holds.
     int64_t cmp_op = 0;
     switch (e.type) {
     case ExpressionType::COMPARE_EQUAL:    cmp_op = rp::OP_EQ; break;
@@ -2353,11 +2354,11 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
       cmp_op = col_on_right ? rp::OP_LE : rp::OP_GE; break;
     default:
-      return false;  // unsupported comparison type -> decline
+      return false;  // unsupported comparison type: decline
     }
     auto &ref = col_side->Cast<BoundColumnRefExpression>();
-    // TYPE GATE: only INTEGER / DATE go down the int eval path. EXCLUDE everything
-    // else (VARCHAR/DECIMAL/BIGINT/BOOLEAN/...) -> fail-closed BEFORE AddValueConst.
+    // Type gate: only INTEGER / DATE go down the int eval path. Exclude everything
+    // else (VARCHAR/DECIMAL/BIGINT/BOOLEAN/...) and fail closed before AddValueConst.
     auto tid = ref.return_type.id();
     if (tid != LogicalTypeId::INTEGER && tid != LogicalTypeId::DATE) { return false; }
     auto col = ResolveJoinColref(ref, gets);
@@ -2376,11 +2377,11 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     op_count += 3;
     return true;
   }
-  return false;  // any other expression class -> decline
+  return false;  // any other expression class: decline
 }
 
 // Walk the supported LogicalAggregate class generically and fill the builder.
-// Returns false on anything outside the class (-> caller logs "unsupported").
+// Returns false on anything outside the class (the caller then logs "unsupported").
 bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   if (agg.children.size() != 1) { return false; }
   if (!agg.grouping_functions.empty()) { return false; }
@@ -2404,9 +2405,9 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   // equalities / sparse-IN that DuckDB leaves above the scan). When captured, we
   // descend past it (`below = filter.children[0]`) so the dispatch below proceeds
   // as a single GET, and serialize the filter's predicate into a PASS_PROGRAM after
-  // the GETS section. When the flag is OFF (or the shape differs) we do NOTHING ->
-  // `below` stays the LOGICAL_FILTER -> it falls into the `else { return false; }`
-  // dispatch below -> BYTE-IDENTICAL decline. (A join-tree residual filter stays
+  // the GETS section. When the flag is off (or the shape differs) we do nothing:
+  // `below` stays the LOGICAL_FILTER, falls into the `else { return false; }`
+  // dispatch below, and declines exactly as before. (A join-tree residual filter stays
   // declined by CollectJoinTree's non-empty-expressions guard; this path is
   // single-GET only.)
   const LogicalFilter *residual_filter = nullptr;
@@ -2434,19 +2435,19 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   }
   if (jt.gets.empty()) { return false; }
 
-  // NULL-SAFETY GATE. The materialize/feed path copies only the column DATA array
-  // (FedColumn::fill = a raw memcpy) and -- unless GPU_OP_NULLABLE captures it --
-  // does NOT carry DuckDB's validity mask, so a NULL row is read as raw garbage
-  // int64 -> SILENT WRONG RESULTS (sum off, avg=0, filtered-sum=garbage). Returns
-  // true iff ANY projected column of ANY GET is nullable (lacks a NOT NULL
-  // constraint). Provably complete: GetColumnIds() is a SUPERSET of the columns the
+  // NULL-safety gate. The materialize/feed path copies only the column data array
+  // (FedColumn::fill = a raw memcpy) and, unless GPU_OP_NULLABLE captures it,
+  // does not carry DuckDB's validity mask, so a NULL row is read as raw garbage
+  // int64 and gives silently wrong results (sum off, avg=0, filtered-sum=garbage).
+  // Returns true iff any projected column of any GET is nullable (lacks a NOT NULL
+  // constraint). Provably complete: GetColumnIds() is a superset of the columns the
   // GPU reads (aggregate args, group keys, filter columns, join keys, gathered dim
-  // columns). TPC-H tables are created all-NOT-NULL (dbgen) so the accepted classes
+  // columns). TPC-H tables are created with all columns NOT NULL (dbgen) so the accepted classes
   // never trip this.
   auto any_nullable_projected = [&]() -> bool {
     for (auto *g : jt.gets) {
       auto te = g->GetTable();
-      if (!te) { return true; }  // non-table GET: can't verify -> treat as nullable
+      if (!te) { return true; }  // non-table GET: can't verify, so treat as nullable
       for (auto &ci : g->GetColumnIds()) {
         if (ci.IsRowIdColumn() || ci.IsVirtualColumn()) { continue; }
         idx_t cidx = ci.GetPrimaryIndex();
@@ -2463,10 +2464,10 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     }
     return false;
   };
-  // Default (GPU_OP_NULLABLE off): decline ANY nullable column here, byte-identical
-  // to before. When ON: defer the decision to the role-aware SAFE-SLICE gate at the
-  // END of this function (after aggregates/filters/groups are serialized, so every
-  // column ROLE is known). A nullable query that is NOT the safe slice is declined
+  // Default (GPU_OP_NULLABLE off): decline any nullable column here, byte-identical
+  // to before. When on: defer the decision to the role-aware safe-slice gate at the
+  // end of this function (after aggregates/filters/groups are serialized, so every
+  // column role is known). A nullable query that is not the safe slice is declined
   // there exactly as today; the safe slice routes with validity-folding (see
   // _pin_finalize_generic). Cache the flag for the late gate.
   const bool nullable_on = GpuOpNullableOn();
@@ -2479,16 +2480,16 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     RawPlanBuilder::Get ge;
     ge.table_strid = out.intern(te->name);
     ge.est_cardinality = (int64_t)g->estimated_cardinality;
-    // Filters: keyed by table column index into get->names. Map -> name, cmp, const.
+    // Filters: keyed by table column index into get->names. Map to name, cmp, const.
     auto add_filter = [&](idx_t col_idx, const ConstantFilter &cf) -> bool {
       if (col_idx >= g->names.size()) { return false; }
-      // TYPE GATE (FIX 2): a pushed-down zone-map filter column is MATERIALIZED and
+      // Type gate (fix 2): a pushed-down zone-map filter column is materialized and
       // fed like any other column, so it must be one of the physical types the feed
       // switch handles (INT32/INT64/INT128/DOUBLE, or logical VARCHAR). Without this
-      // gate, `WHERE bool_col = true` routes then THROWS "unsupported materialized
-      // column physical type for BOOLEAN" in the feed loop (routed-then-error). The
+      // gate, `WHERE bool_col = true` routes and then throws "unsupported materialized
+      // column physical type for BOOLEAN" in the feed loop (routed, then error). The
       // feed switch's `default:` covers BOOLEAN (PhysicalType::BOOL), TINYINT
-      // (INT8) and SMALLINT (INT16) -- decline them here. DATE is PhysicalType::
+      // (INT8) and SMALLINT (INT16), so decline them here. DATE is PhysicalType::
       // INT32 and integer/date range filters (TPC-H) still route.
       if (col_idx < g->returned_types.size()) {
         const LogicalType &ft = g->returned_types[col_idx];
@@ -2505,14 +2506,14 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
             feedable = false;
           }
         }
-        if (!feedable) { return false; }  // e.g. BOOLEAN/TINYINT/SMALLINT -> decline
+        if (!feedable) { return false; }  // e.g. BOOLEAN/TINYINT/SMALLINT: decline
       } else {
-        return false;  // can't verify the filter column type -> fail-closed
+        return false;  // can't verify the filter column type: fail closed
       }
       int64_t cmp = MapCmp(cf.comparison_type);
       if (cmp == 0) { return false; }
       int64_t cid = AddValueConst(out, cf.constant);
-      if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) filter const -> decline
+      if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) filter const: decline
       ge.filters.push_back({out.intern(g->names[col_idx]), cmp, cid});
       return true;
     };
@@ -2532,8 +2533,8 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
         // never authoritative for correctness. DuckDB pushes one as the partial copy
         // of the residual IN/OR predicate that also remains as the LogicalFilter we
         // captured above this GET. Since we serialize that residual into the
-        // PASS_PROGRAM below, the optional copy is subsumed -> safe to skip. Gated on
-        // residual_filter so the flag-OFF path keeps declining on OPTIONAL_FILTER
+        // PASS_PROGRAM below, the optional copy is covered by it and is safe to skip.
+        // Gated on residual_filter so the flag-off path keeps declining on OPTIONAL_FILTER
         // exactly as before (byte-identical default behavior).
         continue;
       } else {
@@ -2544,11 +2545,11 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   }
 
   // 3b. PASS_PROGRAMS (NR3, GPU_OP_FILTER_OR). If a single-table residual filter
-  // was captured, serialize EACH of its (implicitly ANDed) expressions into ONE
+  // was captured, serialize each of its (implicitly ANDed) expressions into one
   // postfix program, chaining the per-expression results with OP_MUL (AND). It
-  // attaches to GET ordinal 0 (the single GET this path supports). If ANY
-  // expression fails to serialize -> DECLINE the whole offload (never drop a
-  // predicate -> never a wrong answer). residual_filter is non-null only when the
+  // attaches to GET ordinal 0 (the single GET this path supports). If any
+  // expression fails to serialize, decline the whole offload (never drop a
+  // predicate, so never a wrong answer). residual_filter is non-null only when the
   // flag is on, so this whole block is dead by default.
   if (residual_filter) {
     if (jt.gets.size() != 1 || !single_get) { return false; }  // single-GET only
@@ -2571,12 +2572,12 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
 
   // 4. JOINS (one INNER entry with the resolved conds; none if single GET).
   if (!single_get) {
-    // JOIN-UNIQUENESS GATE (audit Group E, case 1). The FK->dim gather lowering
-    // is only correct when each edge's DIM-side join key is unique; against a
+    // Join-uniqueness gate (audit Group E, case 1). The FK-to-dim gather lowering
+    // is only correct when each edge's dim-side join key is unique; against a
     // non-unique build side a many-to-many join silently collapses to 1x. Decline
-    // the whole offload unless every dim key is provably unique. This runs BEFORE
+    // the whole offload unless every dim key is provably unique. This runs before
     // serializing the join (so a non-unique join never even forms a descriptor
-    // that could misclassify as Q3/Q5/Q14). Q5/Q14/Q3's FK->PK keys are recognized
+    // that could misclassify as Q3/Q5/Q14). Q5/Q14/Q3's FK-to-PK keys are recognized
     // by the exact distinct probe (their dbgen tables carry no PK constraint).
     if (!JoinDimKeysProvablyUnique(jt, eqs)) { return false; }
     RawPlanBuilder::Join jn;
@@ -2590,8 +2591,8 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
 
   // Identify the fact table (max-cardinality GET) so a group key bound to a
   // dimension column via an equi-join equivalence can be re-attributed to its
-  // fact-side column — mirroring what the engine actually emits, and what the
-  // Mojo strategy picker keys on (integer fact group key -> SORT_SEGREDUCE).
+  // fact-side column. This mirrors what the engine actually emits, and what the
+  // Mojo strategy picker keys on (an integer fact group key selects SORT_SEGREDUCE).
   std::string fact_table;
   {
     int64_t best = -1;
@@ -2658,7 +2659,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     ae.ret_width = width;
     ae.ret_is_int128 = (ag.return_type.InternalType() == PhysicalType::INT128) ? 1 : 0;
     // Program: empty for COUNT_STAR; a statistical aggregate emits its argument
-    // program(s) into Agg.program -- 1-arg (stddev/var) is just the x program;
+    // program(s) into Agg.program: 1-arg (stddev/var) is only the x program;
     // 2-arg (covar/corr/regr_*) emits the dependent-y program, OP_ARGSEP, then the
     // independent-x program. (DuckDB's regr_*(y, x) puts dependent first.) The Mojo
     // metric lowering splits on OP_ARGSEP and builds the shared-sum metrics.
@@ -2678,56 +2679,56 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     out.aggregates.push_back(std::move(ae));
   }
 
-  // GPU_OP_NULLABLE SAFE-SLICE GATE (role-aware; runs only when the flag is on).
-  // The early NULL-safety gate was deferred to here so every column ROLE is known.
-  // ACCEPT a nullable query ONLY for the provably-safe slice where folding each
-  // row's validity into the single shared host pass column is BIT-IDENTICAL to SQL
+  // GPU_OP_NULLABLE safe-slice gate (role-aware; runs only when the flag is on).
+  // The early NULL-safety gate was deferred to here so every column role is known.
+  // Accept a nullable query only for the provably-safe slice where folding each
+  // row's validity into the single shared host pass column is bit-identical to SQL
   // aggregate NULL semantics (a NULL agg-input / filter row is excluded exactly like
-  // a filtered-out row; ungrouped_count_m is summed over the SAME pass-gated rows so
+  // a filtered-out row; ungrouped_count_m is summed over the same pass-gated rows so
   // sum/avg stay correct). Conditions (each derived from the adversarial NULL-
-  // semantics analysis -- see PERF_BACKLOG):
+  // semantics analysis; see PERF_BACKLOG):
   //   * single_get (no join: no nullable FK / multi-table fan-out)
-  //   * UNGROUPED (agg.groups.empty(): no nullable GROUP KEY, which would form its
+  //   * UNGROUPED (agg.groups.empty(): no nullable group key, which would form its
   //     own NULL group rather than be excluded)
-  //   * GPU_OP_NATIVE_DECODE unset: GUARANTEES the host-pass-bake path. All three
-  //     in-kernel-predicate paths (q6_pred / gen_pred / f64_pred) that SKIP the host
+  //   * GPU_OP_NATIVE_DECODE unset: this guarantees the host-pass-bake path. All three
+  //     in-kernel-predicate paths (q6_pred / gen_pred / f64_pred) that skip the host
   //     bake require native-decode; without it the host bake (where validity is
   //     folded) always runs.
-  //   * exactly ONE aggregate, kind SUM with an INT128 result (ret_is_int128):
-  //     - SUM excludes count(*) (counts ALL rows incl. NULL-input -> a shared-pass
+  //   * exactly one aggregate, kind SUM with an INT128 result (ret_is_int128):
+  //     - SUM excludes count(*) (it counts all rows incl. NULL-input, so a shared-pass
   //       fold would undercount), MIN/MAX (declined anyway), and stat kinds.
-  //     - the INT128-result requirement is important in TWO ways: (a) it keeps
+  //     - the INT128-result requirement matters in two ways: (a) it keeps
   //       this to the int64/int128 assembly path that writes res_lo/res_hi (the f64
   //       transcendental SUM, sum(sqrt(x)) etc. returns DOUBLE, ret_is_int128=0,
   //       so it declines: that path is NVIDIA-only and unvalidated for nullable);
-  //       (b) it EXCLUDES AVG: DuckDB rewrites a nullable avg(x) into a `sum`
-  //       aggregate (kind_tag == AGG_SUM!) with a DOUBLE output column + a division
-  //       projection above -- the int128 assembly would write res_lo while the
-  //       DOUBLE extraction reads res_f64 (=> 0.0, a wrong result). Requiring an
-  //       INT128 result fences that out (avg's output is DOUBLE) -> avg declines to
+  //       (b) it excludes AVG: DuckDB rewrites a nullable avg(x) into a `sum`
+  //       aggregate (kind_tag == AGG_SUM) with a DOUBLE output column + a division
+  //       projection above. The int128 assembly would write res_lo while the
+  //       DOUBLE extraction reads res_f64 (giving 0.0, a wrong result). Requiring an
+  //       INT128 result rules that out (avg's output is DOUBLE), so avg declines to
   //       stock. (A single nullable-input SUM is also, by construction, a single
   //       distinct agg-input column, so shape-5's per-aggregate-exclusion hazard
   //       cannot arise.)
-  //   * OR the f64 path: a single transcendental SUM (sum(sqrt(x))..) or a
+  //   * or the f64 path: a single transcendental SUM (sum(sqrt(x))..) or a
   //     statistical aggregate (stddev/var/covar/corr/regr_*). These are NVIDIA-only
-  //     (the Mojo builder's f64 scope guard declines non-NVIDIA -> stock, so Apple is
-  //     unaffected), is_float64 -> the host-bake pass column gates the f64 metrics
-  //     IDENTICALLY to the int path, so the same validity fold excludes NULL rows. A
-  //     multi-arg stat (corr(x,y)) is NULL-excluded when EITHER arg is NULL -- exactly
-  //     AND-ing both columns' validity into the one pass bit. AVG stays excluded (same
+  //     (the Mojo builder's f64 scope guard declines non-NVIDIA to stock, so Apple is
+  //     unaffected). With is_float64 the host-bake pass column gates the f64 metrics
+  //     identically to the int path, so the same validity fold excludes NULL rows. A
+  //     multi-arg stat (corr(x,y)) is NULL-excluded when either arg is NULL, which is
+  //     exactly AND-ing both columns' validity into the one pass bit. AVG stays excluded (same
   //     avg-as-sum-double hazard); a transcendental SUM has a transcendental opcode in
   //     its program, which is how we tell it from a plain (rewritten-avg) SUM.
-  // IS NULL / IS NOT NULL filters (which would INVERT the fold) already decline in
-  // the filter walk above (unmodeled filter shape -> return false), so no extra check
+  // IS NULL / IS NOT NULL filters (which would invert the fold) already decline in
+  // the filter walk above (unmodeled filter shape, return false), so no extra check
   // is needed. Any query failing the slice re-applies the original blanket decline.
   if (nullable_on) {
     // A1 unified pass model: accept N aggregates (not just one). The host pass column
-    // folds in only FILTER-column validity; each metric multiplies in its own
-    // agg-input-column validity, and count(*) is unmultiplied -- so count(*) (counts
-    // ALL filter-passing rows) and multiple aggregates over DIFFERENT nullable columns
+    // folds in only filter-column validity; each metric multiplies in its own
+    // agg-input-column validity, and count(*) is unmultiplied. So count(*) (counts
+    // all filter-passing rows) and multiple aggregates over different nullable columns
     // (each excludes only its own NULLs) are correct. Per-aggregate NULL-on-empty uses
     // each aggregate's validity-product count. Accept iff single-table, UNGROUPED, no
-    // native-decode, and EVERY aggregate is an int128 SUM / AVG / count(*) / stat /
+    // native-decode, and every aggregate is an int128 SUM / AVG / count(*) / stat /
     // transcendental SUM (the kinds the Mojo finalize lowers under A1).
     bool base = single_get && agg.groups.empty() &&
                 std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
@@ -2740,7 +2741,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
         if (a.kind_tag == rp::AGG_COUNT_STAR) {
           ok = true;  // counts all filter-passing rows; never validity-multiplied
         } else if (a.kind_tag == rp::AGG_SUM && a.ret_is_int128 == 1) {
-          ok = true;  // int128 SUM (avg-as-sum-double is DOUBLE -> ret_is_int128==0)
+          ok = true;  // int128 SUM (avg-as-sum-double is DOUBLE, so ret_is_int128==0)
         } else if (a.kind_tag == rp::AGG_AVG) {
           ok = true;  // numerator * validity, denominator = validity-product count
         } else if (IsStatAggKind(a.kind_tag)) {
@@ -2759,24 +2760,24 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
         if (!ok) { all_ok = false; break; }
       }
     }
-    // The A1 per-metric validity multiply is INT-only. An f64 (transcendental/stats)
-    // aggregate uses the validity-IN-PASS fold instead -- a NULL row is excluded from
-    // the kernel entirely, because a metric tape would otherwise EVALUATE the
-    // transcendental on a NULL row's garbage (e.g. sqrt(negative) -> domain error)
+    // The A1 per-metric validity multiply is int-only. An f64 (transcendental/stats)
+    // aggregate uses the validity-in-pass fold instead: a NULL row is excluded from
+    // the kernel entirely, because a metric tape would otherwise evaluate the
+    // transcendental on a NULL row's garbage (e.g. sqrt(negative) raises a domain error)
     // before a multiply could zero it. Pass-folding excludes whole rows, so it cannot
-    // give per-column NULL exclusion across MULTIPLE f64 aggregates -> restrict f64
-    // nullable to a SINGLE aggregate (the shipped ce3e7db scope). Int multi-aggregate
+    // give per-column NULL exclusion across multiple f64 aggregates. So we restrict f64
+    // nullable to a single aggregate (the shipped ce3e7db scope). Int multi-aggregate
     // (count(*) + sum/avg over different nullable columns) is unaffected.
     if (has_f64 && out.aggregates.size() != 1) { all_ok = false; }
 
-    // GPU_OP_NULLABLE_GROUPED: extend to a DENSE GROUP BY with NOT-NULL group key(s)
+    // GPU_OP_NULLABLE_GROUPED: extend to a DENSE GROUP BY with NOT NULL group key(s)
     // over nullable agg/filter columns (int path). The A1 per-metric validity multiply
     // + per-group validity-count NULL marking + the dense filter-count existence gate
-    // are all per-group (g*M-indexed) -> no new kernel. Require: single-table, grouped,
-    // no native-decode, every aggregate int {SUM int128, AVG, count(*)} (the routing
-    // accessor a1_grouped_ok additionally requires DENSE), and EVERY group key NOT NULL
-    // (a nullable group key would form its own SQL NULL group, unmodeled by the dense
-    // gid build -> stays declined).
+    // are all per-group (g*M-indexed), so no new kernel is needed. Require: single-table,
+    // grouped, no native-decode, every aggregate int {SUM int128, AVG, count(*)} (the
+    // routing accessor a1_grouped_ok additionally requires DENSE), and every group key
+    // NOT NULL (a nullable group key would form its own SQL NULL group, which the dense
+    // gid build does not model, so it stays declined).
     if (!all_ok && GpuOpNullableGroupedOn() && single_get &&
         !agg.groups.empty() &&
         std::getenv("GPU_OP_NATIVE_DECODE") == nullptr &&
@@ -2791,7 +2792,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
         }
       }
       if (g_ok) {
-        // Collect nullable column NAMES (same storage-index + NOT_NULL-constraint basis
+        // Collect nullable column names (same storage-index + NOT_NULL-constraint basis
         // as any_nullable_projected; name via the catalog) and decline if any group key
         // is among them.
         std::set<std::string> nullable_names;
@@ -2827,7 +2828,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   return true;
 }
 
-// Shadow validation entry: serialize -> build descriptor -> log classification.
+// Shadow validation entry: serialize, build the descriptor, log the classification.
 void ShadowValidateAggregate(LogicalAggregate &agg) {
   RawPlanBuilder b;
   bool ok = false;
@@ -2870,10 +2871,10 @@ void ShadowValidateAggregate(LogicalAggregate &agg) {
 // descriptor handle (built from the RawPlan wire form). It is class-agnostic:
 // output schema, the SQL to materialize, column feeding and result extraction
 // are all driven by the shuttle ABI. This is the default (and only) GPU
-// aggregate path; GPU_OP_GENERIC=off disables it -> stock DuckDB CPU.
+// aggregate path; GPU_OP_GENERIC=off disables it (stock DuckDB CPU then runs).
 // ===========================================================================
 
-// Contract TypeTag (scale/width) -> DuckDB LogicalType. Inverse of MapType.
+// Contract TypeTag (scale/width) to DuckDB LogicalType. Inverse of MapType.
 LogicalType TagToLogicalType(int64_t tag, int64_t scale, int64_t width) {
   switch (tag) {
   case rp::TYPE_BOOL:     return LogicalType::BOOLEAN;
@@ -2897,14 +2898,14 @@ LogicalType TagToLogicalType(int64_t tag, int64_t scale, int64_t width) {
   }
 }
 
-// DuckDB LogicalType -> contract TypeTag (for the feed_column type_tag argument).
+// DuckDB LogicalType to contract TypeTag (for the feed_column type_tag argument).
 int64_t LogicalTypeToTag(const LogicalType &t) {
   int64_t tag, scale, width;
   MapType(t, tag, scale, width);
   return tag;
 }
 
-// Phase G Stage 1 (flag-gated, additive): for the COLD fact-materialize request
+// Phase G Stage 1 (flag-gated, additive): for the cold fact-materialize request
 // of a fully-fixed-width-decodable aggregate, feed the fact columns from the
 // GPU-direct DuckDB-native segment decoder instead of running the nested
 // Connection::Query + chunk-gather. Defined after the native-storage helpers
@@ -2914,9 +2915,9 @@ int64_t LogicalTypeToTag(const LogicalType &t) {
 // `fact_cols` are the projected fact column names parsed from the request-0
 // materialize SQL (deterministic `SELECT c0, c1, ... FROM <fact_table>` form).
 // Returns true iff every fact column was decoded on-GPU and fed (the request is
-// fully satisfied); false means NOTHING was fed and the caller MUST run the
+// fully satisfied); false means nothing was fed and the caller must run the
 // normal Connection::Query feed for the whole request (never partial). When it
-// returns true, `*out_bytes_moved` carries the host->device bytes uploaded (sum
+// returns true, `*out_bytes_moved` carries the host-to-device bytes uploaded (sum
 // of decoded segment byte sizes) for optional instrumentation.
 bool TryGpuDirectFactFeed(ClientContext &context, void *h,
                           const std::string &fact_table,
@@ -2969,19 +2970,19 @@ public:
         }
 
         // SKIP-MATERIALIZE (GPU_OP_COLPOOL=2): when active for this query, the
-        // narrowed SELECT (emitted by materialize_sql) reads only the NON-resident
+        // narrowed SELECT (emitted by materialize_sql) reads only the non-resident
         // fact columns and the finalize sources the resident ones from the pool.
-        // BYPASS the GPU-direct fact feed entirely (it would re-decode the full
+        // Bypass the GPU-direct fact feed entirely (it would re-decode the full
         // column set) and use the narrowed SQL feed below. (The decode-skip is
         // deferred.) Recompute per request; only the fact request (i==0) matters.
         bool skipmat = (mojo_gpu_skipmat_active(h) == 1);
 
-        // Phase G Stage 1 (flag-gated): for the FACT request (i==0) ONLY, when
+        // Phase G Stage 1 (flag-gated): for the fact request (i==0) only, when
         // GPU_OP_NATIVE_DECODE is set and every projected fact column resolves to
         // a fully-decodable native column, feed the fact columns from the
         // GPU-direct segment decoder instead of this nested SQL query + gather.
         // Eligibility / decode is all-or-nothing per request; on any unsupported
-        // column/segment TryGpuDirectFactFeed feeds NOTHING and returns false, so
+        // column/segment TryGpuDirectFactFeed feeds nothing and returns false, so
         // we fall through to the unchanged Connection::Query feed below.
         if (i == 0 && !skipmat && std::getenv("GPU_OP_NATIVE_DECODE")) {
           int64_t kind = mojo_gpu_desc_kind(h);
@@ -3030,14 +3031,14 @@ public:
         }
 
         // SKIP-MATERIALIZE landmine #1 (all-resident edge): when the narrowed
-        // request-0 SELECT has ZERO projected columns (every fact column is
-        // pool-resident), the SQL is "SELECT  FROM <table>" -- ILLEGAL to run.
-        // Detect the empty projection list and SKIP the fact Connection::Query
+        // request-0 SELECT has zero projected columns (every fact column is
+        // pool-resident), the SQL is "SELECT  FROM <table>", which is illegal to run.
+        // Detect the empty projection list and skip the fact Connection::Query
         // entirely. materialize_sql already seeded st.n_rows from the resident row
         // count for this case, so the finalize sources every column from the pool
         // and knows the row count. (A genuine query whose projection is empty is
-        // impossible here -- materialize_sql only emits an empty list when it
-        // omitted every column after a guaranteed pool HIT.)
+        // impossible here: materialize_sql only emits an empty list when it
+        // omitted every column after a guaranteed pool hit.)
         if (i == 0 && skipmat) {
           const std::string kSel = "SELECT ";
           const std::string kFrom = " FROM ";
@@ -3049,7 +3050,7 @@ public:
             empty_projection = (mid.find_first_not_of(" \t") == std::string::npos);
           }
           if (empty_projection) {
-            continue;  // all fact columns resident -> nothing to scan/feed
+            continue;  // all fact columns resident: nothing to scan/feed
           }
         }
 
@@ -3061,17 +3062,17 @@ public:
         idx_t total_rows = res->RowCount();
         idx_t n_cols = res->types.size();
 
-        // SKIP-MATERIALIZE landmine #1: set st.n_rows for the FACT request from the
-        // observed row count BEFORE the feed loop. Required so the finalize knows
-        // n_rows even for an OMITTED column (whose feed_column never runs); for fed
+        // SKIP-MATERIALIZE landmine #1: set st.n_rows for the fact request from the
+        // observed row count before the feed loop. Required so the finalize knows
+        // n_rows even for an omitted column (whose feed_column never runs); for fed
         // columns feed_column sets the same value, so this is idempotent. Gated by
         // `skipmat` so the non-skip-materialize paths (flag off / =1 / Q1/Q3/Q5)
-        // are byte-IDENTICAL to before -- they never call this extra C-ABI entry.
+        // are byte-identical to before; they never call this extra C-ABI entry.
         if (i == 0 && skipmat) {
           mojo_gpu_feed_rowcount(h, (int64_t)total_rows);
         }
 
-        // Gather every output column CONTIGUOUSLY across all chunks into one flat
+        // Gather every output column contiguously across all chunks into one flat
         // buffer (feed_column overwrites per (req,col), so a single contiguous feed
         // per column is required), then feed it once. Read chunks lazily into the
         // per-column buffers so the result is walked once.
@@ -3080,19 +3081,19 @@ public:
         std::vector<std::vector<int64_t>> buf_i64(n_cols);
         std::vector<std::vector<hugeint_t>> buf_i128(n_cols);
         std::vector<std::vector<double>> buf_f64(n_cols);
-        // VARCHAR columns (e.g. Q1 group keys, Q14 p_type) are fed as a CONTIGUOUS
+        // VARCHAR columns (e.g. Q1 group keys, Q14 p_type) are fed as a contiguous
         // array of string_t (16 bytes each). A non-inlined string_t (length > 12)
-        // is a POINTER into the chunk's per-scan string heap, which DuckDB reuses
-        // across Fetch() calls — so we must capture the bytes WHILE the chunk is
-        // alive, not rely on the pointer surviving. We deep-copy each string's
-        // CONTENT into a persistent per-column std::string store (`buf_strdata`),
+        // is a pointer into the chunk's per-scan string heap, which DuckDB reuses
+        // across Fetch() calls, so we must capture the bytes while the chunk is
+        // alive and not rely on the pointer surviving. We deep-copy each string's
+        // content into a persistent per-column std::string store (`buf_strdata`),
         // then after the scan rebuild self-contained string_t pointing into that
         // stable storage. (1-char group keys are inlined, so the copy is moot for
         // them, but doing it uniformly is correct for arbitrary-length VARCHAR.)
         std::vector<std::vector<string_t>> buf_str(n_cols);
         std::vector<std::vector<std::string>> buf_strdata(n_cols);
         // GPU_OP_NULLABLE: per-column per-row validity staging (1=valid, 0=NULL).
-        // Only allocated/walked when the flag is ON (default-off => zero overhead,
+        // Only allocated/walked when the flag is on (off by default: no overhead,
         // byte-identical to today). buf_valid[c] stays row-aligned with the data
         // (1's appended for AllValid chunks); col_has_null[c] records whether the
         // column ever held a NULL, so only those columns are fed validity below.
@@ -3128,7 +3129,7 @@ public:
           for (idx_t c = 0; c < n_cols; c++) {
             chunk->data[c].Flatten(n);
             const LogicalType &ct = res->types[c];
-            // GPU_OP_NULLABLE: capture validity for EVERY column (before the VARCHAR
+            // GPU_OP_NULLABLE: capture validity for every column (before the VARCHAR
             // branch's `continue`) so buf_valid[c] stays row-aligned. A NULL row is
             // read as raw garbage data, so the finalize must know to exclude it.
             if (nullable_on) {
@@ -3143,7 +3144,7 @@ public:
               }
             }
             if (ct.id() == LogicalTypeId::VARCHAR) {
-              // Capture each string's CONTENT now (chunk is alive); the string_t
+              // Capture each string's content now (chunk is alive); the string_t
               // structs are rebuilt after the scan from this stable storage.
               const string_t *p = FlatVector::GetData<string_t>(chunk->data[c]);
               for (idx_t r = 0; r < n; r++) {
@@ -3208,7 +3209,7 @@ public:
             }
           }
           // GPU_OP_STATS: pass the source decimal scale (0 for non-DECIMAL) so the
-          // finalize builds col_div from the column's ACTUAL scale, not a hardcode.
+          // finalize builds col_div from the column's actual scale, not a hardcoded one.
           int64_t dscale =
               (ct.id() == LogicalTypeId::DECIMAL) ? (int64_t)DecimalType::GetScale(ct) : 0;
           int64_t rc = mojo_gpu_feed_column(h, i, (int64_t)c, ptr,
@@ -3239,9 +3240,9 @@ public:
     int64_t fin_rc = mojo_gpu_pin_finalize(h);
     // Audit Group G: domain-error rc codes from the transcendental f64 finalize.
     // A single out-of-domain row (sqrt of a negative / log of a non-positive)
-    // poisons the f64 aggregate to NaN; stock DuckDB RAISES rather than returning
+    // turns the f64 aggregate into NaN; stock DuckDB raises rather than returning
     // nan, so surface the matching OutOfRangeException here (rc 10=sqrt, 11=log,
-    // 12=unspecified domain). This is NOT a fallback-to-CPU path -- like stock, the
+    // 12=unspecified domain). This is not a fallback-to-CPU path: like stock, the
     // query errors.
     if (fin_rc == 10) {
       throw OutOfRangeException("cannot take square root of a negative number");
@@ -3423,7 +3424,7 @@ public:
 // Serialize the matched aggregate, build a descriptor, and if its kind is
 // buildable replace *node with a LogicalGpuAgg.
 bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
-  // Default-ON: the descriptor-driven generic engine handles all supported
+  // On by default: the descriptor-driven generic engine handles all supported
   // classes unless explicitly disabled with GPU_OP_GENERIC=off|none. A non-empty
   // value other than off/none restricts routing to the named kinds (substring
   // match, e.g. "q3 q5"). Whenever this returns false the node is left untouched
@@ -3465,40 +3466,40 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
 
   // GPU_OP_STATS: a statistical aggregate plan (stddev/var/covar/corr/regr_*) has
   // no TPC-H kind (KIND_UNKNOWN). Enable routing whenever the descriptor carries a
-  // stat aggregate -- the Mojo scope guard already validated the shape (UNGROUPED/
+  // stat aggregate. The Mojo scope guard already validated the shape (UNGROUPED/
   // DENSE, no FK dims, NVIDIA-only) and flag-gated the agg-kind emission.
   if (GpuOpFlagOn("GPU_OP_STATS") && mojo_gpu_desc_is_stats(h)) {
     enabled = true;
   }
 
   // A1 (GPU_OP_NULLABLE): an UNGROUPED int multi-aggregate (count(*) + SUM/AVG over
-  // possibly-NULLABLE columns) classifies KIND_UNKNOWN -- no single TPC-H kind matches
-  // 2+ aggregates -- but the generic ungrouped int128 kernel executes it, and the A1
+  // possibly nullable columns) classifies KIND_UNKNOWN (no single TPC-H kind matches
+  // 2+ aggregates), but the generic ungrouped int128 kernel executes it, and the A1
   // metric lowering gives count(*) its own (unmultiplied) metric + each SUM/AVG its own
   // validity multiply. Enable it when GPU_OP_NULLABLE is on; the accessor restricts to
   // UNGROUPED all-int {SUM,AVG,count(*)} so an f64 stat/transcendental is never mixed
   // onto the int path (and single-agg int already routes via KIND_Q6, so this only adds
   // the multi-aggregate case). The SerializeMatchedPlan nullable gate already
-  // fail-closed any nullable shape outside the accepted set before we got here.
+  // failed closed on any nullable shape outside the accepted set before we got here.
   if (GpuOpNullableOn() && mojo_gpu_desc_a1_ungrouped_ok(h)) {
     enabled = true;
   }
 
   // GPU_OP_NULLABLE_GROUPED: a DENSE int GROUP BY (count(*) + SUM/AVG over nullable
-  // columns, NOT-NULL group key) classifies KIND_UNKNOWN -- the generic dense int128
+  // columns, NOT NULL group key) classifies KIND_UNKNOWN; the generic dense int128
   // kernel + the A1 per-group machinery execute it. The SerializeMatchedPlan grouped
-  // gate above already required NOT-NULL group keys + accepted agg kinds.
+  // gate above already required NOT NULL group keys + accepted agg kinds.
   if (GpuOpNullableGroupedOn() && mojo_gpu_desc_a1_grouped_ok(h)) {
     enabled = true;
   }
 
   if (!enabled) { mojo_gpu_desc_free(h); return false; }
 
-  // item 5: below the crossover, the co-installed CPU SIMD kernels (or stock) win
-  // -- decline so the descriptor isn't routed to the GPU.
+  // item 5: below the crossover, the co-installed CPU SIMD kernels (or stock) win,
+  // so decline and do not route the descriptor to the GPU.
   if (BelowGpuCrossover(*node)) { mojo_gpu_desc_free(h); return false; }
 
-  // LogicalGpuAgg takes ownership of the handle (NOT freed on the success path).
+  // LogicalGpuAgg takes ownership of the handle (not freed on the success path).
   auto repl = make_uniq<LogicalGpuAgg>(h);
   repl->estimated_cardinality = node->estimated_cardinality;
   node = std::move(repl);
@@ -3506,19 +3507,19 @@ bool TryRouteGeneric(unique_ptr<LogicalOperator> &node) {
 }
 
 // ===-------------------------------------------------------------------===//
-// GPU-DIRECT NATIVE-STORAGE DECODE (debug-only entry points).
+// GPU-direct native-storage decode (debug-only entry points).
 //
-// Phase A: gpu_native_segment_info(table, column) -- run the in-process
-//          table->bytes reachability call chain and emit per-segment metadata
+// Phase A: gpu_native_segment_info(table, column): run the in-process
+//          table-to-bytes reachability call chain and emit per-segment metadata
 //          (compression_type, mode, segment_start/count, block_id, and for the
 //          first group: frame + width parsed straight out of the pinned bytes).
 //          Proves byte reachability + that our byte-layout reading matches.
 //
-// Phase C: gpu_native_decode_check(table, column) -- pin each segment, decode
+// Phase C: gpu_native_decode_check(table, column): pin each segment, decode
 //          it on the GPU via mojo_gpu_decode_segment into a contiguous output at
 //          segment_start, then compare every value against
 //          Connection::Query("SELECT <column> FROM <table>") (unfiltered scan
-//          order). Asserts every value is BIT-IDENTICAL.
+//          order). Asserts every value is bit-identical.
 //
 // Both are additive, parallel to the existing CPU-materialize cold path; they
 // do not touch it. They use DuckDB-internal storage APIs (CPP ABI).
@@ -3560,7 +3561,7 @@ struct PinnedSegment {
   const_data_ptr_t base = nullptr;  // pointer to the segment's first byte
   idx_t seg_bytes = 0;           // SegmentSize() of the persistent segment
   unique_ptr<ColumnSegment> segment;  // owns nothing block-wise; keeps type alive
-  BufferHandle handle;           // KEEP ALIVE: the pinned block backing `base`
+  BufferHandle handle;           // keep alive: the pinned block backing `base`
 };
 
 // Map a DuckDB CompressionType to the Mojo decode `codec` arg (0/1) or -1 if
@@ -3611,7 +3612,7 @@ void ForEachColumnSegment(ClientContext &context, NativeColumnRef &ref, FN &&fn)
       PinnedSegment ps;
       ps.info = si;
       // CONSTANT segments live in-memory (block_id < 0): no on-disk bytes to
-      // pin. Skip them here -- they are decoded purely from stats by the
+      // pin. Skip them here; they are decoded purely from stats by the
       // bitpacking CONSTANT path only when bitpacked; a top-level CONSTANT
       // compression segment has no packed bytes. Hand them to `fn` with a null
       // base so the caller can handle (Phase A prints; Phase C is told).
@@ -3761,7 +3762,7 @@ void RegisterGpuNativeSegInfoTableFunction(ExtensionLoader &loader) {
 }
 
 // --- Debug: gpu_native_group_dump(table, column) ------------------------------
-// One row per 2048-row metadata group of every DATA segment, parsed straight
+// One row per 2048-row metadata group of every data segment, parsed straight
 // from the pinned bytes (mode/width/frame/data_off + seg_bytes). Used to pin
 // down per-group decode discrepancies.
 struct GpuNativeGroupDumpBindData : public TableFunctionData {
@@ -3841,13 +3842,13 @@ struct DecodedFactColumn {
   int64_t tag = rp::TYPE_INVALID;
   int64_t dec_scale = 0;       // DECIMAL scale (0 for non-DECIMAL); GPU_OP_STATS
   idx_t n_rows = 0;
-  int64_t bytes_moved = 0;     // sum of decoded segment byte sizes (H->D)
+  int64_t bytes_moved = 0;     // sum of decoded segment byte sizes (H2D)
   std::vector<int32_t> v32;
   std::vector<int64_t> v64;
 };
 
 // Decode all DATA segments of one native column. Returns false (leaving `out`
-// untouched/partial) the moment any segment is unsupported -- the caller treats
+// untouched/partial) the moment any segment is unsupported; the caller treats
 // that as ineligible for the whole request. Mirrors gpu_native_decode_check:
 //   * only the top-level data column path ("[N]", no comma) is decoded;
 //   * codec must be UNCOMPRESSED or BITPACKING (CodecToMojo >= 0);
@@ -3855,7 +3856,7 @@ struct DecodedFactColumn {
 //   * for BITPACKING, every 2048-row group's mode must be one of the four
 //     implemented fixed-width modes (FOR/CONSTANT/CONSTANT_DELTA/DELTA_FOR);
 //   * has_updates segments are rejected (the persistent block bytes would be
-//     stale -- extra-conservative beyond the proven check).
+//     stale; this is more conservative than the verified check).
 bool DecodeNativeColumnForFeed(ClientContext &context, NativeColumnRef &ref,
                                DecodedFactColumn &out) {
   out.type_code = TypeCodeForSize(ref.physical_type_size);
@@ -3913,7 +3914,7 @@ bool TryGpuDirectFactFeed(ClientContext &context, void *h,
                           const std::string &fact_table,
                           const std::vector<std::string> &fact_cols,
                           int64_t /*kind*/, int64_t *out_bytes_moved) {
-  // Pass 1: resolve + decode every fact column. Any failure => feed nothing.
+  // Pass 1: resolve + decode every fact column. On any failure feed nothing.
   std::vector<DecodedFactColumn> decoded(fact_cols.size());
   idx_t expect_rows = 0;
   int64_t total_bytes = 0;
@@ -3927,7 +3928,7 @@ bool TryGpuDirectFactFeed(ClientContext &context, void *h,
     if (!DecodeNativeColumnForFeed(context, ref, decoded[c])) { return false; }
     total_bytes += decoded[c].bytes_moved;
     if (c == 0) { expect_rows = decoded[c].n_rows; }
-    else if (decoded[c].n_rows != expect_rows) { return false; }  // ragged => bail
+    else if (decoded[c].n_rows != expect_rows) { return false; }  // ragged: bail
   }
   if (decoded.empty() || expect_rows == 0) { return false; }
 
@@ -3938,7 +3939,7 @@ bool TryGpuDirectFactFeed(ClientContext &context, void *h,
                     : static_cast<void *>(decoded[c].v64.data());
     // Thread the real DECIMAL scale so the GPU_OP_STATS f64 path builds col_div
     // (10^scale) correctly. With predicate-independent residency the stats/
-    // transcendental f64 path NOW feeds through native-decode (it is the
+    // transcendental f64 path now feeds through native-decode (it is the
     // GPU_OP_NATIVE_DECODE-gated residency prerequisite), so a hardcoded 0 here
     // gave dimensioned stats (stddev/var/covar) a 100x scale error. 0 for non-
     // DECIMAL columns (dates/ints), matching the SQL-feed path's GetScale.
@@ -4007,7 +4008,7 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
     auto n = chunk->size();
     chunk->data[0].Flatten(n);
     if (type_code == 0) {
-      // 4B physical: DATE -> int32 days, INTEGER -> int32. Read via the column's
+      // 4B physical: DATE is int32 days, INTEGER is int32. Read via the column's
       // physical layout. We re-Flatten to a typed pointer of the right width.
       auto pt = ref.type.InternalType();
       if (pt == PhysicalType::INT32) {
@@ -4028,15 +4029,15 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
   }
   bd->total_rows = NumericCast<int64_t>(reference.size());
 
-  // GPU decode per segment into a contiguous output at the GLOBAL row offset,
+  // GPU decode per segment into a contiguous output at the global row offset,
   // comparing each decoded value against the reference.
   //
   // Two subtleties (verified against duckdb storage/table/column_data.cpp):
   //   * GetColumnSegmentInfo recurses into the validity child, which appears as
   //     a separate ColumnSegmentInfo with column_path "[N, 0]" (the data column
-  //     is "[N]", no comma). We decode ONLY the data column's segments.
+  //     is "[N]", no comma). We decode only the data column's segments.
   //   * `segment_start` is row-group-relative (it resets each row group), so we
-  //     track our own running GLOBAL offset across accepted data segments.
+  //     track our own running global offset across accepted data segments.
   vector<int32_t> dec32;
   vector<int64_t> dec64;
   idx_t global_row = 0;
@@ -4046,7 +4047,7 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
     if (ps.info.column_path.find(',') != std::string::npos) { return; }
     int codec = CodecToMojo(EnumUtil::FromString<CompressionType>(ps.info.compression_type.c_str()));
     idx_t count = ps.info.segment_count;
-    idx_t start = global_row;     // GLOBAL output offset (running)
+    idx_t start = global_row;     // global output offset (running)
     global_row += count;          // advance regardless, so offsets stay aligned
     if (!ps.base || codec < 0) {
       bd->skipped_segments++;
@@ -4055,9 +4056,9 @@ unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableF
     // For BITPACKING segments, classify each 2048-group's mode so we can
     // attribute any (still-unimplemented) zero-filled groups to `deferred_rows`
     // rather than counting them as decode failures. A `deferred` row is one
-    // whose group mode is NOT implemented in the kernel (deterministic
-    // zero-fill). The four fixed-width modes -- FOR, CONSTANT, CONSTANT_DELTA,
-    // and DELTA_FOR -- are all implemented now, so a mismatch in any of them is
+    // whose group mode is not implemented in the kernel (deterministic
+    // zero-fill). The four fixed-width modes (FOR, CONSTANT, CONSTANT_DELTA,
+    // and DELTA_FOR) are all implemented now, so a mismatch in any of them is
     // a real bug. Only INVALID / AUTO / unknown modes remain deferred.
     auto group_deferred = [&](idx_t row_in_seg) -> bool {
       if (codec != 1) return false;  // UNCOMPRESSED is always implemented
@@ -4164,7 +4165,7 @@ void RegisterGpuNativeDecodeCheckTableFunction(ExtensionLoader &loader) {
 //   gpu_pin_table(table, column [, prec])  -> pre-pin a kNN embedding column warm
 //
 // Names mirror the existing gpu_cosine* / gpu_native_* table functions. unpin is
-// always correctness-safe (a later query simply rebuilds COLD); in-use pins
+// always safe for correctness (a later query rebuilds it cold); in-use pins
 // (refcount > 0, a query in flight) are skipped and reported, never force-freed.
 // ===-------------------------------------------------------------------===//
 struct GpuPinStatusBindData : public TableFunctionData {
@@ -4229,10 +4230,10 @@ void RegisterGpuPinStatusTableFunction(ExtensionLoader &loader) {
   loader.RegisterFunction(tf);
 }
 
-// gpu_colpool_status() -> one row (uploaded_bytes BIGINT): the monotonic count
+// gpu_colpool_status() returns one row (uploaded_bytes BIGINT): the monotonic count
 // of bytes the column pool pushed H2D on misses (GPU_OP_COLPOOL). The dedup
-// proof selects this between queries; the DELTA shrinks once shared columns are
-// resident. Observability only -- does not touch the pool / affect results.
+// check selects this between queries; the delta shrinks once shared columns are
+// resident. Observability only: does not touch the pool or affect results.
 struct GpuColPoolStatusBindData : public TableFunctionData {
   int64_t uploaded_bytes = 0;
   int64_t pool_bytes = 0;
@@ -4296,7 +4297,7 @@ void RegisterGpuColPoolStatusTableFunction(ExtensionLoader &loader) {
 
 // gpu_unpin(key) / gpu_unpin_all(): free resident pins. Returns one row
 // (freed BIGINT, skipped_in_use BIGINT). Skips in-use entries (a query holds a
-// lease) — they are reported in skipped_in_use, never force-freed.
+// lease); they are reported in skipped_in_use, never force-freed.
 struct GpuUnpinBindData : public TableFunctionData {
   int64_t freed = 0;
   int64_t skipped_in_use = 0;
@@ -4447,10 +4448,10 @@ void LoadInternal(ExtensionLoader &loader) {
   RegisterGpuNativeGroupDumpTableFunction(loader);    // debug: per-group mode/width dump
   RegisterGpuNativeDecodeCheckTableFunction(loader);  // Phase C: GPU-direct decode bit-exact check
   RegisterGpuPinStatusTableFunction(loader);          // pin cache observability (resident pins)
-  RegisterGpuColPoolStatusTableFunction(loader);      // column-pool uploaded-bytes (dedup proof)
+  RegisterGpuColPoolStatusTableFunction(loader);      // column-pool uploaded-bytes (dedup check)
   RegisterGpuUnpinTableFunctions(loader);             // explicit unpin (key / all)
   RegisterGpuPinTableTableFunction(loader);           // pre-pin a kNN embedding column warm
-  if (GpuOpOverridesOn()) {                            // NR1: declined queries -> Mojo SIMD kernels before stock
+  if (GpuOpOverridesOn()) {                            // NR1: declined queries use Mojo SIMD kernels before stock
     RegisterMojoOverrides(loader.GetDatabaseInstance());
   }
 }

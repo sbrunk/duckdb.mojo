@@ -19,16 +19,13 @@ comptime EXT_PATH = "extensions/test-extension/build/mojo.duckdb_extension"
 comptime BAD_API_EXT_PATH = "extensions/test-extension/build/bad_api.duckdb_extension"
 
 
-comptime UNSTABLE_EXT_PATH = "extensions/test-extension/build/mojo_unstable.duckdb_extension"
-
-
 def _open_unsigned() raises -> Database:
     """Open an in-memory database with allow_unsigned_extensions enabled."""
     var config = Config({"allow_unsigned_extensions": "true"})
     return Database(":memory:", config)
 
 
-def _connect() raises -> Connection[ApiLevel.CLIENT]:
+def _connect() raises -> Connection:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()
@@ -336,26 +333,19 @@ def test_ext_across_connections() raises:
 
 
 # ===--------------------------------------------------------------------===#
-# Unstable API extension path
+# C API functions stabilized in v1.5.6
 # ===--------------------------------------------------------------------===#
 
 
-def test_ext_unstable_loads_and_invokes() raises:
-    """Extension built with `Extension.run_unstable[init]` loads and runs.
+def test_ext_v1_5_6_api() raises:
+    """`Extension.run` exposes functions that were unstable before DuckDB 1.5.6.
 
-    Exercises the unstable-API codegen path:
-    - `_get_ext_api_unstable_ptr` returning Some(ptr) (rather than the
-      no-ptr-set None branch)
-    - `LibDuckDB.__init__(api: UnsafePointer[duckdb_ext_api_v1_unstable, ...])`
-      (the no-try/except, all-field-read constructor)
-    - `Connection[ApiLevel.EXT_UNSTABLE]` used for registration
-
-    Without this test, the unstable path compiles but is never executed.
+    The extension registers `test_ext_triple` only after creating and
+    destroying a standalone vector, which uses functions from the v1.5.6 band
+    of the extension API struct.
     """
-    var db = _open_unsigned()
-    var conn = Connection(db^)
-    _ = conn.execute("LOAD '" + UNSTABLE_EXT_PATH + "'")
-    var result = conn.execute("SELECT test_ext_unstable_triple(14) AS r")
+    var conn = _connect()
+    var result = conn.execute("SELECT test_ext_triple(14) AS r")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[Int64](col=0, row=0), Int64(42))
 

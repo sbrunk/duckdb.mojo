@@ -6,7 +6,6 @@ reports a load error) when the requested version is unsupported.
 
 from duckdb._libduckdb import duckdb_extension_info
 from duckdb.extension import duckdb_extension_access, Extension, EXTENSION_API_VERSION
-from duckdb.api_level import ApiLevel
 from duckdb.connection import Connection
 
 
@@ -40,5 +39,5 @@ def bad_api_init_c_api(
     if not api:
         ext.set_error(get_error_message())
         return False
-    # Should never reach here — if it does, something is wrong.
+    # This should never be reached. If it is, something is wrong.
     return True

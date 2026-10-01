@@ -3,7 +3,7 @@ from std.testing import assert_equal, assert_true, assert_raises
 from std.testing.suite import TestSuite
 
 
-def _count(con: Connection[ApiLevel.CLIENT], table: String) raises -> Int64:
+def _count(con: Connection, table: String) raises -> Int64:
     return con.execute(
         String("SELECT count(*) FROM ", table)
     ).fetchall().get[Int64](col=0, row=0)
@@ -66,11 +66,11 @@ def test_load_unknown_extension_raises() raises:
 
 def test_install_and_load_bundled_extension() raises:
     # `icu` is statically linked into libduckdb, so install/load succeed with
-    # no network. Disabling autoinstall guarantees this never reaches out.
+    # no network. Disabling autoinstall makes sure this never downloads anything.
     var con = DuckDB.connect(":memory:")
     _ = con.execute("SET autoinstall_known_extensions=false")
     # Plain INSTALL of a statically-linked extension is a local no-op (no
-    # network). FORCE INSTALL is deliberately not exercised here: it forces a
+    # network). FORCE INSTALL is deliberately not tested here: it forces a
     # fresh download from the extension repository, which needs the network.
     con.install_extension("icu")
     con.load_extension("icu")

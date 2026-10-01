@@ -1,8 +1,10 @@
 """C-ABI shim for the mojo_overrides extension.
 
 Exports the `duckdb.kernels.simd` bulk kernels as `extern "C"` symbols so the
-C++ override extension can `dlopen` them and call over raw FLAT column buffers.
-Built to `build/libmojo_simd.{dylib,so}` by build.sh.
+C++ override extension can call them over raw FLAT column buffers. build.sh
+compiles this file to an object that is linked straight into
+`mojo_overrides.duckdb_extension`, and also into a standalone
+`build/libmojo_simd.{dylib,so}` for direct kernel use.
 """
 
 from duckdb.kernels.simd import (
@@ -143,7 +145,7 @@ def mojo_array_cosine_sim_f64(
     return array_cosine_sim[DType.float64, W64](a, b, n)
 
 
-# ---- nullable (validity-masked) reductions: A1 mask-multiply ----
+# ---- nullable (validity-masked) reductions ----
 
 
 @export("mojo_sum_f64_masked")
@@ -213,7 +215,7 @@ def mojo_sum_i128_masked(
     reduce_sum_i128_masked(a, valid, n, out_val, out_count, out_overflow)
 
 
-# ---- blocked multi-query kNN (item 4): metric 0=cosine, 1=l2, 2=ip ----
+# ---- blocked multi-query kNN: metric 0=cosine, 1=l2, 2=ip ----
 
 
 @export("mojo_knn_cosine_f32")
@@ -264,7 +266,7 @@ def mojo_knn_ip_f32(
     knn_topk[2](q, nrm_q, m, e, nrm_e, n, d_dim, k, out_ids, out_dists)
 
 
-# ---- fused sum-of-transcendental (item 2): plain + masked, per function ----
+# ---- fused sum-of-transcendental: plain and masked, per function ----
 
 
 @export("mojo_fsum_sqrt_f64")

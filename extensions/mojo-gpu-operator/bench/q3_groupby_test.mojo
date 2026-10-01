@@ -1,27 +1,29 @@
-"""De-risk the TPC-H Q3 GPU *segmented-reduction* group-by (bit-exact vs CPU).
+"""Validate the TPC-H Q3 GPU segmented-reduction group-by (bit-exact vs CPU).
 
 This replaces the host-side per-order sum (the O(n_rows) loop in q3_kernel_test /
 mojo_q3_query) with a real on-GPU high-cardinality group-by using the standard
-sort + segmented-reduce technique (no int64 atomics -- Apple GPU lacks them):
+sort + segmented-reduce technique (no int64 atomics, because the Apple GPU lacks
+them):
 
-  1. Input is SORTED by l_orderkey (DuckDB does this at pin time via ORDER BY).
+  1. Input is sorted by l_orderkey (DuckDB does this at pin time via ORDER BY).
      All rows of one order are contiguous.
   2. The host computes, from the sorted l_orderkey array, the list of distinct
      orderkeys (seg_key[s]) and a seg_offset[] array: seg_offset[s] = first row
      of segment s, seg_offset[n_seg] = n_rows. A single linear pass.
-  3. GPU segmented reduction: ONE WARP per order segment. Each warp's 32 lanes
+  3. GPU segmented reduction: one warp per order segment. Each warp's 32 lanes
      stride over its contiguous rows [seg_offset[s], seg_offset[s+1]); each lane
      applies the per-row l_shipdate > cutoff filter and the per-segment
      order_pass[seg_key[s]] test, computes rev = ext*(100-disc) (scale-4 int64),
-     warp.sum reduces the 32 partials, lane 0 writes seg_rev[s]. No atomics, no
-     cross-block merge -- each segment is owned by exactly one warp.
+     warp.sum reduces the 32 partials, lane 0 writes seg_rev[s]. No atomics and
+     no cross-block merge are needed, because each segment is owned by exactly
+     one warp.
   4. Host: seg_rev[s] (one int64 per order, ~1.5M) maps back via seg_key[s].
 
 Exactness: ext is DECIMAL(15,2)=int64 scale2; (1-disc)=(100-disc_raw) scale2;
 per-row product scale4 int64 (~1e9). An order has <=7 lines so per-order revenue
 fits int64. We compare the full per-segment revenue array bit-for-bit against a
-CPU int128-accumulated reference (int128 on the CPU side purely as a paranoia
-check that int64 never overflows).
+CPU int128-accumulated reference (int128 on the CPU side only as an extra check
+that int64 never overflows).
 """
 
 from std.gpu import block_idx, thread_idx
@@ -89,7 +91,7 @@ def main() raises:
         if is_building and od < o_cutoff:
             order_pass[k] = 1
 
-    # ===== 2. synthetic lineitem, SORTED by l_orderkey =====
+    # ===== 2. synthetic lineitem, sorted by l_orderkey =====
     # Mirror DuckDB's ORDER BY l_orderkey at pin time: rows are grouped by order.
     # Distinct orderkeys 1..max_orderkey (some orders absent to mimic sparsity),
     # 1..7 lines each, contiguous. We build the columns in sorted order directly.

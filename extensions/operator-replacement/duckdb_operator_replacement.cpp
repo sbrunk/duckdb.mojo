@@ -84,7 +84,7 @@ void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, uniq
 
                         // Insert BoundCastExpression wrappers on children whose types
                         // don't match the replacement function's declared parameter types.
-                        // E.g., DECIMAL(15,2) -> DECIMAL(18,4) scale adjustment.
+                        // E.g., a DECIMAL(15,2) to DECIMAL(18,4) scale adjustment.
                         // AddCastToType is a no-op when source == target type.
                         for (idx_t i = 0; i < func_expr.children.size() && i < replacement_func.arguments.size(); i++) {
                             if (func_expr.children[i]->return_type != replacement_func.arguments[i]) {
@@ -103,7 +103,7 @@ void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, uniq
                         // the built-in function's bind callback and is incompatible
                         // with the C API wrapper that our replacement uses (which
                         // expects CScalarFunctionInfo). Without re-binding, the
-                        // execution wrapper interprets the wrong memory layout → crash.
+                        // execution wrapper reads the wrong memory layout and crashes.
                         if (func_expr.function.bind) {
                             func_expr.bind_info = func_expr.function.bind(context, func_expr.function, func_expr.children);
                         } else {
@@ -115,13 +115,13 @@ void OperatorReplacementExtension::ReplaceOperators(ClientContext &context, uniq
                         // were bound expecting the original type) remain compatible.
                         // E.g., our DECIMAL(18,4) result gets cast to DECIMAL(34,6)
                         // that the parent SUM() was bound with.
-                        // NOTE: after this std::move, func_expr/expr refs are invalid.
+                        // After this std::move, the func_expr/expr references are invalid.
                         if (original_return_type != replacement_func.return_type) {
                             *expr_ptr = BoundCastExpression::AddCastToType(
                                 context, std::move(*expr_ptr), original_return_type);
                         }
                     } catch (...) {
-                        // No compatible overload found — keep the original function
+                        // No compatible overload found: keep the original function
                     }
                 }
             }

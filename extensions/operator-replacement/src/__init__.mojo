@@ -1,4 +1,4 @@
-"""DuckDB Operator Replacement Extension - Unstable API.
+"""DuckDB Operator Replacement Extension (unstable API).
 
 This module provides bindings to the DuckDB operator replacement extension,
 which allows replacing any scalar function or operator at query optimization time.

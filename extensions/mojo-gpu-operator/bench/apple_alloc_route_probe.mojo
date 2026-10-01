@@ -1,25 +1,25 @@
 """Probe: is a DB-wide unified allocator viable, or must we pin?
 
 The allocator route needs a single pointer that DuckDB writes column data into via
-ordinary CPU stores AND the GPU reads with no copy. This probe establishes which
+ordinary CPU stores and the GPU reads with no copy. This probe establishes which
 Mojo buffer primitives can and cannot do that on Apple, and demonstrates the path
-that DOES work (pin-resident).
+that does work (pin-resident).
 
 Findings (Apple GPU):
 
   * DeviceBuffer is the only DevicePassable buffer (can be a kernel arg), but its
-    `unsafe_ptr()` is NOT CPU-writable -> a direct CPU store through it CRASHES.
-  * CPU access to a DeviceBuffer is only via the SCOPED `map_to_host()` context
-    manager (docs: "may involve copying"; writes propagate on scope exit) -> no
-    stable unified pointer to hand to DuckDB for arbitrary writes.
-  * HostBuffer is CPU-writable (pinned) but is NOT DevicePassable -> cannot be a
-    kernel argument; and wrapping a raw/host pointer as a non-owning DeviceBuffer
-    is the broken path (apple_unified_probe Variant C).
+    `unsafe_ptr()` is not CPU-writable, so a direct CPU store through it crashes.
+  * CPU access to a DeviceBuffer is only via the scoped `map_to_host()` context
+    manager (docs: "may involve copying"; writes propagate on scope exit), so
+    there is no stable unified pointer to hand to DuckDB for arbitrary writes.
+  * HostBuffer is CPU-writable (pinned) but is not DevicePassable, so it cannot
+    be a kernel argument; and wrapping a raw/host pointer as a non-owning
+    DeviceBuffer is the broken path (apple_unified_probe Variant C).
 
-=> A DB-wide unified allocator (DuckDB buffers ARE GPU memory) is NOT expressible
-   with this Mojo API. Use the Sirius-style PIN-RESIDENT route: one controlled
-   copy of the column into a resident DeviceBuffer at pin time, amortized across
-   queries. That working pattern is demonstrated below (T_PIN).
+Conclusion: a DB-wide unified allocator (DuckDB buffers being GPU memory) cannot
+be expressed with this Mojo API. Use the Sirius-style pin-resident route instead:
+one controlled copy of the column into a resident DeviceBuffer at pin time, with
+the cost spread across queries. That working pattern is demonstrated below (T_PIN).
 """
 
 from std.sys import has_accelerator
@@ -52,7 +52,7 @@ def main() raises:
 
     # -----------------------------------------------------------------
     # T_PIN: the working pin-resident pattern. CPU fills the buffer via a
-    #        SCOPED map_to_host (the one controlled copy), kernel runs on the
+    #        scoped map_to_host (the one controlled copy), kernel runs on the
     #        resident DeviceBuffer, CPU reads results back via map_to_host.
     #        This is the Phase-2 fallback the gate selects.
     # -----------------------------------------------------------------

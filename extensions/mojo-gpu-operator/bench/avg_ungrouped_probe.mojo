@@ -1,10 +1,11 @@
-"""DEFAULT-ON bug repro: ungrouped avg(x) on a SINGLE-column table returns 0.0 via
-the operator (NO flags -- pure default config), while stock + multi-column tables
-return the correct value. DuckDB rewrites the single-column avg into a `sum`
-aggregate with a DOUBLE output; the operator's int128 assembly writes res_lo while
-the DOUBLE extraction reads res_f64 (=> 0.0). NOT a nullable-feature bug (NOT NULL
-column, no GPU_OP_NULLABLE) -- a pre-existing default-on silent-wrong-result that
-TPC-H never hits (Q1's avg is grouped, Q6 is sum). Run with NO env flags:
+"""Repro for a bug in the default configuration: ungrouped avg(x) on a single-column
+table returns 0.0 through the operator (no flags, default config only), while stock
+and multi-column tables return the correct value. DuckDB rewrites the single-column
+avg into a `sum` aggregate with a DOUBLE output; the operator's int128 assembly
+writes res_lo while the DOUBLE extraction reads res_f64, which gives 0.0. This is
+not a nullable-feature bug (NOT NULL column, no GPU_OP_NULLABLE). It is an older,
+silent wrong result in the default configuration that TPC-H never hits (Q1's avg is
+grouped, Q6 is a sum). Run without env flags:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/avg_ungrouped_probe.mojo
 """
@@ -26,16 +27,16 @@ def main() raises:
     var config = Config({"allow_unsigned_extensions": "true"})
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
-    # SINGLE-column NOT-NULL table; c = i % 1000 -> avg = 499.5.
+    # Single-column NOT NULL table; c = i % 1000, so avg = 499.5.
     _ = con.execute("CREATE TABLE one(c BIGINT NOT NULL)")
     _ = con.execute("INSERT INTO one SELECT (i%1000)::BIGINT FROM range(120000) r(i)")
-    # TWO-column NOT-NULL table (same data) -> avg works.
+    # Two-column NOT NULL table (same data): avg works.
     _ = con.execute("CREATE TABLE two(c BIGINT NOT NULL, d BIGINT NOT NULL)")
     _ = con.execute(
         "INSERT INTO two SELECT (i%1000)::BIGINT, 0::BIGINT FROM range(120000) r(i)"
     )
 
-    # Repro the original failure: sum(c) FIRST, then avg(c), same table+columns.
+    # Repro the original failure: sum(c) first, then avg(c), same table and columns.
     var s_first = con.execute("SELECT sum(c) FROM one").fetch_chunk().get[
         Optional[Int128]
     ](col=0, row=0)

@@ -5,8 +5,8 @@ from std.ffi import _find_dylib, _Global, OwnedDLHandle
 # ===-----------------------------------------------------------------------===#
 # FFI definitions for the DuckDB Operator Replacement C API.
 # 
-# This is based on internal DuckDB APIs and is NOT part of the stable API.
-# Use at your own risk - may break between DuckDB versions.
+# This is based on internal DuckDB APIs and is not part of the stable API.
+# It may break between DuckDB versions.
 # ===-----------------------------------------------------------------------===#
 
 # ===--------------------------------------------------------------------===#
@@ -44,7 +44,7 @@ comptime _register_operator_replacement = _dylib_function["register_operator_rep
 ]
 
 # ===--------------------------------------------------------------------===#
-# Public API  Wrapper
+# Public API Wrapper
 # ===--------------------------------------------------------------------===#
 
 struct OperatorReplacementLib:

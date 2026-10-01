@@ -1,11 +1,11 @@
 """GPU_OP_NULLABLE on the f64 path (transcendental SUM + statistical aggregates),
-live-SQL, NVIDIA-only (on Apple/AMD the f64 scope guard declines -> operator == stock,
-so this passes trivially; the real validation is on the RTX 4090 / frederick).
+live SQL, NVIDIA-only (on Apple/AMD the f64 scope guard declines, so operator == stock
+and this passes trivially; the meaningful check runs on the RTX 4090 / frederick).
 
-Builds a single fact table with NULLABLE DECIMAL columns + a deterministic NULL pattern
-and asserts every routed query equals stock DuckDB (operator OFF) within tight rel-err.
-Operator-vs-stock is toggled in-process via GPU_OP_GENERIC so the SAME data/connection
-is compared (no need to hand-compute transcendentals). If the validity fold failed, a
+Builds a single fact table with nullable DECIMAL columns and a deterministic NULL pattern
+and asserts that every routed query equals stock DuckDB (operator off) within a tight
+relative error. Operator vs stock is toggled in-process via GPU_OP_GENERIC so the same
+data and connection are compared (no need to hand-compute transcendentals). If the validity fold failed, a
 NULL row's garbage would be sqrt'd/summed and the operator would diverge from stock.
 
 Run from the repo root (extension built):
@@ -37,7 +37,7 @@ def main() raises:
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
     # x: positive (sqrt/ln safe) nullable DECIMAL; y: nullable DECIMAL; f: nullable INT.
-    # f64 paths decline on raw DOUBLE -> use DECIMAL.
+    # f64 paths decline on raw DOUBLE, so use DECIMAL.
     _ = con.execute(
         String(
             "CREATE TABLE t AS SELECT"

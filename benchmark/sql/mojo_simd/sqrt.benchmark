@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/sqrt.benchmark
-# description: Mojo SIMD patch target — sqrt(x)
+# description: Mojo SIMD patch target: sqrt(x)
 # group: [mojo_simd]
 
 name sqrt(x)

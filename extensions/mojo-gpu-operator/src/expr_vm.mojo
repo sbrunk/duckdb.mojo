@@ -1,12 +1,12 @@
 """Generic integer postfix-expression VM (device-callable).
 
-This is foundational GPU primitive #1 for the mojo-gpu-operator extension. It
+This is the first basic GPU building block of the mojo-gpu-operator extension. It
 replaces the bespoke per-row arithmetic baked into q6_kernel / q1_kernel /
 q3_seg_kernel (e.g. `ext * disc`, `ext*(100-disc)*(100+tax)`) with a tiny
-stack-machine that evaluates a *uploaded* postfix program for ONE row and
+stack-machine that evaluates an uploaded postfix program for one row and
 returns an `Int64` (the per-row metric value at the metric's decimal scale).
 
-All arithmetic is pure integer, exactly like the existing kernels — the caller
+All arithmetic is pure integer, exactly like the existing kernels. The caller
 guarantees per-row magnitudes fit int64 (true for TPC-H SF-scale data, which is
 what the existing kernels rely on). The int128 widening happens later, on the
 host, in the cross-block reduction (see segreduce.mojo).
@@ -17,7 +17,7 @@ A program is a flat device array of `Int64`, three slots per op:
 
     prog[3*k + 0] = op       (one of the OP_* tags from raw_plan_tags.mojo)
     prog[3*k + 1] = a        (operand a, meaning depends on op)
-    prog[3*k + 2] = b        (operand b, currently unused / reserved -> 0)
+    prog[3*k + 2] = b        (operand b, currently unused / reserved, set to 0)
 
 `prog_len` is the number of ops (so the array holds `3 * prog_len` int64s).
 
@@ -25,7 +25,7 @@ OPS (tag values imported from raw_plan_tags.mojo)
 -------------------------------------------------
     OP_LOAD_COL    a = column slot index  -> push cols[a][row]
     OP_PUSH_CONST  a = the scaled int64 constant value, pushed directly.
-                   NOTE: at THIS layer constants are already resolved to int64
+                   At this layer constants are already resolved to int64
                    values (the const-pool id resolution happens in the caller /
                    lowering step), so `a` is the literal value, not a pool id.
     OP_ADD         pop b, a -> push a + b
@@ -48,13 +48,13 @@ OPS (tag values imported from raw_plan_tags.mojo)
                    gathers indexed by a fact-column slot), ANDed (via OP_MUL)
                    into the row pass program.
 
-`OP_PROMO_PRED` is intentionally NOT handled here: the promo/LIKE CASE is
+`OP_PROMO_PRED` is intentionally not handled here: the promo/LIKE CASE is
 lowered by the caller into a precomputed 0/1 column + OP_LOAD_COL + OP_SELECT,
 so the VM needs no string/LIKE op.
 
 COLUMN-BUFFER LAYOUT
 --------------------
-All input columns are packed into ONE int64 device buffer addressed by a single
+All input columns are packed into one int64 device buffer addressed by a single
 pointer, column-major by slot:
 
     cols[slot * n_rows + row]
@@ -69,7 +69,7 @@ arithmetic, exactly matching the integer contract of the existing kernels.
 
 DIM-ARRAY (GATHER) BUFFER LAYOUT
 --------------------------------
-The N FK-join dimension arrays are packed into ONE int64 device buffer `dims`,
+The N FK-join dimension arrays are packed into one int64 device buffer `dims`,
 concatenated back-to-back, addressed via a `dim_offsets` array of length
 `n_dims + 1`:
 
@@ -117,21 +117,21 @@ comptime EXPR_STACK_MAX = 16
 
 
 # ---------------------------------------------------------------------------
-# _col_at: read column `slot` at `row`, from EITHER the packed buffer (Phase 1/2
-# default) or a per-column POINTER TABLE (Phase 3 / Option B, GPU_OP_COLPTR).
+# _col_at: read column `slot` at `row`, from either the packed buffer (Phase 1/2
+# default) or a per-column pointer table (Phase 3 / Option B, GPU_OP_COLPTR).
 #
-# The `cols` argument is REUSED to carry both representations (so no kernel/VM
-# gains an extra runtime argument -- only a comptime flag):
-#   USE_COLPTR == False: `cols` is the PACKED buffer -> cols[slot * n_rows + row]
-#                        (today's layout, byte-identical; the ptr branch elides).
-#   USE_COLPTR == True:  `cols` is the per-column POINTER TABLE -> cols[slot] holds
-#                        the DEVICE ADDRESS of slot's column buffer; reconstruct a
+# The `cols` argument is reused to carry both representations, so no kernel/VM
+# gains an extra runtime argument, only a comptime flag:
+#   USE_COLPTR == False: `cols` is the packed buffer, read as cols[slot * n_rows + row]
+#                        (today's layout, byte-identical; the ptr branch is elided).
+#   USE_COLPTR == True:  `cols` is the per-column pointer table: cols[slot] holds
+#                        the device address of slot's column buffer. We rebuild a
 #                        GLOBAL-address-space pointer from it and read [row]. This
-#                        lets kernels read POOLED per-column buffers DIRECTLY (no
-#                        packed copy) -> eliminates the Phase 1/2 cols_d duplicate
-#                        (~44% resident-VRAM cut).
+#                        lets kernels read pooled per-column buffers directly (no
+#                        packed copy), which removes the Phase 1/2 cols_d duplicate
+#                        (~44% less resident VRAM).
 #
-# AddressSpace.GLOBAL is REQUIRED: a pointer reconstructed from a raw integer with
+# AddressSpace.GLOBAL is required: a pointer reconstructed from a raw integer with
 # the default GENERIC address space reads 0 on Apple Metal (separate address
 # spaces). GLOBAL works on both Apple M3 + NVIDIA (verified by bench/colptr_probe).
 # The value read is identical to the packed layout, so results are bit-exact.
@@ -264,11 +264,11 @@ def eval_program[
 # ---------------------------------------------------------------------------
 # FLOAT64 expression VM (transcendental aggregate path; GPU_OP_TRANSCENDENTAL).
 #
-# Purely ADDITIVE: the int64 eval_program above is untouched and byte-identical.
+# Purely additive: the int64 eval_program above is untouched and byte-identical.
 # This VM is only invoked by the float64 segreduce accumulator for a
 # DOUBLE-returning transcendental aggregate (sum/avg of f(col)). It evaluates the
-# SAME postfix encoding but on a float64 stack, and -- crucially -- reconstructs
-# the TRUE double of each operand from the SCALED int64 column / const:
+# same postfix encoding but on a float64 stack, and it reconstructs the true
+# double of each operand from the scaled int64 column / const:
 #
 #   OP_LOAD_COL a  -> push Float64(cols[a][row]) / col_div[a]
 #   OP_PUSH_CONST a-> push Float64(a) / const_div_of_this_op   (a is scaled int64)
@@ -280,14 +280,14 @@ def eval_program[
 # PUSH_CONST ops; 1.0 otherwise) carrying the const's 10^scale divisor.
 #
 # Precise f64 sqrt: stdlib sqrt(Float64) routes to the NVVM approx path which is
-# constrained off for f64 on NVIDIA. We seed from the f32 approx and do ONE
+# constrained off for f64 on NVIDIA. We seed from the f32 approx and do one
 # Newton step (~1e-14 rel err, validated vs DuckDB). x>=0 by construction for the
 # DECIMAL/price columns these aggregates apply to.
 #
-# DOMAIN (audit Group G): stock DuckDB RAISES "cannot take square root of a
+# Domain (audit Group G): stock DuckDB raises "cannot take square root of a
 # negative number" for x<0. The f32 seed of a negative is NaN and the `y > 0.0`
-# Newton guard is then false, so the result is already NaN -- but make the domain
-# violation EXPLICIT/deterministic: x<0 -> NaN sentinel. The host f64 finalize
+# Newton guard is then false, so the result is already NaN. We still make the
+# domain violation explicit and deterministic: x<0 returns a NaN sentinel. The host f64 finalize
 # detects this NaN and raises (matching stock), so a single out-of-domain row no
 # longer poisons the aggregate into a silent nan. (sqrt(0)==0 stays exact.)
 # ---------------------------------------------------------------------------
@@ -301,10 +301,10 @@ def _vm_sqrt_f64(x: Float64) -> Float64:
     return y
 
 
-# Natural log with DOMAIN normalization (audit Group G): stock DuckDB RAISES
+# Natural log with domain normalization (audit Group G): stock DuckDB raises
 # "cannot take logarithm of zero" / "of a negative number" for x<=0. The raw
-# in-kernel f64 log gives -inf for x==0 and NaN for x<0 -- NORMALIZE BOTH to a NaN
-# sentinel so the domain violation is an unambiguous signal distinct from a valid
+# in-kernel f64 log gives -inf for x==0 and NaN for x<0. Both are normalized to a
+# NaN sentinel so the domain violation is an unambiguous signal distinct from a valid
 # Inf (exp overflow). The host f64 finalize detects this NaN and raises (matching
 # stock). Used by OP_LN/OP_LOG10/OP_LOG2 (log10/log2 derive from this natural log).
 @always_inline
@@ -315,17 +315,17 @@ def _vm_ln_f64(x: Float64) -> Float64:
 
 
 # 1 / ln(10): log10(x) = log(x) * this. NVIDIA has no f64 log10 (libm, CPU-only),
-# but f64 `log` (natural) works -> derive log10 exactly from it.
+# but f64 `log` (natural) works, so log10 is derived exactly from it.
 comptime _INV_LN10: Float64 = 0.43429448190325182765112891891660508229439700580367
 # 1 / ln(2): log2(x) = log(x) * this. Same rationale as _INV_LN10 (no f64 log2 on
 # NVIDIA; derive from the working f64 natural log).
 comptime _INV_LN2: Float64 = 1.4426950408889634073599246810018921374266459541530
 
 
-# power(base, exp) for INTEGER-valued exponents via exact binary exponentiation —
-# pure multiplies (and one reciprocal for negative exponents), so it stays bit-faithful
-# for ANY base sign and uses ONLY in-kernel-proven f64 ops (no f64 `pow` intrinsic,
-# which is libm/CPU-only on NVIDIA — same class as the missing f64 sin/cos). The
+# power(base, exp) for integer-valued exponents via exact binary exponentiation:
+# pure multiplies (and one reciprocal for negative exponents), so it stays bit-exact
+# for any base sign and uses only f64 ops known to work in kernels. There is no f64
+# `pow` intrinsic: it is libm/CPU-only on NVIDIA, like the missing f64 sin/cos. The
 # C++ EmitProgram only emits OP_POW when the exponent is an integer-valued constant,
 # so `exp` here is always integral; the fallback path is defensive only.
 @always_inline

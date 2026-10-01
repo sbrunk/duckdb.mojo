@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/complex_f64.benchmark
-# description: Mojo SIMD patch target — x*y+x-y (f64)
+# description: Mojo SIMD patch target: x*y+x-y (f64)
 # group: [mojo_simd]
 
 name x*y+x-y (f64)

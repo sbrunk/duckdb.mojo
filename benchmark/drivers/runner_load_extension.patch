@@ -8,7 +8,7 @@
 # so the extension's catalog overrides apply to every benchmark.
 #
 # It is generic (loads any extension by path) and independent of the SIMD source patch.
-# Apply against a v1.5.5 DuckDB checkout:  git apply runner_load_extension.patch
+# Apply against a v1.5.6 DuckDB checkout:  git apply runner_load_extension.patch
 diff --git a/benchmark/interpreted_benchmark.cpp b/benchmark/interpreted_benchmark.cpp
 index 2e4a902..0e36f72 100644
 --- a/benchmark/interpreted_benchmark.cpp
@@ -28,7 +28,7 @@ index 2e4a902..0e36f72 100644
  	LoadExtensions(*state, false);
 +
 +	// Optionally load a local extension by path at init (e.g. mojo_overrides), so its
-+	// catalog overrides apply to every benchmark. Not a DuckDB change — a runner convenience.
++	// catalog overrides apply to every benchmark. This is a runner convenience, not a DuckDB change.
 +	const char *bench_ext = std::getenv("DUCKDB_BENCH_EXTENSION");
 +	if (bench_ext && bench_ext[0]) {
 +		auto ext_result = state->con.Query("LOAD '" + string(bench_ext) + "'");

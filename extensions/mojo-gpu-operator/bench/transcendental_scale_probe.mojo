@@ -1,16 +1,17 @@
-"""PHASE B correctness de-risk: GPU sum(f(DECIMAL col)) vs DuckDB, exact lowering.
+"""Phase B correctness check: GPU sum(f(DECIMAL col)) vs DuckDB, exact lowering.
 
-The operator packs DECIMAL/INTEGER columns as SCALED int64 (e.g. l_extendedprice
-DECIMAL(15,2) -> int64 value * 100). A transcendental aggregate operates on the
-TRUE double value, so the float eval path must reconstruct it as
-`Float64(scaled_int64) / 10^scale` before applying f. This probe validates that
-EXACT lowering against the real DuckDB database, which is the only new
-correctness risk gating the full Phase B integration:
+The operator packs DECIMAL/INTEGER columns as scaled int64 (e.g. l_extendedprice
+DECIMAL(15,2) becomes int64 value * 100). A transcendental aggregate operates on
+the real double value, so the float eval path must reconstruct it as
+`Float64(scaled_int64) / 10^scale` before applying f. This probe checks that
+exact lowering against the real DuckDB database. It is the only new correctness
+risk that blocks the full Phase B integration:
 
   - Input: l_extendedprice * 100 cast to BIGINT, exported from tpch_sf1 to a CSV
     of one int64 per line (see the COPY in the harness comment below).
-  - GPU: read scaled int64 -> reconstruct Float64(v)/100.0 -> sum(sqrt) / sum(ln)
-    via the same shared-mem float64 reduction as transcendental_agg_probe.
+  - GPU: read the scaled int64, reconstruct Float64(v)/100.0, then compute
+    sum(sqrt) / sum(ln) with the same shared-memory float64 reduction as
+    transcendental_agg_probe.
   - Reference: DuckDB's own `sum(sqrt(l_extendedprice))` /
     `sum(ln(l_extendedprice))` on tpch_sf1 (passed in via env).
 
@@ -49,7 +50,7 @@ comptime REF_LN = 61590396.43125566
 @always_inline
 def _sqrt_f64(x: Float64) -> Float64:
     # Precise f64 sqrt on NVIDIA (stdlib sqrt(f64) is the approx-only NVVM path,
-    # constrained off for f64): f32 seed + one Newton step -> ~1e-14 rel err.
+    # constrained off for f64): an f32 seed plus one Newton step gives ~1e-14 rel err.
     var y = Float64(sqrt(x.cast[DType.float32]()))
     y = 0.5 * (y + x / y)
     return y
@@ -63,7 +64,7 @@ def _apply[F: Int](x: Float64) -> Float64:
         return log(x)
 
 
-# Reconstruct the TRUE double from the scaled int64 (v / 10^scale), apply f, sum.
+# Reconstruct the real double from the scaled int64 (v / 10^scale), apply f, sum.
 # This is the exact per-row float eval the operator's transcendental path needs.
 def trans_scaled_kernel[F: Int](
     v: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],

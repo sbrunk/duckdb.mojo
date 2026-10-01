@@ -1,15 +1,15 @@
 """Portable Mojo GPU decoders for DuckDB's native fixed-width column storage.
 
 This is the GPU-direct decode path: read DuckDB's on-disk/pinned column-segment
-bytes and decode them ON the GPU, in pure portable Mojo (Sirius's equivalents
-are CUDA-only). It is a *parallel*, bit-exact verification path next to the
-existing CPU-materialize cold path -- NOT yet a replacement for it.
+bytes and decode them on the GPU, in pure portable Mojo (Sirius's equivalents
+are CUDA-only). It is a bit-exact verification path that runs alongside the
+existing CPU-materialize cold path. It does not replace that path yet.
 
 Two codecs are implemented here, comptime-specialized per element type T
 (int32 / int64):
 
-  * UNCOMPRESSED fixed-width -- a straight device-to-device typed copy.
-  * BITPACKING -- one CTA (block) per 2048-row metadata group. The block reads
+  * UNCOMPRESSED fixed-width: a straight device-to-device typed copy.
+  * BITPACKING: one CTA (block) per 2048-row metadata group. The block reads
     the segment trailer for its group, recovers the per-group mode + header,
     then decodes each row. All four fixed-width modes are implemented:
     CONSTANT, FOR, CONSTANT_DELTA, and DELTA_FOR (the last needs an in-group
@@ -19,9 +19,9 @@ BITPACKING byte layout per segment (matches DuckDB v1.5.4
 common/bitpacking.hpp + storage/compression/bitpacking.hpp and Sirius's
 gpu_decode_bitpacking.cu):
 
-    base[0..8)              uint64 metadata_end  (offset of END of trailer within segment)
+    base[0..8)              uint64 metadata_end  (offset of the end of the trailer within segment)
     ...data groups...
-    ...trailer (one uint32 per group, REVERSED): entry K at metadata_end-(K+1)*4
+    ...trailer (one uint32 per group, reversed): entry K at metadata_end-(K+1)*4
                                                   low 24 bits = data_off,
                                                   high 8 bits = BitpackingMode
 
@@ -32,7 +32,7 @@ gpu_decode_bitpacking.cu):
                                out[i] = frame + i*delta
   Group data (DELTA_FOR):      [T frame][T width][T delta_offset][packed...]
                                packed @ data_off+3*sizeof(T). Decode = unpack
-                               each width-bit value, add frame to EACH, take the
+                               each width-bit value, add frame to each, take the
                                inclusive prefix-sum over the group, then add the
                                delta_offset bias:
                                  out[i] = delta_offset + sum_{j=0..i}(frame+unpack(j))
@@ -184,7 +184,7 @@ def uncompressed_decode_kernel[
 
 
 # ---------------------------------------------------------------------------
-# BITPACKING decode: ONE block per 2048-row metadata group.
+# BITPACKING decode: one block per 2048-row metadata group.
 #
 # `seg`         raw segment bytes
 # `seg_bytes`   size of the staged segment buffer (defensive bound)
@@ -195,8 +195,9 @@ def uncompressed_decode_kernel[
 #
 # Thread 0 parses the trailer + per-group header into shared scalars; the block
 # barriers, then every thread strides its rows and stores frame + unpack(width).
-# CONSTANT broadcasts the single stored value. DELTA_FOR / INVALID / unknown
-# modes zero-fill the group's row range deterministically.
+# CONSTANT broadcasts the single stored value. DELTA_FOR adds a prefix sum over
+# the group. INVALID / AUTO / unknown modes zero-fill the group's row range
+# deterministically.
 # ---------------------------------------------------------------------------
 def bitpacking_decode_kernel[
     T: DType
@@ -299,7 +300,7 @@ def bitpacking_decode_kernel[
                 elif parsed_mode == BPMODE_DELTA_FOR:
                     # [T frame][T width][T delta_offset][packed...]
                     # DELTA_FOR adds a third T (delta_offset) before the packed
-                    # stream -- re-bound to catch tight segments where the third
+                    # stream, so re-check the bound to catch tight segments where the third
                     # read would alias the metadata trailer.
                     if data_off + 3 * TBYTES <= metadata_end:
                         var width = Int(seg[data_off + TBYTES])  # width fits in 1 byte
@@ -351,7 +352,7 @@ def bitpacking_decode_kernel[
 
     if mode == BPMODE_FOR:
         # FOR: out[i] = frame + unpack_value(width, i).
-        # Do the add in the UNSIGNED domain (two's-complement wrap matches DuckDB's
+        # Do the add in the unsigned domain (two's-complement wrap matches DuckDB's
         # frame-of-reference decode) then reinterpret the bits to the signed T.
         var width = Int(sm_width[0])
         var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
@@ -366,7 +367,7 @@ def bitpacking_decode_kernel[
 
     if mode == BPMODE_DELTA_FOR:
         # DELTA_FOR: out[i] = delta_offset + sum_{j=0..i}(frame + unpack(j)),
-        # i.e. an INCLUSIVE prefix-sum (within the 2048-row metadata group) of
+        # i.e. an inclusive prefix-sum (within the 2048-row metadata group) of
         # the frame-of-reference-decoded deltas, seeded with delta_offset.
         #
         # This matches DuckDB's per-algorithm-group decode (bitpacking.cpp):
@@ -380,8 +381,8 @@ def bitpacking_decode_kernel[
         #
         # Shared scratch holds frame-decoded deltas, then the prefix sums. A
         # single-thread serial scan over <= BP_META_GROUP_SIZE elements keeps
-        # this bulletproof for arbitrary block_dim / short tails (correctness
-        # over cleverness; portable, no warp/scan intrinsics).
+        # this robust for any block_dim and for short tails. It favors
+        # correctness over speed and stays portable (no warp/scan intrinsics).
         var sm_scan = stack_allocation[
             BP_META_GROUP_SIZE, Scalar[UT], address_space = AddressSpace.SHARED
         ]()
@@ -412,7 +413,7 @@ def bitpacking_decode_kernel[
             j += nthreads
         return
 
-    # INVALID / AUTO / unknown -> deterministic zero-fill.
+    # INVALID / AUTO / unknown: deterministic zero-fill.
     var i = tid
     while i < group_rows:
         dst[out_base + i] = Scalar[T](0)

@@ -24,7 +24,7 @@ var chunk = result.fetch_chunk()
 var lst = chunk.get[List[Int32]](col=0, row=0)
 ```
 
-Structs — uses reflection to map fields from DuckDB ``STRUCT`` to Mojo struct:
+Structs (reflection maps the fields of a DuckDB ``STRUCT`` to a Mojo struct):
 ```mojo
 @fieldwise_init
 struct Point(Copyable, Movable):
@@ -36,7 +36,7 @@ var chunk = result.fetch_chunk()
 var pt = chunk.get[Point](col=0, row=0)
 ```
 
-Arrays (DuckDB ``ARRAY`` — fixed-size lists):
+Arrays (DuckDB ``ARRAY``, fixed-size lists):
 ```mojo
 result = con.execute("SELECT [1, 2, 3]::INTEGER[3]")
 var chunk = result.fetch_chunk()
@@ -82,7 +82,7 @@ from duckdb.logical_type import LogicalType, struct_type
 
 
 # ──────────────────────────────────────────────────────────────────
-# Value conversion — create duckdb_value from Mojo types
+# Value conversion: create duckdb_value from Mojo types
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -192,7 +192,7 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
         return libduckdb.duckdb_create_time_ns(raw)
     elif T == Bit:
         var bit_ref = vp.unsafe_bitcast[Bit]()[].copy()
-        # Allocate temp buffer for duckdb_bit.data — padding byte + bit bytes
+        # Allocate temp buffer for duckdb_bit.data (padding byte plus bit bytes)
         var buf = unsafe_alloc[UInt8](len(bit_ref._data))
         for i in range(len(bit_ref._data)):
             buf[unsafe_offset=i] = bit_ref._data[i]
@@ -208,7 +208,7 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
 
 
 # ──────────────────────────────────────────────────────────────────
-# MojoType — a pure Mojo representation of DuckDB logical types
+# MojoType: a pure Mojo representation of DuckDB logical types
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -629,7 +629,7 @@ def mojo_logical_type[T: Copyable & Deinitable]() -> MojoType:
         elif base_name == "Variant":
             return MojoType(DuckDBType.union)
         else:
-            # User-defined struct — reflect over fields
+            # User-defined struct: reflect over fields
             comptime field_count = Reflected[T].field_count()
             comptime field_type_arr = Reflected[T].field_types()
 
@@ -648,7 +648,7 @@ def mojo_logical_type[T: Copyable & Deinitable]() -> MojoType:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — scalar
+# Deserialization: scalar
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -718,7 +718,7 @@ def _deserialize_scalar[T: Copyable & Deinitable](vector: Vector, offset: Int) r
         var bit = _deserialize_bit(vector, offset)
         return rebind_var[T](bit^)
     elif T == Int:
-        # Int is platform-dependent — read the matching fixed-width type
+        # Int is platform-dependent, so read the matching fixed-width type
         comptime if size_of[Int]() == 4:
             var val = Int(vector.get_data().unsafe_bitcast[Int32]()[unsafe_offset=offset])
             return rebind_var[T](val)
@@ -738,7 +738,7 @@ def _deserialize_scalar[T: Copyable & Deinitable](vector: Vector, offset: Int) r
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — BLOB
+# Deserialization: BLOB
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -773,7 +773,7 @@ def _deserialize_blob(vector: Vector, offset: Int) -> List[UInt8]:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — BIT
+# Deserialization: BIT
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -813,7 +813,7 @@ def _deserialize_bit(vector: Vector, offset: Int) -> Bit:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — ENUM
+# Deserialization: ENUM
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -881,7 +881,7 @@ def _deserialize_enum_column[
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — struct (reflection-based)
+# Deserialization: struct (reflection-based)
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -918,7 +918,7 @@ def _deserialize_struct_field[
     comptime db_type = mojo_type_to_duckdb_type[FieldType]()
 
     comptime if db_type == DuckDBType.struct_t:
-        # Nested struct — recurse
+        # Nested struct: recurse
         return _deserialize_struct_row[FieldType](child_vector, offset)
     else:
         # Scalar field
@@ -945,7 +945,7 @@ def _deserialize_struct_row[
     """
     comptime field_count = Reflected[T].field_count()
 
-    # Allocate uninitialised memory — we fill every field below.
+    # Allocate uninitialised memory. Every field is filled below.
     var ptr = unsafe_alloc[T](1)
 
     comptime for idx in range(field_count):
@@ -957,7 +957,7 @@ def _deserialize_struct_row[
         var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
 
         comptime if conforms_to(FT, _NullableColumn):
-            # Optional field — check child vector validity for this row
+            # Optional field: check child vector validity for this row
             var child_validity = child_vec.get_validity()
             var is_null = not _is_valid(child_validity, offset)
             var val = downcast[
@@ -994,7 +994,7 @@ def _deserialize_struct_row[
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — union (struct with all-Optional fields)
+# Deserialization: union (struct with all-Optional fields)
 # ──────────────────────────────────────────────────────────────────
 #
 # A DuckDB UNION(name1 TYPE1, name2 TYPE2, ...) is stored internally as
@@ -1039,7 +1039,7 @@ def _deserialize_union_row[
     var tag_vec = vector.struct_get_child(0)
     var tag = Int(tag_vec.get_data().unsafe_bitcast[UInt8]()[unsafe_offset=offset])
 
-    # Allocate uninitialised memory — we fill every field
+    # Allocate uninitialised memory. Every field is filled below.
     var ptr = unsafe_alloc[T](1)
 
     comptime for idx in range(field_count):
@@ -1050,7 +1050,7 @@ def _deserialize_union_row[
         # Each field must be Optional. Child vectors are 1-indexed
         # (child 0 is the tag).
         if tag == idx:
-            # Active member — deserialize from child vector (idx + 1)
+            # Active member: deserialize from child vector (idx + 1)
             var child_vec = vector.struct_get_child(idx_t(idx + 1))
 
             comptime if conforms_to(FT, _NullableColumn):
@@ -1061,11 +1061,11 @@ def _deserialize_union_row[
                 ]._deserialize_single_nullable(child_vec, offset, is_null)
                 dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
-                # Non-Optional field in union — deserialize directly
+                # Non-Optional field in union: deserialize directly
                 var val = _deserialize_table_field[FT](child_vec, offset)
                 dst.unsafe_bitcast[FT]().unsafe_write(val^)
         else:
-            # Inactive member — set to None if Optional
+            # Inactive member: set to None if Optional
             comptime if conforms_to(FT, _NullableColumn):
                 # Initialize as None by re-using the nullable deserializer
                 var child_vec = vector.struct_get_child(idx_t(idx + 1))
@@ -1074,7 +1074,7 @@ def _deserialize_union_row[
                 ]._deserialize_single_nullable(child_vec, offset, True)
                 dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
-                # Non-Optional inactive member — zero-init
+                # Non-Optional inactive member: zero-init
                 var zero = unsafe_alloc[Byte](size_of[FT]())
                 for i in range(size_of[FT]()):
                     zero[unsafe_offset=i] = 0
@@ -1087,14 +1087,14 @@ def _deserialize_union_row[
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — union as Variant
+# Deserialization: union as Variant
 # ──────────────────────────────────────────────────────────────────
 #
 # Alternative to the struct-with-Optional approach: represent a
 # DuckDB UNION as a Mojo `Variant[T1, T2, ...]`.
 #
 # Positional mapping: Variant's type index i corresponds to UNION
-# member i.  Member names are NOT checked — only types by position.
+# member i.  Member names are not checked, only types by position.
 #
 # Example:
 #
@@ -1139,20 +1139,20 @@ __extension Variant(_VariantUnionDeserializable):
 
 
 # ──────────────────────────────────────────────────────────────────
-# List type decomposition — traits + extensions for recursive types
+# List type decomposition: traits and extensions for recursive types
 # ──────────────────────────────────────────────────────────────────
 #
 # Problem: inside a generic `def foo[T: Copyable & Deinitable]()` we
 # cannot access `T.T` to decompose `List[Optional[X]]` into X.
 #
 # Solution (inspired by EmberJson): use `__extension` blocks where
-# `Self` IS the concrete type, so `Self.T` resolves to the actual
+# `Self` is the concrete type, so `Self.T` resolves to the actual
 # parameter.  Two extensions cooperate:
 #
-#   Optional._deser_as_list_elements  — unwraps Optional and calls
+#   Optional._deser_as_list_elements: unwraps Optional and calls
 #       _deserialize_list with the leaf type.
 #
-#   List._from_list_child  — delegates to Optional's method if the
+#   List._from_list_child: delegates to Optional's method if the
 #       element type conforms, otherwise strips Optional from the
 #       result of _deserialize_list for plain element types.
 #
@@ -1220,7 +1220,7 @@ __extension List(_VectorListConstructible):
             )
             return rebind_var[Self](inner^)
         else:
-            # Self = List[X] where X is NOT Optional.
+            # Self = List[X] where X is not Optional.
             # Deserialize as List[Optional[X]] then unwrap, raising on NULLs.
             var deserialized = _deserialize_list[downcast[Self.T, _DBase]](
                 child_vector, length, offset
@@ -1244,7 +1244,7 @@ __extension List(_VectorListConstructible):
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — MAP as Dict
+# Deserialization: MAP as Dict
 # ──────────────────────────────────────────────────────────────────
 #
 # A DuckDB MAP(K, V) is stored internally as LIST(STRUCT(key K, value V)).
@@ -1289,7 +1289,7 @@ __extension Dict(_DictMapDeserializable):
 
         # Build into a Dict over the refined key/value types: a Dict is
         # `Deinitable` only when its key and value types are, and an
-        # `__extension Dict` cannot tighten Dict's own bounds — so a `Self()`
+        # `__extension Dict` cannot tighten Dict's own bounds. So a `Self()`
         # local here would be rejected as abandoned on the raising paths below.
         var result = Dict[KT, VT]()
 
@@ -1321,7 +1321,7 @@ __extension Dict(_DictMapDeserializable):
 
 
 # ──────────────────────────────────────────────────────────────────
-# Deserialization — list elements
+# Deserialization: list elements
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -1384,7 +1384,7 @@ def _deserialize_list[
                 else:
                     result.append(None)
     elif element_db_type == DuckDBType.list:
-        # Nested list — use the _VectorListConstructible extension to
+        # Nested list: use the _VectorListConstructible extension to
         # decompose ElementType (a List[...]) and recurse.
         var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var child_vec = vector.list_get_child()
@@ -1438,7 +1438,7 @@ def deserialize_list_column[
     """Deserialize a LIST column from a DuckDB vector.
 
     Each row in the column is a variable-length list of `ElementType` values.
-    Uses `_deserialize_list` internally — a column *is* essentially a list,
+    Uses `_deserialize_list` internally. A column is essentially a list,
     so nested lists reuse the same machinery.
 
     Parameters:
@@ -1539,10 +1539,10 @@ def _deserialize_table_field[
     comptime base_name = Reflected[T].base_name()
 
     comptime if base_name == "List":
-        # List/Array/Map field — dispatch by actual vector type
+        # List/Array/Map field: dispatch by actual vector type
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type == DuckDBType.blob:
-            # BLOB column → List[UInt8]
+            # BLOB column becomes List[UInt8]
             var blob_list = _deserialize_blob(vector, row)
             return rebind_var[T](blob_list^)
         if actual_type == DuckDBType.array:
@@ -1569,7 +1569,7 @@ def _deserialize_table_field[
             )
             return rebind_var[T](inner^)
     elif base_name == "Dict":
-        # MAP column → Dict[K, V]
+        # MAP column becomes Dict[K, V]
         var list_entries = vector.get_data().unsafe_bitcast[duckdb_list_entry]()
         var entry = list_entries[unsafe_offset=row]
         var child_vec = vector.list_get_child()
@@ -1578,20 +1578,20 @@ def _deserialize_table_field[
         ]._from_map_child(child_vec, Int(entry.length), Int(entry.offset))
         return rebind_var[T](inner^)
     elif db_type == DuckDBType.union:
-        # Variant union — use the _VariantUnionDeserializable extension
+        # Variant union: use the _VariantUnionDeserializable extension
         var inner = downcast[
             T, _VariantUnionDeserializable
         ]._from_union_vector(vector, row)
         return rebind_var[T](inner^)
     elif db_type == DuckDBType.struct_t:
-        # Could be STRUCT or UNION — check actual vector type
+        # Could be STRUCT or UNION, so check the actual vector type
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type == DuckDBType.union:
             return _deserialize_union_row[T](vector, row)
         else:
             return _deserialize_struct_row[T](vector, row)
     else:
-        # Scalar (including String) — use existing scalar deserialization
+        # Scalar (including String): use existing scalar deserialization
         # ENUM columns can be deserialized as String
         comptime if db_type == DuckDBType.varchar:
             var actual_type = vector.get_column_type().get_type_id()
@@ -1635,11 +1635,11 @@ def deserialize_from_vector[
     comptime base_name = Reflected[T].base_name()
 
     comptime if base_name == "List":
-        # List/Array/Map deserialization — use the _VectorListConstructible
+        # List/Array/Map deserialization: use the _VectorListConstructible
         # extension to decompose T (a List[...]) and build each row's list.
         var actual_type = vector.get_column_type().get_type_id()
 
-        # BLOB columns → List[UInt8]: read raw bytes from varchar-style storage
+        # BLOB columns become List[UInt8]: read raw bytes from varchar-style storage
         if actual_type == DuckDBType.blob:
             var result = List[Optional[T]](capacity=length)
             var validity_mask = vector.get_validity()
@@ -1698,7 +1698,7 @@ def deserialize_from_vector[
         return result^
 
     comptime if base_name == "Dict":
-        # MAP column → Dict[K, V]
+        # MAP column becomes Dict[K, V]
         var actual_type = vector.get_column_type().get_type_id()
         if actual_type != DuckDBType.map:
             raise Error(
@@ -1810,15 +1810,15 @@ def deserialize_from_vector[
 
 
 # ──────────────────────────────────────────────────────────────────
-# Nullable column support — Optional[T] extension
+# Nullable column support: Optional[T] extension
 # ──────────────────────────────────────────────────────────────────
 #
 # These types allow `get[Optional[T]]` to return None for NULL values
 # instead of raising a runtime error.  Without Optional, a NULL triggers
-# an error — making null-avoidance the default.
+# an error, which makes null-avoidance the default.
 #
-#   get[Int64](col=0, row=0)            → Int64          (raises on NULL)
-#   get[Optional[Int64]](col=0, row=0)  → Optional[Int64] (None on NULL)
+#   get[Int64](col=0, row=0)            returns Int64           (raises on NULL)
+#   get[Optional[Int64]](col=0, row=0)  returns Optional[Int64] (None on NULL)
 # ──────────────────────────────────────────────────────────────────
 
 

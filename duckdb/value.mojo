@@ -7,7 +7,7 @@ from std.collections import Optional, List
 struct DuckDBValue(Movable):
     """A high-level wrapper around a DuckDB value.
     
-    `DuckDBValue` provides a safe and ergonomic API for creating and manipulating
+    `DuckDBValue` provides a safe and easy-to-use API for creating and manipulating
     DuckDB values. Values can represent any SQL data type including primitives
     (integers, floats, strings, booleans), temporal types (dates, timestamps, intervals),
     and NULL values.

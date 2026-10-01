@@ -47,7 +47,7 @@ struct TableFunctionInfo:
     def get_bind_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Gets the bind data set during the bind phase.
 
-        Note that the bind data is read-only during execution.
+        The bind data is read-only during execution.
 
         Returns:
             Pointer to the bind data.
@@ -592,7 +592,7 @@ struct TableFunction(Movable):
             self._function, pushdown
         )
 
-    def register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection) raises:
         """Registers the table function within the given connection.
 
         The function requires at least a name, a bind function, an init function,

@@ -174,7 +174,7 @@ struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
     def aggregate(self, aggr: String, group: String = "") -> Self:
         """Aggregate with ``aggr`` projection, optionally grouped by ``group``.
 
-        ``rel.aggregate("k, sum(v) AS s", group="k")`` →
+        ``rel.aggregate("k, sum(v) AS s", group="k")`` becomes
         ``SELECT k, sum(v) AS s FROM (...) GROUP BY k``.
         """
         var s = String("SELECT ", aggr, " FROM ", self._from())

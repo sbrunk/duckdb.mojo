@@ -15,7 +15,6 @@ duckdb.sql("SELECT 42").show()              # default connection
 
 from std.collections import Dict
 from duckdb.api import _get_default_connection
-from duckdb.api_level import ApiLevel
 from duckdb.config import Config
 from duckdb.connection import Connection, _reader_call
 from duckdb.relation import Relation
@@ -24,7 +23,7 @@ from duckdb.result import Result, ResultError
 
 def connect(
     database: String = ":memory:", *, read_only: Bool = False
-) raises -> Connection[ApiLevel.CLIENT]:
+) raises -> Connection:
     """Open a new connection to ``database`` (default in-memory).
 
     Args:
@@ -38,7 +37,7 @@ def connect(
 
 def connect(
     database: String, var config: Config, *, read_only: Bool = False
-) raises -> Connection[ApiLevel.CLIENT]:
+) raises -> Connection:
     """Open a new connection with an explicit `Config`."""
     if read_only:
         config.set("access_mode", "READ_ONLY")
@@ -47,7 +46,7 @@ def connect(
 
 def connect(
     database: String, *, config: Dict[String, String], read_only: Bool = False
-) raises -> Connection[ApiLevel.CLIENT]:
+) raises -> Connection:
     """Open a new connection with configuration from a dictionary."""
     var cfg = Config(config)
     if read_only:

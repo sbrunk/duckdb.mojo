@@ -1,32 +1,32 @@
 """Phase 2 cost-aware placement validation (Mojo-only, needs a GPU).
 
 Exercises the column pool's eviction policy directly at the col_pool API level
-(no full query shuttle needed): the cost-aware keep-benefit policy and plain LRU
-are *different victim pickers*, so the cleanest proof is to drive the SAME pool
-state through BOTH and assert they evict OPPOSITE columns.
+(no full query shuttle needed). The cost-aware keep-benefit policy and plain LRU
+pick eviction victims differently, so the clearest test is to run the same pool
+state through both and assert that they evict opposite columns.
 
-Correctness is free here (invariant #2: eviction only changes WHICH column is
-cold-rebuilt; results are unaffected), so this test asserts POLICY behavior, not
-numeric results:
+Correctness is not at stake here (invariant #2: eviction only changes which
+column is rebuilt cold; results are unaffected), so this test asserts policy
+behavior, not numeric results:
 
-  Scenario 1 -- keep-benefit protects hot-small, LRU wrongly evicts it.
-    A small column touched many times (HOT) and a large column touched once
-    (COLD, but more RECENTLY). keep-benefit keeps A and evicts the large cold B;
+  Scenario 1: keep-benefit protects a small, hot column that LRU wrongly evicts.
+    A small column touched many times (hot) and a large column touched once
+    (cold, but more recently). keep-benefit keeps A and evicts the large cold B;
     plain LRU keeps B (newer) and evicts A. Opposite victims on identical state.
 
-  Scenario 2 -- proactive promotion protects a hot-but-huge column.
-    A huge column touched past the promotion threshold (PROMOTED, yet LOW
-    keep-benefit because it is large) and a small column touched once (NOT
-    promoted, HIGHER keep-benefit). Pure benefit ranking would evict the huge
+  Scenario 2: proactive promotion protects a hot but huge column.
+    A huge column touched past the promotion threshold (promoted, but with low
+    keep-benefit because it is large) and a small column touched once (not
+    promoted, higher keep-benefit). Ranking by benefit alone would evict the huge
     promoted column; promotion makes the policy evict the small non-promoted one
-    instead -- "keep proven-hot data resident under pressure."
+    instead ("keep data that has proven hot resident under memory pressure").
 
 Run from the repo root:
     pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/colpool_costaware_test.mojo
-(No env flags needed -- the test calls evict_lru / evict_by_keep_benefit
-directly, so it validates both policies in one process regardless of
-GPU_OP_COLPOOL_COSTAWARE. It DOES read the default promotion threshold; an
+(No env flags needed. The test calls evict_lru / evict_by_keep_benefit directly,
+so it checks both policies in one process regardless of
+GPU_OP_COLPOOL_COSTAWARE. It does read the default promotion threshold; an
 override of GPU_OP_COLPOOL_PROMOTE_HITS outside [2,5] skips scenario 2.)
 """
 
@@ -60,14 +60,14 @@ comptime TABLE = "synth"
 
 # Drain every evictable (refcount == 0) pooled column so each scenario starts
 # from an empty pool. The test always release_lease()es after ensure, so nothing
-# is leased here -> the pool empties fully.
+# is leased here and the pool empties fully.
 def _drain() raises:
     while evict_lru() > 0:
         pass
 
 
 # Touch `column` (`n` rows) `times` times via ensure_column, releasing the lease
-# after each so the column ends resident + EVICTABLE with access_count == times.
+# after each so the column ends up resident and evictable with access_count == times.
 # Returns the resident byte footprint (n * 8).
 def _touch(
     ctx: DeviceContext, column: String, n: Int, times: Int
@@ -106,14 +106,14 @@ def main() raises:
     var LARGE = 1_000_000  # 8 MB
 
     # =====================================================================
-    # Scenario 1: keep-benefit vs LRU pick OPPOSITE victims on identical state.
+    # Scenario 1: keep-benefit vs LRU pick opposite victims on identical state.
     # =====================================================================
     _drain()
     var ev0 = pool_evictions()
 
-    # HOT small column: touched 5x (older last_use after this).
+    # Hot small column: touched 5x (older last_use after this).
     var a_bytes = _touch(ctx, "hot_small", SMALL, 5)
-    # COLD large column: touched once, AFTER A -> newer last_use.
+    # Cold large column: touched once, after A, so it has a newer last_use.
     var b_bytes = _touch(ctx, "cold_large", LARGE, 1)
 
     assert_true(_resident("hot_small", SMALL), "A should be resident")
@@ -127,7 +127,7 @@ def main() raises:
           "  keep_benefit(B cold/large) =", ben_b)
     assert_true(ben_a > ben_b, "hot small column must outrank cold large one")
 
-    # Cost-aware policy evicts the LOW-benefit B (the large cold one).
+    # Cost-aware policy evicts the low-benefit B (the large cold one).
     var freed_ca = evict_by_keep_benefit()
     print("cost-aware evicted bytes:", freed_ca, " (expect B =", b_bytes, ")")
     assert_equal(freed_ca, b_bytes, "keep-benefit must evict the large cold B")
@@ -135,7 +135,7 @@ def main() raises:
     assert_false(_resident("cold_large", LARGE), "B must be evicted by keep-benefit")
 
     # Re-add B (now the most-recently-used) so the state matches scenario start,
-    # then run PLAIN LRU: it evicts the older-touched A instead -- the opposite.
+    # then run plain LRU: it evicts the older-touched A instead, the opposite choice.
     _ = _touch(ctx, "cold_large", LARGE, 1)
     assert_equal(pool_resident_cols(), 2, "A + B resident again")
     var freed_lru = evict_lru()
@@ -149,7 +149,7 @@ def main() raises:
     print("scenario 1 PASS: keep-benefit and LRU chose OPPOSITE victims")
 
     # =====================================================================
-    # Scenario 2: proactive promotion protects a hot-but-huge column.
+    # Scenario 2: proactive promotion protects a hot but huge column.
     # =====================================================================
     _drain()
     var threshold = _promote_threshold()
@@ -161,16 +161,16 @@ def main() raises:
         print("ALL PASS")
         return
 
-    # PROMOTED huge column: touched 5x (>= threshold) but LOW keep-benefit (large).
+    # Promoted huge column: touched 5x (>= threshold) but low keep-benefit (large).
     var c_bytes = _touch(ctx, "hot_huge", LARGE, 5)
-    # NOT-promoted small column: touched once, HIGHER keep-benefit (small).
+    # Non-promoted small column: touched once, higher keep-benefit (small).
     var e_bytes = _touch(ctx, "cold_small", SMALL, 1)
 
     var ben_c = keep_benefit(5, c_bytes)
     var ben_e = keep_benefit(1, e_bytes)
     print("scenario 2: keep_benefit(C hot/huge, promoted) =", ben_c,
           "  keep_benefit(E cold/small) =", ben_e)
-    # Pure benefit ranking would pick C (lower benefit) as the victim...
+    # Ranking by benefit alone would pick C (lower benefit) as the victim...
     assert_true(ben_c < ben_e, "huge promoted column has the LOWER raw benefit")
     # ...but C is promoted and E is not.
     assert_equal(pool_promoted_cols(), 1, "exactly the huge column is promoted")

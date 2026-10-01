@@ -99,9 +99,9 @@ struct AggregateState:
             Pointer to the state's data (to be bitcast to the actual state type).
         """
         # duckdb_aggregate_state is UnsafePointer[_duckdb_aggregate_state].
-        # The state data lives at the address self._state points to — NOT
+        # The state data lives at the address self._state points to, not
         # at self._state[].internal_ptr.  DuckDB reinterpret_casts the raw
-        # allocation to duckdb_aggregate_state, so the user struct IS the
+        # allocation to duckdb_aggregate_state, so the user struct is the
         # memory at that address.
         return self._state.unsafe_bitcast[NoneType]()
 
@@ -181,15 +181,15 @@ struct AggregateFunction(Movable):
     """An aggregate function that can be registered in DuckDB.
 
     Aggregate functions process multiple rows and produce a single result value
-    per group. They require four callback functions:
+    per group. They require these callback functions:
 
-    1. **state_size**: Returns the size of the aggregate state in bytes.
-    2. **state_init**: Initializes a new aggregate state.
-    3. **update**: Called for each input row to update the state.
-    4. **combine**: Merges two states (for parallel aggregation).
-    5. **finalize**: Produces the final result from the state.
+    1. `state_size`: Returns the size of the aggregate state in bytes.
+    2. `state_init`: Initializes a new aggregate state.
+    3. `update`: Called for each input row to update the state.
+    4. `combine`: Merges two states (for parallel aggregation).
+    5. `finalize`: Produces the final result from the state.
 
-    Optionally, a **destroy** callback can clean up state resources.
+    Optionally, a `destroy` callback can clean up state resources.
 
     Example:
     ```mojo
@@ -479,7 +479,7 @@ struct AggregateFunction(Movable):
             self._function, raw_destroy
         )
 
-    def register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection) raises:
         """Registers the aggregate function within the given connection.
 
         The function requires at least a name, a return type,
@@ -514,7 +514,7 @@ struct AggregateFunction(Movable):
             SIMD[D, width], SIMD[D, width]
         ) thin -> SIMD[D, width],
         init_fn: def() thin -> Scalar[D],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a unary aggregate from a SIMD reduction function.
 
         Auto-generates all aggregate callbacks (state_size, init, update,
@@ -620,7 +620,7 @@ struct AggregateFunction(Movable):
             SIMD[Out, width], SIMD[Out, width]
         ) thin -> SIMD[Out, width],
         init_fn: def() thin -> Scalar[Out],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a unary aggregate with separate input/output types.
 
         Input values are cast to ``Out`` before accumulation.  The reduce
@@ -721,7 +721,7 @@ struct AggregateFunction(Movable):
             SIMD[dtype, width], SIMD[dtype, width]
         ) thin -> SIMD[dtype, width],
         init_fn: def() thin -> Scalar[D],
-    ](conn: Connection[_]) raises:
+    ](conn: Connection) raises:
         """Create and register a unary aggregate from a stdlib-compatible function.
 
         Accepts functions with the standard library signature
@@ -816,7 +816,7 @@ struct AggregateFunction(Movable):
     # ===--------------------------------------------------------------------===#
 
     @staticmethod
-    def from_sum[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_sum[name: StringLiteral, D: DType](conn: Connection) raises:
         """Create and register a SUM aggregate.
 
         Computes the sum of all non-NULL input values.  Returns NULL for
@@ -842,7 +842,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _add, _zero](conn)
 
     @staticmethod
-    def from_product[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_product[name: StringLiteral, D: DType](conn: Connection) raises:
         """Create and register a PRODUCT aggregate.
 
         Computes the product of all non-NULL input values.  Returns NULL for
@@ -867,7 +867,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _mul, _one](conn)
 
     @staticmethod
-    def from_max[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_max[name: StringLiteral, D: DType](conn: Connection) raises:
         """Create and register a MAX aggregate.
 
         Returns the maximum non-NULL input value, or NULL for empty groups.
@@ -891,7 +891,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _max, _init](conn)
 
     @staticmethod
-    def from_min[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_min[name: StringLiteral, D: DType](conn: Connection) raises:
         """Create and register a MIN aggregate.
 
         Returns the minimum non-NULL input value, or NULL for empty groups.
@@ -915,7 +915,7 @@ struct AggregateFunction(Movable):
         AggregateFunction.from_reduce[name, D, _min, _init](conn)
 
     @staticmethod
-    def from_mean[name: StringLiteral, D: DType](conn: Connection[_]) raises:
+    def from_mean[name: StringLiteral, D: DType](conn: Connection) raises:
         """Create and register a MEAN (average) aggregate.
 
         Computes the arithmetic mean of all non-NULL input values.
@@ -1075,7 +1075,7 @@ struct AggregateFunctionSet(Movable):
                 "Failed to add function to set - overload may already exist"
             )
 
-    def register(self, conn: Connection[_]) raises:
+    def register(self, conn: Connection) raises:
         """Registers the aggregate function set within the given connection.
 
         The set requires at least one valid overload.

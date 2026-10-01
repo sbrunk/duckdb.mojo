@@ -1,4 +1,4 @@
-"""De-risk the TPC-H Q5 GPU multi-table-join grouped-aggregation kernel.
+"""Validate the TPC-H Q5 GPU multi-table-join grouped-aggregation kernel.
 
 Q5 is a 6-table join (customer, orders, lineitem, supplier, nation, region) with
 a correlated join condition (c_nationkey == s_nationkey) and a small-cardinality
@@ -13,10 +13,10 @@ group-by on the nation:
     GROUP BY n_name ORDER BY revenue DESC;
 
 Design (build-on-host dimension lookups + GPU probe over lineitem +
-per-block-partials group-by, NO GPU atomics -- the Apple GPU lacks int64
-Atomic.fetch_add, found in the Q3 work):
+per-block-partials group-by, no GPU atomics, because the Apple GPU lacks int64
+Atomic.fetch_add, as found in the Q3 work):
 
-  * HOST collapses the 5 dimension joins into dense arrays indexed by key:
+  * The host collapses the 5 dimension joins into dense arrays indexed by key:
     - order_pass[o_orderkey]        : uint8  (o_orderdate in [lo, hi))
     - order_cust_nation[o_orderkey] : int32  (folds customer lookup:
                                        c_nationkey[o_custkey])
@@ -30,11 +30,11 @@ Atomic.fetch_add, found in the Q3 work):
             accumulate rev into group = sn  via per-block partials.
   * Each block keeps private [NGROUPS] int64 lane accumulators (group=nation),
     warp.sum reduces each group across the 32 lanes, lane 0 writes the per-block
-    partial. The HOST reduces partials across blocks in int128 -> exact.
+    partial. The host reduces partials across blocks in int128, which is exact.
 
 Exactness: ext is DECIMAL(15,2)=int64 scale2, (1-disc)=(100-disc_raw) scale2;
-per-row product is scale-4 int64 (~1e9). At SF1 a nation's revenue ~5.5e7 (scale
-4 -> ~5.5e11) fits int64, but we reduce across blocks in int128 to stay exact for
+per-row product is scale-4 int64 (~1e9). At SF1 a nation's revenue ~5.5e7 (at
+scale 4, ~5.5e11) fits int64, but we reduce across blocks in int128 to stay exact for
 any scale. This test asserts the GPU per-nation revenue is bit-exact vs a CPU
 int128 reference across all 25 groups.
 """

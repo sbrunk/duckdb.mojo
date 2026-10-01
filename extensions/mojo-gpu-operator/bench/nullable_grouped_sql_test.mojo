@@ -1,17 +1,17 @@
-"""GPU_OP_NULLABLE_GROUPED: DENSE GROUP BY over nullable agg columns, live SQL.
+"""GPU_OP_NULLABLE_GROUPED: dense GROUP BY over nullable agg columns, live SQL.
 
-A DENSE grouped int aggregate (count(*) + sum/avg, NOT-NULL group key) over NULLABLE
-agg columns. The A1 per-metric validity multiply + per-group validity-count NULL
-marking + the dense filter-count existence gate are all per-group, so:
+A dense grouped int aggregate (count(*) + sum/avg, NOT NULL group key) over nullable
+agg columns. The A1 per-metric validity multiply, the per-group validity-count NULL
+marking and the dense filter-count existence gate all work per group, so:
   * each group's sum(x) excludes its own NULL-x rows,
   * a group with filter-passing rows but all-NULL x emits SQL NULL,
-  * a group with ZERO filter-passing rows is OMITTED (matches stock),
+  * a group with zero filter-passing rows is omitted (matches stock),
   * count(*) per group counts all filter-passing rows.
-A NULLABLE group key must DECLINE (it would form its own SQL NULL group).
+A nullable group key must decline (it would form its own SQL NULL group).
 
 Each probe wraps the grouped result in string_agg(... ORDER BY k) so a single VARCHAR
-captures all groups; the inner GROUP BY routes (operator), the outer string_agg is a CPU
-projection. We compare operator (GPU_OP_NULLABLE_GROUPED=1) vs stock (GPU_OP_GENERIC=off).
+captures all groups; the operator handles the inner GROUP BY, and the outer string_agg
+is a CPU projection. We compare operator (GPU_OP_NULLABLE_GROUPED=1) vs stock (GPU_OP_GENERIC=off).
 
 Run: GPU_OP_NULLABLE=1 GPU_OP_NULLABLE_GROUPED=1 pixi run mojo run \
         -I extensions/mojo-gpu-operator/src \
@@ -41,9 +41,9 @@ def main() raises:
     var config = Config({"allow_unsigned_extensions": "true"})
     var con = DuckDB.connect(":memory:", config^)
     _ = con.execute("LOAD '" + ext + "'")
-    # k: NOT-NULL VARCHAR group key (4 groups -> DENSE). gid: NOT-NULL int (==group).
+    # k: NOT NULL VARCHAR group key (4 groups, so dense). gid: NOT NULL int (==group).
     # x: nullable BIGINT (NULL on i%7). xg: nullable BIGINT where group 'D' (i%4==3) is
-    # ALL NULL. knull: nullable VARCHAR (group 'A' key is NULL) for the decline test.
+    # all NULL. knull: nullable VARCHAR (group 'A' key is NULL) for the decline test.
     _ = con.execute("CREATE TABLE t(k VARCHAR NOT NULL, gid INTEGER NOT NULL,"
                     " x BIGINT, xg BIGINT, knull VARCHAR)")
     _ = con.execute(
@@ -67,7 +67,7 @@ def main() raises:
         "SELECT string_agg(k||':'||COALESCE(s::VARCHAR,'NULL')||':'||c::VARCHAR,"
         " '|' ORDER BY k) FROM (SELECT k, sum(x) s, count(*) c FROM t GROUP BY k)"
     )
-    # fully-filtered group: gid<3 excludes ALL of group 'D' -> 'D' must be OMITTED.
+    # fully-filtered group: gid<3 excludes all of group 'D', so 'D' must be omitted.
     sqls.append(
         "SELECT string_agg(k||':'||COALESCE(s::VARCHAR,'NULL')||':'||c::VARCHAR,"
         " '|' ORDER BY k) FROM (SELECT k, sum(x) s, count(*) c FROM t"
@@ -83,7 +83,7 @@ def main() raises:
         "SELECT string_agg(k||':'||COALESCE(round(a,4)::VARCHAR,'NULL'),"
         " '|' ORDER BY k) FROM (SELECT k, avg(x) AS a FROM t WHERE x > 100 GROUP BY k)"
     )
-    # NULLABLE GROUP KEY -> must DECLINE (stock). (knull group 'A' key is NULL.)
+    # Nullable group key: the operator must decline (stock runs). (knull group 'A' key is NULL.)
     sqls.append(
         "SELECT string_agg(COALESCE(knull,'<NULL>')||':'||COALESCE(s::VARCHAR,'NULL'),"
         " '|' ORDER BY knull) FROM (SELECT knull, sum(x) s FROM t GROUP BY knull)"

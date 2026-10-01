@@ -1,23 +1,24 @@
 #!/bin/bash
 # Compile-check every Mojo file in a directory without running it.
 #
-# Benchmarks and examples aren't part of the test suite, so they silently rot
-# when the Mojo stdlib or the duckdb API changes (renamed methods, new ABI
-# requirements on callbacks, stdlib import-path churn). A plain `mojo build`
-# catches all of those in seconds — no data generation, no runtime variance —
-# which is all we want from a guard against API/ABI drift.
+# Benchmarks and examples aren't part of the test suite, so they break without
+# anyone noticing when the Mojo stdlib or the duckdb API changes (renamed
+# methods, new ABI requirements on callbacks, moved stdlib imports). A plain
+# `mojo build` catches all of those in seconds, without generating data or
+# depending on runtime behavior, which is all we need to catch API/ABI drift.
 #
 # Usage: scripts/compile_check.sh <dir> [<dir> ...]
-# Runs via `pixi run compile-benchmarks` (see pixi.toml). Compiles the duckdb
-# package from source per file (see the EXPERIMENT note in run_tests.sh).
+# Runs via `pixi run compile-benchmarks` (see pixi.toml). Like run_tests.sh, it
+# compiles the duckdb package from source for each file.
 set -e
 
-# Optional Mojo codegen target override, set ONLY in CI — see run_tests.sh and
-# .github/workflows/test.yml for the rationale. Unset locally → native build.
+# Optional Mojo codegen target override, set only in CI. See run_tests.sh and
+# .github/workflows/test.yml for the reason. When unset (locally), the build is
+# native.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
 # Files that can't be compiled in the default environment. Keep this list short
-# and explain every entry — anything excluded here is NOT guarded against drift.
+# and explain every entry. Anything excluded here is not checked for drift.
 EXCLUDE=(
     # Requires the `full` environment (duckdb-from-source + the
     # operator_replacement package). Covered separately; see the full-env CI

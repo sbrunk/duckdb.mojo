@@ -1,5 +1,5 @@
 # name: benchmark/micro/mojo_simd/mixed_heavy.benchmark
-# description: Mojo SIMD patch target — mixed heavy
+# description: Mojo SIMD patch target: mixed heavy
 # group: [mojo_simd]
 
 name mixed heavy

@@ -765,8 +765,8 @@ struct Column(Copyable & Writable):
 struct Result(Writable, Iterable, Movable):
     """A streaming query result.
 
-    Iterating a ``Result`` yields ``Row`` proxies — the most ergonomic
-    way to consume query output:
+    Iterating a ``Result`` yields ``Row`` proxies. This is the most
+    convenient way to consume query output:
 
         for row in conn.execute("SELECT name, age FROM users"):
             print(row.get[String](col=0), row.get[Int64](col=1))
@@ -928,7 +928,7 @@ struct Result(Writable, Iterable, Movable):
         return ChunkIter(Pointer(to=self))
 
     def rows(ref self) -> RowIter[ImmOrigin(origin_of(self))]:
-        """Iterate over rows — explicit spelling of ``__iter__``.
+        """Iterate over rows (an explicit spelling of ``__iter__``).
 
         Equivalent to ``for row in result``, provided for
         discoverability.
@@ -1269,7 +1269,7 @@ struct MaterializedResult(Sized, Movable):
     def _locate(self, row: Int) raises -> Tuple[Int, Int]:
         """Map a global row index to a ``(chunk_index, offset_in_chunk)`` pair.
 
-        Walks chunks by their actual sizes — chunks are not assumed to all be
+        Walks chunks by their actual sizes. Chunks are not assumed to all be
         ``vector_size`` rows (e.g. ``UNION ALL`` can yield small chunks).
         """
         if row < 0 or row >= self.size:
@@ -1344,7 +1344,7 @@ struct MaterializedResult(Sized, Movable):
             T: A Mojo struct whose fields correspond to table columns.
 
         Returns:
-            List[T] — one struct per row across all chunks.
+            List[T] with one struct per row across all chunks.
 
         Example:
             ```mojo
@@ -1483,7 +1483,7 @@ struct MaterializedResult(Sized, Movable):
         var type_names = List[String](capacity=ncols)
         var right = List[Bool](capacity=ncols)
         for c in range(ncols):
-            # Read the type id from the live result's logical type — the stored
+            # Read the type id from the live result's logical type. The stored
             # `_columns[c].type` is rebuilt from a type id alone and reads back
             # as `invalid` for parameterized/nested types (decimal/list/...).
             var tid = self.result.column_type(c).get_type_id()
@@ -1567,7 +1567,7 @@ struct MaterializedResult(Sized, Movable):
         return table^
 
     def show(self, *, max_rows: Int = 40, max_col_width: Int = 32) raises:
-        """Print the result as a formatted table, à la the DuckDB CLI.
+        """Print the result as a formatted table, like the DuckDB CLI does.
 
         The header carries the column name and its type (e.g. ``int32``).
         Numeric columns are right-aligned, others left-aligned.  Large results
@@ -1588,7 +1588,7 @@ struct MaterializedResult(Sized, Movable):
 
 
 # ──────────────────────────────────────────────────────────────────
-# Chunk-level iterator — streams chunks from a Result
+# Chunk-level iterator: streams chunks from a Result
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -1629,7 +1629,7 @@ struct ChunkIter[
 
 
 # ──────────────────────────────────────────────────────────────────
-# Cross-chunk row iterator — streams Row proxies across chunks
+# Cross-chunk row iterator: streams Row proxies across chunks
 # ──────────────────────────────────────────────────────────────────
 
 
