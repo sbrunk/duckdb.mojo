@@ -3,10 +3,9 @@
 #
 set -e
 
-# Optional Mojo codegen target override. Set only in CI (see
-# .github/workflows/test.yml) to work around a Mojo bug on GitHub's AMD EPYC
-# 9V74 runners, where host-CPU codegen emits AVX-512 that Azure has masked,
-# causing SIGILL. It is unset locally, so local builds stay native.
+# Optional extra flags for every mojo build/run, for example
+# MOJO_TARGET_FLAGS=--target-cpu=x86-64-v3 to pin the codegen target. Unset by
+# default, so builds target the native CPU.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
 # Tests that compile quickly (no heavy generic monomorphization)

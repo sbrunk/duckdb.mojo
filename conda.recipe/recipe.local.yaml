@@ -30,15 +30,8 @@ requirements:
 
 tests:
   - script:
-      # On GitHub's linux-64 runners, host-CPU codegen can emit AVX-512
-      # instructions that the runner has disabled, causing SIGILL at runtime.
-      # Pin a safe baseline there (every CI runner has AVX2). This mirrors
-      # MOJO_TARGET_FLAGS in test.yml. Test scripts can't read env vars, so the
-      # target is hard-coded with a selector.
-      - if: linux and x86_64
+      - if: unix
         then:
-          - mojo run --target-cpu=x86-64-v3 smoke_test.mojo
-        else:
           - mojo run smoke_test.mojo
     files:
       recipe:

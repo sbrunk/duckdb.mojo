@@ -12,9 +12,8 @@
 # compiles the duckdb package from source for each file.
 set -e
 
-# Optional Mojo codegen target override, set only in CI. See run_tests.sh and
-# .github/workflows/test.yml for the reason. When unset (locally), the build is
-# native.
+# Optional extra mojo flags, see scripts/run_tests.sh. Unset by default, so the
+# build targets the native CPU.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
 # Files that can't be compiled in the default environment. Keep this list short

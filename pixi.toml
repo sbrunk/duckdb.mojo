@@ -39,10 +39,9 @@ generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
 
 # Demo extension.
-# The mojo build/run calls are wrapped in `bash -c` so $MOJO_TARGET_FLAGS (set
-# only in CI, see .github/workflows/test.yml) is applied as a codegen target
-# override on the affected runners. Locally it is unset, expands to nothing,
-# and the build targets the native CPU.
+# The mojo build/run calls are wrapped in `bash -c` so the optional
+# $MOJO_TARGET_FLAGS (see scripts/run_tests.sh) is applied. When it is unset,
+# it expands to nothing and the build targets the native CPU.
 build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
