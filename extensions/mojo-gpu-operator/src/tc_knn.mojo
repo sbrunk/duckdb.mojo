@@ -1,8 +1,6 @@
 """Fused tensor-core kNN for the batched fp16 top-k path (NVIDIA-only).
 
-Ported from `bench/tc_knn_fused.mojo` (measured: recall@10 = 1.0, 0 genuine misses
-at N=1M K=768 M=128 k=10; ~67x the scalar batched path on an RTX 4090). It
-computes per-query top-k via a tiled MMA `Q.Emb^T` (m16n8k8, transpose_b) fused
+It computes per-query top-k via a tiled MMA `Q.Emb^T` (m16n8k8, transpose_b) fused
 with a streaming per-query top-k, so the M x N similarity matrix is never
 materialized: only Emb is read, and only M x k results are written.
 

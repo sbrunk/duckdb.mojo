@@ -727,24 +727,3 @@ grouped aggregates (sum, max, min, avg) on 10M rows.
 ```shell
 pixi run mojo run benchmark/reduction_benchmark.mojo
 ```
-
-### Note on SIMD utilization and the DuckDB C API
-
-Mojo's `algorithm.reduction` module provides SIMD-vectorized and parallelized
-reduction functions (`sum`, `max`, `min`, `mean`, etc.) that
-operate on contiguous `Span` data. However, these cannot be used directly in
-DuckDB aggregate callbacks because the C API `update` function receives one
-state pointer per row (`duckdb_aggregate_state *states`), and each pointer
-may point to a different group's state. So there is no way to reduce a contiguous buffer into a single accumulator.
-
-DuckDB's internal aggregates use a separate `simple_update` callback for
-ungrouped aggregates that passes the entire vector plus a single state pointer,
-which would be a natural fit for stdlib reduction. However, the C API does not
-expose this. `simple_update` is hardcoded to `nullptr` for all C API aggregate
-functions.
-
-Exposing a `duckdb_aggregate_function_set_simple_update(fn(info, vector, state, count))`
-callback in the C API would allow Mojo bindings to call
-`algorithm.reduction.sum(Span(vector_data, count))` directly on the input
-vector. Ungrouped aggregates would then get full SIMD vectorization and parallel
-execution instead of the current scalar per-row loop.

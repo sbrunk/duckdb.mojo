@@ -68,6 +68,9 @@ overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
 # Needs the `gpu` environment (max-core): `pixi run -e gpu gpu-op-build`.
 gpu-op-build = "bash extensions/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf extensions/mojo-gpu-operator/build"
+# Run the GPU tests in extensions/mojo-gpu-operator/bench (needs a GPU). Pass a
+# name to run a subset, e.g. `pixi run -e gpu gpu-op-test q6_shuttle`.
+gpu-op-test = { cmd = "bash extensions/mojo-gpu-operator/bench/run_tests.sh", depends-on = ["gpu-op-build"] }
 
 # Benchmarks. See benchmark/README.md for an overview.
 # One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).

@@ -48,7 +48,8 @@ from std.math import sqrt
 # ===-------------------------------------------------------------------===#
 # 8x8 simdgroup-matrix primitives (verified on this M3, K=64, fp16, err=0).
 # Lifted from `.repos/modular/.../apple/matmul_8x8.mojo` (`_frag8_layout`,
-# `_mma8x8`); see apple_8x8_probe.mojo for the bit-exact validation.
+# `_mma8x8`). bench/apple_tc_knn_test.mojo checks the result against a scalar
+# reference.
 # ===-------------------------------------------------------------------===#
 comptime AP_MMA = 8  # 8x8x8 simdgroup-matrix shape
 comptime FRAG8 = 2  # 8x8 = 64 elems / 32 lanes = 2 per lane

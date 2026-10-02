@@ -79,8 +79,8 @@ def _query_raw(m: Int, i: Int) -> Float32:
 
 # Build emb (N*K) + queries (M*K). If `normalize`, each row/query is L2-unit.
 def build_data(
-    emb: Pointer[Float32, MutAnyOrigin],
-    qs: Pointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutUntrackedOrigin],
+    qs: Pointer[Float32, MutUntrackedOrigin],
     normalize: Bool,
 ):
     for row in range(N):
@@ -118,11 +118,11 @@ def build_data(
 # before forming dot + norm, so they are bit-identical to the resident matrix. Top-k by
 # smallest distance with the (dist, rowid) tie-break.
 def cpu_topk(
-    emb: Pointer[Float32, MutAnyOrigin],
-    q: Pointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutUntrackedOrigin],
+    q: Pointer[Float32, MutUntrackedOrigin],
     metric: Int,
-    out_ids: Pointer[Int64, MutAnyOrigin],
-    out_dists: Pointer[Float32, MutAnyOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ):
     # query squared norm in fp32 (matches host qnorm computation).
     var qsq = Float32(0)
@@ -190,17 +190,17 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
     var emb = alloc[Float32](N * K)
     var qs = alloc[Float32](M * K)
     build_data(emb, qs, normalize)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
-    var qs_imm = Pointer[Float32, ImmutAnyOrigin](
+    var qs_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qs)
     )
 
     var handle = mojo_gpu_pin_f16(emb_imm, N, K)
     if handle == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
 
     # GPU fused metric path.
     var gpu_ids = alloc[Int64](M * KK)
@@ -225,7 +225,7 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
     var oneq_ids = alloc[Int64](KK)
     var oneq_dists = alloc[Float32](KK)
     for m in range(M):
-        var qptr = UnsafePointer[Float32, MutAnyOrigin](
+        var qptr = UnsafePointer[Float32, MutUntrackedOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
         )
         cpu_topk(emb, qptr, metric, oneq_ids, oneq_dists)

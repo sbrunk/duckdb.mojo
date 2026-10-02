@@ -133,7 +133,7 @@ comptime EXPR_STACK_MAX = 16
 #
 # AddressSpace.GLOBAL is required: a pointer reconstructed from a raw integer with
 # the default GENERIC address space reads 0 on Apple Metal (separate address
-# spaces). GLOBAL works on both Apple M3 + NVIDIA (verified by bench/colptr_probe).
+# spaces). GLOBAL works on both Apple M3 + NVIDIA.
 # The value read is identical to the packed layout, so results are bit-exact.
 # ---------------------------------------------------------------------------
 @always_inline

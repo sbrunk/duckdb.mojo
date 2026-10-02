@@ -50,11 +50,11 @@ def query_val(m: Int, i: Int) -> Float32:
 # CPU reference: all N cosine distances for query at `q`, then a stable selection
 # of the k smallest under (dist asc, id asc), matching the GPU tie-break.
 def cpu_topk(
-    emb: Pointer[Float32, MutAnyOrigin],
-    q: Pointer[Float32, MutAnyOrigin],
+    emb: Pointer[Float32, MutUntrackedOrigin],
+    q: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
-    out_ids: Pointer[Int64, MutAnyOrigin],
-    out_dists: Pointer[Float32, MutAnyOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ):
     var qnorm = Float32(0)
     for i in range(K):
@@ -97,10 +97,10 @@ def cpu_topk(
 
 def check_topk(
     label: String,
-    gpu_ids: Pointer[Int64, MutAnyOrigin],
-    gpu_dists: Pointer[Float32, MutAnyOrigin],
-    cpu_ids: Pointer[Int64, MutAnyOrigin],
-    cpu_dists: Pointer[Float32, MutAnyOrigin],
+    gpu_ids: Pointer[Int64, MutUntrackedOrigin],
+    gpu_dists: Pointer[Float32, MutUntrackedOrigin],
+    cpu_ids: Pointer[Int64, MutUntrackedOrigin],
+    cpu_dists: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
 ) raises:
     var ok = True
@@ -131,17 +131,17 @@ def check_topk(
     print("  PASS", label, "(k =", k, ")")
 
 
-def run_single(handle: Int, emb: Pointer[Float32, MutAnyOrigin], k: Int) raises:
+def run_single(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], k: Int) raises:
     var q = alloc[Float32](K)
     for i in range(K):
         q[i] = query_val(0, i)
-    var q_imm = Pointer[Float32, ImmutAnyOrigin](
+    var q_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(q)
     )
 
     var gpu_ids = alloc[Int64](k)
     var gpu_dists = alloc[Float32](k)
-    var h = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     var rc = mojo_gpu_pin_query_topk(h, q_imm, k, gpu_ids, gpu_dists)
     if rc != 0:
         raise Error(String("mojo_gpu_pin_query_topk rc=") + String(Int(rc)))
@@ -165,18 +165,18 @@ def run_single(handle: Int, emb: Pointer[Float32, MutAnyOrigin], k: Int) raises:
     cpu_dists.free()
 
 
-def run_batch(handle: Int, emb: Pointer[Float32, MutAnyOrigin], M: Int, k: Int) raises:
+def run_batch(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], M: Int, k: Int) raises:
     var qs = alloc[Float32](M * K)
     for m in range(M):
         for i in range(K):
             qs[m * K + i] = query_val(m + 1, i)  # vary per batch query
-    var qs_imm = Pointer[Float32, ImmutAnyOrigin](
+    var qs_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qs)
     )
 
     var gpu_ids = alloc[Int64](M * k)
     var gpu_dists = alloc[Float32](M * k)
-    var h = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     var rc = mojo_gpu_pin_query_topk_batch(h, qs_imm, M, k, gpu_ids, gpu_dists)
     if rc != 0:
         raise Error(
@@ -210,7 +210,7 @@ def main() raises:
     for r in range(N):
         for i in range(K):
             emb[r * K + i] = emb_val(r, i)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
@@ -222,7 +222,7 @@ def main() raises:
     run_single(handle, emb, 100)
     run_batch(handle, emb, 8, 10)
 
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     mojo_gpu_pin_free(h)
     emb.free()
     print("ALL PASS")

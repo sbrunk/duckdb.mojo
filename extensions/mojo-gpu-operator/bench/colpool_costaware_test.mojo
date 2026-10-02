@@ -79,7 +79,7 @@ def _touch(
     for _t in range(times):
         var er = ensure_column(
             ctx, key, REPR_INT64_PACKED, ORDERING_STORAGE,
-            host.unsafe_origin_cast[MutAnyOrigin](), n, Int64(0),
+            host.unsafe_origin_cast[MutUntrackedOrigin](), n, Int64(0),
         )
         assert_true(er.ok, "ensure_column should succeed for " + column)
         release_lease(key)

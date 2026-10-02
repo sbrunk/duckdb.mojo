@@ -45,6 +45,8 @@ pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with Duck
 pixi build                    # Build conda package
 pixi run overrides-build      # Build the mojo-kernel-overrides extension
 pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
+pixi run -e gpu gpu-op-build  # Build the mojo-gpu-operator extension
+pixi run -e gpu gpu-op-test   # Build it and run its GPU tests (needs a GPU)
 # Consolidated benchmarks (see benchmark/README.md):
 pixi run bench-build          # Build DuckDB's benchmark_runner (w/ load-ext hook), once
 pixi run bench-sql <group> --engines=stock,cpu,gpu   # warm compare (mojo_simd|gpu_xover|gpu_knn|tpch/...)

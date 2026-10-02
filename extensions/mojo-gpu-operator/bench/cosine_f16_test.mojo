@@ -71,7 +71,7 @@ def _center_val(c: Int, i: Int) -> Float32:
 # Each row picks a cluster, copies its center + small jitter, then L2-normalizes.
 # ---------------------------------------------------------------------------
 def build_embeddings(
-    emb: Pointer[Float32, MutAnyOrigin], N: Int, K: Int
+    emb: Pointer[Float32, MutUntrackedOrigin], N: Int, K: Int
 ):
     for row in range(N):
         var c = row % NCLUST
@@ -95,7 +95,7 @@ def build_embeddings(
 
 
 # Synthesize query m near cluster center (m % NCLUST), unit-normalized.
-def build_query(q: Pointer[Float32, MutAnyOrigin], m: Int, K: Int):
+def build_query(q: Pointer[Float32, MutUntrackedOrigin], m: Int, K: Int):
     var c = m % NCLUST
     var nrm = Float32(0)
     for i in range(K):
@@ -121,10 +121,10 @@ struct RecallResult(Copyable, Movable):
 
 
 def recall_one(
-    f32_ids: Pointer[Int64, MutAnyOrigin],
-    f32_dists: Pointer[Float32, MutAnyOrigin],
-    f16_ids: Pointer[Int64, MutAnyOrigin],
-    f16_dists: Pointer[Float32, MutAnyOrigin],
+    f32_ids: Pointer[Int64, MutUntrackedOrigin],
+    f32_dists: Pointer[Float32, MutUntrackedOrigin],
+    f16_ids: Pointer[Int64, MutUntrackedOrigin],
+    f16_dists: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
 ) -> RecallResult:
     # Worst kept distance among the fp16 result (its top-k boundary).
@@ -156,7 +156,7 @@ def recall_one(
 
 
 # Median of an Int64 timing array (in-place insertion sort; n small).
-def _median_ns(times: Pointer[Int64, MutAnyOrigin], n: Int) -> Int64:
+def _median_ns(times: Pointer[Int64, MutUntrackedOrigin], n: Int) -> Int64:
     for a in range(n):
         for b in range(a + 1, n):
             if times[b] < times[a]:
@@ -172,7 +172,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
 
     var emb = alloc[Float32](N * K)
     build_embeddings(emb, N, K)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
@@ -183,10 +183,10 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
     var h16_i = mojo_gpu_pin_f16(emb_imm, N, K)
     if h16_i == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h32 = UnsafePointer[NoneType, MutAnyOrigin](
+    var h32 = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=h32_i
     )
-    var h16 = UnsafePointer[NoneType, MutAnyOrigin](
+    var h16 = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=h16_i
     )
 
@@ -204,7 +204,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
     var total_overlap = 0
     var total_miss = 0
     for m in range(NQUERY):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf) + m * K * 4
         )
         var rc32 = mojo_gpu_pin_query_topk(h32, q, TOPK, f32_ids, f32_dists)
@@ -231,7 +231,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
     # Small-N exact correctness sanity: at 50k we additionally print whether the
     # fp16 top-1 id matches fp32 top-1 for query 0 (cheap visible check).
     if check_exact:
-        var q0 = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q0 = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf)
         )
         _ = mojo_gpu_pin_query_topk(h32, q0, TOPK, f32_ids, f32_dists)
@@ -257,12 +257,12 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
 
     # fp32 warm latency
     for m in range(WARMUP):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + m * K * 4
         )
         _ = mojo_gpu_pin_query_topk(h32, q, TOPK, f32_ids, f32_dists)
     for m in range(WARM):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + (WARMUP + m) * K * 4
         )
         var t0 = perf_counter_ns()
@@ -275,12 +275,12 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
 
     # fp16 warm latency
     for m in range(WARMUP):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + m * K * 4
         )
         _ = mojo_gpu_pin_query_topk_f16(h16, q, TOPK, f16_ids, f16_dists)
     for m in range(WARM):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + (WARMUP + m) * K * 4
         )
         var t0 = perf_counter_ns()

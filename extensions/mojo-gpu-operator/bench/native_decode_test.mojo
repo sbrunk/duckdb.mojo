@@ -46,12 +46,12 @@ from native_decode import (
 # ---------------------------------------------------------------------------
 # Host-side helpers operating on a growable byte buffer.
 # ---------------------------------------------------------------------------
-def put_u64(buf: Pointer[UInt8, MutAnyOrigin], off: Int, v: UInt64):
+def put_u64(buf: Pointer[UInt8, MutUntrackedOrigin], off: Int, v: UInt64):
     for b in range(8):
         buf[off + b] = UInt8((v >> UInt64(8 * b)) & 0xFF)
 
 
-def put_u32(buf: Pointer[UInt8, MutAnyOrigin], off: Int, v: UInt32):
+def put_u32(buf: Pointer[UInt8, MutUntrackedOrigin], off: Int, v: UInt32):
     for b in range(4):
         buf[off + b] = UInt8((v >> UInt32(8 * b)) & 0xFF)
 
@@ -74,7 +74,7 @@ def min_width(maxv: UInt64) -> Int:
 # `unpack_value`. `packed_bytes` must be zero-initialized and large enough
 # (ceil(count*width/32)*4 bytes + a guard word).
 def pack_lsb_first(
-    packed: Pointer[UInt32, MutAnyOrigin], vals: Pointer[UInt64, MutAnyOrigin], count: Int, width: Int
+    packed: Pointer[UInt32, MutUntrackedOrigin], vals: Pointer[UInt64, MutUntrackedOrigin], count: Int, width: Int
 ):
     if width == 0:
         return
@@ -104,14 +104,14 @@ def pack_lsb_first(
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct BuiltSegment(Copyable, Movable):
-    var data: Pointer[UInt8, MutAnyOrigin]
+    var data: Pointer[UInt8, MutUntrackedOrigin]
     var nbytes: Int
     var n_groups: Int
 
 
 def build_bitpacking_segment[
     T: DType
-](vals: Pointer[Scalar[T], MutAnyOrigin], n: Int, force_constant: Bool) -> BuiltSegment:
+](vals: Pointer[Scalar[T], MutUntrackedOrigin], n: Int, force_constant: Bool) -> BuiltSegment:
     comptime TBYTES = 4 if T == DType.int32 else 8
     var n_groups = ceildiv(n, BP_META_GROUP_SIZE)
 
@@ -208,7 +208,7 @@ def build_bitpacking_segment[
 
 
 # Store the low TBYTES bytes of an unsigned bit-pattern into buf at off.
-def put_u64_t[T: DType](buf: Pointer[UInt8, MutAnyOrigin], off: Int, v: UInt64):
+def put_u64_t[T: DType](buf: Pointer[UInt8, MutUntrackedOrigin], off: Int, v: UInt64):
     comptime TBYTES = 4 if T == DType.int32 else 8
     for b in range(TBYTES):
         buf[off + b] = UInt8((v >> UInt64(8 * b)) & 0xFF)
@@ -233,8 +233,8 @@ def _bits_t[T: DType](v: Scalar[T]) -> UInt64:
 def build_constant_delta_segment[
     T: DType
 ](
-    frames: Pointer[Scalar[T], MutAnyOrigin],
-    deltas: Pointer[Scalar[T], MutAnyOrigin],
+    frames: Pointer[Scalar[T], MutUntrackedOrigin],
+    deltas: Pointer[Scalar[T], MutUntrackedOrigin],
     n: Int,
 ) -> BuiltSegment:
     comptime TBYTES = 4 if T == DType.int32 else 8
@@ -283,7 +283,7 @@ def build_constant_delta_segment[
 # ---------------------------------------------------------------------------
 def build_delta_for_segment[
     T: DType
-](vals: Pointer[Scalar[T], MutAnyOrigin], n: Int) -> BuiltSegment:
+](vals: Pointer[Scalar[T], MutUntrackedOrigin], n: Int) -> BuiltSegment:
     comptime TBYTES = 4 if T == DType.int32 else 8
     var n_groups = ceildiv(n, BP_META_GROUP_SIZE)
 
@@ -375,7 +375,7 @@ def run_built_segment[
     ctx: DeviceContext,
     name: String,
     var seg: BuiltSegment,
-    vals: Pointer[Scalar[T], MutAnyOrigin],
+    vals: Pointer[Scalar[T], MutUntrackedOrigin],
     n: Int,
 ) raises -> Bool:
     # Upload raw segment bytes as uint8.
@@ -392,18 +392,18 @@ def run_built_segment[
         var rows = BP_META_GROUP_SIZE if g0 + BP_META_GROUP_SIZE <= n else n - g0
         ctx.enqueue_function[kernel](
             seg_d,
-            seg.nbytes,
+            Int64(seg.nbytes),
             out_d,
-            g,         # group_idx
-            rows,      # group_rows
-            g0,        # out_row_offset
+            Int64(g),     # group_idx
+            Int64(rows),  # group_rows
+            Int64(g0),    # out_row_offset
             grid_dim=1,
             block_dim=256,
         )
     ctx.synchronize()
 
     var out_h = alloc[Scalar[T]](n)
-    var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n, owning=False)
+    var out_sub = out_d.create_sub_buffer[T](0, n)
     ctx.enqueue_copy(out_h, out_sub)
     ctx.synchronize()
 
@@ -430,7 +430,7 @@ def run_bitpacking_case[
 ](
     ctx: DeviceContext,
     name: String,
-    vals: Pointer[Scalar[T], MutAnyOrigin],
+    vals: Pointer[Scalar[T], MutUntrackedOrigin],
     n: Int,
     force_constant: Bool,
 ) raises -> Bool:
@@ -443,9 +443,9 @@ def run_constant_delta_case[
 ](
     ctx: DeviceContext,
     name: String,
-    frames: Pointer[Scalar[T], MutAnyOrigin],
-    deltas: Pointer[Scalar[T], MutAnyOrigin],
-    vals: Pointer[Scalar[T], MutAnyOrigin],
+    frames: Pointer[Scalar[T], MutUntrackedOrigin],
+    deltas: Pointer[Scalar[T], MutUntrackedOrigin],
+    vals: Pointer[Scalar[T], MutUntrackedOrigin],
     n: Int,
 ) raises -> Bool:
     var seg = build_constant_delta_segment[T](frames, deltas, n)
@@ -457,7 +457,7 @@ def run_delta_for_case[
 ](
     ctx: DeviceContext,
     name: String,
-    vals: Pointer[Scalar[T], MutAnyOrigin],
+    vals: Pointer[Scalar[T], MutUntrackedOrigin],
     n: Int,
 ) raises -> Bool:
     var seg = build_delta_for_segment[T](vals, n)
@@ -466,7 +466,7 @@ def run_delta_for_case[
 
 def run_uncompressed_case[
     T: DType
-](ctx: DeviceContext, name: String, vals: Pointer[Scalar[T], MutAnyOrigin], n: Int) raises -> Bool:
+](ctx: DeviceContext, name: String, vals: Pointer[Scalar[T], MutUntrackedOrigin], n: Int) raises -> Bool:
     comptime TBYTES = 4 if T == DType.int32 else 8
     # Raw segment = the values laid out contiguously (data_off = 0).
     var nbytes = n * TBYTES
@@ -488,13 +488,13 @@ def run_uncompressed_case[
 
     comptime kernel = uncompressed_decode_kernel[T]
     ctx.enqueue_function[kernel](
-        seg_d, out_d, n, 0, 0,
+        seg_d, out_d, Int64(n), Int64(0), Int64(0),
         grid_dim=256, block_dim=256,
     )
     ctx.synchronize()
 
     var out_h = alloc[Scalar[T]](n)
-    var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n, owning=False)
+    var out_sub = out_d.create_sub_buffer[T](0, n)
     ctx.enqueue_copy(out_h, out_sub)
     ctx.synchronize()
 

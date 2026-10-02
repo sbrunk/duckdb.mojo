@@ -3,8 +3,7 @@
 Calls the real exported `mojo_gpu_pin_query_topk_batch_f16` (the entry the C++
 GpuCosinePhysicalOp invokes) and compares its M*k result against a per-query
 ground truth computed via `mojo_gpu_pin_query_topk_f16` (the single-query exact
-path, which never routes through the batched fused kernel). Uses the same data as
-cosine_batch_latency.mojo / tc_knn_fused.mojo.
+path, which never routes through the batched fused kernel).
 
 Run it twice on frederick:
   * GPU_OP_TENSORCORE unset  -> batched scalar path; recall should be ~1.0
@@ -57,20 +56,20 @@ def main() raises:
     for r in range(N):
         for i in range(K):
             emb[r * K + i] = emb_val(r, i)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
     var handle = mojo_gpu_pin_f16(emb_imm, N, K)
     if handle == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
+    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
 
     var qs = alloc[Float32](M * K)
     for m in range(M):
         for i in range(K):
             qs[m * K + i] = query_val(m, i)
-    var qs_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var qs_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qs)
     )
 
@@ -81,7 +80,7 @@ def main() raises:
     var oneq_ids = alloc[Int64](KK)
     var oneq_dists = alloc[Float32](KK)
     for m in range(M):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
         )
         var rc = mojo_gpu_pin_query_topk_f16(h, q, KK, oneq_ids, oneq_dists)

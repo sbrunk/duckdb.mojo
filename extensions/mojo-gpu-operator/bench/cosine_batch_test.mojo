@@ -58,7 +58,7 @@ def query_raw(m: Int, i: Int, c: Int) -> Float32:
     return center_val(c, i) + pert
 
 
-def fill_unit(p: Pointer[Float32, MutAnyOrigin], off: Int):
+def fill_unit(p: Pointer[Float32, MutUntrackedOrigin], off: Int):
     var nrm = Float32(0)
     for i in range(K):
         nrm += p[off + i] * p[off + i]
@@ -71,10 +71,10 @@ def fill_unit(p: Pointer[Float32, MutAnyOrigin], off: Int):
 
 def check_eq(
     label: String,
-    batch_ids: Pointer[Int64, MutAnyOrigin],
-    batch_dists: Pointer[Float32, MutAnyOrigin],
-    single_ids: Pointer[Int64, MutAnyOrigin],
-    single_dists: Pointer[Float32, MutAnyOrigin],
+    batch_ids: Pointer[Int64, MutUntrackedOrigin],
+    batch_dists: Pointer[Float32, MutUntrackedOrigin],
+    single_ids: Pointer[Int64, MutUntrackedOrigin],
+    single_dists: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
 ) raises:
     for j in range(k):
@@ -102,9 +102,9 @@ def check_eq(
 
 def run_case[
     is_f16: Bool
-](handle: Int, qs: Pointer[Float32, MutAnyOrigin], M: Int, k: Int) raises:
-    var h = Pointer[NoneType, MutAnyOrigin](unsafe_from_address=handle)
-    var qs_imm = Pointer[Float32, ImmutAnyOrigin](
+](handle: Int, qs: Pointer[Float32, MutUntrackedOrigin], M: Int, k: Int) raises:
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
+    var qs_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qs)
     )
 
@@ -124,7 +124,7 @@ def run_case[
     var s_ids = alloc[Int64](k)
     var s_dists = alloc[Float32](k)
     for m in range(M):
-        var q_imm = Pointer[Float32, ImmutAnyOrigin](
+        var q_imm = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
         )
 
@@ -161,7 +161,7 @@ def main() raises:
         for i in range(K):
             emb[r * K + i] = emb_unit(r, i, c)
         fill_unit(emb, r * K)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
@@ -181,7 +181,7 @@ def main() raises:
     run_case[False](h32, qs, 64, 10)
     run_case[False](h32, qs, 64, 100)
     mojo_gpu_pin_free(
-        UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h32)
+        UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h32)
     )
 
     # fp16
@@ -192,7 +192,7 @@ def main() raises:
     run_case[True](h16, qs, 64, 10)
     run_case[True](h16, qs, 64, 100)
     mojo_gpu_pin_free_f16(
-        UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h16)
+        UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h16)
     )
 
     emb.free()

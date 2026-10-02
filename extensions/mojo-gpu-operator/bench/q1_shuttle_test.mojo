@@ -211,7 +211,7 @@ def build_q1_tape(mut b: TapeBuilder, ship_cutoff: Int):
 # Build a synthetic DuckDB string_t (16 bytes) for a short ASCII string into the
 # 16-byte slot at `slot` (already pointing at row i). Short strings (<=12 bytes,
 # always the case here since they are single chars) are inlined.
-def write_string_t(slot: Pointer[UInt8, MutAnyOrigin], s: String):
+def write_string_t(slot: Pointer[UInt8, MutUntrackedOrigin], s: String):
     var n = s.byte_length()
     # length (little-endian uint32)
     slot[0] = UInt8(n & 0xFF)
@@ -349,7 +349,7 @@ def main() raises:
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = Pointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -449,21 +449,21 @@ def main() raises:
     var sbuf = alloc[UInt8](64)
 
     def read_i128(
-        h: Pointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutUntrackedOrigin],
         row: Int,
         col: Int,
-        lo: Pointer[Int64, MutAnyOrigin],
-        hi: Pointer[Int64, MutAnyOrigin],
+        lo: Pointer[Int64, MutUntrackedOrigin],
+        hi: Pointer[Int64, MutUntrackedOrigin],
     ) raises -> Int128:
         var rc = mojo_gpu_result_i128(h, row, col, lo, hi)
         assert_equal(rc, 0, "result_i128 rc")
         return (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
 
     def read_str(
-        h: Pointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutUntrackedOrigin],
         row: Int,
         col: Int,
-        sbuf: Pointer[UInt8, MutAnyOrigin],
+        sbuf: Pointer[UInt8, MutUntrackedOrigin],
     ) raises -> String:
         var n = mojo_gpu_result_str(h, row, col, sbuf, 64)
         var s = String("")

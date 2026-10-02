@@ -51,7 +51,7 @@ def build_prog(ops: List[Int64], aa: List[Int64]) -> List[Int64]:
     return p^
 
 
-def to_buf(src: List[Int64]) -> Pointer[Scalar[DType.int64], MutAnyOrigin]:
+def to_buf(src: List[Int64]) -> Pointer[Scalar[DType.int64], MutUntrackedOrigin]:
     var n = len(src) if len(src) > 0 else 1
     var p = alloc[Int64](n)
     for i in range(len(src)):
@@ -73,7 +73,7 @@ def main() raises:
     var passc = alloc[Int64](N)
 
     comptime N_GROUPS = 4
-    # Q6 filter constants (same shape as q6_kernel_test).
+    # Q6 filter constants (the same as in q6_shuttle_test).
     var ship_lo = Int64(8766)
     var ship_hi = Int64(9131)
     var disc_lo = Int64(5)

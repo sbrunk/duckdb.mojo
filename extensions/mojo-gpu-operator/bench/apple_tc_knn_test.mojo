@@ -47,7 +47,7 @@ def _center_val(c: Int, i: Int) -> Float32:
     )
 
 
-def build_embeddings(emb: Pointer[Float32, MutAnyOrigin], N: Int, K: Int):
+def build_embeddings(emb: Pointer[Float32, MutUntrackedOrigin], N: Int, K: Int):
     for row in range(N):
         var c = row % NCLUST
         var base = row * K
@@ -65,7 +65,7 @@ def build_embeddings(emb: Pointer[Float32, MutAnyOrigin], N: Int, K: Int):
             emb[base + i] = emb[base + i] * inv
 
 
-def build_query(q: Pointer[Float32, MutAnyOrigin], m: Int, K: Int):
+def build_query(q: Pointer[Float32, MutUntrackedOrigin], m: Int, K: Int):
     var c = m % NCLUST
     var nrm = Float32(0)
     for i in range(K):
@@ -87,10 +87,10 @@ struct RecallResult(Copyable, Movable):
 
 
 def recall_one(
-    ref_ids: Pointer[Int64, MutAnyOrigin],
-    ref_dists: Pointer[Float32, MutAnyOrigin],
-    got_ids: Pointer[Int64, MutAnyOrigin],
-    got_dists: Pointer[Float32, MutAnyOrigin],
+    ref_ids: Pointer[Int64, MutUntrackedOrigin],
+    ref_dists: Pointer[Float32, MutUntrackedOrigin],
+    got_ids: Pointer[Int64, MutUntrackedOrigin],
+    got_dists: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
 ) -> RecallResult:
     var got_worst = Float32(0)
@@ -133,20 +133,20 @@ def run_case(N: Int, K: Int, M: Int) raises:
 
     var emb = alloc[Float32](N * K)
     build_embeddings(emb, N, K)
-    var emb_imm = Pointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
     var h_i = mojo_gpu_pin_f16(emb_imm, N, K)
     if h_i == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h_i)
+    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h_i)
 
     # Query set.
     var qbuf = alloc[Float32](M * K)
     for m in range(M):
         build_query(qbuf + m * K, m, K)
-    var qbuf_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var qbuf_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qbuf)
     )
 
@@ -154,7 +154,7 @@ def run_case(N: Int, K: Int, M: Int) raises:
     var ref_ids = alloc[Int64](M * TOPK)
     var ref_dists = alloc[Float32](M * TOPK)
     for m in range(M):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf) + m * K * 4
         )
         var rc = mojo_gpu_pin_query_topk_f16(
