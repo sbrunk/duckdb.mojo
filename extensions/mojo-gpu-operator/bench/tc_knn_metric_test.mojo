@@ -29,7 +29,7 @@ Datasets:
 from std.sys import has_accelerator
 from std.os import getenv
 from std.math import sqrt, abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 
 from gpu_kernels import (
     mojo_gpu_pin_f16,
@@ -88,7 +88,7 @@ def build_data(
         var nrm = Float32(0)
         for i in range(K):
             var v = _emb_raw(row, i)
-            emb[base + i] = v
+            emb[unsafe_offset=base + i] = v
             nrm += v * v
         if normalize:
             nrm = sqrt(nrm)
@@ -96,13 +96,13 @@ def build_data(
                 nrm = 1
             var inv = Float32(1) / nrm
             for i in range(K):
-                emb[base + i] = emb[base + i] * inv
+                emb[unsafe_offset=base + i] = emb[unsafe_offset=base + i] * inv
     for m in range(M):
         var base = m * K
         var nrm = Float32(0)
         for i in range(K):
             var v = _query_raw(m, i)
-            qs[base + i] = v
+            qs[unsafe_offset=base + i] = v
             nrm += v * v
         if normalize:
             nrm = sqrt(nrm)
@@ -110,7 +110,7 @@ def build_data(
                 nrm = 1
             var inv = Float32(1) / nrm
             for i in range(K):
-                qs[base + i] = qs[base + i] * inv
+                qs[unsafe_offset=base + i] = qs[unsafe_offset=base + i] * inv
 
 
 # Scalar fp32 CPU ground truth for one query, one metric. To match the GPU
@@ -127,20 +127,20 @@ def cpu_topk(
     # query squared norm in fp32 (matches host qnorm computation).
     var qsq = Float32(0)
     for i in range(K):
-        qsq += q[i] * q[i]
+        qsq += q[unsafe_offset=i] * q[unsafe_offset=i]
     var qn = sqrt(qsq)
 
     # running ascending top-k (insertion).
-    var bd = alloc[Float32](KK)
-    var bi = alloc[Int64](KK)
+    var bd = unsafe_alloc[Float32](KK)
+    var bi = unsafe_alloc[Int64](KK)
     var cnt = 0
     for row in range(N):
         var base = row * K
         var dot = Float32(0)
         var esq = Float32(0)
         for i in range(K):
-            var ev = emb[base + i].cast[DType.float16]().cast[DType.float32]()
-            dot += q[i] * ev  # scalar uses fp32 product (ref ground truth)
+            var ev = emb[unsafe_offset=base + i].cast[DType.float16]().cast[DType.float32]()
+            dot += q[unsafe_offset=i] * ev  # scalar uses fp32 product (ref ground truth)
             esq += ev * ev
         var cd: Float32
         if metric == METRIC_L2:
@@ -153,30 +153,30 @@ def cpu_topk(
         var ci = Int64(row)
         var accept = True
         if cnt >= KK:
-            var wd = bd[KK - 1]
-            var wi = bi[KK - 1]
+            var wd = bd[unsafe_offset=KK - 1]
+            var wi = bi[unsafe_offset=KK - 1]
             if cd > wd or (cd == wd and ci >= wi):
                 accept = False
         if accept:
             var pos = cnt if cnt < KK else KK - 1
             while pos > 0:
-                var pd = bd[pos - 1]
-                var pi = bi[pos - 1]
+                var pd = bd[unsafe_offset=pos - 1]
+                var pi = bi[unsafe_offset=pos - 1]
                 if pd > cd or (pd == cd and pi > ci):
-                    bd[pos] = pd
-                    bi[pos] = pi
+                    bd[unsafe_offset=pos] = pd
+                    bi[unsafe_offset=pos] = pi
                     pos -= 1
                 else:
                     break
-            bd[pos] = cd
-            bi[pos] = ci
+            bd[unsafe_offset=pos] = cd
+            bi[unsafe_offset=pos] = ci
             if cnt < KK:
                 cnt += 1
     for j in range(KK):
-        out_ids[j] = bi[j]
-        out_dists[j] = bd[j]
-    bd.free()
-    bi.free()
+        out_ids[unsafe_offset=j] = bi[unsafe_offset=j]
+        out_dists[unsafe_offset=j] = bd[unsafe_offset=j]
+    bd.unsafe_free()
+    bi.unsafe_free()
 
 
 def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
@@ -187,8 +187,8 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
         " N =", N, " K =", K, " M =", M, " k =", KK,
     )
 
-    var emb = alloc[Float32](N * K)
-    var qs = alloc[Float32](M * K)
+    var emb = unsafe_alloc[Float32](N * K)
+    var qs = unsafe_alloc[Float32](M * K)
     build_data(emb, qs, normalize)
     var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
@@ -200,38 +200,38 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
     var handle = mojo_gpu_pin_f16(emb_imm, N, K)
     if handle == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
 
     # GPU fused metric path.
-    var gpu_ids = alloc[Int64](M * KK)
-    var gpu_dists = alloc[Float32](M * KK)
+    var gpu_ids = unsafe_alloc[Int64](M * KK)
+    var gpu_dists = unsafe_alloc[Float32](M * KK)
     var rc = mojo_gpu_pin_query_topk_batch_f16_metric(
         h, qs_imm, M, KK, metric, gpu_ids, gpu_dists
     )
     if rc != 0:
         mojo_gpu_pin_free_f16(h)
-        emb.free()
-        qs.free()
-        gpu_ids.free()
-        gpu_dists.free()
+        emb.unsafe_free()
+        qs.unsafe_free()
+        gpu_ids.unsafe_free()
+        gpu_dists.unsafe_free()
         raise Error(
             String("metric entry rc=") + String(Int(rc))
             + " (need GPU_OP_TENSORCORE=1 on an NVIDIA build for non-cosine)"
         )
 
     # CPU ground truth per query.
-    var ref_ids = alloc[Int64](M * KK)
-    var ref_dists = alloc[Float32](M * KK)
-    var oneq_ids = alloc[Int64](KK)
-    var oneq_dists = alloc[Float32](KK)
+    var ref_ids = unsafe_alloc[Int64](M * KK)
+    var ref_dists = unsafe_alloc[Float32](M * KK)
+    var oneq_ids = unsafe_alloc[Int64](KK)
+    var oneq_dists = unsafe_alloc[Float32](KK)
     for m in range(M):
-        var qptr = UnsafePointer[Float32, MutUntrackedOrigin](
+        var qptr = Pointer[Float32, MutUntrackedOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
         )
         cpu_topk(emb, qptr, metric, oneq_ids, oneq_dists)
         for j in range(KK):
-            ref_ids[m * KK + j] = oneq_ids[j]
-            ref_dists[m * KK + j] = oneq_dists[j]
+            ref_ids[unsafe_offset=m * KK + j] = oneq_ids[unsafe_offset=j]
+            ref_dists[unsafe_offset=m * KK + j] = oneq_dists[unsafe_offset=j]
 
     var exact_rows = 0
     var total_overlap = 0
@@ -240,21 +240,21 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
         var match_row = True
         var worst = Float32(-3.0e38)
         for j in range(KK):
-            if gpu_dists[m * KK + j] > worst:
-                worst = gpu_dists[m * KK + j]
+            if gpu_dists[unsafe_offset=m * KK + j] > worst:
+                worst = gpu_dists[unsafe_offset=m * KK + j]
         for j in range(KK):
-            if gpu_ids[m * KK + j] != ref_ids[m * KK + j]:
+            if gpu_ids[unsafe_offset=m * KK + j] != ref_ids[unsafe_offset=m * KK + j]:
                 match_row = False
-            var rid = ref_ids[m * KK + j]
+            var rid = ref_ids[unsafe_offset=m * KK + j]
             var found = False
             for b in range(KK):
-                if gpu_ids[m * KK + b] == rid:
+                if gpu_ids[unsafe_offset=m * KK + b] == rid:
                     found = True
                     break
             if found:
                 total_overlap += 1
             else:
-                var d = ref_dists[m * KK + j]
+                var d = ref_dists[unsafe_offset=m * KK + j]
                 if abs(d - worst) > TIE_EPS:
                     genuine_miss += 1
         if match_row:
@@ -273,14 +273,14 @@ def run_case(metric: Int, normalize: Bool, name: String) raises -> Bool:
         print("RESULT: (recall<0.99 or genuine misses present)")
 
     mojo_gpu_pin_free_f16(h)
-    emb.free()
-    qs.free()
-    gpu_ids.free()
-    gpu_dists.free()
-    ref_ids.free()
-    ref_dists.free()
-    oneq_ids.free()
-    oneq_dists.free()
+    emb.unsafe_free()
+    qs.unsafe_free()
+    gpu_ids.unsafe_free()
+    gpu_dists.unsafe_free()
+    ref_ids.unsafe_free()
+    ref_dists.unsafe_free()
+    oneq_ids.unsafe_free()
+    oneq_dists.unsafe_free()
     return ok
 
 

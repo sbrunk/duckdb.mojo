@@ -66,7 +66,7 @@ from raw_plan_tags import (
     STRAT_HASH_GROUP,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.os import setenv
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
@@ -214,28 +214,28 @@ def build_string_t(
     List[Pointer[UInt8, MutUntrackedOrigin]],
 ]:
     var n = len(strs)
-    var stbuf = alloc[UInt8]((n * 16) if n > 0 else 1)
+    var stbuf = unsafe_alloc[UInt8]((n * 16) if n > 0 else 1)
     var owned: List[Pointer[UInt8, MutUntrackedOrigin]] = []
     for r in range(n):
         ref s = strs[r]
         var L = s.byte_length()
-        var sp = alloc[UInt8](L if L > 0 else 1)
+        var sp = unsafe_alloc[UInt8](L if L > 0 else 1)
         var sb = s.as_bytes()
         for k in range(L):
-            sp[k] = sb[k]
+            sp[unsafe_offset=k] = sb[k]
         owned.append(sp)
         var base = r * 16
-        stbuf[base + 0] = UInt8(L & 0xFF)
-        stbuf[base + 1] = UInt8((L >> 8) & 0xFF)
-        stbuf[base + 2] = UInt8((L >> 16) & 0xFF)
-        stbuf[base + 3] = UInt8((L >> 24) & 0xFF)
+        stbuf[unsafe_offset=base + 0] = UInt8(L & 0xFF)
+        stbuf[unsafe_offset=base + 1] = UInt8((L >> 8) & 0xFF)
+        stbuf[unsafe_offset=base + 2] = UInt8((L >> 16) & 0xFF)
+        stbuf[unsafe_offset=base + 3] = UInt8((L >> 24) & 0xFF)
         if L <= 12:
             for k in range(L):
-                stbuf[base + 4 + k] = sb[k]
+                stbuf[unsafe_offset=base + 4 + k] = sb[k]
         else:
             var addr = Int(sp)
             for kb in range(8):
-                stbuf[base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
+                stbuf[unsafe_offset=base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
     return (stbuf, owned^)
 
 
@@ -251,7 +251,7 @@ def main() raises:
     var o_cutoff = 9204
 
     # ---- synthetic customer: c_custkey 1..N_CUST; BUILDING iff ck % 5 == 0 ----
-    var is_building = alloc[Int64](N_CUST + 1)
+    var is_building = unsafe_alloc[Int64](N_CUST + 1)
     var cseg_strs: List[String] = []
     var cck_vals: List[Int64] = []
     for r in range(N_CUST):
@@ -259,83 +259,83 @@ def main() raises:
         cck_vals.append(Int64(ck))
         if ck % 5 == 0:
             cseg_strs.append(String("BUILDING"))
-            is_building[ck] = 1
+            is_building[unsafe_offset=ck] = 1
         else:
             cseg_strs.append(String("MACHINERY"))
-            is_building[ck] = 0
+            is_building[unsafe_offset=ck] = 0
 
     # ---- synthetic orders: o_orderkey 1..N_ORDERS, o_custkey, date, prio ----
-    var order_custkey = alloc[Int64](N_ORDERS + 1)
-    var order_date = alloc[Int64](N_ORDERS + 1)
-    var order_prio = alloc[Int64](N_ORDERS + 1)
-    var order_pass = alloc[Int64](N_ORDERS + 1)  # CPU ref: folded pass flag
-    var ook_vals = alloc[Int64](N_ORDERS)
-    var ock_vals = alloc[Int64](N_ORDERS)
-    var odate_vals = alloc[Int32](N_ORDERS)
-    var oprio_vals = alloc[Int32](N_ORDERS)
+    var order_custkey = unsafe_alloc[Int64](N_ORDERS + 1)
+    var order_date = unsafe_alloc[Int64](N_ORDERS + 1)
+    var order_prio = unsafe_alloc[Int64](N_ORDERS + 1)
+    var order_pass = unsafe_alloc[Int64](N_ORDERS + 1)  # CPU ref: folded pass flag
+    var ook_vals = unsafe_alloc[Int64](N_ORDERS)
+    var ock_vals = unsafe_alloc[Int64](N_ORDERS)
+    var odate_vals = unsafe_alloc[Int32](N_ORDERS)
+    var oprio_vals = unsafe_alloc[Int32](N_ORDERS)
     for r in range(N_ORDERS):
         var ok = r + 1
         var ck = Int64(1 + (r * 2246822519) % N_CUST)
         var od = Int32(9000 + (r * 16807) % 400)  # date days 9000..9399
         var sp = Int32((r * 7) % 3)  # shippriority 0..2
-        order_custkey[ok] = ck
-        order_date[ok] = Int64(od)
-        order_prio[ok] = Int64(sp)
+        order_custkey[unsafe_offset=ok] = ck
+        order_date[unsafe_offset=ok] = Int64(od)
+        order_prio[unsafe_offset=ok] = Int64(sp)
         # folded pass: o_orderdate < o_cutoff AND is_building[o_custkey]
-        var building = is_building[Int(ck)] != 0
-        order_pass[ok] = Int64(1) if (
+        var building = is_building[unsafe_offset=Int(ck)] != 0
+        order_pass[unsafe_offset=ok] = Int64(1) if (
             building and Int(od) < o_cutoff
         ) else Int64(0)
-        ook_vals[r] = Int64(ok)
-        ock_vals[r] = ck
-        odate_vals[r] = od
-        oprio_vals[r] = sp
+        ook_vals[unsafe_offset=r] = Int64(ok)
+        ock_vals[unsafe_offset=r] = ck
+        odate_vals[unsafe_offset=r] = od
+        oprio_vals[unsafe_offset=r] = sp
 
     # ---- synthetic lineitem (fact), sorted by l_orderkey (contiguous segs) ----
-    var lok = alloc[Int64](N)
-    var ship = alloc[Int32](N)
-    var ext = alloc[Int64](N)
-    var disc = alloc[Int64](N)
+    var lok = unsafe_alloc[Int64](N)
+    var ship = unsafe_alloc[Int32](N)
+    var ext = unsafe_alloc[Int64](N)
+    var disc = unsafe_alloc[Int64](N)
     var i = 0
     for r in range(N_ORDERS):
         var ok = r + 1
         for j in range(LINES_PER):
             var idx = ok * LINES_PER + j  # deterministic per-line variety
-            lok[i] = Int64(ok)
-            ship[i] = Int32(9000 + (idx * 1103515245 + 12345) % 400)  # 9000..9399
-            ext[i] = Int64(100 + (idx * 16807) % 9_999_900)  # ~1e7 scale2
-            disc[i] = Int64((idx * 48271) % 11)  # 0..10 scale2
+            lok[unsafe_offset=i] = Int64(ok)
+            ship[unsafe_offset=i] = Int32(9000 + (idx * 1103515245 + 12345) % 400)  # 9000..9399
+            ext[unsafe_offset=i] = Int64(100 + (idx * 16807) % 9_999_900)  # ~1e7 scale2
+            disc[unsafe_offset=i] = Int64((idx * 48271) % 11)  # 0..10 scale2
             i += 1
 
     # ---- CPU int128 reference: per-order revenue over passing lineitems ----
     # passing lineitem: l_shipdate > l_cutoff AND order_pass[l_orderkey].
-    var cpu_rev = alloc[Int128](N_ORDERS + 1)
+    var cpu_rev = unsafe_alloc[Int128](N_ORDERS + 1)
     for ok in range(N_ORDERS + 1):
-        cpu_rev[ok] = Int128(0)
+        cpu_rev[unsafe_offset=ok] = Int128(0)
     for r in range(N):
-        var ok = Int(lok[r])
-        if Int(ship[r]) > l_cutoff and order_pass[ok] != 0:
-            cpu_rev[ok] += Int128(ext[r]) * (Int128(100) - Int128(disc[r]))
+        var ok = Int(lok[unsafe_offset=r])
+        if Int(ship[unsafe_offset=r]) > l_cutoff and order_pass[unsafe_offset=ok] != 0:
+            cpu_rev[unsafe_offset=ok] += Int128(ext[unsafe_offset=r]) * (Int128(100) - Int128(disc[unsafe_offset=r]))
     # CPU set of emitted orders (revenue > 0) + checksum.
     var cpu_emit = 0
     var cpu_total = Int128(0)
     for ok in range(1, N_ORDERS + 1):
-        if cpu_rev[ok] > Int128(0):
+        if cpu_rev[unsafe_offset=ok] > Int128(0):
             cpu_emit += 1
-            cpu_total += cpu_rev[ok]
+            cpu_total += cpu_rev[unsafe_offset=ok]
 
     # ---- build the Q3 RawPlan tape ----
     var b = TapeBuilder()
     var bsid = b.sid("BUILDING")
     build_q3_tape(b, o_cutoff, l_cutoff, bsid)
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for k in range(tlen):
-        tptr[k] = b.tape[k]
+        tptr[unsafe_offset=k] = b.tape[k]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for k in range(blen):
-        bptr[k] = b.blob[k]
+        bptr[unsafe_offset=k] = b.blob[k]
 
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
@@ -352,7 +352,7 @@ def main() raises:
     assert_equal(count, 3, "materialize_count != 3 (fact + 2 dims)")
 
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
 
     # Strategy is platform-dependent: SORT_SEGREDUCE on Apple (no 64-bit atomics),
     # HASH_GROUP on NVIDIA/AMD (one-pass GPU hash-aggregate, no sort).
@@ -365,7 +365,7 @@ def main() raises:
     var sql0_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     var sql0 = String("")
     for k in range(sql0_len):
-        sql0 += chr(Int(sql_buf[k]))
+        sql0 += chr(Int(sql_buf[unsafe_offset=k]))
     print("fact SQL:", sql0)
     if is_hash:
         assert_true(
@@ -382,7 +382,7 @@ def main() raises:
     var sql1_len = mojo_gpu_desc_materialize_sql(h, 1, sql_buf, cap)
     var sql1 = String("")
     for k in range(sql1_len):
-        sql1 += chr(Int(sql_buf[k]))
+        sql1 += chr(Int(sql_buf[unsafe_offset=k]))
     print("dim1 SQL:", sql1)
     var dim1_order = _parse_order(sql1)
     var dim1_is_orders = "FROM orders" in sql1
@@ -390,7 +390,7 @@ def main() raises:
     var sql2_len = mojo_gpu_desc_materialize_sql(h, 2, sql_buf, cap)
     var sql2 = String("")
     for k in range(sql2_len):
-        sql2 += chr(Int(sql_buf[k]))
+        sql2 += chr(Int(sql_buf[unsafe_offset=k]))
     print("dim2 SQL:", sql2)
     var dim2_order = _parse_order(sql2)
 
@@ -402,26 +402,26 @@ def main() raises:
         var nm = fact_order[j]
         var rc: Int
         if nm == "l_orderkey":
-            rc = mojo_gpu_feed_column(h, 0, j, lok.bitcast[NoneType](), N, TYPE_BIGINT)
+            rc = mojo_gpu_feed_column(h, 0, j, lok.unsafe_bitcast[NoneType](), N, TYPE_BIGINT)
         elif nm == "l_shipdate":
-            rc = mojo_gpu_feed_column(h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE)
+            rc = mojo_gpu_feed_column(h, 0, j, ship.unsafe_bitcast[NoneType](), N, TYPE_DATE)
         elif nm == "l_extendedprice":
-            rc = mojo_gpu_feed_column(h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL)
+            rc = mojo_gpu_feed_column(h, 0, j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
         elif nm == "l_discount":
-            rc = mojo_gpu_feed_column(h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL)
+            rc = mojo_gpu_feed_column(h, 0, j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
         else:
             raise Error("unexpected fact column: " + nm)
         assert_equal(rc, 0, "fact feed rc for " + nm)
 
     # ---- feed dim columns. Build orders + customer buffers. ----
-    var ook_buf = alloc[Int64](N_ORDERS)
-    var ock_buf = alloc[Int64](N_ORDERS)
+    var ook_buf = unsafe_alloc[Int64](N_ORDERS)
+    var ock_buf = unsafe_alloc[Int64](N_ORDERS)
     for r in range(N_ORDERS):
-        ook_buf[r] = ook_vals[r]
-        ock_buf[r] = ock_vals[r]
-    var cck_buf = alloc[Int64](N_CUST)
+        ook_buf[unsafe_offset=r] = ook_vals[unsafe_offset=r]
+        ock_buf[unsafe_offset=r] = ock_vals[unsafe_offset=r]
+    var cck_buf = unsafe_alloc[Int64](N_CUST)
     for r in range(N_CUST):
-        cck_buf[r] = cck_vals[r]
+        cck_buf[unsafe_offset=r] = cck_vals[r]
     var cstr = build_string_t(cseg_strs)
 
     var orders_req = 1 if dim1_is_orders else 2
@@ -434,13 +434,13 @@ def main() raises:
         var nm = orders_order[j]
         var rc: Int
         if nm == "o_orderkey":
-            rc = mojo_gpu_feed_column(h, orders_req, j, ook_buf.bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
+            rc = mojo_gpu_feed_column(h, orders_req, j, ook_buf.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
         elif nm == "o_custkey":
-            rc = mojo_gpu_feed_column(h, orders_req, j, ock_buf.bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
+            rc = mojo_gpu_feed_column(h, orders_req, j, ock_buf.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
         elif nm == "o_orderdate":
-            rc = mojo_gpu_feed_column(h, orders_req, j, odate_vals.bitcast[NoneType](), N_ORDERS, TYPE_DATE)
+            rc = mojo_gpu_feed_column(h, orders_req, j, odate_vals.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_DATE)
         elif nm == "o_shippriority":
-            rc = mojo_gpu_feed_column(h, orders_req, j, oprio_vals.bitcast[NoneType](), N_ORDERS, TYPE_INTEGER)
+            rc = mojo_gpu_feed_column(h, orders_req, j, oprio_vals.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_INTEGER)
         else:
             raise Error("unexpected orders column: " + nm)
         assert_equal(rc, 0, "orders feed rc for " + nm)
@@ -450,9 +450,9 @@ def main() raises:
         var nm = cust_order[j]
         var rc: Int
         if nm == "c_custkey":
-            rc = mojo_gpu_feed_column(h, cust_req, j, cck_buf.bitcast[NoneType](), N_CUST, TYPE_BIGINT)
+            rc = mojo_gpu_feed_column(h, cust_req, j, cck_buf.unsafe_bitcast[NoneType](), N_CUST, TYPE_BIGINT)
         elif nm == "c_mktsegment":
-            rc = mojo_gpu_feed_column(h, cust_req, j, cstr[0].bitcast[NoneType](), N_CUST, TYPE_VARCHAR)
+            rc = mojo_gpu_feed_column(h, cust_req, j, cstr[0].unsafe_bitcast[NoneType](), N_CUST, TYPE_VARCHAR)
         else:
             raise Error("unexpected customer column: " + nm)
         assert_equal(rc, 0, "customer feed rc for " + nm)
@@ -468,37 +468,37 @@ def main() raises:
     # Verify every emitted row: revenue bit-exact, carried keys correct, and the
     # orderkey is one CPU also emits (revenue>0). Out cols: 0=l_orderkey(BIGINT),
     # 1=o_orderdate(DATE), 2=o_shippriority(INTEGER), 3=revenue(DECIMAL38,4).
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
     var gpu_total = Int128(0)
     var all_ok = True
-    var seen = alloc[Int64](N_ORDERS + 1)
+    var seen = unsafe_alloc[Int64](N_ORDERS + 1)
     for k in range(N_ORDERS + 1):
-        seen[k] = 0
+        seen[unsafe_offset=k] = 0
     for r in range(rows):
         var ok = Int(mojo_gpu_result_i64(h, r, 0))
         var odate = Int(mojo_gpu_result_i64(h, r, 1))
         var oprio = Int(mojo_gpu_result_i64(h, r, 2))
         _ = mojo_gpu_result_i128(h, r, 3, lo, hi)
-        var rev = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+        var rev = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
         gpu_total += rev
         if ok < 1 or ok > N_ORDERS:
             all_ok = False
             continue
-        seen[ok] = 1
-        if rev != cpu_rev[ok]:
+        seen[unsafe_offset=ok] = 1
+        if rev != cpu_rev[unsafe_offset=ok]:
             all_ok = False
             if r < 5:
-                print("  MISMATCH ok=", ok, " gpu=", rev, " cpu=", cpu_rev[ok])
-        if Int64(odate) != order_date[ok]:
+                print("  MISMATCH ok=", ok, " gpu=", rev, " cpu=", cpu_rev[unsafe_offset=ok])
+        if Int64(odate) != order_date[unsafe_offset=ok]:
             all_ok = False
-            print("  DATE MISMATCH ok=", ok, " gpu=", odate, " cpu=", order_date[ok])
-        if Int64(oprio) != order_prio[ok]:
+            print("  DATE MISMATCH ok=", ok, " gpu=", odate, " cpu=", order_date[unsafe_offset=ok])
+        if Int64(oprio) != order_prio[unsafe_offset=ok]:
             all_ok = False
-            print("  PRIO MISMATCH ok=", ok, " gpu=", oprio, " cpu=", order_prio[ok])
+            print("  PRIO MISMATCH ok=", ok, " gpu=", oprio, " cpu=", order_prio[unsafe_offset=ok])
     # Every CPU-emitted order must appear exactly once.
     for ok in range(1, N_ORDERS + 1):
-        if (cpu_rev[ok] > Int128(0)) != (seen[ok] != 0):
+        if (cpu_rev[unsafe_offset=ok] > Int128(0)) != (seen[unsafe_offset=ok] != 0):
             all_ok = False
 
     print("GPU total revenue =", gpu_total, "  CPU total =", cpu_total)
@@ -506,7 +506,7 @@ def main() raises:
     assert_true(all_ok, "per-segment revenue / carried keys / emit set mismatch")
 
     for r in range(len(cstr[1])):
-        cstr[1][r].free()
+        cstr[1][r].unsafe_free()
     mojo_gpu_desc_free(h)
     print("ALL PASS")
 

@@ -1,6 +1,8 @@
-"""Repro for a bug in the default configuration: ungrouped avg(x) on a single-column
-table returns 0.0 through the operator (no flags, default config only), while stock
-and multi-column tables return the correct value. DuckDB rewrites the single-column
+"""Repro for a bug in the default configuration.
+
+Ungrouped avg(x) on a single-column table returns 0.0 through the operator (no
+flags, default config only), while stock and multi-column tables return the
+correct value. DuckDB rewrites the single-column
 avg into a `sum` aggregate with a DOUBLE output; the operator's int128 assembly
 writes res_lo while the DOUBLE extraction reads res_f64, which gives 0.0. This is
 not a nullable-feature bug (NOT NULL column, no GPU_OP_NULLABLE). It is an older,

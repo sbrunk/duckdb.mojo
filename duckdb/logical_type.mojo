@@ -303,7 +303,7 @@ def enum_type(mut names: List[String]) -> LogicalType[True, MutUntrackedOrigin]:
     
     for i in range(count):
         var s = (base_ptr.unsafe_offset(i))[].as_c_string_span()
-        c_names_list.append(s.unsafe_ptr().as_unsafe_any_origin())
+        c_names_list.append(s.ptr().as_unsafe_any_origin())
         
     # Get pointer to the array of pointers
     return LogicalType[True, MutUntrackedOrigin](

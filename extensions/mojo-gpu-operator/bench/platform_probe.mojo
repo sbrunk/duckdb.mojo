@@ -30,18 +30,18 @@ def probe_kernel(out_buf: Pointer[Scalar[DType.int32], MutAnyOrigin]):
     if Int(block_idx.x) == 0 and Int(thread_idx.x) == 0:
         comptime has_64 = is_nvidia_gpu() or is_amd_gpu()
         comptime if has_64:
-            out_buf[0] = 64  # NVIDIA / AMD: native 64-bit atomics path
+            out_buf[unsafe_offset=0] = 64  # NVIDIA / AMD: native 64-bit atomics path
         else:
-            out_buf[0] = 32  # Apple (or other): no 64-bit atomics
-        out_buf[1] = Int32(WARP_SIZE)
+            out_buf[unsafe_offset=0] = 32  # Apple (or other): no 64-bit atomics
+        out_buf[unsafe_offset=1] = Int32(WARP_SIZE)
         comptime if is_apple_gpu():
-            out_buf[2] = 1
+            out_buf[unsafe_offset=2] = 1
         elif is_nvidia_gpu():
-            out_buf[2] = 2
+            out_buf[unsafe_offset=2] = 2
         elif is_amd_gpu():
-            out_buf[2] = 3
+            out_buf[unsafe_offset=2] = 3
         else:
-            out_buf[2] = 0
+            out_buf[unsafe_offset=2] = 0
 
 
 def main() raises:

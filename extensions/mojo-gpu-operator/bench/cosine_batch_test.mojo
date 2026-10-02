@@ -20,7 +20,7 @@ Run (local Apple GPU or frederick):
 
 from std.sys import has_accelerator
 from std.math import sqrt, sin, cos
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 
 from gpu_kernels import (
     mojo_gpu_pin,
@@ -61,12 +61,12 @@ def query_raw(m: Int, i: Int, c: Int) -> Float32:
 def fill_unit(p: Pointer[Float32, MutUntrackedOrigin], off: Int):
     var nrm = Float32(0)
     for i in range(K):
-        nrm += p[off + i] * p[off + i]
+        nrm += p[unsafe_offset=off + i] * p[unsafe_offset=off + i]
     nrm = sqrt(nrm)
     if nrm == 0:
         nrm = 1
     for i in range(K):
-        p[off + i] = p[off + i] / nrm
+        p[unsafe_offset=off + i] = p[unsafe_offset=off + i] / nrm
 
 
 def check_eq(
@@ -78,8 +78,8 @@ def check_eq(
     k: Int,
 ) raises:
     for j in range(k):
-        var id_ok = batch_ids[j] == single_ids[j]
-        var derr = abs(batch_dists[j] - single_dists[j])
+        var id_ok = batch_ids[unsafe_offset=j] == single_ids[unsafe_offset=j]
+        var derr = abs(batch_dists[unsafe_offset=j] - single_dists[unsafe_offset=j])
         if not id_ok or derr > Float32(1.0e-6):
             print(
                 "  MISMATCH",
@@ -87,13 +87,13 @@ def check_eq(
                 "slot",
                 j,
                 ": batch(id=",
-                batch_ids[j],
+                batch_ids[unsafe_offset=j],
                 ", d=",
-                batch_dists[j],
+                batch_dists[unsafe_offset=j],
                 ") single(id=",
-                single_ids[j],
+                single_ids[unsafe_offset=j],
                 ", d=",
-                single_dists[j],
+                single_dists[unsafe_offset=j],
                 ") |derr|=",
                 derr,
             )
@@ -109,8 +109,8 @@ def run_case[
     )
 
     # Batched call (one matrix read per query-tile).
-    var b_ids = alloc[Int64](M * k)
-    var b_dists = alloc[Float32](M * k)
+    var b_ids = unsafe_alloc[Int64](M * k)
+    var b_dists = unsafe_alloc[Float32](M * k)
     var rc: Int32
 
     comptime if is_f16:
@@ -121,8 +121,8 @@ def run_case[
         raise Error(String("batch rc=") + String(Int(rc)))
 
     # Single-query reference per query.
-    var s_ids = alloc[Int64](k)
-    var s_dists = alloc[Float32](k)
+    var s_ids = unsafe_alloc[Int64](k)
+    var s_dists = unsafe_alloc[Float32](k)
     for m in range(M):
         var q_imm = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qs) + m * K * 4
@@ -136,8 +136,8 @@ def run_case[
             raise Error(String("single rc=") + String(Int(rc)))
         check_eq(
             String("M=") + String(M) + " k=" + String(k) + " q[" + String(m) + "]",
-            b_ids + m * k,
-            b_dists + m * k,
+            b_ids.unsafe_offset(m * k),
+            b_dists.unsafe_offset(m * k),
             s_ids,
             s_dists,
             k,
@@ -145,32 +145,32 @@ def run_case[
 
     var prec = "fp16" if is_f16 else "fp32"
     print("  PASS", prec, "M =", M, "k =", k, "(batch == single, all", M, "queries)")
-    b_ids.free()
-    b_dists.free()
-    s_ids.free()
-    s_dists.free()
+    b_ids.unsafe_free()
+    b_dists.unsafe_free()
+    s_ids.unsafe_free()
+    s_dists.unsafe_free()
 
 
 def main() raises:
     comptime assert has_accelerator(), "requires a GPU"
     print("cosine BATCH==SINGLE test: N =", N, " K =", K, " clusters =", NCLUSTERS)
 
-    var emb = alloc[Float32](N * K)
+    var emb = unsafe_alloc[Float32](N * K)
     for r in range(N):
         var c = r % NCLUSTERS
         for i in range(K):
-            emb[r * K + i] = emb_unit(r, i, c)
+            emb[unsafe_offset=r * K + i] = emb_unit(r, i, c)
         fill_unit(emb, r * K)
     var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
     comptime MMAX = 64
-    var qs = alloc[Float32](MMAX * K)
+    var qs = unsafe_alloc[Float32](MMAX * K)
     for m in range(MMAX):
         var c = m % NCLUSTERS  # each query lands near a cluster
         for i in range(K):
-            qs[m * K + i] = query_raw(m, i, c)
+            qs[unsafe_offset=m * K + i] = query_raw(m, i, c)
         fill_unit(qs, m * K)
 
     # fp32
@@ -181,7 +181,7 @@ def main() raises:
     run_case[False](h32, qs, 64, 10)
     run_case[False](h32, qs, 64, 100)
     mojo_gpu_pin_free(
-        UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h32)
+        Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h32)
     )
 
     # fp16
@@ -192,9 +192,9 @@ def main() raises:
     run_case[True](h16, qs, 64, 10)
     run_case[True](h16, qs, 64, 100)
     mojo_gpu_pin_free_f16(
-        UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h16)
+        Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h16)
     )
 
-    emb.free()
-    qs.free()
+    emb.unsafe_free()
+    qs.unsafe_free()
     print("ALL PASS")

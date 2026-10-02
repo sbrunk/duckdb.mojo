@@ -63,7 +63,7 @@ from raw_plan_tags import (
     STRAT_DENSE_GROUP,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -219,28 +219,28 @@ def build_string_t(
     List[Pointer[UInt8, MutUntrackedOrigin]],
 ]:
     var n = len(strs)
-    var stbuf = alloc[UInt8]((n * 16) if n > 0 else 1)
+    var stbuf = unsafe_alloc[UInt8]((n * 16) if n > 0 else 1)
     var owned: List[Pointer[UInt8, MutUntrackedOrigin]] = []
     for r in range(n):
         ref s = strs[r]
         var L = s.byte_length()
-        var sp = alloc[UInt8](L if L > 0 else 1)
+        var sp = unsafe_alloc[UInt8](L if L > 0 else 1)
         var sb = s.as_bytes()
         for k in range(L):
-            sp[k] = sb[k]
+            sp[unsafe_offset=k] = sb[k]
         owned.append(sp)
         var base = r * 16
-        stbuf[base + 0] = UInt8(L & 0xFF)
-        stbuf[base + 1] = UInt8((L >> 8) & 0xFF)
-        stbuf[base + 2] = UInt8((L >> 16) & 0xFF)
-        stbuf[base + 3] = UInt8((L >> 24) & 0xFF)
+        stbuf[unsafe_offset=base + 0] = UInt8(L & 0xFF)
+        stbuf[unsafe_offset=base + 1] = UInt8((L >> 8) & 0xFF)
+        stbuf[unsafe_offset=base + 2] = UInt8((L >> 16) & 0xFF)
+        stbuf[unsafe_offset=base + 3] = UInt8((L >> 24) & 0xFF)
         if L <= 12:
             for k in range(L):
-                stbuf[base + 4 + k] = sb[k]
+                stbuf[unsafe_offset=base + 4 + k] = sb[k]
         else:
             var addr = Int(sp)
             for kb in range(8):
-                stbuf[base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
+                stbuf[unsafe_offset=base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
     return (stbuf, owned^)
 
 
@@ -302,94 +302,94 @@ def main() raises:
 
     # ---- nation: keys 0..N_NATIONS-1; region = key % N_REGIONS; ASIA region=2 ----
     var nation_name: List[String] = []
-    var nation_region = alloc[Int32](N_NATIONS)
-    var nation_in_asia = alloc[Int64](N_NATIONS)
+    var nation_region = unsafe_alloc[Int32](N_NATIONS)
+    var nation_in_asia = unsafe_alloc[Int64](N_NATIONS)
     for k in range(N_NATIONS):
         nation_name.append(String("NATION_") + String(k))
         var rk = Int32(k % N_REGIONS)
-        nation_region[k] = rk
-        nation_in_asia[k] = Int64(1) if Int(rk) == ASIA else Int64(0)
+        nation_region[unsafe_offset=k] = rk
+        nation_in_asia[unsafe_offset=k] = Int64(1) if Int(rk) == ASIA else Int64(0)
 
     # ---- region: keys 0..N_REGIONS-1; r_name "REGION_<k>", ASIA = "REGION_2" ----
     var region_name: List[String] = []
-    var rrk_vals = alloc[Int32](N_REGIONS)
+    var rrk_vals = unsafe_alloc[Int32](N_REGIONS)
     for k in range(N_REGIONS):
         region_name.append(String("REGION_") + String(k))
-        rrk_vals[k] = Int32(k)
+        rrk_vals[unsafe_offset=k] = Int32(k)
     var asia_str = String("REGION_") + String(ASIA)
 
     # ---- customer: c_custkey 1..N_CUST, c_nationkey ----
-    var cust_nation = alloc[Int32](N_CUST + 1)
-    var cck_vals = alloc[Int64](N_CUST)
-    var cnk_vals = alloc[Int32](N_CUST)
+    var cust_nation = unsafe_alloc[Int32](N_CUST + 1)
+    var cck_vals = unsafe_alloc[Int64](N_CUST)
+    var cnk_vals = unsafe_alloc[Int32](N_CUST)
     for r in range(N_CUST):
         var ck = r + 1
         var nk = Int32((r * 2654435761) % N_NATIONS)
-        cust_nation[ck] = nk
-        cck_vals[r] = Int64(ck)
-        cnk_vals[r] = nk
+        cust_nation[unsafe_offset=ck] = nk
+        cck_vals[unsafe_offset=r] = Int64(ck)
+        cnk_vals[unsafe_offset=r] = nk
 
     # ---- supplier: s_suppkey 1..N_SUPP, s_nationkey. Assign nation = suppkey %
     #      N_NATIONS so each nation has a known supplier (one per residue), which
     #      lets the fact builder pick a supplier of a specific nation on demand. ----
-    var supp_nation = alloc[Int32](N_SUPP + 1)
-    var ssk_vals = alloc[Int64](N_SUPP)
-    var snk_vals = alloc[Int32](N_SUPP)
+    var supp_nation = unsafe_alloc[Int32](N_SUPP + 1)
+    var ssk_vals = unsafe_alloc[Int64](N_SUPP)
+    var snk_vals = unsafe_alloc[Int32](N_SUPP)
     # first_supp_of_nation[nk] = a suppkey whose s_nationkey == nk.
-    var first_supp_of_nation = alloc[Int64](N_NATIONS)
+    var first_supp_of_nation = unsafe_alloc[Int64](N_NATIONS)
     for k in range(N_NATIONS):
-        first_supp_of_nation[k] = 0
+        first_supp_of_nation[unsafe_offset=k] = 0
     for r in range(N_SUPP):
         var sk = r + 1
         var nk = Int32(sk % N_NATIONS)
-        supp_nation[sk] = nk
-        ssk_vals[r] = Int64(sk)
-        snk_vals[r] = nk
-        if first_supp_of_nation[Int(nk)] == 0:
-            first_supp_of_nation[Int(nk)] = Int64(sk)
+        supp_nation[unsafe_offset=sk] = nk
+        ssk_vals[unsafe_offset=r] = Int64(sk)
+        snk_vals[unsafe_offset=r] = nk
+        if first_supp_of_nation[unsafe_offset=Int(nk)] == 0:
+            first_supp_of_nation[unsafe_offset=Int(nk)] = Int64(sk)
 
     # ---- orders: o_orderkey 1..N_ORDERS, o_custkey, o_orderdate ----
-    var order_cust = alloc[Int64](N_ORDERS + 1)
-    var order_date = alloc[Int32](N_ORDERS + 1)
-    var order_pass = alloc[Int64](N_ORDERS + 1)
-    var ook_vals = alloc[Int64](N_ORDERS)
-    var ock_vals = alloc[Int64](N_ORDERS)
-    var odate_vals = alloc[Int32](N_ORDERS)
+    var order_cust = unsafe_alloc[Int64](N_ORDERS + 1)
+    var order_date = unsafe_alloc[Int32](N_ORDERS + 1)
+    var order_pass = unsafe_alloc[Int64](N_ORDERS + 1)
+    var ook_vals = unsafe_alloc[Int64](N_ORDERS)
+    var ock_vals = unsafe_alloc[Int64](N_ORDERS)
+    var odate_vals = unsafe_alloc[Int32](N_ORDERS)
     for r in range(N_ORDERS):
         var ok = r + 1
         var ck = Int64(1 + (r * 2246822519) % N_CUST)
         var od = Int32(8600 + (r * 16807) % 700)  # 8600..9299 (straddles range)
-        order_cust[ok] = ck
-        order_date[ok] = od
-        order_pass[ok] = Int64(1) if (
+        order_cust[unsafe_offset=ok] = ck
+        order_date[unsafe_offset=ok] = od
+        order_pass[unsafe_offset=ok] = Int64(1) if (
             Int(od) >= o_lo and Int(od) < o_hi
         ) else Int64(0)
-        ook_vals[r] = Int64(ok)
-        ock_vals[r] = ck
-        odate_vals[r] = od
+        ook_vals[unsafe_offset=r] = Int64(ok)
+        ock_vals[unsafe_offset=r] = ck
+        odate_vals[unsafe_offset=r] = od
 
     # ---- lineitem (fact): l_orderkey, l_suppkey, l_extendedprice, l_discount ----
-    var lok = alloc[Int64](N)
-    var lsk = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var disc = alloc[Int64](N)
+    var lok = unsafe_alloc[Int64](N)
+    var lsk = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var disc = unsafe_alloc[Int64](N)
     var i = 0
     for r in range(N_ORDERS):
         var ok = r + 1
-        var cust = Int(order_cust[ok])
-        var cn = Int(cust_nation[cust])
+        var cust = Int(order_cust[unsafe_offset=ok])
+        var cn = Int(cust_nation[unsafe_offset=cust])
         for j in range(LINES_PER):
             var idx = ok * LINES_PER + j
-            lok[i] = Int64(ok)
+            lok[unsafe_offset=i] = Int64(ok)
             # For ~half the lines, pick a supplier whose nation == the order's
             # customer nation (so the correlated compare passes and exercises the
             # ASIA group when cn is an ASIA nation); else a pseudo-random supplier.
             if idx % 2 == 0:
-                lsk[i] = first_supp_of_nation[cn]
+                lsk[unsafe_offset=i] = first_supp_of_nation[unsafe_offset=cn]
             else:
-                lsk[i] = Int64(1 + (idx * 40009) % N_SUPP)
-            ext[i] = Int64(100 + (idx * 16807) % 9_999_900)  # ~1e7 scale2
-            disc[i] = Int64((idx * 48271) % 11)  # 0..10 scale2
+                lsk[unsafe_offset=i] = Int64(1 + (idx * 40009) % N_SUPP)
+            ext[unsafe_offset=i] = Int64(100 + (idx * 16807) % 9_999_900)  # ~1e7 scale2
+            disc[unsafe_offset=i] = Int64((idx * 48271) % 11)  # 0..10 scale2
             i += 1
 
     # ---- CPU int128 reference: per-nation (ASIA) revenue ----
@@ -397,41 +397,41 @@ def main() raises:
     #   AND cust_nation[order_cust[l_orderkey]] == supp_nation[l_suppkey]
     #   AND nation_in_asia[supp_nation[l_suppkey]].
     # Group = supp_nation (== cust_nation when it passes).
-    var cpu_rev = alloc[Int128](N_NATIONS)
+    var cpu_rev = unsafe_alloc[Int128](N_NATIONS)
     for k in range(N_NATIONS):
-        cpu_rev[k] = Int128(0)
+        cpu_rev[unsafe_offset=k] = Int128(0)
     for r in range(N):
-        var ok = Int(lok[r])
-        if order_pass[ok] == 0:
+        var ok = Int(lok[unsafe_offset=r])
+        if order_pass[unsafe_offset=ok] == 0:
             continue
-        var cust = Int(order_cust[ok])
-        var cn = Int(cust_nation[cust])
-        var sk = Int(lsk[r])
-        var sn = Int(supp_nation[sk])
+        var cust = Int(order_cust[unsafe_offset=ok])
+        var cn = Int(cust_nation[unsafe_offset=cust])
+        var sk = Int(lsk[unsafe_offset=r])
+        var sn = Int(supp_nation[unsafe_offset=sk])
         if cn != sn:
             continue
-        if nation_in_asia[sn] == 0:
+        if nation_in_asia[unsafe_offset=sn] == 0:
             continue
-        cpu_rev[sn] += Int128(ext[r]) * (Int128(100) - Int128(disc[r]))
+        cpu_rev[unsafe_offset=sn] += Int128(ext[unsafe_offset=r]) * (Int128(100) - Int128(disc[unsafe_offset=r]))
     var cpu_emit = 0
     var cpu_total = Int128(0)
     for k in range(N_NATIONS):
-        if cpu_rev[k] != Int128(0):
+        if cpu_rev[unsafe_offset=k] != Int128(0):
             cpu_emit += 1
-            cpu_total += cpu_rev[k]
+            cpu_total += cpu_rev[unsafe_offset=k]
 
     # ---- build the Q5 RawPlan tape ----
     var b = TapeBuilder()
     var asia_sid = b.sid(asia_str)
     build_q5_tape(b, o_lo, o_hi, asia_sid)
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for k in range(tlen):
-        tptr[k] = b.tape[k]
+        tptr[unsafe_offset=k] = b.tape[k]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for k in range(blen):
-        bptr[k] = b.blob[k]
+        bptr[unsafe_offset=k] = b.blob[k]
 
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
@@ -447,7 +447,7 @@ def main() raises:
     assert_equal(count, 6, "materialize_count != 6 (fact + 5 dims)")
 
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
 
     # Build string_t buffers for nation/region names once.
     var nat_str = build_string_t(nation_name)
@@ -461,7 +461,7 @@ def main() raises:
         var slen = mojo_gpu_desc_materialize_sql(h, req, sql_buf, cap)
         var sql = String("")
         for k in range(slen):
-            sql += chr(Int(sql_buf[k]))
+            sql += chr(Int(sql_buf[unsafe_offset=k]))
         var tbl = _table_of(sql)
         var order = _parse_order(sql)
         if req == 0:
@@ -470,37 +470,37 @@ def main() raises:
             var nm = order[j]
             var rc: Int
             if nm == "l_orderkey":
-                rc = mojo_gpu_feed_column(h, req, j, lok.bitcast[NoneType](), N, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, lok.unsafe_bitcast[NoneType](), N, TYPE_BIGINT)
             elif nm == "l_suppkey":
-                rc = mojo_gpu_feed_column(h, req, j, lsk.bitcast[NoneType](), N, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, lsk.unsafe_bitcast[NoneType](), N, TYPE_BIGINT)
             elif nm == "l_extendedprice":
-                rc = mojo_gpu_feed_column(h, req, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL)
+                rc = mojo_gpu_feed_column(h, req, j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
             elif nm == "l_discount":
-                rc = mojo_gpu_feed_column(h, req, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL)
+                rc = mojo_gpu_feed_column(h, req, j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
             elif nm == "o_orderkey":
-                rc = mojo_gpu_feed_column(h, req, j, ook_vals.bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, ook_vals.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
             elif nm == "o_custkey":
-                rc = mojo_gpu_feed_column(h, req, j, ock_vals.bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, ock_vals.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_BIGINT)
             elif nm == "o_orderdate":
-                rc = mojo_gpu_feed_column(h, req, j, odate_vals.bitcast[NoneType](), N_ORDERS, TYPE_DATE)
+                rc = mojo_gpu_feed_column(h, req, j, odate_vals.unsafe_bitcast[NoneType](), N_ORDERS, TYPE_DATE)
             elif nm == "c_custkey":
-                rc = mojo_gpu_feed_column(h, req, j, cck_vals.bitcast[NoneType](), N_CUST, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, cck_vals.unsafe_bitcast[NoneType](), N_CUST, TYPE_BIGINT)
             elif nm == "c_nationkey":
-                rc = mojo_gpu_feed_column(h, req, j, cnk_vals.bitcast[NoneType](), N_CUST, TYPE_INTEGER)
+                rc = mojo_gpu_feed_column(h, req, j, cnk_vals.unsafe_bitcast[NoneType](), N_CUST, TYPE_INTEGER)
             elif nm == "s_suppkey":
-                rc = mojo_gpu_feed_column(h, req, j, ssk_vals.bitcast[NoneType](), N_SUPP, TYPE_BIGINT)
+                rc = mojo_gpu_feed_column(h, req, j, ssk_vals.unsafe_bitcast[NoneType](), N_SUPP, TYPE_BIGINT)
             elif nm == "s_nationkey":
-                rc = mojo_gpu_feed_column(h, req, j, snk_vals.bitcast[NoneType](), N_SUPP, TYPE_INTEGER)
+                rc = mojo_gpu_feed_column(h, req, j, snk_vals.unsafe_bitcast[NoneType](), N_SUPP, TYPE_INTEGER)
             elif nm == "n_nationkey":
                 rc = _feed_nat_key(h, req, j)
             elif nm == "n_name":
-                rc = mojo_gpu_feed_column(h, req, j, nat_str[0].bitcast[NoneType](), N_NATIONS, TYPE_VARCHAR)
+                rc = mojo_gpu_feed_column(h, req, j, nat_str[0].unsafe_bitcast[NoneType](), N_NATIONS, TYPE_VARCHAR)
             elif nm == "n_regionkey":
                 rc = _feed_nat_region(h, req, j, nation_region)
             elif nm == "r_regionkey":
-                rc = mojo_gpu_feed_column(h, req, j, rrk_vals.bitcast[NoneType](), N_REGIONS, TYPE_INTEGER)
+                rc = mojo_gpu_feed_column(h, req, j, rrk_vals.unsafe_bitcast[NoneType](), N_REGIONS, TYPE_INTEGER)
             elif nm == "r_name":
-                rc = mojo_gpu_feed_column(h, req, j, reg_str[0].bitcast[NoneType](), N_REGIONS, TYPE_VARCHAR)
+                rc = mojo_gpu_feed_column(h, req, j, reg_str[0].unsafe_bitcast[NoneType](), N_REGIONS, TYPE_VARCHAR)
             else:
                 raise Error("unexpected column in req " + String(req) + ": " + nm)
             assert_equal(rc, 0, "feed rc for " + nm)
@@ -514,21 +514,21 @@ def main() raises:
     assert_equal(rows, cpu_emit, "emitted row count != CPU reference")
 
     # Verify every emitted (n_name, revenue) row against the CPU reference.
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
-    var name_buf = alloc[UInt8](64)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
+    var name_buf = unsafe_alloc[UInt8](64)
     var gpu_total = Int128(0)
     var all_ok = True
-    var seen = alloc[Int64](N_NATIONS)
+    var seen = unsafe_alloc[Int64](N_NATIONS)
     for k in range(N_NATIONS):
-        seen[k] = 0
+        seen[unsafe_offset=k] = 0
     for r in range(rows):
         var nlen = mojo_gpu_result_str(h, r, 0, name_buf, 64)
         var nm = String("")
         for k in range(nlen):
-            nm += chr(Int(name_buf[k]))
+            nm += chr(Int(name_buf[unsafe_offset=k]))
         _ = mojo_gpu_result_i128(h, r, 1, lo, hi)
-        var rev = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+        var rev = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
         gpu_total += rev
         # find the nation key whose name matches.
         var nk = -1
@@ -539,12 +539,12 @@ def main() raises:
             all_ok = False
             print("  UNKNOWN n_name:", nm)
             continue
-        seen[nk] = 1
-        if rev != cpu_rev[nk]:
+        seen[unsafe_offset=nk] = 1
+        if rev != cpu_rev[unsafe_offset=nk]:
             all_ok = False
-            print("  MISMATCH nk=", nk, " name=", nm, " gpu=", rev, " cpu=", cpu_rev[nk])
+            print("  MISMATCH nk=", nk, " name=", nm, " gpu=", rev, " cpu=", cpu_rev[unsafe_offset=nk])
     for k in range(N_NATIONS):
-        if (cpu_rev[k] != Int128(0)) != (seen[k] != 0):
+        if (cpu_rev[unsafe_offset=k] != Int128(0)) != (seen[unsafe_offset=k] != 0):
             all_ok = False
             print("  EMIT-SET MISMATCH nk=", k)
 
@@ -553,9 +553,9 @@ def main() raises:
     assert_true(all_ok, "per-nation revenue / emit set mismatch")
 
     for r in range(len(nat_str[1])):
-        nat_str[1][r].free()
+        nat_str[1][r].unsafe_free()
     for r in range(len(reg_str[1])):
-        reg_str[1][r].free()
+        reg_str[1][r].unsafe_free()
     mojo_gpu_desc_free(h)
     print("ALL PASS")
 
@@ -564,10 +564,10 @@ def main() raises:
 def _feed_nat_key(
     h: Pointer[NoneType, MutUntrackedOrigin], req: Int, j: Int
 ) raises -> Int:
-    var nk = alloc[Int32](N_NATIONS)
+    var nk = unsafe_alloc[Int32](N_NATIONS)
     for k in range(N_NATIONS):
-        nk[k] = Int32(k)
-    return mojo_gpu_feed_column(h, req, j, nk.bitcast[NoneType](), N_NATIONS, TYPE_INTEGER)
+        nk[unsafe_offset=k] = Int32(k)
+    return mojo_gpu_feed_column(h, req, j, nk.unsafe_bitcast[NoneType](), N_NATIONS, TYPE_INTEGER)
 
 
 def _feed_nat_region(
@@ -577,5 +577,5 @@ def _feed_nat_region(
     nation_region: Pointer[Int32, MutUntrackedOrigin],
 ) raises -> Int:
     return mojo_gpu_feed_column(
-        h, req, j, nation_region.bitcast[NoneType](), N_NATIONS, TYPE_INTEGER
+        h, req, j, nation_region.unsafe_bitcast[NoneType](), N_NATIONS, TYPE_INTEGER
     )

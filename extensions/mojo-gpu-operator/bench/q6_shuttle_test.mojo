@@ -42,7 +42,7 @@ from raw_plan_tags import (
     KIND_Q6,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -166,24 +166,24 @@ def main() raises:
     var qty_hi = Int64(2400)  # 24.00 scale2
 
     # ---- synthetic lineitem-like columns ----
-    var ship = alloc[Int32](N)
-    var disc = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var qty = alloc[Int64](N)
+    var ship = unsafe_alloc[Int32](N)
+    var disc = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var qty = unsafe_alloc[Int64](N)
     for i in range(N):
-        ship[i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)  # day number
-        disc[i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
-        ext[i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
-        qty[i] = Int64(1 + (i * 22695477) % 5000)  # 1..5000 (scale2)
+        ship[unsafe_offset=i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)  # day number
+        disc[unsafe_offset=i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
+        ext[unsafe_offset=i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
+        qty[unsafe_offset=i] = Int64(1 + (i * 22695477) % 5000)  # 1..5000 (scale2)
 
     # ---- CPU int128 reference (same filter + ext*disc product) ----
     var cpu = Int128(0)
     for i in range(N):
-        var sd = ship[i]
+        var sd = ship[unsafe_offset=i]
         if sd >= Int32(ship_lo) and sd < Int32(ship_hi):
-            var d = disc[i]
-            if d >= disc_lo and d <= disc_hi and qty[i] < qty_hi:
-                cpu += Int128(ext[i]) * Int128(d)
+            var d = disc[unsafe_offset=i]
+            if d >= disc_lo and d <= disc_hi and qty[unsafe_offset=i] < qty_hi:
+                cpu += Int128(ext[unsafe_offset=i]) * Int128(d)
 
     # ---- build the Q6 RawPlan tape ----
     var b = TapeBuilder()
@@ -191,13 +191,13 @@ def main() raises:
         b, ship_lo, ship_hi, Int(disc_lo), Int(disc_hi), Int(qty_hi)
     )
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
 
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
@@ -214,12 +214,12 @@ def main() raises:
 
     # materialize SQL: must name the 4 fact columns.
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
     var sql_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     assert_true(sql_len > 0, "materialize_sql returned empty")
     var sql = String("")
     for i in range(sql_len):
-        sql += chr(Int(sql_buf[i]))
+        sql += chr(Int(sql_buf[unsafe_offset=i]))
     print("materialize SQL:", sql)
     assert_true("l_extendedprice" in sql, "SQL missing l_extendedprice")
     assert_true("l_discount" in sql, "SQL missing l_discount")
@@ -268,19 +268,19 @@ def main() raises:
         var rc: Int
         if name == "l_shipdate":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, ship.bitcast[NoneType](), N, TYPE_DATE
+                h, 0, col_j, ship.unsafe_bitcast[NoneType](), N, TYPE_DATE
             )
         elif name == "l_discount":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, disc.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, col_j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         elif name == "l_extendedprice":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, ext.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, col_j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         elif name == "l_quantity":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, qty.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, col_j, qty.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         else:
             raise Error("unexpected column in feed order: " + name)
@@ -295,13 +295,13 @@ def main() raises:
 
     # results.
     assert_equal(mojo_gpu_result_rows(h), 1, "result_rows != 1")
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
     var rr = mojo_gpu_result_i128(h, 0, 0, lo, hi)
     assert_equal(rr, 0, "result_i128 rc")
     # Reassemble the int128 from the two limbs (low is unsigned).
-    var gpu = Int128(hi[0]) << 64
-    gpu += Int128(UInt64(lo[0]))
+    var gpu = Int128(hi[unsafe_offset=0]) << 64
+    gpu += Int128(UInt64(lo[unsafe_offset=0]))
     print("CPU ref =", cpu, "  GPU =", gpu)
     assert_equal(gpu, cpu, "GPU Q6 sum != CPU reference (not bit-exact)")
 
@@ -319,7 +319,7 @@ def main() raises:
     assert_equal(fr2, 0, "warm pin_finalize rc")
     var rr2 = mojo_gpu_result_i128(h2, 0, 0, lo, hi)
     assert_equal(rr2, 0, "warm result_i128 rc")
-    var gpu_warm = Int128(lo[0]) + (Int128(hi[0]) << 64)
+    var gpu_warm = Int128(lo[unsafe_offset=0]) + (Int128(hi[unsafe_offset=0]) << 64)
     assert_equal(gpu_warm, cpu, "WARM GPU Q6 sum != CPU reference")
 
     mojo_gpu_desc_free(h2)

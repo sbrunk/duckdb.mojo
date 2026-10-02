@@ -49,7 +49,7 @@ from col_pool import (
     ORDERING_STORAGE,
 )
 from max.gpu.host import DeviceContext
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true, assert_false
@@ -72,9 +72,9 @@ def _drain() raises:
 def _touch(
     ctx: DeviceContext, column: String, n: Int, times: Int
 ) raises -> Int:
-    var host = alloc[Int64](n if n > 0 else 1)
+    var host = unsafe_alloc[Int64](n if n > 0 else 1)
     for i in range(n):
-        host[i] = Int64(i)
+        host[unsafe_offset=i] = Int64(i)
     var key = col_key(TABLE, column, REPR_INT64_PACKED, ORDERING_STORAGE, n)
     for _t in range(times):
         var er = ensure_column(
@@ -83,7 +83,7 @@ def _touch(
         )
         assert_true(er.ok, "ensure_column should succeed for " + column)
         release_lease(key)
-    host.free()
+    host.unsafe_free()
     return n * 8
 
 

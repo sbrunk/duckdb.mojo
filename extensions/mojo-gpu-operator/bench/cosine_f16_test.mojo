@@ -28,7 +28,7 @@ On a CUDA box (frederick / RTX 4090), build the ext then run with
 
 from std.sys import has_accelerator
 from std.math import sqrt, sin, cos
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.time import perf_counter_ns
 
 from gpu_kernels import (
@@ -84,14 +84,14 @@ def build_embeddings(
         var jit = Float32(0.10) + Float32(row % 4096) * (Float32(0.30) / 4096.0)
         for i in range(K):
             var v = _center_val(c, i) + jit * _hash01(row, i)
-            emb[base + i] = v
+            emb[unsafe_offset=base + i] = v
             nrm += v * v
         nrm = sqrt(nrm)
         if nrm == 0:
             nrm = 1
         var inv = Float32(1) / nrm
         for i in range(K):
-            emb[base + i] = emb[base + i] * inv
+            emb[unsafe_offset=base + i] = emb[unsafe_offset=base + i] * inv
 
 
 # Synthesize query m near cluster center (m % NCLUST), unit-normalized.
@@ -100,14 +100,14 @@ def build_query(q: Pointer[Float32, MutUntrackedOrigin], m: Int, K: Int):
     var nrm = Float32(0)
     for i in range(K):
         var v = _center_val(c, i) + 0.05 * _hash01(m * 131 + 7, i)
-        q[i] = v
+        q[unsafe_offset=i] = v
         nrm += v * v
     nrm = sqrt(nrm)
     if nrm == 0:
         nrm = 1
     var inv = Float32(1) / nrm
     for i in range(K):
-        q[i] = q[i] * inv
+        q[unsafe_offset=i] = q[unsafe_offset=i] * inv
 
 
 # Recall of a single query: |fp16_ids ∩ fp32_ids| / k, plus a count of genuine
@@ -130,16 +130,16 @@ def recall_one(
     # Worst kept distance among the fp16 result (its top-k boundary).
     var f16_worst = Float32(0)
     for j in range(k):
-        if f16_dists[j] > f16_worst:
-            f16_worst = f16_dists[j]
+        if f16_dists[unsafe_offset=j] > f16_worst:
+            f16_worst = f16_dists[unsafe_offset=j]
 
     var overlap = 0
     var genuine_miss = 0
     for a in range(k):
-        var id32 = f32_ids[a]
+        var id32 = f32_ids[unsafe_offset=a]
         var found = False
         for b in range(k):
-            if f16_ids[b] == id32:
+            if f16_ids[unsafe_offset=b] == id32:
                 found = True
                 break
         if found:
@@ -149,7 +149,7 @@ def recall_one(
             # distance is within TIE_EPS of the fp16 boundary, it is a boundary
             # FP tie (two near-equal distances reorder under fp16 storage), not a
             # genuine accuracy loss.
-            var d = f32_dists[a]
+            var d = f32_dists[unsafe_offset=a]
             if abs(d - f16_worst) > TIE_EPS:
                 genuine_miss += 1
     return RecallResult(overlap, genuine_miss)
@@ -159,18 +159,18 @@ def recall_one(
 def _median_ns(times: Pointer[Int64, MutUntrackedOrigin], n: Int) -> Int64:
     for a in range(n):
         for b in range(a + 1, n):
-            if times[b] < times[a]:
-                var t = times[a]
-                times[a] = times[b]
-                times[b] = t
-    return times[n // 2]
+            if times[unsafe_offset=b] < times[unsafe_offset=a]:
+                var t = times[unsafe_offset=a]
+                times[unsafe_offset=a] = times[unsafe_offset=b]
+                times[unsafe_offset=b] = t
+    return times[unsafe_offset=n // 2]
 
 
 def run_case(N: Int, K: Int, check_exact: Bool) raises:
     print("====================================================")
     print("case: N =", N, " K =", K, " topk =", TOPK)
 
-    var emb = alloc[Float32](N * K)
+    var emb = unsafe_alloc[Float32](N * K)
     build_embeddings(emb, N, K)
     var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
@@ -183,28 +183,28 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
     var h16_i = mojo_gpu_pin_f16(emb_imm, N, K)
     if h16_i == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h32 = UnsafePointer[NoneType, MutUntrackedOrigin](
+    var h32 = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=h32_i
     )
-    var h16 = UnsafePointer[NoneType, MutUntrackedOrigin](
+    var h16 = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=h16_i
     )
 
     # Query set (deterministic, near cluster centers).
-    var qbuf = alloc[Float32](NQUERY * K)
+    var qbuf = unsafe_alloc[Float32](NQUERY * K)
     for m in range(NQUERY):
-        build_query(qbuf + m * K, m, K)
+        build_query(qbuf.unsafe_offset(m * K), m, K)
 
-    var f32_ids = alloc[Int64](TOPK)
-    var f32_dists = alloc[Float32](TOPK)
-    var f16_ids = alloc[Int64](TOPK)
-    var f16_dists = alloc[Float32](TOPK)
+    var f32_ids = unsafe_alloc[Int64](TOPK)
+    var f32_dists = unsafe_alloc[Float32](TOPK)
+    var f16_ids = unsafe_alloc[Int64](TOPK)
+    var f16_dists = unsafe_alloc[Float32](TOPK)
 
     # --- recall@10 over the query set ---
     var total_overlap = 0
     var total_miss = 0
     for m in range(NQUERY):
-        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf) + m * K * 4
         )
         var rc32 = mojo_gpu_pin_query_topk(h32, q, TOPK, f32_ids, f32_dists)
@@ -231,38 +231,38 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
     # Small-N exact correctness sanity: at 50k we additionally print whether the
     # fp16 top-1 id matches fp32 top-1 for query 0 (cheap visible check).
     if check_exact:
-        var q0 = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q0 = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf)
         )
         _ = mojo_gpu_pin_query_topk(h32, q0, TOPK, f32_ids, f32_dists)
         _ = mojo_gpu_pin_query_topk_f16(h16, q0, TOPK, f16_ids, f16_dists)
         print(
             "    [50k check] q0 top-1: fp32 id=",
-            f32_ids[0],
+            f32_ids[unsafe_offset=0],
             " d=",
-            f32_dists[0],
+            f32_dists[unsafe_offset=0],
             " | fp16 id=",
-            f16_ids[0],
+            f16_ids[unsafe_offset=0],
             " d=",
-            f16_dists[0],
+            f16_dists[unsafe_offset=0],
         )
 
     # --- warm-median latency, fp32 vs fp16 ---
     # Distinct query per iter so nothing is trivially cached.
-    var lat_q = alloc[Float32]((WARMUP + WARM) * K)
+    var lat_q = unsafe_alloc[Float32]((WARMUP + WARM) * K)
     for m in range(WARMUP + WARM):
-        build_query(lat_q + m * K, m + 1000, K)  # different cluster mix
+        build_query(lat_q.unsafe_offset(m * K), m + 1000, K)  # different cluster mix
 
-    var times = alloc[Int64](WARM)
+    var times = unsafe_alloc[Int64](WARM)
 
     # fp32 warm latency
     for m in range(WARMUP):
-        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + m * K * 4
         )
         _ = mojo_gpu_pin_query_topk(h32, q, TOPK, f32_ids, f32_dists)
     for m in range(WARM):
-        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + (WARMUP + m) * K * 4
         )
         var t0 = perf_counter_ns()
@@ -270,17 +270,17 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
         var t1 = perf_counter_ns()
         if rc != 0:
             raise Error(String("fp32 lat rc=") + String(Int(rc)))
-        times[m] = Int64(t1 - t0)
+        times[unsafe_offset=m] = Int64(t1 - t0)
     var med32 = _median_ns(times, WARM)
 
     # fp16 warm latency
     for m in range(WARMUP):
-        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + m * K * 4
         )
         _ = mojo_gpu_pin_query_topk_f16(h16, q, TOPK, f16_ids, f16_dists)
     for m in range(WARM):
-        var q = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(lat_q) + (WARMUP + m) * K * 4
         )
         var t0 = perf_counter_ns()
@@ -288,7 +288,7 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
         var t1 = perf_counter_ns()
         if rc != 0:
             raise Error(String("fp16 lat rc=") + String(Int(rc)))
-        times[m] = Int64(t1 - t0)
+        times[unsafe_offset=m] = Int64(t1 - t0)
     var med16 = _median_ns(times, WARM)
 
     var us32 = Float64(med32) / 1000.0
@@ -301,14 +301,14 @@ def run_case(N: Int, K: Int, check_exact: Bool) raises:
 
     mojo_gpu_pin_free(h32)
     mojo_gpu_pin_free_f16(h16)
-    emb.free()
-    qbuf.free()
-    lat_q.free()
-    times.free()
-    f32_ids.free()
-    f32_dists.free()
-    f16_ids.free()
-    f16_dists.free()
+    emb.unsafe_free()
+    qbuf.unsafe_free()
+    lat_q.unsafe_free()
+    times.unsafe_free()
+    f32_ids.unsafe_free()
+    f32_dists.unsafe_free()
+    f16_ids.unsafe_free()
+    f16_dists.unsafe_free()
 
 
 def main() raises:

@@ -85,7 +85,7 @@ def test_chunk_from_query() raises:
 
 
 def test_get_span_reads_column_values() raises:
-    """get_span yields the column's values with the chunk's row count as length."""
+    """`get_span` yields the column's values with the chunk's row count as length."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT i::INT AS v FROM range(5) t(i)")
     var chunk = result.fetch_chunk()
@@ -137,7 +137,7 @@ def test_get_span_is_writable_when_chunk_is_mut() raises:
 
 
 def test_get_span_matches_get_data() raises:
-    """get_span agrees with the raw get_data path it is meant to replace."""
+    """`get_span` agrees with the raw get_data path it is meant to replace."""
     var conn = DuckDB.connect(":memory:")
     var result = conn.execute("SELECT (i * 7)::DOUBLE AS v FROM range(6) t(i)")
     var chunk = result.fetch_chunk()

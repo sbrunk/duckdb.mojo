@@ -146,15 +146,15 @@ def _col_at[
     row: Int,
 ) -> Int64:
     comptime if USE_COLPTR:
-        var addr = Int(cols[slot])
+        var addr = Int(cols[unsafe_offset=slot])
         var p = Pointer[
             Scalar[DType.int64],
             MutUntrackedOrigin,
             address_space = AddressSpace.GLOBAL,
         ](unsafe_from_address=addr)
-        return p[row]
+        return p[unsafe_offset=row]
     else:
-        return cols[slot * n_rows + row]
+        return cols[unsafe_offset=slot * n_rows + row]
 
 
 @always_inline
@@ -190,16 +190,16 @@ def eval_program[
     var sp = 0  # next free slot (stack depth)
     var k = 0
     while k < prog_len:
-        var op = prog[3 * k + 0]
-        var a = prog[3 * k + 1]
-        var b = prog[3 * k + 2]
+        var op = prog[unsafe_offset=3 * k + 0]
+        var a = prog[unsafe_offset=3 * k + 1]
+        var b = prog[unsafe_offset=3 * k + 2]
         if op == OP_LOAD_COL:
             stack[sp] = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
             sp += 1
         elif op == OP_LOAD_DIM:
             # FK gather: key = cols[b][row]; push dims[dim_offsets[a] + key].
             var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
-            stack[sp] = dims[Int(dim_offsets[Int(a)]) + key]
+            stack[sp] = dims[unsafe_offset=Int(dim_offsets[unsafe_offset=Int(a)]) + key]
             sp += 1
         elif op == OP_PUSH_CONST:
             stack[sp] = a
@@ -384,19 +384,19 @@ def eval_program_f64[
     var sp = 0
     var k = 0
     while k < prog_len:
-        var op = prog[3 * k + 0]
-        var a = prog[3 * k + 1]
+        var op = prog[unsafe_offset=3 * k + 0]
+        var a = prog[unsafe_offset=3 * k + 1]
         if op == OP_LOAD_COL:
             var raw = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
-            stack[sp] = Float64(raw) / col_div[Int(a)]
+            stack[sp] = Float64(raw) / col_div[unsafe_offset=Int(a)]
             sp += 1
         elif op == OP_LOAD_DIM:
-            var b = prog[3 * k + 2]
+            var b = prog[unsafe_offset=3 * k + 2]
             var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
-            stack[sp] = Float64(dims[Int(dim_offsets[Int(a)]) + key])
+            stack[sp] = Float64(dims[unsafe_offset=Int(dim_offsets[unsafe_offset=Int(a)]) + key])
             sp += 1
         elif op == OP_PUSH_CONST:
-            stack[sp] = Float64(a) / const_div[k]
+            stack[sp] = Float64(a) / const_div[unsafe_offset=k]
             sp += 1
         elif op == OP_ADD:
             var rhs = stack[sp - 1]

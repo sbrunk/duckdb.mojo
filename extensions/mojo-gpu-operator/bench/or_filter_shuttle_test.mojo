@@ -60,7 +60,7 @@ from raw_plan_tags import (
     KIND_Q6,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -238,12 +238,12 @@ def run_shuttle(
     )
 
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
     var sql_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     assert_true(sql_len > 0, label + ": materialize_sql returned empty")
     var sql = String("")
     for i in range(sql_len):
-        sql += chr(Int(sql_buf[i]))
+        sql += chr(Int(sql_buf[unsafe_offset=i]))
     print(label, "materialize SQL:", sql)
     # column order: pass-program columns (a) -> agg-program LOAD_COLs (x) => [a, x]
     assert_equal(sql, String("SELECT a, x FROM facts"), label + ": SQL mismatch")
@@ -253,23 +253,23 @@ def run_shuttle(
 
     # feed order: [a, x]
     var rc0 = mojo_gpu_feed_column(
-        h, 0, 0, a.bitcast[NoneType](), N, TYPE_INTEGER
+        h, 0, 0, a.unsafe_bitcast[NoneType](), N, TYPE_INTEGER
     )
     assert_equal(rc0, 0, label + ": feed_column rc for a")
     var rc1 = mojo_gpu_feed_column(
-        h, 0, 1, x.bitcast[NoneType](), N, TYPE_DECIMAL
+        h, 0, 1, x.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
     )
     assert_equal(rc1, 0, label + ": feed_column rc for x")
 
     var fr = mojo_gpu_pin_finalize(h)
     assert_equal(fr, 0, label + ": pin_finalize rc")
     assert_equal(mojo_gpu_result_rows(h), 1, label + ": result_rows != 1")
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
     var rr = mojo_gpu_result_i128(h, 0, 0, lo, hi)
     assert_equal(rr, 0, label + ": result_i128 rc")
-    var gpu = Int128(hi[0]) << 64
-    gpu += Int128(UInt64(lo[0]))
+    var gpu = Int128(hi[unsafe_offset=0]) << 64
+    gpu += Int128(UInt64(lo[unsafe_offset=0]))
     print(label, "CPU ref =", cpu, "  GPU =", gpu)
     assert_equal(gpu, cpu, label + ": GPU sum != CPU reference (not bit-exact)")
     mojo_gpu_desc_free(h)
@@ -284,31 +284,31 @@ def main() raises:
     var k2 = 40
 
     # ---- synthetic single-fact columns ----
-    var a = alloc[Int32](N)
-    var x = alloc[Int64](N)
+    var a = unsafe_alloc[Int32](N)
+    var x = unsafe_alloc[Int64](N)
     for i in range(N):
         # `a` in 0..49 so the three OR values are hit by a reasonable fraction.
-        a[i] = Int32((i * 1103515245 + 12345) % 50)
-        x[i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
+        a[unsafe_offset=i] = Int32((i * 1103515245 + 12345) % 50)
+        x[unsafe_offset=i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
 
     # ---- CPU int128 reference (same OR predicate over `a`) ----
     var cpu = Int128(0)
     for i in range(N):
-        var av = Int(a[i])
+        var av = Int(a[unsafe_offset=i])
         if av == k0 or av == k1 or av == k2:
-            cpu += Int128(x[i])
+            cpu += Int128(x[unsafe_offset=i])
 
     # ---- build the OR-filter RawPlan tape ----
     var b = TapeBuilder()
     build_or_tape(b, k0, k1, k2)
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
 
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
@@ -328,12 +328,12 @@ def main() raises:
     # fact_projected_columns: pushed fact filters (none) -> pass-program columns
     # (a) -> agg-program LOAD_COLs (x). So the order is exactly [a, x].
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
     var sql_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     assert_true(sql_len > 0, "materialize_sql returned empty")
     var sql = String("")
     for i in range(sql_len):
-        sql += chr(Int(sql_buf[i]))
+        sql += chr(Int(sql_buf[unsafe_offset=i]))
     print("materialize SQL:", sql)
     assert_true("facts" in sql, "SQL missing fact table")
     assert_true(" a" in sql or "a," in sql, "SQL missing OR column a")
@@ -362,11 +362,11 @@ def main() raises:
         var rc: Int
         if name == "a":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, a.bitcast[NoneType](), N, TYPE_INTEGER
+                h, 0, col_j, a.unsafe_bitcast[NoneType](), N, TYPE_INTEGER
             )
         elif name == "x":
             rc = mojo_gpu_feed_column(
-                h, 0, col_j, x.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, col_j, x.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         else:
             raise Error("unexpected column in feed order: " + name)
@@ -381,12 +381,12 @@ def main() raises:
 
     # results.
     assert_equal(mojo_gpu_result_rows(h), 1, "result_rows != 1")
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
     var rr = mojo_gpu_result_i128(h, 0, 0, lo, hi)
     assert_equal(rr, 0, "result_i128 rc")
-    var gpu = Int128(hi[0]) << 64
-    gpu += Int128(UInt64(lo[0]))
+    var gpu = Int128(hi[unsafe_offset=0]) << 64
+    gpu += Int128(UInt64(lo[unsafe_offset=0]))
     print("CPU ref =", cpu, "  GPU =", gpu)
     assert_equal(gpu, cpu, "GPU OR-filter sum != CPU reference (not bit-exact)")
 
@@ -403,8 +403,8 @@ def main() raises:
     assert_equal(fr2, 0, "warm pin_finalize rc")
     var rr2 = mojo_gpu_result_i128(h2, 0, 0, lo, hi)
     assert_equal(rr2, 0, "warm result_i128 rc")
-    var gpu_warm = Int128(hi[0]) << 64
-    gpu_warm += Int128(UInt64(lo[0]))
+    var gpu_warm = Int128(hi[unsafe_offset=0]) << 64
+    gpu_warm += Int128(UInt64(lo[unsafe_offset=0]))
     assert_equal(gpu_warm, cpu, "WARM GPU OR-filter sum != CPU reference")
 
     mojo_gpu_desc_free(h2)
@@ -420,20 +420,20 @@ def main() raises:
     var hi_k = 42  # a > 42  (a is in 0..49)
     var cpu_range = Int128(0)
     for i in range(N):
-        var av = Int(a[i])
+        var av = Int(a[unsafe_offset=i])
         if av < lo_k or av > hi_k:
-            cpu_range += Int128(x[i])
+            cpu_range += Int128(x[unsafe_offset=i])
 
     var br = TapeBuilder()
     build_or_range_tape(br, lo_k, hi_k)
     var rtlen = len(br.tape)
-    var rtptr = alloc[Int64](rtlen if rtlen > 0 else 1)
+    var rtptr = unsafe_alloc[Int64](rtlen if rtlen > 0 else 1)
     for i in range(rtlen):
-        rtptr[i] = br.tape[i]
+        rtptr[unsafe_offset=i] = br.tape[i]
     var rblen = len(br.blob)
-    var rbptr = alloc[UInt8](rblen if rblen > 0 else 1)
+    var rbptr = unsafe_alloc[UInt8](rblen if rblen > 0 else 1)
     for i in range(rblen):
-        rbptr[i] = br.blob[i]
+        rbptr[unsafe_offset=i] = br.blob[i]
 
     # Cold run.
     run_shuttle(

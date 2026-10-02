@@ -16,7 +16,7 @@ Run:
 
 from std.sys import has_accelerator
 from std.math import sqrt
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 
 from gpu_kernels import (
     mojo_gpu_pin,
@@ -58,41 +58,41 @@ def cpu_topk(
 ):
     var qnorm = Float32(0)
     for i in range(K):
-        qnorm += q[i] * q[i]
+        qnorm += q[unsafe_offset=i] * q[unsafe_offset=i]
     qnorm = sqrt(qnorm)
 
-    var dists = alloc[Float32](N)
+    var dists = unsafe_alloc[Float32](N)
     for row in range(N):
         var base = row * K
         var dot = Float32(0)
         var na = Float32(0)
         for i in range(K):
-            var av = emb[base + i]
-            dot += av * q[i]
+            var av = emb[unsafe_offset=base + i]
+            dot += av * q[unsafe_offset=i]
             na += av * av
         var denom = sqrt(na) * qnorm
-        dists[row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
+        dists[unsafe_offset=row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
 
-    var taken = alloc[Bool](N)
+    var taken = unsafe_alloc[Bool](N)
     for r in range(N):
-        taken[r] = False
+        taken[unsafe_offset=r] = False
     for slot in range(k):
         var best = -1
         var best_d = Float32(3.0e38)
         for r in range(N):
-            if taken[r]:
+            if taken[unsafe_offset=r]:
                 continue
-            var d = dists[r]
+            var d = dists[unsafe_offset=r]
             # (dist asc, id asc): on a tie the smaller id wins, and since `r`
             # ascends, the first-seen tie is already the smaller id.
             if best < 0 or d < best_d:
                 best = r
                 best_d = d
-        taken[best] = True
-        out_ids[slot] = Int64(best)
-        out_dists[slot] = best_d
-    dists.free()
-    taken.free()
+        taken[unsafe_offset=best] = True
+        out_ids[unsafe_offset=slot] = Int64(best)
+        out_dists[unsafe_offset=slot] = best_d
+    dists.unsafe_free()
+    taken.unsafe_free()
 
 
 def check_topk(
@@ -105,8 +105,8 @@ def check_topk(
 ) raises:
     var ok = True
     for j in range(k):
-        var id_ok = gpu_ids[j] == cpu_ids[j]
-        var derr = abs(gpu_dists[j] - cpu_dists[j])
+        var id_ok = gpu_ids[unsafe_offset=j] == cpu_ids[unsafe_offset=j]
+        var derr = abs(gpu_dists[unsafe_offset=j] - cpu_dists[unsafe_offset=j])
         var d_ok = derr <= Float32(1.0e-6)
         if not id_ok or not d_ok:
             ok = False
@@ -116,13 +116,13 @@ def check_topk(
                 "slot",
                 j,
                 ": gpu(id=",
-                gpu_ids[j],
+                gpu_ids[unsafe_offset=j],
                 ", d=",
-                gpu_dists[j],
+                gpu_dists[unsafe_offset=j],
                 ") cpu(id=",
-                cpu_ids[j],
+                cpu_ids[unsafe_offset=j],
                 ", d=",
-                cpu_dists[j],
+                cpu_dists[unsafe_offset=j],
                 ")  |derr|=",
                 derr,
             )
@@ -132,22 +132,22 @@ def check_topk(
 
 
 def run_single(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], k: Int) raises:
-    var q = alloc[Float32](K)
+    var q = unsafe_alloc[Float32](K)
     for i in range(K):
-        q[i] = query_val(0, i)
+        q[unsafe_offset=i] = query_val(0, i)
     var q_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(q)
     )
 
-    var gpu_ids = alloc[Int64](k)
-    var gpu_dists = alloc[Float32](k)
+    var gpu_ids = unsafe_alloc[Int64](k)
+    var gpu_dists = unsafe_alloc[Float32](k)
     var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     var rc = mojo_gpu_pin_query_topk(h, q_imm, k, gpu_ids, gpu_dists)
     if rc != 0:
         raise Error(String("mojo_gpu_pin_query_topk rc=") + String(Int(rc)))
 
-    var cpu_ids = alloc[Int64](k)
-    var cpu_dists = alloc[Float32](k)
+    var cpu_ids = unsafe_alloc[Int64](k)
+    var cpu_dists = unsafe_alloc[Float32](k)
     cpu_topk(emb, q, k, cpu_ids, cpu_dists)
 
     check_topk(
@@ -158,24 +158,24 @@ def run_single(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], k: Int) r
         cpu_dists,
         k,
     )
-    q.free()
-    gpu_ids.free()
-    gpu_dists.free()
-    cpu_ids.free()
-    cpu_dists.free()
+    q.unsafe_free()
+    gpu_ids.unsafe_free()
+    gpu_dists.unsafe_free()
+    cpu_ids.unsafe_free()
+    cpu_dists.unsafe_free()
 
 
 def run_batch(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], M: Int, k: Int) raises:
-    var qs = alloc[Float32](M * K)
+    var qs = unsafe_alloc[Float32](M * K)
     for m in range(M):
         for i in range(K):
-            qs[m * K + i] = query_val(m + 1, i)  # vary per batch query
+            qs[unsafe_offset=m * K + i] = query_val(m + 1, i)  # vary per batch query
     var qs_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qs)
     )
 
-    var gpu_ids = alloc[Int64](M * k)
-    var gpu_dists = alloc[Float32](M * k)
+    var gpu_ids = unsafe_alloc[Int64](M * k)
+    var gpu_dists = unsafe_alloc[Float32](M * k)
     var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     var rc = mojo_gpu_pin_query_topk_batch(h, qs_imm, M, k, gpu_ids, gpu_dists)
     if rc != 0:
@@ -183,33 +183,33 @@ def run_batch(handle: Int, emb: Pointer[Float32, MutUntrackedOrigin], M: Int, k:
             String("mojo_gpu_pin_query_topk_batch rc=") + String(Int(rc))
         )
 
-    var cpu_ids = alloc[Int64](k)
-    var cpu_dists = alloc[Float32](k)
+    var cpu_ids = unsafe_alloc[Int64](k)
+    var cpu_dists = unsafe_alloc[Float32](k)
     for m in range(M):
-        cpu_topk(emb, qs + m * K, k, cpu_ids, cpu_dists)
+        cpu_topk(emb, qs.unsafe_offset(m * K), k, cpu_ids, cpu_dists)
         check_topk(
             String("batch[") + String(m) + String("] k=") + String(k),
-            gpu_ids + m * k,
-            gpu_dists + m * k,
+            gpu_ids.unsafe_offset(m * k),
+            gpu_dists.unsafe_offset(m * k),
             cpu_ids,
             cpu_dists,
             k,
         )
-    qs.free()
-    gpu_ids.free()
-    gpu_dists.free()
-    cpu_ids.free()
-    cpu_dists.free()
+    qs.unsafe_free()
+    gpu_ids.unsafe_free()
+    gpu_dists.unsafe_free()
+    cpu_ids.unsafe_free()
+    cpu_dists.unsafe_free()
 
 
 def main() raises:
     comptime assert has_accelerator(), "requires a GPU"
     print("cosine top-k test: N =", N, " K =", K)
 
-    var emb = alloc[Float32](N * K)
+    var emb = unsafe_alloc[Float32](N * K)
     for r in range(N):
         for i in range(K):
-            emb[r * K + i] = emb_val(r, i)
+            emb[unsafe_offset=r * K + i] = emb_val(r, i)
     var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
@@ -222,7 +222,7 @@ def main() raises:
     run_single(handle, emb, 100)
     run_batch(handle, emb, 8, 10)
 
-    var h = UnsafePointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=handle)
     mojo_gpu_pin_free(h)
-    emb.free()
+    emb.unsafe_free()
     print("ALL PASS")

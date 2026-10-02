@@ -12,7 +12,7 @@ Run:
         extensions/mojo-gpu-operator/bench/expr_vm_f64_test.mojo
 """
 
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, log, abs
 from expr_vm import eval_program, eval_program_f64
 from raw_plan_tags import (
@@ -31,23 +31,23 @@ def main() raises:
     # l_discount scaled *100. Packed col-major: cols[slot*N + row].
     var ext = [2116823, 4598316, 1330960, 999900]  # 21168.23, 45983.16, ...
     var disc = [6, 9, 8, 10]                        # 0.06, 0.09, 0.08, 0.10
-    var cols = alloc[Int64](2 * N)
+    var cols = unsafe_alloc[Int64](2 * N)
     for i in range(N):
-        cols[0 * N + i] = Int64(ext[i])
-        cols[1 * N + i] = Int64(disc[i])
+        cols[unsafe_offset=0 * N + i] = Int64(ext[i])
+        cols[unsafe_offset=1 * N + i] = Int64(disc[i])
 
     # col_div: 10^scale per slot (scale 2 gives 100). const_div parallel to ops.
-    var col_div = alloc[Float64](2)
-    col_div[0] = 100.0
-    col_div[1] = 100.0
+    var col_div = unsafe_alloc[Float64](2)
+    col_div[unsafe_offset=0] = 100.0
+    col_div[unsafe_offset=1] = 100.0
 
-    var dims = alloc[Int64](1)
-    var dim_off = alloc[Int64](1)
-    dim_off[0] = 0
+    var dims = unsafe_alloc[Int64](1)
+    var dim_off = unsafe_alloc[Int64](1)
+    dim_off[unsafe_offset=0] = 0
 
     # --- Test A: int64 VM unchanged. program = LOAD_COL(0) (raw scaled value).
-    var progA = alloc[Int64](3 * 1)
-    progA[0] = OP_LOAD_COL; progA[1] = 0; progA[2] = 0
+    var progA = unsafe_alloc[Int64](3 * 1)
+    progA[unsafe_offset=0] = OP_LOAD_COL; progA[unsafe_offset=1] = 0; progA[unsafe_offset=2] = 0
     for i in range(N):
         var got = eval_program(progA, 1, cols, N, i, dims, dim_off)
         if got != Int64(ext[i]):
@@ -55,11 +55,11 @@ def main() raises:
     print("PASS: int64 eval_program unchanged (raw scaled load)")
 
     # --- Test B: sum(sqrt(l_extendedprice)). program = LOAD_COL(0); SQRT.
-    var progB = alloc[Int64](3 * 2)
-    progB[0] = OP_LOAD_COL; progB[1] = 0; progB[2] = 0
-    progB[3] = OP_SQRT; progB[4] = 0; progB[5] = 0
-    var const_div = alloc[Float64](2)
-    const_div[0] = 1.0; const_div[1] = 1.0
+    var progB = unsafe_alloc[Int64](3 * 2)
+    progB[unsafe_offset=0] = OP_LOAD_COL; progB[unsafe_offset=1] = 0; progB[unsafe_offset=2] = 0
+    progB[unsafe_offset=3] = OP_SQRT; progB[unsafe_offset=4] = 0; progB[unsafe_offset=5] = 0
+    var const_div = unsafe_alloc[Float64](2)
+    const_div[unsafe_offset=0] = 1.0; const_div[unsafe_offset=1] = 1.0
     var ssum = Float64(0.0)
     var ref_ssum = Float64(0.0)
     for i in range(N):
@@ -79,17 +79,17 @@ def main() raises:
     #   where PUSH_CONST(100) is the scaled-2 representation of 1.0 (1.0*100),
     #   (1 - disc): 100/100 - disc/100; then * ext; then ln. Matches the revenue
     #   arg shape (ext*(1-disc)) the operator already lowers for the int path.
-    var progC = alloc[Int64](3 * 6)
-    progC[0] = OP_LOAD_COL; progC[1] = 0; progC[2] = 0      # ext (div 100)
-    progC[3] = OP_PUSH_CONST; progC[4] = 100; progC[5] = 0  # 1.0 (scaled 2)
-    progC[6] = OP_LOAD_COL; progC[7] = 1; progC[8] = 0      # disc (div 100)
-    progC[9] = OP_SUB; progC[10] = 0; progC[11] = 0         # 1 - disc
-    progC[12] = OP_MUL; progC[13] = 0; progC[14] = 0        # ext*(1-disc)
-    progC[15] = OP_LN; progC[16] = 0; progC[17] = 0         # ln(...)
-    var cdivC = alloc[Float64](6)
+    var progC = unsafe_alloc[Int64](3 * 6)
+    progC[unsafe_offset=0] = OP_LOAD_COL; progC[unsafe_offset=1] = 0; progC[unsafe_offset=2] = 0      # ext (div 100)
+    progC[unsafe_offset=3] = OP_PUSH_CONST; progC[unsafe_offset=4] = 100; progC[unsafe_offset=5] = 0  # 1.0 (scaled 2)
+    progC[unsafe_offset=6] = OP_LOAD_COL; progC[unsafe_offset=7] = 1; progC[unsafe_offset=8] = 0      # disc (div 100)
+    progC[unsafe_offset=9] = OP_SUB; progC[unsafe_offset=10] = 0; progC[unsafe_offset=11] = 0         # 1 - disc
+    progC[unsafe_offset=12] = OP_MUL; progC[unsafe_offset=13] = 0; progC[unsafe_offset=14] = 0        # ext*(1-disc)
+    progC[unsafe_offset=15] = OP_LN; progC[unsafe_offset=16] = 0; progC[unsafe_offset=17] = 0         # ln(...)
+    var cdivC = unsafe_alloc[Float64](6)
     for k in range(6):
-        cdivC[k] = 1.0
-    cdivC[1] = 100.0  # the PUSH_CONST at op index 1 is scale 2, so div 100
+        cdivC[unsafe_offset=k] = 1.0
+    cdivC[unsafe_offset=1] = 100.0  # the PUSH_CONST at op index 1 is scale 2, so div 100
     var lsum = Float64(0.0)
     var ref_lsum = Float64(0.0)
     for i in range(N):

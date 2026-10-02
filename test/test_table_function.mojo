@@ -8,7 +8,7 @@ from duckdb.table_function import (
 from duckdb._libduckdb import *
 from std.testing import *
 from std.testing.suite import TestSuite
-from std.memory.alloc import alloc
+from std.memory.alloc import unsafe_alloc
 
 
 # ===--------------------------------------------------------------------===#
@@ -41,14 +41,14 @@ struct MultiColBindData(Copyable, Movable):
 
 def destroy_counter_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for CounterBindData."""
-    data.bitcast[CounterBindData]().unsafe_deinit_pointee()
-    data.bitcast[CounterBindData]().free()
+    data.unsafe_bitcast[CounterBindData]().unsafe_deinit_pointee()
+    data.unsafe_bitcast[CounterBindData]().unsafe_free()
 
 
 def destroy_multi_col_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
     """Destroy callback for MultiColBindData."""
-    data.bitcast[MultiColBindData]().unsafe_deinit_pointee()
-    data.bitcast[MultiColBindData]().free()
+    data.unsafe_bitcast[MultiColBindData]().unsafe_deinit_pointee()
+    data.unsafe_bitcast[MultiColBindData]().unsafe_free()
 
 
 # ===--------------------------------------------------------------------===#
@@ -62,10 +62,10 @@ def counter_bind(info: TableBindInfo):
     info.add_result_column("i", LogicalType(DuckDBType.integer))
     var limit_val = info.get_parameter(0)
     var limit = Int(limit_val.as_int32())
-    var bind_data = alloc[CounterBindData](1)
+    var bind_data = unsafe_alloc[CounterBindData](1)
     bind_data.unsafe_write(CounterBindData(limit=limit, current_row=0))
     info.set_bind_data(
-        bind_data.bitcast[NoneType](),
+        bind_data.unsafe_bitcast[NoneType](),
         destroy_counter_bind_data,
     )
 
@@ -78,7 +78,7 @@ def counter_init(info: TableInitInfo):
 def counter_function(info: TableFunctionInfo, mut output: Chunk):
     """Main function: produces rows in batches. Sets output size to 0 when done.
     """
-    var bind_data = info.get_bind_data().bitcast[CounterBindData]()
+    var bind_data = info.get_bind_data().unsafe_bitcast[CounterBindData]()
     var current = bind_data[].current_row
     var limit = bind_data[].limit
 
@@ -90,9 +90,9 @@ def counter_function(info: TableFunctionInfo, mut output: Chunk):
     var batch_size = min(remaining, 2048)
 
     var out_vec0 = output.get_vector(0)
-    var out_data = out_vec0.get_data().bitcast[Int32]()
+    var out_data = out_vec0.get_data().unsafe_bitcast[Int32]()
     for i in range(batch_size):
-        out_data[i] = Int32(current + i)
+        out_data[unsafe_offset=i] = Int32(current + i)
 
     bind_data[].current_row = current + batch_size
     output.set_size(batch_size)
@@ -108,10 +108,10 @@ def multi_col_bind(info: TableBindInfo):
     info.add_result_column("id", LogicalType(DuckDBType.integer))
     info.add_result_column("name", LogicalType(DuckDBType.varchar))
     info.add_result_column("score", LogicalType(DuckDBType.double))
-    var bind_data = alloc[MultiColBindData](1)
+    var bind_data = unsafe_alloc[MultiColBindData](1)
     bind_data.unsafe_write(MultiColBindData(num_rows=3, current_row=0))
     info.set_bind_data(
-        bind_data.bitcast[NoneType](),
+        bind_data.unsafe_bitcast[NoneType](),
         destroy_multi_col_bind_data,
     )
 
@@ -123,7 +123,7 @@ def multi_col_init(info: TableInitInfo):
 
 def multi_col_function(info: TableFunctionInfo, mut output: Chunk):
     """Produces 3 rows with (id, name, score) columns."""
-    var bind_data = info.get_bind_data().bitcast[MultiColBindData]()
+    var bind_data = info.get_bind_data().unsafe_bitcast[MultiColBindData]()
     var current = bind_data[].current_row
     var num_rows = bind_data[].num_rows
 
@@ -135,19 +135,19 @@ def multi_col_function(info: TableFunctionInfo, mut output: Chunk):
     var batch_size = min(remaining, 2048)
 
     var id_vec = output.get_vector(0)
-    var id_data = id_vec.get_data().bitcast[Int32]()
+    var id_data = id_vec.get_data().unsafe_bitcast[Int32]()
     var name_vec = output.get_vector(1)
     var score_vec = output.get_vector(2)
-    var score_data = score_vec.get_data().bitcast[Float64]()
+    var score_data = score_vec.get_data().unsafe_bitcast[Float64]()
 
     # Names for our test data
     var names: List[String] = ["alice", "bob", "carol"]
 
     for i in range(batch_size):
         var row = current + i
-        id_data[i] = Int32(row + 1)
+        id_data[unsafe_offset=i] = Int32(row + 1)
         name_vec.assign_string_element(UInt64(i), names[row])
-        score_data[i] = Float64(row) * 10.5
+        score_data[unsafe_offset=i] = Float64(row) * 10.5
 
     bind_data[].current_row = current + batch_size
     output.set_size(batch_size)
@@ -164,17 +164,17 @@ struct StaticBindData(Copyable, Movable):
 
 
 def destroy_static_bind_data(data: Pointer[NoneType, MutAnyOrigin]) abi("C"):
-    data.bitcast[StaticBindData]().unsafe_deinit_pointee()
-    data.bitcast[StaticBindData]().free()
+    data.unsafe_bitcast[StaticBindData]().unsafe_deinit_pointee()
+    data.unsafe_bitcast[StaticBindData]().unsafe_free()
 
 
 def static_bind(info: TableBindInfo):
     """Bind function for a parameterless table function."""
     info.add_result_column("value", LogicalType(DuckDBType.integer))
-    var bind_data = alloc[StaticBindData](1)
+    var bind_data = unsafe_alloc[StaticBindData](1)
     bind_data.unsafe_write(StaticBindData(done=False))
     info.set_bind_data(
-        bind_data.bitcast[NoneType](),
+        bind_data.unsafe_bitcast[NoneType](),
         destroy_static_bind_data,
     )
 
@@ -185,15 +185,15 @@ def static_init(info: TableInitInfo):
 
 def static_function(info: TableFunctionInfo, mut output: Chunk):
     """Produces exactly 2 rows in one call, then signals done."""
-    var bind_data = info.get_bind_data().bitcast[StaticBindData]()
+    var bind_data = info.get_bind_data().unsafe_bitcast[StaticBindData]()
     if bind_data[].done:
         output.set_size(0)
         return
 
     var out_vec0 = output.get_vector(0)
-    var out_data = out_vec0.get_data().bitcast[Int32]()
-    out_data[0] = Int32(100)
-    out_data[1] = Int32(200)
+    var out_data = out_vec0.get_data().unsafe_bitcast[Int32]()
+    out_data[unsafe_offset=0] = Int32(100)
+    out_data[unsafe_offset=1] = Int32(200)
 
     bind_data[].done = True
     output.set_size(2)
@@ -493,10 +493,10 @@ def test_table_function_set_cardinality() raises:
     def cardinality_bind(info: TableBindInfo):
         info.add_result_column("value", LogicalType(DuckDBType.integer))
         info.set_cardinality(2, True)
-        var bind_data = alloc[StaticBindData](1)
+        var bind_data = unsafe_alloc[StaticBindData](1)
         bind_data.unsafe_write(StaticBindData(done=False))
         info.set_bind_data(
-            bind_data.bitcast[NoneType](),
+            bind_data.unsafe_bitcast[NoneType](),
             destroy_static_bind_data,
         )
 

@@ -56,7 +56,7 @@ from raw_plan_tags import (
     KIND_Q14,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -188,55 +188,55 @@ def main() raises:
 
     # ---- synthetic part (dim): p_partkey 1..P, p_type promo iff pk % 3 == 1 ----
     # Build the p_type strings + promo truth on the host for the CPU reference.
-    var promo_truth = alloc[Int64](P + 1)  # indexed by partkey (1..P), 0 unused
+    var promo_truth = unsafe_alloc[Int64](P + 1)  # indexed by partkey (1..P), 0 unused
     var ptype_strs: List[String] = []
     var ppk_vals: List[Int64] = []
     for _ in range(P + 1):
-        promo_truth[0] = 0
+        promo_truth[unsafe_offset=0] = 0
     for r in range(P):
         var pk = r + 1
         var is_promo = (pk % 3 == 1)
         ppk_vals.append(Int64(pk))
         if is_promo:
             ptype_strs.append(String("PROMO BRUSHED STEEL"))
-            promo_truth[pk] = 1
+            promo_truth[unsafe_offset=pk] = 1
         else:
             ptype_strs.append(String("STANDARD POLISHED TIN"))
-            promo_truth[pk] = 0
+            promo_truth[unsafe_offset=pk] = 0
 
     # ---- synthetic lineitem (fact) ----
-    var ship = alloc[Int32](N)
-    var disc = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var lpk = alloc[Int64](N)
+    var ship = unsafe_alloc[Int32](N)
+    var disc = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var lpk = unsafe_alloc[Int64](N)
     for i in range(N):
-        ship[i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)
-        disc[i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
-        ext[i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
-        lpk[i] = Int64(1 + (i * 2246822519) % P)  # partkey in 1..P
+        ship[unsafe_offset=i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)
+        disc[unsafe_offset=i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
+        ext[unsafe_offset=i] = Int64(100 + (i * 16807) % 9_999_900)  # ~ up to 1e7 (scale2)
+        lpk[unsafe_offset=i] = Int64(1 + (i * 2246822519) % P)  # partkey in 1..P
 
     # ---- CPU int128 reference (same filter + ext*(100-disc), same promo) ----
     var cpu_promo = Int128(0)
     var cpu_total = Int128(0)
     for i in range(N):
-        var sd = ship[i]
+        var sd = ship[unsafe_offset=i]
         if sd >= Int32(ship_lo) and sd < Int32(ship_hi):
-            var rev = Int128(ext[i]) * (Int128(100) - Int128(disc[i]))
+            var rev = Int128(ext[unsafe_offset=i]) * (Int128(100) - Int128(disc[unsafe_offset=i]))
             cpu_total += rev
-            if promo_truth[Int(lpk[i])] != 0:
+            if promo_truth[unsafe_offset=Int(lpk[unsafe_offset=i])] != 0:
                 cpu_promo += rev
 
     # ---- build the Q14 RawPlan tape ----
     var b = TapeBuilder()
     build_q14_tape(b, ship_lo, ship_hi)
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
 
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
@@ -254,12 +254,12 @@ def main() raises:
 
     # ---- request 0: fact SQL (must name the fact cols incl l_partkey) ----
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
     var sql0_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     assert_true(sql0_len > 0, "fact materialize_sql empty")
     var sql0 = String("")
     for i in range(sql0_len):
-        sql0 += chr(Int(sql_buf[i]))
+        sql0 += chr(Int(sql_buf[unsafe_offset=i]))
     print("fact SQL:", sql0)
     assert_true("l_extendedprice" in sql0, "fact SQL missing l_extendedprice")
     assert_true("l_discount" in sql0, "fact SQL missing l_discount")
@@ -272,7 +272,7 @@ def main() raises:
     assert_true(sql1_len > 0, "dim materialize_sql empty")
     var sql1 = String("")
     for i in range(sql1_len):
-        sql1 += chr(Int(sql_buf[i]))
+        sql1 += chr(Int(sql_buf[unsafe_offset=i]))
     print("dim SQL:", sql1)
     assert_true("p_partkey" in sql1, "dim SQL missing p_partkey")
     assert_true("p_type" in sql1, "dim SQL missing p_type")
@@ -292,19 +292,19 @@ def main() raises:
         var rc: Int
         if nm == "l_shipdate":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE
+                h, 0, j, ship.unsafe_bitcast[NoneType](), N, TYPE_DATE
             )
         elif nm == "l_discount":
             rc = mojo_gpu_feed_column(
-                h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         elif nm == "l_extendedprice":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL
+                h, 0, j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL
             )
         elif nm == "l_partkey":
             rc = mojo_gpu_feed_column(
-                h, 0, j, lpk.bitcast[NoneType](), N, TYPE_BIGINT
+                h, 0, j, lpk.unsafe_bitcast[NoneType](), N, TYPE_BIGINT
             )
         else:
             raise Error("unexpected fact column: " + nm)
@@ -312,43 +312,43 @@ def main() raises:
 
     # ---- feed dim columns (request 1) in dim_order ----
     # p_partkey: BIGINT int64 array; p_type: contiguous DuckDB string_t (16 bytes).
-    var ppk_buf = alloc[Int64](P)
+    var ppk_buf = unsafe_alloc[Int64](P)
     for r in range(P):
-        ppk_buf[r] = ppk_vals[r]
+        ppk_buf[unsafe_offset=r] = ppk_vals[r]
     # Build a contiguous string_t array for p_type. The strings are longer than
     # 12 chars, so build the 16-byte string_t layout by hand using the pointer
     # variant, pointing at owned UTF-8 buffers.
-    var stbuf = alloc[UInt8](P * 16)
+    var stbuf = unsafe_alloc[UInt8](P * 16)
     var owned_strs: List[Pointer[UInt8, MutUntrackedOrigin]] = []
     for r in range(P):
         ref s = ptype_strs[r]
         var L = s.byte_length()
-        var sp = alloc[UInt8](L if L > 0 else 1)
+        var sp = unsafe_alloc[UInt8](L if L > 0 else 1)
         var sb = s.as_bytes()
         for k in range(L):
-            sp[k] = sb[k]
+            sp[unsafe_offset=k] = sb[k]
         owned_strs.append(sp)
         var base = r * 16
         # length (little-endian uint32) in bytes 0..3
-        stbuf[base + 0] = UInt8(L & 0xFF)
-        stbuf[base + 1] = UInt8((L >> 8) & 0xFF)
-        stbuf[base + 2] = UInt8((L >> 16) & 0xFF)
-        stbuf[base + 3] = UInt8((L >> 24) & 0xFF)
+        stbuf[unsafe_offset=base + 0] = UInt8(L & 0xFF)
+        stbuf[unsafe_offset=base + 1] = UInt8((L >> 8) & 0xFF)
+        stbuf[unsafe_offset=base + 2] = UInt8((L >> 16) & 0xFF)
+        stbuf[unsafe_offset=base + 3] = UInt8((L >> 24) & 0xFF)
         # all our p_type strings are > 12 chars, so use the pointer form: bytes 8..15.
         var addr = Int(sp)
         for kb in range(8):
-            stbuf[base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
+            stbuf[unsafe_offset=base + 8 + kb] = UInt8((addr >> (8 * kb)) & 0xFF)
 
     for j in range(len(dim_order)):
         var nm = dim_order[j]
         var rc: Int
         if nm == "p_partkey":
             rc = mojo_gpu_feed_column(
-                h, 1, j, ppk_buf.bitcast[NoneType](), P, TYPE_BIGINT
+                h, 1, j, ppk_buf.unsafe_bitcast[NoneType](), P, TYPE_BIGINT
             )
         elif nm == "p_type":
             rc = mojo_gpu_feed_column(
-                h, 1, j, stbuf.bitcast[NoneType](), P, TYPE_VARCHAR
+                h, 1, j, stbuf.unsafe_bitcast[NoneType](), P, TYPE_VARCHAR
             )
         else:
             raise Error("unexpected dim column: " + nm)
@@ -360,16 +360,16 @@ def main() raises:
 
     # results: 1 row, 2 cols (promo, total) in out_types order.
     assert_equal(mojo_gpu_result_rows(h), 1, "result_rows != 1")
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
 
     var rcp = mojo_gpu_result_i128(h, 0, 0, lo, hi)
     assert_equal(rcp, 0, "result_i128 promo rc")
-    var gpu_promo = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+    var gpu_promo = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
 
     var rct = mojo_gpu_result_i128(h, 0, 1, lo, hi)
     assert_equal(rct, 0, "result_i128 total rc")
-    var gpu_total = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+    var gpu_total = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
 
     print("CPU promo =", cpu_promo, "  GPU promo =", gpu_promo)
     print("CPU total =", cpu_total, "  GPU total =", gpu_total)
@@ -377,7 +377,7 @@ def main() raises:
     assert_equal(gpu_total, cpu_total, "GPU total sum != CPU (not bit-exact)")
 
     for r in range(len(owned_strs)):
-        owned_strs[r].free()
+        owned_strs[r].unsafe_free()
     mojo_gpu_desc_free(h)
     print("ALL PASS")
 

@@ -37,7 +37,7 @@ def sum_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 def sum_state_init(info: AggregateFunctionInfo, state: AggregateState):
     """Initializes a SUM state to zero."""
-    state.get_data().bitcast[SumState]().unsafe_write(SumState(total=0))
+    state.get_data().unsafe_bitcast[SumState]().unsafe_write(SumState(total=0))
 
 
 def sum_update(
@@ -45,10 +45,10 @@ def sum_update(
 ):
     """Updates SUM states with integer input values."""
     var size = len(input)
-    var data = input.get_vector(0).get_data().bitcast[Int32]()
+    var data = input.get_vector(0).get_data().unsafe_bitcast[Int32]()
     for i in range(size):
-        var s = states.get_state(i).get_data().bitcast[SumState]()
-        s[].total += Int64(data[i])
+        var s = states.get_state(i).get_data().unsafe_bitcast[SumState]()
+        s[].total += Int64(data[unsafe_offset=i])
 
 
 def sum_combine(
@@ -59,8 +59,8 @@ def sum_combine(
 ):
     """Combines SUM states for parallel aggregation."""
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[SumState]()
-        var t = target.get_state(i).get_data().bitcast[SumState]()
+        var s = source.get_state(i).get_data().unsafe_bitcast[SumState]()
+        var t = target.get_state(i).get_data().unsafe_bitcast[SumState]()
         t[].total += s[].total
 
 
@@ -72,16 +72,16 @@ def sum_finalize(
     offset: Int,
 ):
     """Produces the final SUM result."""
-    var out = result.get_data().bitcast[Int64]()
+    var out = result.get_data().unsafe_bitcast[Int64]()
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[SumState]()
-        out[offset + i] = s[].total
+        var s = source.get_state(i).get_data().unsafe_bitcast[SumState]()
+        out[unsafe_offset=offset + i] = s[].total
 
 
 def sum_destroy(states: AggregateStateArray):
     """Destroys SUM states."""
     for i in range(len(states)):
-        states.get_state(i).get_data().bitcast[SumState]().unsafe_deinit_pointee()
+        states.get_state(i).get_data().unsafe_bitcast[SumState]().unsafe_deinit_pointee()
 
 
 # ===--------------------------------------------------------------------===#
@@ -106,7 +106,7 @@ def count_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def count_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[CountState]().unsafe_write(
+    state.get_data().unsafe_bitcast[CountState]().unsafe_write(
         CountState(count=0)
     )
 
@@ -116,7 +116,7 @@ def count_update(
 ):
     var size = len(input)
     for i in range(size):
-        var s = states.get_state(i).get_data().bitcast[CountState]()
+        var s = states.get_state(i).get_data().unsafe_bitcast[CountState]()
         s[].count += 1
 
 
@@ -127,8 +127,8 @@ def count_combine(
     count: Int,
 ):
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[CountState]()
-        var t = target.get_state(i).get_data().bitcast[CountState]()
+        var s = source.get_state(i).get_data().unsafe_bitcast[CountState]()
+        var t = target.get_state(i).get_data().unsafe_bitcast[CountState]()
         t[].count += s[].count
 
 
@@ -139,10 +139,10 @@ def count_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Int64]()
+    var out = result.get_data().unsafe_bitcast[Int64]()
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[CountState]()
-        out[offset + i] = s[].count
+        var s = source.get_state(i).get_data().unsafe_bitcast[CountState]()
+        out[unsafe_offset=offset + i] = s[].count
 
 
 # ===--------------------------------------------------------------------===#
@@ -163,7 +163,7 @@ def avg_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def avg_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[AvgState]().unsafe_write(
+    state.get_data().unsafe_bitcast[AvgState]().unsafe_write(
         AvgState(sum=0.0, count=0)
     )
 
@@ -172,10 +172,10 @@ def avg_update_double(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     var size = len(input)
-    var data = input.get_vector(0).get_data().bitcast[Float64]()
+    var data = input.get_vector(0).get_data().unsafe_bitcast[Float64]()
     for i in range(size):
-        var s = states.get_state(i).get_data().bitcast[AvgState]()
-        s[].sum += data[i]
+        var s = states.get_state(i).get_data().unsafe_bitcast[AvgState]()
+        s[].sum += data[unsafe_offset=i]
         s[].count += 1
 
 
@@ -186,8 +186,8 @@ def avg_combine(
     count: Int,
 ):
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[AvgState]()
-        var t = target.get_state(i).get_data().bitcast[AvgState]()
+        var s = source.get_state(i).get_data().unsafe_bitcast[AvgState]()
+        var t = target.get_state(i).get_data().unsafe_bitcast[AvgState]()
         t[].sum += s[].sum
         t[].count += s[].count
 
@@ -199,13 +199,13 @@ def avg_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Float64]()
+    var out = result.get_data().unsafe_bitcast[Float64]()
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[AvgState]()
+        var s = source.get_state(i).get_data().unsafe_bitcast[AvgState]()
         if s[].count > 0:
-            out[offset + i] = s[].sum / Float64(s[].count)
+            out[unsafe_offset=offset + i] = s[].sum / Float64(s[].count)
         else:
-            out[offset + i] = 0.0
+            out[unsafe_offset=offset + i] = 0.0
 
 
 # ===--------------------------------------------------------------------===#
@@ -223,7 +223,7 @@ def sum_double_state_size(info: AggregateFunctionInfo) -> idx_t:
 
 
 def sum_double_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[SumDoubleState]().unsafe_write(
+    state.get_data().unsafe_bitcast[SumDoubleState]().unsafe_write(
         SumDoubleState(total=0.0)
     )
 
@@ -232,10 +232,10 @@ def sum_double_update(
     info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray
 ):
     var size = len(input)
-    var data = input.get_vector(0).get_data().bitcast[Float64]()
+    var data = input.get_vector(0).get_data().unsafe_bitcast[Float64]()
     for i in range(size):
-        var s = states.get_state(i).get_data().bitcast[SumDoubleState]()
-        s[].total += data[i]
+        var s = states.get_state(i).get_data().unsafe_bitcast[SumDoubleState]()
+        s[].total += data[unsafe_offset=i]
 
 
 def sum_double_combine(
@@ -245,8 +245,8 @@ def sum_double_combine(
     count: Int,
 ):
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[SumDoubleState]()
-        var t = target.get_state(i).get_data().bitcast[SumDoubleState]()
+        var s = source.get_state(i).get_data().unsafe_bitcast[SumDoubleState]()
+        var t = target.get_state(i).get_data().unsafe_bitcast[SumDoubleState]()
         t[].total += s[].total
 
 
@@ -257,10 +257,10 @@ def sum_double_finalize(
     count: Int,
     offset: Int,
 ):
-    var out = result.get_data().bitcast[Float64]()
+    var out = result.get_data().unsafe_bitcast[Float64]()
     for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[SumDoubleState]()
-        out[offset + i] = s[].total
+        var s = source.get_state(i).get_data().unsafe_bitcast[SumDoubleState]()
+        out[unsafe_offset=offset + i] = s[].total
 
 
 # ===--------------------------------------------------------------------===#

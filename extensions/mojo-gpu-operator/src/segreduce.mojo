@@ -64,7 +64,8 @@ from max.gpu import block_idx, thread_idx, global_idx, block_dim, grid_dim
 from max.gpu.primitives import warp
 from max.gpu.memory import AddressSpace
 from max.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import alloc, stack_allocation
+from std.memory import stack_allocation
+from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.os import abort, getenv
 from std.sys.info import is_nvidia_gpu, is_amd_gpu
@@ -197,23 +198,23 @@ def eval_program_fast[
         dims: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
         dim_offsets: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     ) -> Int64:
-        var op = prog[3 * k + 0]
-        var a = prog[3 * k + 1]
-        var b = prog[3 * k + 2]
+        var op = prog[unsafe_offset=3 * k + 0]
+        var a = prog[unsafe_offset=3 * k + 1]
+        var b = prog[unsafe_offset=3 * k + 2]
         if op == OP_LOAD_COL:
             return _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
         elif op == OP_PUSH_CONST:
             return a
         elif op == OP_LOAD_DIM:
             var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
-            return dims[Int(dim_offsets[Int(a)]) + key]
+            return dims[unsafe_offset=Int(dim_offsets[unsafe_offset=Int(a)]) + key]
         # operand op should be a leaf; non-leaf here means an unrecognized shape.
         return Int64(0)
 
     if prog_len == 1:
         return _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
 
-    if prog_len == 3 and prog[3 * 2 + 0] == OP_MUL:
+    if prog_len == 3 and prog[unsafe_offset=3 * 2 + 0] == OP_MUL:
         var x = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
         var y = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
         return x * y
@@ -221,8 +222,8 @@ def eval_program_fast[
     # len 5: e ; k ; d ; SUB ; MUL  ->  e * (k - d)
     if (
         prog_len == 5
-        and prog[3 * 3 + 0] == OP_SUB
-        and prog[3 * 4 + 0] == OP_MUL
+        and prog[unsafe_offset=3 * 3 + 0] == OP_SUB
+        and prog[unsafe_offset=3 * 4 + 0] == OP_MUL
     ):
         var e = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
         var k = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
@@ -232,10 +233,10 @@ def eval_program_fast[
     # len 9: e ; k ; d ; SUB ; MUL ; k2 ; t ; ADD ; MUL -> e*(k-d) * (k2 + t)
     if (
         prog_len == 9
-        and prog[3 * 3 + 0] == OP_SUB
-        and prog[3 * 4 + 0] == OP_MUL
-        and prog[3 * 7 + 0] == OP_ADD
-        and prog[3 * 8 + 0] == OP_MUL
+        and prog[unsafe_offset=3 * 3 + 0] == OP_SUB
+        and prog[unsafe_offset=3 * 4 + 0] == OP_MUL
+        and prog[unsafe_offset=3 * 7 + 0] == OP_ADD
+        and prog[unsafe_offset=3 * 8 + 0] == OP_MUL
     ):
         var e = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
         var k = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
@@ -248,9 +249,9 @@ def eval_program_fast[
     #   stack at SELECT: [p, prod, z] -> pred=p, then=prod, else=z.
     if (
         prog_len == 8
-        and prog[3 * 4 + 0] == OP_SUB
-        and prog[3 * 5 + 0] == OP_MUL
-        and prog[3 * 7 + 0] == OP_SELECT
+        and prog[unsafe_offset=3 * 4 + 0] == OP_SUB
+        and prog[unsafe_offset=3 * 5 + 0] == OP_MUL
+        and prog[unsafe_offset=3 * 7 + 0] == OP_SELECT
     ):
         var p = _operand(prog, 0, cols, n_rows, row, dims, dim_offsets)
         var e = _operand(prog, 1, cols, n_rows, row, dims, dim_offsets)
@@ -314,9 +315,9 @@ def seg_ungrouped_kernel_q6(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program_fast(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -324,7 +325,7 @@ def seg_ungrouped_kernel_q6(
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            partials[blk * M + m] = s
+            partials[unsafe_offset=blk * M + m] = s
 
 
 # ===========================================================================
@@ -407,33 +408,33 @@ def seg_ungrouped_kernel_f64[
                 pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
             ) and _fpred_pass_dev[USE_COLPTR](cols, n_rows, i, fpred, n_fpred):
                 for m in range(M):
-                    var moff = Int(metric_offsets[m])
-                    var prog = metric_progs + 3 * moff
+                    var moff = Int(metric_offsets[unsafe_offset=m])
+                    var prog = metric_progs.unsafe_offset(3 * moff)
                     # const_div is parallel to the op tape (one entry per op), so
                     # it is sliced by the same per-metric op offset as the program;
                     # then eval_program_f64 indexes it by local op index k.
                     acc[m] += eval_program_f64[USE_COLPTR](
-                        prog, Int(metric_lens[m]), cols, n_rows, i,
-                        col_div, const_div + moff, dims, dim_offsets,
+                        prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
+                        col_div, const_div.unsafe_offset(moff), dims, dim_offsets,
                     )
             i += stride
         # Tree reduction in shared memory, per metric, then thread 0 atomic-adds.
         for m in range(M):
-            smem[tid * SEG_MAX_METRICS + m] = acc[m]
+            smem[unsafe_offset=tid * SEG_MAX_METRICS + m] = acc[m]
         barrier()
         var active = SEG_BLK
         while active > 1:
             active >>= 1
             if tid < active:
                 for m in range(M):
-                    smem[tid * SEG_MAX_METRICS + m] = (
-                        smem[tid * SEG_MAX_METRICS + m]
-                        + smem[(tid + active) * SEG_MAX_METRICS + m]
+                    smem[unsafe_offset=tid * SEG_MAX_METRICS + m] = (
+                        smem[unsafe_offset=tid * SEG_MAX_METRICS + m]
+                        + smem[unsafe_offset=(tid + active) * SEG_MAX_METRICS + m]
                     )
             barrier()
         if tid == 0:
             for m in range(M):
-                _ = Atomic.fetch_add(fpartials + m, smem[m])
+                _ = Atomic.fetch_add(fpartials.unsafe_offset(m), smem[unsafe_offset=m])
     else:
         abort("seg_ungrouped_kernel_f64 requires NVIDIA (kernel f64)")
 
@@ -517,19 +518,19 @@ def seg_dense_kernel_f64[
                 cnt[g] += 1.0
                 var base = g * M
                 for m in range(M):
-                    var moff = Int(metric_offsets[m])
-                    var prog = metric_progs + 3 * moff
+                    var moff = Int(metric_offsets[unsafe_offset=m])
+                    var prog = metric_progs.unsafe_offset(3 * moff)
                     acc[base + m] += eval_program_f64[USE_COLPTR](
-                        prog, Int(metric_lens[m]), cols, n_rows, i,
-                        col_div, const_div + moff, dims, dim_offsets,
+                        prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
+                        col_div, const_div.unsafe_offset(moff), dims, dim_offsets,
                     )
             i += stride
         # Tree reduction in shared memory, per (group, metric); lane 0 atomic-adds.
         var smbase = lane * (SEG_MAX_METRICS * SEG_MAX_METRICS)
         for x in range(gm):
-            smem[smbase + x] = acc[x]
+            smem[unsafe_offset=smbase + x] = acc[x]
         for g in range(G):
-            scnt[smbase + g] = cnt[g]
+            scnt[unsafe_offset=smbase + g] = cnt[g]
         barrier()
         var active = WARP
         while active > 1:
@@ -537,15 +538,15 @@ def seg_dense_kernel_f64[
             if lane < active:
                 var ob = (lane + active) * (SEG_MAX_METRICS * SEG_MAX_METRICS)
                 for x in range(gm):
-                    smem[smbase + x] = smem[smbase + x] + smem[ob + x]
+                    smem[unsafe_offset=smbase + x] = smem[unsafe_offset=smbase + x] + smem[unsafe_offset=ob + x]
                 for g in range(G):
-                    scnt[smbase + g] = scnt[smbase + g] + scnt[ob + g]
+                    scnt[unsafe_offset=smbase + g] = scnt[unsafe_offset=smbase + g] + scnt[unsafe_offset=ob + g]
             barrier()
         if lane == 0:
             for x in range(gm):
-                _ = Atomic.fetch_add(fpartials + x, smem[x])
+                _ = Atomic.fetch_add(fpartials.unsafe_offset(x), smem[unsafe_offset=x])
             for g in range(G):
-                _ = Atomic.fetch_add(gcount + g, scnt[g])
+                _ = Atomic.fetch_add(gcount.unsafe_offset(g), scnt[unsafe_offset=g])
     else:
         abort("seg_dense_kernel_f64 requires NVIDIA (kernel f64)")
 
@@ -605,15 +606,15 @@ def seg_dense_kernel_f64_global[
                 var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
                 if g >= 0 and g < G:
                     var base = g * M
-                    _ = Atomic.fetch_add(gcount + g, Float64(1.0))
+                    _ = Atomic.fetch_add(gcount.unsafe_offset(g), Float64(1.0))
                     for m in range(M):
-                        var moff = Int(metric_offsets[m])
-                        var prog = metric_progs + 3 * moff
+                        var moff = Int(metric_offsets[unsafe_offset=m])
+                        var prog = metric_progs.unsafe_offset(3 * moff)
                         var v = eval_program_f64[USE_COLPTR](
-                            prog, Int(metric_lens[m]), cols, n_rows, i,
-                            col_div, const_div + moff, dims, dim_offsets,
+                            prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
+                            col_div, const_div.unsafe_offset(moff), dims, dim_offsets,
                         )
-                        _ = Atomic.fetch_add(fpartials + (base + m), v)
+                        _ = Atomic.fetch_add(fpartials.unsafe_offset((base + m)), v)
             i += stride
     else:
         abort("seg_dense_kernel_f64_global requires NVIDIA (kernel f64 + atomics)")
@@ -676,7 +677,7 @@ def seg_hash_kernel_f64[
                 while guard <= cap:
                     var expected = HASH_EMPTY
                     if Atomic[Int64].compare_exchange(
-                        slot_key + slot, expected, key
+                        slot_key.unsafe_offset(slot), expected, key
                     ):
                         placed = True
                     elif expected == key:
@@ -684,13 +685,13 @@ def seg_hash_kernel_f64[
                     if placed:
                         var base = slot * M
                         for m in range(M):
-                            var moff = Int(metric_offsets[m])
-                            var prog = metric_progs + 3 * moff
+                            var moff = Int(metric_offsets[unsafe_offset=m])
+                            var prog = metric_progs.unsafe_offset(3 * moff)
                             var v = eval_program_f64[USE_COLPTR](
-                                prog, Int(metric_lens[m]), cols, n_rows, i,
-                                col_div, const_div + moff, dims, dim_offsets,
+                                prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
+                                col_div, const_div.unsafe_offset(moff), dims, dim_offsets,
                             )
-                            _ = Atomic.fetch_add(slot_facc + base + m, v)
+                            _ = Atomic.fetch_add(slot_facc.unsafe_offset(base + m), v)
                         break
                     slot = (slot + 1) & mask
                     guard += 1
@@ -761,9 +762,9 @@ def seg_ungrouped_kernel_q6_pred[
             and qt < qty_hi
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program_fast[USE_COLPTR](
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -771,7 +772,7 @@ def seg_ungrouped_kernel_q6_pred[
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            partials[blk * M + m] = s
+            partials[unsafe_offset=blk * M + m] = s
 
 
 # ===========================================================================
@@ -803,9 +804,9 @@ def _fpred_pass_dev[
     # When USE_COLPTR is True, `cols` is the per-column pointer table (Phase 3);
     # _col_at reads the same value through it. Default False = packed (unchanged).
     for p in range(n_fpred):
-        var slot = Int(fpred[3 * p + 0])
-        var cmp = fpred[3 * p + 1]
-        var k = fpred[3 * p + 2]
+        var slot = Int(fpred[unsafe_offset=3 * p + 0])
+        var cmp = fpred[unsafe_offset=3 * p + 1]
+        var k = fpred[unsafe_offset=3 * p + 2]
         var v = _col_at[USE_COLPTR](cols, n_rows, slot, row)
         # Mirror host _pred_pass exactly (same cmp tags / same int64 compares).
         if cmp == CMP_EQ:
@@ -871,9 +872,9 @@ def seg_dense_kernel_q1_pred[
             var g = Int(_col_at[USE_COLPTR](cols, n_rows, gid_slot, i))
             var base = g * M
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[base + m] += eval_program_fast[USE_COLPTR](
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -882,7 +883,7 @@ def seg_dense_kernel_q1_pred[
         for m in range(M):
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
-                partials[(blk * G + g) * M + m] = s
+                partials[unsafe_offset=(blk * G + g) * M + m] = s
 
 
 # Q14 predicate-independent (UNGROUPED + 1 dim): identical to
@@ -919,9 +920,9 @@ def seg_ungrouped_kernel_q14_pred[
     while i < n_rows:
         if _fpred_pass_dev[USE_COLPTR](cols, n_rows, i, fpred, n_fpred):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program_fast[USE_COLPTR](
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -929,7 +930,7 @@ def seg_ungrouped_kernel_q14_pred[
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            partials[blk * M + m] = s
+            partials[unsafe_offset=blk * M + m] = s
 
 
 # Q14 (UNGROUPED + 1 dim): same shape as Q6's ungrouped kernel, but the pass
@@ -960,9 +961,9 @@ def seg_ungrouped_kernel_q14(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program_fast(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -970,7 +971,7 @@ def seg_ungrouped_kernel_q14(
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            partials[blk * M + m] = s
+            partials[unsafe_offset=blk * M + m] = s
 
 
 # Q1 (DENSE_GROUP): specialized copy of seg_dense_kernel with the fast metric +
@@ -1004,12 +1005,12 @@ def seg_dense_kernel_q1(
         if _row_passes_fast(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
-            var g = Int(cols[gid_slot * n_rows + i])
+            var g = Int(cols[unsafe_offset=gid_slot * n_rows + i])
             var base = g * M
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[base + m] += eval_program_fast(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1018,7 +1019,7 @@ def seg_dense_kernel_q1(
         for m in range(M):
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
-                partials[(blk * G + g) * M + m] = s
+                partials[unsafe_offset=(blk * G + g) * M + m] = s
 
 
 # Q5 (DENSE_GROUP + 5 dims): same structure as seg_dense_kernel_q1; the pass
@@ -1052,12 +1053,12 @@ def seg_dense_kernel_q5(
         if _row_passes_fast(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
-            var g = Int(cols[gid_slot * n_rows + i])
+            var g = Int(cols[unsafe_offset=gid_slot * n_rows + i])
             var base = g * M
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[base + m] += eval_program_fast(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1066,7 +1067,7 @@ def seg_dense_kernel_q5(
         for m in range(M):
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
-                partials[(blk * G + g) * M + m] = s
+                partials[unsafe_offset=(blk * G + g) * M + m] = s
 
 
 # Q5 predicate-independent (DENSE_GROUP + 5 dims): identical to seg_dense_kernel_q5
@@ -1123,17 +1124,17 @@ def seg_dense_kernel_q5_pred[
     var stride = SEG_NBLOCKS * WARP
     var acc = Array[Int64, SEG_MAX_METRICS * SEG_MAX_METRICS](fill=0)
     var i = Int(block_idx.x) * WARP + lane
-    var doff0 = Int(dim_offsets[0])
-    var doff1 = Int(dim_offsets[1])
-    var doff2 = Int(dim_offsets[2])
-    var doff3 = Int(dim_offsets[3])
+    var doff0 = Int(dim_offsets[unsafe_offset=0])
+    var doff1 = Int(dim_offsets[unsafe_offset=1])
+    var doff2 = Int(dim_offsets[unsafe_offset=2])
+    var doff3 = Int(dim_offsets[unsafe_offset=3])
     while i < n_rows:
         var ok = Int(_col_at[USE_COLPTR](cols, n_rows, lok_slot, i))
         var sk = Int(_col_at[USE_COLPTR](cols, n_rows, lsk_slot, i))
-        var od = dims[doff0 + ok]
-        var cust_n = dims[doff1 + ok]
-        var supp_n = dims[doff2 + sk]
-        var supp_r = dims[doff3 + sk]
+        var od = dims[unsafe_offset=doff0 + ok]
+        var cust_n = dims[unsafe_offset=doff1 + ok]
+        var supp_n = dims[unsafe_offset=doff2 + sk]
+        var supp_r = dims[unsafe_offset=doff3 + sk]
         var passes = (
             od >= o_lo
             and od < o_hi
@@ -1145,9 +1146,9 @@ def seg_dense_kernel_q5_pred[
             if g >= 0 and g < G:
                 var base = g * M
                 for m in range(M):
-                    var prog = metric_progs + 3 * Int(metric_offsets[m])
+                    var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                     acc[base + m] += eval_program_fast[USE_COLPTR](
-                        prog, Int(metric_lens[m]), cols, n_rows, i,
+                        prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                         dims, dim_offsets,
                     )
         i += stride
@@ -1156,7 +1157,7 @@ def seg_dense_kernel_q5_pred[
         for m in range(M):
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
-                partials[(blk * G + g) * M + m] = s
+                partials[unsafe_offset=(blk * G + g) * M + m] = s
 
 
 # ---------------------------------------------------------------------------
@@ -1189,9 +1190,9 @@ def seg_ungrouped_kernel(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1199,7 +1200,7 @@ def seg_ungrouped_kernel(
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            partials[blk * M + m] = s
+            partials[unsafe_offset=blk * M + m] = s
 
 
 # ---------------------------------------------------------------------------
@@ -1236,12 +1237,12 @@ def seg_dense_kernel(
         if _row_passes(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
-            var g = Int(cols[gid_slot * n_rows + i])
+            var g = Int(cols[unsafe_offset=gid_slot * n_rows + i])
             var base = g * M
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[base + m] += eval_program(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1250,7 +1251,7 @@ def seg_dense_kernel(
         for m in range(M):
             var s = warp.sum(acc[g * M + m])
             if lane == 0:
-                partials[(blk * G + g) * M + m] = s
+                partials[unsafe_offset=(blk * G + g) * M + m] = s
 
 
 # ---------------------------------------------------------------------------
@@ -1288,9 +1289,9 @@ def seg_ungrouped_kernel_mw(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1303,14 +1304,14 @@ def seg_ungrouped_kernel_mw(
     for m in range(M):
         var s = warp.sum(acc[m])
         if lane == 0:
-            sh[wid * SEG_MAX_METRICS + m] = s
+            sh[unsafe_offset=wid * SEG_MAX_METRICS + m] = s
     barrier()
     # threads [0, M) each sum one metric across the SEG_NWARPS warps.
     if Int(thread_idx.x) < M:
         var tot = Int64(0)
         for w in range(SEG_NWARPS):
-            tot += sh[w * SEG_MAX_METRICS + Int(thread_idx.x)]
-        partials[Int(block_idx.x) * M + Int(thread_idx.x)] = tot
+            tot += sh[unsafe_offset=w * SEG_MAX_METRICS + Int(thread_idx.x)]
+        partials[unsafe_offset=Int(block_idx.x) * M + Int(thread_idx.x)] = tot
 
 
 def seg_dense_kernel_mw(
@@ -1342,12 +1343,12 @@ def seg_dense_kernel_mw(
         if _row_passes(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
-            var g = Int(cols[gid_slot * n_rows + i])
+            var g = Int(cols[unsafe_offset=gid_slot * n_rows + i])
             var base = g * M
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[base + m] += eval_program(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += stride
@@ -1362,17 +1363,17 @@ def seg_dense_kernel_mw(
     for x in range(gm):
         var s = warp.sum(acc[x])
         if lane == 0:
-            sh[wid * (SEG_MAX_METRICS * SEG_MAX_METRICS) + x] = s
+            sh[unsafe_offset=wid * (SEG_MAX_METRICS * SEG_MAX_METRICS) + x] = s
     barrier()
     # threads stride over the gm partials, summing each across the warps.
     var xi = Int(thread_idx.x)
     while xi < gm:
         var tot = Int64(0)
         for w in range(SEG_NWARPS):
-            tot += sh[w * (SEG_MAX_METRICS * SEG_MAX_METRICS) + xi]
+            tot += sh[unsafe_offset=w * (SEG_MAX_METRICS * SEG_MAX_METRICS) + xi]
         var g = xi // M
         var m = xi % M
-        partials[(Int(block_idx.x) * G + g) * M + m] = tot
+        partials[unsafe_offset=(Int(block_idx.x) * G + g) * M + m] = tot
         xi += SEG_BLK
 
 
@@ -1405,8 +1406,8 @@ def seg_sort_kernel(
     if s >= n_seg:
         return
     var lane = Int(thread_idx.x)
-    var lo = Int(seg_off[s])
-    var hi = Int(seg_off[s + 1])
+    var lo = Int(seg_off[unsafe_offset=s])
+    var hi = Int(seg_off[unsafe_offset=s + 1])
     var acc = Array[Int64, SEG_MAX_METRICS](fill=0)
     var i = lo + lane
     while i < hi:
@@ -1414,16 +1415,16 @@ def seg_sort_kernel(
             pass_prog, pass_len, cols, n_rows, i, dims, dim_offsets
         ):
             for m in range(M):
-                var prog = metric_progs + 3 * Int(metric_offsets[m])
+                var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                 acc[m] += eval_program(
-                    prog, Int(metric_lens[m]), cols, n_rows, i,
+                    prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                     dims, dim_offsets,
                 )
         i += WARP
     for m in range(M):
         var tot = warp.sum(acc[m])
         if lane == 0:
-            seg_out[s * M + m] = tot
+            seg_out[unsafe_offset=s * M + m] = tot
 
 
 # ---------------------------------------------------------------------------
@@ -1496,7 +1497,7 @@ def seg_hash_kernel[
                     var expected = HASH_EMPTY
                     # Try to claim an empty slot for this key.
                     if Atomic[Int64].compare_exchange(
-                        slot_key + slot, expected, key
+                        slot_key.unsafe_offset(slot), expected, key
                     ):
                         placed = True  # we claimed it
                     elif expected == key:
@@ -1504,13 +1505,13 @@ def seg_hash_kernel[
                     if placed:
                         var base = slot * M
                         for m in range(M):
-                            var prog = metric_progs + 3 * Int(metric_offsets[m])
+                            var prog = metric_progs.unsafe_offset(3 * Int(metric_offsets[unsafe_offset=m]))
                             var v = eval_program[USE_COLPTR](
-                                prog, Int(metric_lens[m]), cols, n_rows, i,
+                                prog, Int(metric_lens[unsafe_offset=m]), cols, n_rows, i,
                                 dims, dim_offsets,
                             )
                             _ = Atomic[Int64].fetch_add(
-                                slot_acc + base + m, v
+                                slot_acc.unsafe_offset(base + m), v
                             )
                         break
                     slot = (slot + 1) & mask
@@ -1587,7 +1588,7 @@ def segreduce_upload(
 
     # ---- FK-join dim arrays (concatenated). dims_total == dim_offsets_host[n_dims].
     # Allocate at least 1 element so the buffer is always valid (n_dims==0 path).
-    var dims_total = Int(dim_offsets_host[n_dims]) if n_dims > 0 else 0
+    var dims_total = Int(dim_offsets_host[unsafe_offset=n_dims]) if n_dims > 0 else 0
     var dims_n = dims_total if dims_total > 0 else 1
     var dims_d = ctx.enqueue_create_buffer[DType.int64](dims_n)
     if dims_total > 0:
@@ -1598,7 +1599,7 @@ def segreduce_upload(
     var dim_offsets = List[Int64]()
     if n_dims > 0:
         for i in range(n_dims + 1):
-            dim_offsets.append(dim_offsets_host[i])
+            dim_offsets.append(dim_offsets_host[unsafe_offset=i])
 
     # ---- sort-segment offsets. Allocate at least 1 element (n_seg==0 path).
     var soff_n = n_seg + 1 if n_seg > 0 else 1
@@ -1644,7 +1645,7 @@ def segreduce_upload_from_packed(
 
     # ---- FK-join dim arrays (concatenated). dims_total == dim_offsets_host[n_dims].
     # Allocate at least 1 element so the buffer is always valid (n_dims==0 path).
-    var dims_total = Int(dim_offsets_host[n_dims]) if n_dims > 0 else 0
+    var dims_total = Int(dim_offsets_host[unsafe_offset=n_dims]) if n_dims > 0 else 0
     var dims_n = dims_total if dims_total > 0 else 1
     var dims_d = ctx.enqueue_create_buffer[DType.int64](dims_n)
     if dims_total > 0:
@@ -1655,7 +1656,7 @@ def segreduce_upload_from_packed(
     var dim_offsets = List[Int64]()
     if n_dims > 0:
         for i in range(n_dims + 1):
-            dim_offsets.append(dim_offsets_host[i])
+            dim_offsets.append(dim_offsets_host[unsafe_offset=i])
 
     # ---- sort-segment offsets. Allocate at least 1 element (n_seg==0 path).
     var soff_n = n_seg + 1 if n_seg > 0 else 1
@@ -1696,7 +1697,7 @@ def segreduce_upload_from_colptr(
     n_dims: Int,
 ) raises -> SegResident:
     # ---- FK-join dim arrays (concatenated). Identical to the other uploaders. ----
-    var dims_total = Int(dim_offsets_host[n_dims]) if n_dims > 0 else 0
+    var dims_total = Int(dim_offsets_host[unsafe_offset=n_dims]) if n_dims > 0 else 0
     var dims_n = dims_total if dims_total > 0 else 1
     var dims_d = ctx.enqueue_create_buffer[DType.int64](dims_n)
     if dims_total > 0:
@@ -1705,7 +1706,7 @@ def segreduce_upload_from_colptr(
     var dim_offsets = List[Int64]()
     if n_dims > 0:
         for i in range(n_dims + 1):
-            dim_offsets.append(dim_offsets_host[i])
+            dim_offsets.append(dim_offsets_host[unsafe_offset=i])
 
     var soff_n = n_seg + 1 if n_seg > 0 else 1
     var seg_off_d = ctx.enqueue_create_buffer[DType.int64](soff_n)
@@ -1834,14 +1835,14 @@ def segreduce_run(
             dims_d, doff_d,
             out_d,
             grid_dim=n_seg, block_dim=WARP)
-        var out_h = alloc[Int64](n_seg * M)
+        var out_h = unsafe_alloc[Int64](n_seg * M)
         var out_sub = out_d.create_sub_buffer[DType.int64](0, n_seg * M)
         ctx.enqueue_copy(out_h, out_sub)
         ctx.synchronize()
         for s in range(n_seg):
             for m in range(M):
-                result.append(Int128(out_h[s * M + m]))
-        out_h.free()
+                result.append(Int128(out_h[unsafe_offset=s * M + m]))
+        out_h.unsafe_free()
         return result^
 
     if mode == STRAT_DENSE_GROUP:
@@ -1934,7 +1935,7 @@ def segreduce_run(
                 dims_d, doff_d,
                 part_d,
                 grid_dim=SEG_NBLOCKS, block_dim=WARP)
-        var part_h = alloc[Int64](npart)
+        var part_h = unsafe_alloc[Int64](npart)
         var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
         ctx.enqueue_copy(part_h, part_sub)
         ctx.synchronize()
@@ -1942,9 +1943,9 @@ def segreduce_run(
             for m in range(M):
                 var acc = Int128(0)
                 for b in range(SEG_NBLOCKS):
-                    acc += Int128(part_h[(b * G + g) * M + m])
+                    acc += Int128(part_h[unsafe_offset=(b * G + g) * M + m])
                 result.append(acc)
-        part_h.free()
+        part_h.unsafe_free()
         return result^
 
     # default: STRAT_UNGROUPED
@@ -2036,16 +2037,16 @@ def segreduce_run(
             dims_d, doff_d,
             part_d,
             grid_dim=SEG_NBLOCKS, block_dim=WARP)
-    var part_h = alloc[Int64](npart)
+    var part_h = unsafe_alloc[Int64](npart)
     var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
     ctx.enqueue_copy(part_h, part_sub)
     ctx.synchronize()
     for m in range(M):
         var acc = Int128(0)
         for b in range(SEG_NBLOCKS):
-            acc += Int128(part_h[b * M + m])
+            acc += Int128(part_h[unsafe_offset=b * M + m])
         result.append(acc)
-    part_h.free()
+    part_h.unsafe_free()
     return result^
 
 
@@ -2231,24 +2232,24 @@ def segreduce_run_f64(
             fpart_d,
             fpred_d, Int64(n_fpred),
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
-    var fpart_h = alloc[Float64](nout)
+    var fpart_h = unsafe_alloc[Float64](nout)
     var fpart_sub = fpart_d.create_sub_buffer[DType.float64](0, nout)
     ctx.enqueue_copy(fpart_h, fpart_sub)
     # DENSE: also read back the per-group passing-row counts (appended to result).
-    var gcnt_h = alloc[Float64](gcnt_n)
+    var gcnt_h = unsafe_alloc[Float64](gcnt_n)
     if mode == STRAT_DENSE_GROUP:
         var gcnt_sub = gcnt_d.create_sub_buffer[DType.float64](0, gcnt_n)
         ctx.enqueue_copy(gcnt_h, gcnt_sub)
     ctx.synchronize()
     for x in range(nout):
-        result.append(fpart_h[x])
+        result.append(fpart_h[unsafe_offset=x])
     # DENSE: append G per-group counts after the G*M sums (the host slices them by
     # G off the end: result[G*M + g] == passing-row count of group g).
     if mode == STRAT_DENSE_GROUP:
         for g in range(G):
-            result.append(gcnt_h[g])
-    fpart_h.free()
-    gcnt_h.free()
+            result.append(gcnt_h[unsafe_offset=g])
+    fpart_h.unsafe_free()
+    gcnt_h.unsafe_free()
     return result^
 
 
@@ -2358,8 +2359,8 @@ def segreduce_run_hash(
             grid_dim=nblocks, block_dim=HASH_BLOCK)
 
     # ---- read back occupied slots, widen int64 to int128 on the host ----
-    var key_h = alloc[Int64](cap)
-    var acc_h = alloc[Int64](cap * M)
+    var key_h = unsafe_alloc[Int64](cap)
+    var acc_h = unsafe_alloc[Int64](cap * M)
     ctx.enqueue_copy(key_h, slot_key_d)
     ctx.enqueue_copy(acc_h, slot_acc_d)
     ctx.synchronize()
@@ -2367,13 +2368,13 @@ def segreduce_run_hash(
     var keys = List[Int64]()
     var sums = List[Int128]()
     for slot in range(cap):
-        if key_h[slot] == HASH_EMPTY:
+        if key_h[unsafe_offset=slot] == HASH_EMPTY:
             continue
-        keys.append(key_h[slot])
+        keys.append(key_h[unsafe_offset=slot])
         for m in range(M):
-            sums.append(Int128(acc_h[slot * M + m]))
-    key_h.free()
-    acc_h.free()
+            sums.append(Int128(acc_h[unsafe_offset=slot * M + m]))
+    key_h.unsafe_free()
+    acc_h.unsafe_free()
     return HashGroupResult(keys^, sums^, M)
 
 
@@ -2480,8 +2481,8 @@ def segreduce_run_hash_f64(
             slot_key_d, slot_facc_d,
             grid_dim=nblocks, block_dim=HASH_BLOCK)
 
-    var key_h = alloc[Int64](cap)
-    var acc_h = alloc[Float64](cap * M)
+    var key_h = unsafe_alloc[Int64](cap)
+    var acc_h = unsafe_alloc[Float64](cap * M)
     ctx.enqueue_copy(key_h, slot_key_d)
     var acc_sub = slot_facc_d.create_sub_buffer[DType.float64](0, cap * M)
     ctx.enqueue_copy(acc_h, acc_sub)
@@ -2490,13 +2491,13 @@ def segreduce_run_hash_f64(
     var keys = List[Int64]()
     var fsums = List[Float64]()
     for slot in range(cap):
-        if key_h[slot] == HASH_EMPTY:
+        if key_h[unsafe_offset=slot] == HASH_EMPTY:
             continue
-        keys.append(key_h[slot])
+        keys.append(key_h[unsafe_offset=slot])
         for m in range(M):
-            fsums.append(acc_h[slot * M + m])
-    key_h.free()
-    acc_h.free()
+            fsums.append(acc_h[unsafe_offset=slot * M + m])
+    key_h.unsafe_free()
+    acc_h.unsafe_free()
     return HashGroupResultF64(keys^, fsums^, M)
 
 
