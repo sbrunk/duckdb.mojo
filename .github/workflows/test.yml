@@ -103,11 +103,11 @@ jobs:
           # $MOJO_TARGET_FLAGS is set at the job level (CI only); empty off-CI.
           pixi run mojo run $MOJO_TARGET_FLAGS examples/example.mojo
 
-      - name: Compile-check benchmarks to guard against API/stdlib drift
+      - name: Compile-check benchmarks and examples to guard against API/stdlib drift
         if: always()
         run: |
           source $HOME/.bash_profile
-          pixi run compile-benchmarks
+          pixi run compile-check
 
   # Verify the rattler-build recipe still builds and its in-package smoke test
   # passes. Builds recipe.local.yaml (which uses the working tree as source) so

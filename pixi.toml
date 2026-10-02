@@ -88,10 +88,10 @@ bench-sql = "python3 benchmark/drivers/bench_runner.py"
 # if those are not available.
 bench-knn = "mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo"
 
-# Compile-check (no run) the benchmarks so they can't silently rot when the
-# stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
-# environment and is excluded here (see scripts/compile_check.sh).
-compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
+# Compile-check (no run) the benchmarks and examples so they can't silently rot
+# when the stdlib or duckdb API drifts. Files that need the `full` or `gpu`
+# environment are excluded (see scripts/compile_check.sh).
+compile-check = { cmd = "bash scripts/compile_check.sh benchmark examples" }
 
 # for local development
 [dependencies]

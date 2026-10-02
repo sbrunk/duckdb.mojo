@@ -1,37 +1,57 @@
 # duckdb.mojo
 
+[![Run tests](https://github.com/sbrunk/duckdb.mojo/actions/workflows/test.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/test.yml)
 [![CodeQL](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/codeql.yml)
 
 [Mojo](https://mojolang.org/) bindings for [DuckDB](https://duckdb.org/).
 
-duckdb.mojo can be used in multiple ways:
+You can use duckdb.mojo to:
 
-1. Client API: query DuckDB from Mojo, register scalar/aggregate/table functions (UDFs), and process results with SIMD vectorization.
-2. Extension development: build DuckDB [extensions](https://duckdb.org/docs/stable/extensions/overview) written in Mojo that can be loaded with `LOAD`. See the [demo extension](extensions/demo-extension/README.md) for a working example.
-3. Accelerate DuckDB (experimental): drop-in Mojo kernels for existing queries. The CPU/SIMD built-in overrides ([mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md), dependency-free) and the GPU offload ([mojo-gpu-operator](extensions/mojo-gpu-operator/README.md)) speed up aggregates, math, and vector search. See [Accelerating DuckDB](#accelerating-duckdb).
+1. Query DuckDB from Mojo, decode results into Mojo types, and register
+   scalar, aggregate and table functions written in Mojo.
+2. Write DuckDB extensions in Mojo that load with `LOAD`.
+3. Speed up DuckDB with Mojo kernels (experimental): SIMD versions of
+   built-in functions, and GPU execution of aggregations and vector search,
+   without changing the SQL.
 
-## 10 minute presentation at the MAX & Mojo community meeting
+Requirements: Mojo 1.1.0 and DuckDB 1.5.6, on Linux (x86_64, aarch64) and macOS
+(Apple silicon). Writing extensions and the acceleration extensions are
+experimental.
 
 <div align="center">
-  <a href="https://www.youtube.com/watch?v=6huytcgQgk8&t=788"><img src="https://img.youtube.com/vi/6huytcgQgk8/0.jpg" alt="10 minute DuckDB.mojo presentation at the MAX & Mojo community meeting"></a>
+  <a href="https://www.youtube.com/watch?v=6huytcgQgk8&t=788"><img src="https://img.youtube.com/vi/6huytcgQgk8/0.jpg" alt="10 minute duckdb.mojo presentation at the MAX & Mojo community meeting"></a>
+  <br>10 minute presentation at the MAX & Mojo community meeting
 </div>
 
-## Examples
+## Quick start
 
-### Client API
+duckdb.mojo is not published as a package yet (see [Installation](#installation)).
+To try it from source, [install Pixi](https://pixi.sh/latest/installation/), then:
+
+```shell
+git clone https://github.com/sbrunk/duckdb.mojo
+cd duckdb.mojo
+pixi run mojo run examples/example.mojo
+```
+
+[`examples/example.mojo`](examples/example.mojo) loads a CSV file over HTTP and
+queries it:
 
 ```mojo
 from duckdb import *
 
-# Struct fields map to query columns by position.
+# Define a struct matching the query columns. Fields map to columns by position.
 @fieldwise_init
 struct StationCount(Writable, Copyable, Movable):
     var station: String
     var num_services: Int64
 
-def main():
+def main() raises:
     var con = DuckDB.connect(":memory:")
     _ = con.execute("""
+    SET autoinstall_known_extensions=1;
+    SET autoload_known_extensions=1;
+
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
     """)
@@ -66,9 +86,15 @@ def main():
         print(stations[i])
 ```
 
-`Result.show()` renders every DuckDB type, including `DECIMAL`, the date/time
-family, `UUID`, `INTERVAL`, `BIT`, `BLOB`, `ENUM`, and nested
-`LIST`/`STRUCT`/`MAP`.
+More examples are in [`examples/`](examples/).
+
+## Client API
+
+Results decode into Mojo scalars, `String`, `Optional`, `List`, `Dict`,
+`Tuple`, `Variant` and structs, including nested `LIST`, `STRUCT` and `MAP`
+columns. `Result.show()` prints any result as a table, for every DuckDB type.
+Build nested types with `list_type`, `map_type`, `array_type`, `struct_type`,
+`decimal_type`, and `enum_type`.
 
 ### Relation API (lazy, composable)
 
@@ -131,9 +157,6 @@ with DuckDB.connect("my.db") as con:          # disconnects at block exit
             print("bad SQL:", e)              # CATALOG/PARSER/BINDER/...
 ```
 
-Build nested types with `list_type`, `map_type`, `array_type`, `struct_type`,
-`decimal_type`, and `enum_type`.
-
 ### Parameterized queries
 
 Bind parameters positionally (`?` / `$1`) or by name (`$name`). Plain Mojo
@@ -194,7 +217,105 @@ print(result.columns())                     # List[String] of names
 print(result.description())                 # List[Column] (index/name/type)
 ```
 
-### Extensions
+### Appender
+
+The Appender loads rows faster than `INSERT` statements. Rows can be structs
+or tuples ([`examples/appender.mojo`](examples/appender.mojo)):
+
+```mojo
+var appender = Appender(con, "people")
+appender.append_row(Person(1, "Mark"))
+appender.append_rows([Person(2, "Hannes"), Person(3, "Pedro")])
+appender.close()
+```
+
+## User-defined functions
+
+Register Mojo functions as DuckDB scalar, aggregate and table functions. They
+work in client code and inside extensions.
+
+### Scalar functions
+
+Pass Mojo stdlib math functions directly, write your own SIMD kernel, or write
+a function that handles one row at a time. SIMD functions get the input in
+batches of the hardware SIMD width
+([`examples/scalar_function.mojo`](examples/scalar_function.mojo)):
+
+```mojo
+import std.math as math
+from duckdb import *
+from duckdb.scalar_function import ScalarFunction
+
+def sin_plus_cos[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+    return math.sin(x) + math.cos(x)
+
+def add_one(x: Int32) -> Int32:
+    return x + 1
+
+def main() raises:
+    var conn = DuckDB.connect(":memory:")
+
+    # Stdlib math functions
+    ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt](conn)
+    ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
+
+    # A custom SIMD kernel
+    ScalarFunction.from_simd_function[
+        "mojo_sin_plus_cos", DType.float64, DType.float64, sin_plus_cos
+    ](conn)
+
+    # One row at a time
+    ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
+
+    conn.execute("SELECT mojo_sqrt(2.0), mojo_sin_plus_cos(1.0), add_one(41)").show()
+```
+
+### Aggregate functions
+
+Common reductions are one line of code. `from_reduce` builds an aggregate from a SIMD
+combine function and its identity value, optionally accumulating into a wider
+type:
+
+```mojo
+AggregateFunction.from_sum["mojo_sum", DType.float64](conn)
+AggregateFunction.from_max["mojo_max", DType.float64](conn)  # also from_min, from_mean, from_product
+
+def add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+    return a + b
+
+def zero() -> Scalar[DType.int64]:
+    return 0
+
+# INTEGER input, BIGINT result
+AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
+```
+
+For full control, you can implement the callbacks yourself (state size, init, update,
+combine, finalize, and an optional destructor) and register them with
+`AggregateFunction.set_functions`. See
+[`examples/aggregate_function.mojo`](examples/aggregate_function.mojo).
+
+### Table functions
+
+A table function has three callbacks: bind declares the output columns and
+reads the parameters, init sets up a scan, and the main function fills output
+chunks until it returns an empty one. See
+[`examples/table_function.mojo`](examples/table_function.mojo), which registers
+`generate_ints(n)`:
+
+```mojo
+var tf = TableFunction()
+tf.set_name("generate_ints")
+tf.add_parameter(LogicalType(DuckDBType.integer))
+tf.set_bind[counter_bind]()
+tf.set_init[counter_init]()
+tf.set_function[counter_function]()
+tf.register(conn)
+
+conn.execute("SELECT sum(i) FROM generate_ints(100)").show()
+```
+
+## Writing extensions
 
 Build DuckDB extensions as shared libraries in Mojo. Write an init function
 that receives a `Connection` and registers your functions, then pass it to
@@ -217,130 +338,120 @@ def init(conn: Connection) raises:
 @export("my_ext_init_c_api")
 def my_ext_init_c_api(
     info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutExternalOrigin],
+    access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
 ) abi("C") -> Bool:
     return Extension.run[init](info, access)
 ```
 
-DuckDB's [Extension C API](https://github.com/duckdb/duckdb/tree/v1.5.6/api_spec/v1)
-provides extensions with a [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb_extension.h)
-instead of relying on dynamic symbol lookup. An extension asks for the struct
-of a given API version, and DuckDB loads it only if its own C API version is
-at least that one. The struct is append-only, so a compiled extension keeps
-working with later DuckDB releases that share the API major version, without
-a rebuild.
-
-`Extension.run` requests API version v1.5.6, which DuckDB 1.5.6 introduced by
-stabilizing every function that used to be unstable. The whole C API is
-therefore available to extensions, and they need DuckDB 1.5.6 or newer.
+Build it and append the metadata footer that DuckDB checks on `LOAD`:
 
 ```sh
 mojo build my_ext.mojo --emit shared-lib -o my_ext.duckdb_extension
+python3 scripts/append_extension_metadata.py my_ext.duckdb_extension
 ```
 
 ```sql
-LOAD 'my_ext.duckdb_extension';
+LOAD 'my_ext.duckdb_extension';  -- needs allow_unsigned_extensions
 SELECT mojo_add_numbers(40, 2);  -- 42
 ```
 
-See the [demo extension](extensions/demo-extension/) for a full working example.
+The extension uses DuckDB's
+[C extension API](https://github.com/duckdb/duckdb/tree/v1.5.6/api_spec/v1),
+which hands the extension a
+[struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb_extension.h)
+for a requested API version. `Extension.run` requests v1.5.6, which covers the
+whole C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
+between releases, so a compiled extension keeps working with later DuckDB 1.x
+releases without a rebuild.
 
-### CPP-ABI extensions (advanced)
+See the [demo extension](extensions/demo-extension/) for a complete example.
+Extensions that need DuckDB internals, such as replacing built-in functions or
+hooking the optimizer, have to use the C++ API instead; see
+[CPP-ABI extensions](docs/cpp-abi-extensions.md).
 
-The C API above is enough for scalar/aggregate/table UDFs, but it cannot reach
-DuckDB internals such as mutating catalog entries, adding an `OptimizerExtension`,
-or registering a custom logical operator. For those you need DuckDB's CPP ABI.
-This is how the [mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md)
-and [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extensions are built.
+## Accelerating DuckDB
 
-In this repo, a CPP-ABI extension is a C++ extension that calls Mojo-compiled
-kernels over a C ABI. No DuckDB C++ type crosses into Mojo:
+There are multiple ways to run Mojo kernels inside DuckDB.
 
-- Mojo exports kernels over raw pointers with `@export(...) ... abi("C")`.
-- C++ declares those symbols in an `extern "C"` block and calls them, and does
-  all the DuckDB-internal work (catalog, optimizer, operators) against the internal
-  C++ headers.
+### 1. Named SIMD functions (part of the package)
 
-The C++ side provides the entry points DuckDB's loader looks up by extension name:
+`duckdb.kernels.register_simd_math(conn)` registers `mojo_sqrt`, `mojo_sin`,
+`mojo_cos`, `mojo_ln`, `mojo_exp` and `mojo_log10` as scalar functions. They are
+part of the `duckdb` package, so there is nothing extra to build or `LOAD`:
 
-```cpp
-#include "duckdb.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
+```mojo
+from duckdb.kernels import register_simd_math
 
-extern "C" {                                  // Mojo kernels, linked into this .so
-void myext_scale_f64(const double *in, double *out, int64_t n, double k);
-}
-
-namespace duckdb {
-void RegisterMyExt(DatabaseInstance &db) {
-    // internal C++ API: mutate the catalog / add an OptimizerExtension / register
-    // a TableFunction, calling myext_scale_f64(...) on raw FLAT column buffers.
-}
-} // namespace duckdb
-
-extern "C" {
-// LOAD entry point: DuckDB calls <extension_name>_duckdb_cpp_init.
-__attribute__((visibility("default")))
-void myext_duckdb_cpp_init(duckdb::ExtensionLoader &loader) {
-    duckdb::RegisterMyExt(loader.GetDatabaseInstance());
-}
-__attribute__((visibility("default")))
-const char *myext_version() { return duckdb::DuckDB::LibraryVersion(); }
-
-// Optional: let an embedder that already holds a connection install it directly
-// (no LOAD, so no footer/version check; the caller must match the DuckDB version).
-__attribute__((visibility("default")))
-void register_myext(duckdb_connection connection) {
-    auto con = reinterpret_cast<duckdb::Connection *>(connection);
-    duckdb::RegisterMyExt(*con->context->db);
-}
-}
+register_simd_math(conn)
+_ = conn.execute("SELECT mojo_sqrt(x) FROM t")
 ```
 
-Build it in two steps: compile the Mojo kernels, then link them into a C++ shared
-object and append the `CPP` metadata footer.
+The kernels in `duckdb.kernels.simd` can also be used in your own functions.
 
-```sh
-# 1. Mojo kernels. --emit object gives a plain .o with no Mojo runtime deps (CPU/SIMD
-#    only), so the final .so is self-contained (links only libm). If the kernels need
-#    the Mojo GPU/AsyncRT runtime, use --emit shared-lib instead and link + rpath the
-#    resulting companion dylib (see extensions/mojo-gpu-operator/build.sh).
-mojo build --emit object kernels.mojo -o kernels.o
+### 2. Built-in overrides (CPU, SIMD)
 
-# 2. C++ extension. DuckDB symbols are left unresolved and bound at load time against
-#    the host libduckdb (-undefined dynamic_lookup on macOS; -Wl,--allow-shlib-undefined
-#    on Linux). Internal headers come from conda libduckdb-devel.
-clang++ -std=c++17 -O2 -fPIC -shared -undefined dynamic_lookup \
-    myext.cpp kernels.o -I "$CONDA_PREFIX/include" -lm \
-    -o myext.duckdb_extension
+The [mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md)
+extension replaces built-in functions in place, so existing queries get faster
+without changes:
 
-# 3. Append the footer. CPP is version-locked, so the version field is the DuckDB
-#    version (not the C API version).
-python3 scripts/append_extension_metadata.py myext.duckdb_extension \
-    --abi-type CPP --duckdb-version v1.5.6
+- `sqrt`, `sin`, `cos`, `ln`, `exp`, `log10`
+- `sum` and `avg` on `DOUBLE`, `HUGEINT` and `DECIMAL(19..38)`, and `min`/`max`,
+  including columns with NULLs. The `HUGEINT`/`DECIMAL` sum is about 7.5× faster
+  than stock DuckDB single-threaded.
+- `array_distance`, `array_cosine_distance`, `array_cosine_similarity`,
+  `array_inner_product`, `array_negative_inner_product`
+- `sum`/`avg` of `sqrt`, `exp`, `ln` and so on, rewritten into one fused pass
+- `mojo_knn(...)`, a table function for batched brute-force top-k vector search
+
+Anything it doesn't handle falls back to the stock implementation. The
+extension is a single self-contained `.so` that is built with
+`pixi run overrides-build` and loaded with `LOAD`.
+
+### 3. GPU execution
+
+The [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extension
+recognizes supported query plans and runs them on the GPU with Mojo kernels:
+aggregations over filters and joins , and exact
+vector search (`array_cosine_distance` top-k, plus the `gpu_cosine_topk`
+table functions). SQL doesn't change, and anything the GPU can't run falls back
+to stock DuckDB. Results match stock DuckDB exactly for decimals. On an RTX 4090,
+TPC-H sf1 runs up to about 11× faster than stock DuckDB (Q14); see the
+extension README for all numbers. It runs on NVIDIA and Apple GPUs. Build it
+with `pixi run -e gpu gpu-op-build`.
+
+[`examples/gpu_knn.mojo`](examples/gpu_knn.mojo) shows the idea in about 170
+lines without the extension: it keeps a table of embeddings on the GPU and runs
+exact k-nearest-neighbor queries against it. Per query it is about 75× faster
+than DuckDB's `array_cosine_distance` on an RTX 4090 and about 9× faster on
+Apple silicon, with the same results:
+
+```shell
+pixi run -e gpu mojo run examples/gpu_knn.mojo
 ```
 
-Caveats specific to the CPP ABI:
+## Benchmarks
 
-- Version-locked: the footer carries the exact DuckDB version and `LOAD` rejects
-  any mismatch. Rebuild for each DuckDB version. The stable C API, in contrast, is
-  forward-compatible.
-- It needs the internal C++ headers and an ABI-matched libduckdb from conda
-  `libduckdb-devel`, not the stable C extension API.
-- It is unsigned, so load it with `-unsigned` / `allow_unsigned_extensions`.
-- A host that statically links DuckDB and `dlopen`s a CPP extension must link with
-  `-rdynamic` so DuckDB's symbols resolve in the loaded extension.
+The [benchmark harness](benchmark/README.md) compares stock DuckDB with the
+CPU and GPU extensions:
 
+```shell
+pixi run bench-build                                  # build DuckDB's benchmark_runner (once)
+pixi run bench-sql <group> --engines=stock,cpu,gpu    # for example tpch/sf1/q06 or mojo_simd
+pixi run bench-knn                                    # vector search: latency and recall
+```
+
+`benchmark/math_benchmark.mojo` and `benchmark/reduction_benchmark.mojo`
+compare Mojo scalar and aggregate functions with DuckDB built-ins:
+
+```shell
+pixi run mojo run benchmark/math_benchmark.mojo
+```
 
 ## Installation
 
-### Use in your own project (conda package)
-
-`duckdb-mojo` is going to be available on the
-[modular-community](https://prefix.dev/channels/modular-community) channel soon.
-Once it's published, you can install it as follows:
-
-Add the channels to your project's `pixi.toml` and install it.
+duckdb.mojo will be published as `duckdb-mojo` on the
+[modular-community](https://prefix.dev/channels/modular-community) channel.
+Once it is, add the channels to your project's `pixi.toml` and install it:
 
 ```toml title="pixi.toml"
 [workspace]
@@ -355,375 +466,20 @@ channels = [
 pixi add duckdb-mojo
 ```
 
-The `libduckdb` runtime library is pulled in automatically as a dependency.
-Import it in Mojo as usual:
+The `libduckdb` runtime library comes with it as a dependency.
 
-```mojo
-from duckdb import *
-```
-
-### Develop from source
-
-1. [Install Pixi](https://pixi.sh/latest/installation/).
-2. Checkout this repo
-3. Run `pixi shell`
-4. Run `mojo examples/example.mojo`
-
-### Run Tests
+## Development
 
 ```shell
-pixi run test
+pixi run test                 # library and extension tests
+pixi run compile-check        # compile the benchmarks and examples
+pixi run overrides-test       # build and test mojo-kernel-overrides
+pixi run -e gpu gpu-op-test   # build and test mojo-gpu-operator (needs a GPU)
 ```
 
-### Build a conda package
-
-There are two ways to build a conda package of the bindings, for two different
-purposes:
-
-`pixi build` uses the `[package]` block in `pixi.toml` (the
-`pixi-build-mojo` backend, which infers the build steps from the project
-layout). It produces a local `.conda` and lets other Pixi workspaces depend on
-duckdb.mojo as a source dependency. No recipe needed:
-
-```shell
-pixi build
-```
-
-`rattler-build` builds from the explicit recipe in `conda.recipe/`. This
-is the path used to publish to the
-[modular-community](https://prefix.dev/channels/modular-community) channel,
-whose CI runs `rattler-build` on the submitted `conda.recipe/recipe.yaml`. To
-verify the recipe locally, build the `recipe.local.yaml` variant (it builds
-from the working tree instead of a pushed git SHA):
-
-```shell
-rattler-build build \
-  --recipe conda.recipe/recipe.local.yaml \
-  -c conda-forge \
-  -c https://conda.modular.com/max \
-  -c https://repo.prefix.dev/modular-community
-```
-
-A successful build runs the in-package smoke test and writes the `.conda` under
-`output/<platform>/`. `conda.recipe/recipe.yaml` is the file submitted to
-modular-community. Bump its `mojo-compiler` pin together with `pixi.toml` on
-every compiler update.
-
-### (Re-)generate the C API bindings
-
-The low-level bindings in `duckdb/_libduckdb.mojo` are auto-generated from DuckDB's
-YAML API spec (the same source used to generate `duckdb.h`).
-To regenerate them (for example after bumping the DuckDB version in `pixi.toml`):
-
-```shell
-pixi run generate-api
-```
-
-## Scalar Functions
-
-Register Mojo functions as DuckDB scalar functions (UDFs) that operate on table
-columns. There are several convenience levels:
-
-### Stdlib math functions (zero boilerplate)
-
-Pass Mojo stdlib math functions directly. Types and SIMD vectorization are
-handled automatically:
-
-```mojo
-import math
-from duckdb import *
-from duckdb.scalar_function import ScalarFunction
-
-var conn = DuckDB.connect(":memory:")
-
-# Register stdlib math functions as SQL scalar functions, one line each
-ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt](conn)
-ScalarFunction.from_simd_function["mojo_sin",  DType.float64, math.sin](conn)
-ScalarFunction.from_simd_function["mojo_cos",  DType.float64, math.cos](conn)
-ScalarFunction.from_simd_function["mojo_exp",  DType.float64, math.exp](conn)
-ScalarFunction.from_simd_function["mojo_log",  DType.float64, math.log](conn)
-
-# Binary stdlib functions work too
-ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
-
-# Now use them in SQL
-var result = conn.execute("SELECT mojo_sqrt(x), mojo_sin(x) FROM my_table")
-```
-
-### Custom SIMD functions
-
-Write your own SIMD-vectorized kernels for fused computations:
-
-```mojo
-def sin_plus_cos[w: Int](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
-    return math.sin(x) + math.cos(x)
-
-# Register. Data is processed in hardware-optimal SIMD batches automatically
-ScalarFunction.from_simd_function[
-    "mojo_sin_plus_cos", DType.float64, DType.float64, sin_plus_cos
-](conn)
-```
-
-### Row-at-a-time functions
-
-For simple per-row logic without manual SIMD:
-
-```mojo
-def add_one(x: Int32) -> Int32:
-    return x + 1
-
-ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
-```
-
-### Math Benchmark
-
-A benchmark comparing Mojo SIMD scalar functions against DuckDB builtins is
-available in `benchmark/math_benchmark.mojo`. It covers unary functions
-(sqrt, sin, cos, exp, log, abs), fused computations (sin+cos, hypot, Gaussian),
-and binary functions (hypot, atan2). Change the `F` constant to switch between
-`DType.float32` and `DType.float64`.
-
-```shell
-pixi run mojo run benchmark/math_benchmark.mojo
-```
-
-### Accelerating DuckDB
-
-Three ways to run Mojo compute inside DuckDB: named SIMD UDFs (part of this package),
-the CPU/SIMD built-in overrides extension, and the GPU offload extension.
-
-#### 1. Named UDFs (part of this package)
-
-`duckdb.kernels.register_simd_math(conn)`
-registers `mojo_sqrt`, `mojo_sin`, ... as scalar functions you call by name. The
-kernels and this helper are part of the `duckdb` package itself: the conda
-`duckdb-mojo` package precompiles all of `duckdb/` (including `duckdb/kernels`),
-so there is nothing extra to build, ship, or `LOAD`. Install the package, import it,
-and call it:
-
-```mojo
-from duckdb.kernels import register_simd_math
-register_simd_math(conn)
-_ = conn.execute("SELECT mojo_sqrt(x) FROM t")
-```
-
-You can also use the kernels (`duckdb.kernels.simd`) directly in your own UDFs.
-
-#### 2. Built-in overrides (CPU/SIMD, a separate dependency-free extension)
-
-To speed up existing queries without renaming functions, the
-[mojo-kernel-overrides](extensions/mojo-kernel-overrides/README.md) extension rewrites
-selected built-ins in place, without forking DuckDB:
-
-- scalar `sqrt`/`sin`/`cos`/`ln`/`exp`/`log10`;
-- aggregates `sum`/`avg` (DOUBLE plus INT128-backed HUGEINT/DECIMAL) and `min`/`max`;
-- vector distance: `array_distance`, `array_cosine_distance`,
-  `array_cosine_similarity`, `array_inner_product`, `array_negative_inner_product`;
-- nullable columns (using a validity mask, so columns with NULLs are covered too), and an
-  optimizer rewrite of `sum/avg(sqrt|exp|ln|…)` into a fused one-pass kernel.
-
-It also adds `mojo_knn(...)`, a batch (multi-query) brute-force top-k table function
-for vector search. The kernels are linked straight in, so the `.so` is self-contained
-(only libm), with no Mojo runtime dependency. It is not part of the conda package.
-Build it with `pixi run overrides-build`, then `LOAD` it (allow unsigned extensions):
-
-```mojo
-from duckdb.config import Config
-var config = Config()
-config.set("allow_unsigned_extensions", "true")
-var conn = DuckDB.connect(":memory:", config)
-_ = conn.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
-```
-
-#### 3. GPU offload (a separate extension)
-
-The [mojo-gpu-operator](extensions/mojo-gpu-operator/README.md) extension
-offloads supported query plans to the GPU via an `OptimizerExtension`, with the
-compute kernels written in Mojo. It is general-purpose: it handles aggregations
-over filters and joins, plus vector-search top-k (`gpu_cosine_topk` and
-`gpu_cosine_topk_batch`). Matching queries route to the GPU with no syntax change.
-Anything it can't translate, or any runtime GPU error, falls back to stock DuckDB,
-with decimal-exact results. Runs on NVIDIA and Apple GPUs. Build with `pixi run gpu-op-build`.
-(Unlike the CPU overrides it links the Mojo GPU runtime, so it is not a single
-self-contained `.so`.)
-
-### Benchmarks
-
-A shared benchmark harness lives in [benchmark/](benchmark/README.md):
-
-```shell
-pixi run bench-build                                  # build DuckDB's benchmark_runner (once)
-pixi run bench-sql <group> --engines=stock,cpu,gpu    # warm stock vs CPU-SIMD vs GPU compare
-pixi run bench-knn                                    # vector-search: single + batch cosine top-k
-```
-
-`bench-knn` compares stock, CPU-SIMD, vss-HNSW and GPU on latency and recall. The
-older standalone microbenchmarks (`benchmark/math_benchmark.mojo`,
-`benchmark/reduction_benchmark.mojo`, `pixi run overrides-bench`) are still there for
-quick checks of single kernels.
-
-## Table Functions
-
-Register Mojo functions as DuckDB table functions that generate rows.
-A table function needs three callbacks: bind (declare output columns and
-store parameters), init (optional per-scan setup), and the main function
-(produce output batches).
-
-```mojo
-from duckdb import *
-from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
-from duckdb._libduckdb import *
-from memory.unsafe_pointer import alloc
-
-@fieldwise_init
-struct CounterBindData(Copyable, Movable):
-    var limit: Int
-    var current_row: Int
-
-def destroy_bind_data(data: UnsafePointer[NoneType, MutAnyOrigin]):
-    data.bitcast[CounterBindData]().destroy_pointee()
-
-def counter_bind(info: TableBindInfo):
-    info.add_result_column("i", LogicalType(DuckDBType.integer))
-    var limit = Int(info.get_parameter(0).as_int32())
-    var bind_data = alloc[CounterBindData](1)
-    bind_data.init_pointee_move(CounterBindData(limit=limit, current_row=0))
-    info.set_bind_data(bind_data.bitcast[NoneType](), destroy_bind_data)
-
-def counter_init(info: TableInitInfo):
-    pass
-
-def counter_function(info: TableFunctionInfo, mut output: Chunk):
-    var bind_data = info.get_bind_data().bitcast[CounterBindData]()
-    var current = bind_data[].current_row
-    var remaining = bind_data[].limit - current
-    if remaining <= 0:
-        output.set_size(0)
-        return
-    var batch = min(remaining, 2048)
-    var out = output.get_vector(0).get_data().bitcast[Int32]()
-    for i in range(batch):
-        out[i] = Int32(current + i)
-    bind_data[].current_row = current + batch
-    output.set_size(batch)
-
-def main() raises:
-    var conn = DuckDB.connect(":memory:")
-    var tf = TableFunction()
-    tf.set_name("generate_ints")
-    tf.add_parameter(LogicalType(DuckDBType.bigint))
-    tf.set_function[counter_bind, counter_init, counter_function]()
-    tf.register(conn)
-
-    var result = conn.execute("SELECT sum(i) FROM generate_ints(100)")
-```
-
-## Aggregate Functions
-
-Register Mojo functions as DuckDB aggregate functions that reduce many rows
-into a single value (per group). There are two API levels: high-level
-convenience methods and a low-level callback API.
-
-### High-level: reduction-based aggregates
-
-Use `from_sum`, `from_max`, `from_min`, `from_product`, and `from_mean` to
-register common aggregates in one line:
-
-```mojo
-from duckdb import *
-from duckdb.aggregate_function import AggregateFunction
-
-var conn = DuckDB.connect(":memory:")
-
-AggregateFunction.from_sum["mojo_sum", DType.float64](conn)
-AggregateFunction.from_max["mojo_max", DType.float64](conn)
-AggregateFunction.from_min["mojo_min", DType.float64](conn)
-AggregateFunction.from_mean["mojo_avg", DType.float64](conn)
-AggregateFunction.from_product["mojo_product", DType.float64](conn)
-
-var result = conn.execute("SELECT mojo_sum(x), mojo_max(x) FROM my_table")
-```
-
-### Custom reductions with `from_reduce`
-
-Define your own binary SIMD reduce function and identity element:
-
-```mojo
-def my_add[w: Int](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
-    return a + b
-
-def zero() -> Scalar[DType.float64]:
-    return 0.0
-
-AggregateFunction.from_reduce["custom_sum", DType.float64, my_add, zero](conn)
-```
-
-Another overload takes separate input and output types, so you can accumulate into a
-wider type (for example Int32 input and Int64 output):
-
-```mojo
-def add[w: Int](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
-    return a + b
-
-def zero() -> Scalar[DType.int64]:
-    return 0
-
-AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
-```
-
-### Low-level API
-
-For full control, implement the five aggregate callbacks manually
-(state_size, state_init, update, combine, finalize) plus an optional destructor:
-
-```mojo
-from sys.info import size_of
-from duckdb import *
-from duckdb.aggregate_function import *
-from duckdb._libduckdb import *
-
-def my_state_size(info: AggregateFunctionInfo) -> idx_t:
-    return idx_t(size_of[Int64]())
-
-def my_state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().bitcast[Int64]().init_pointee_move(0)
-
-def my_update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
-    var data = input.get_vector(0).get_data().bitcast[Int32]()
-    for i in range(len(input)):
-        var s = states.get_state(i).get_data().bitcast[Int64]()
-        s[] += Int64(data[i])
-
-def my_combine(info: AggregateFunctionInfo, source: AggregateStateArray,
-              target: AggregateStateArray, count: Int):
-    for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[Int64]()
-        var t = target.get_state(i).get_data().bitcast[Int64]()
-        t[] += s[]
-
-def my_finalize(info: AggregateFunctionInfo, source: AggregateStateArray,
-               result: Vector, count: Int, offset: Int):
-    var out = result.get_data().bitcast[Int64]()
-    for i in range(count):
-        var s = source.get_state(i).get_data().bitcast[Int64]()
-        out[offset + i] = s[]
-
-def main() raises:
-    var conn = DuckDB.connect(":memory:")
-    var func = AggregateFunction()
-    func.set_name("my_sum")
-    func.add_parameter(LogicalType(DuckDBType.integer))
-    func.set_return_type(LogicalType(DuckDBType.bigint))
-    func.set_functions[my_state_size, my_state_init, my_update, my_combine, my_finalize]()
-    func.register(conn)
-```
-
-### Reduction Benchmark
-
-A benchmark comparing Mojo aggregate functions against DuckDB builtins is
-available in `benchmark/reduction_benchmark.mojo`. It covers ungrouped and
-grouped aggregates (sum, max, min, avg) on 10M rows.
-
-```shell
-pixi run mojo run benchmark/reduction_benchmark.mojo
-```
+The low-level bindings in `duckdb/_libduckdb.mojo` are generated from DuckDB's
+API spec in the `third_party/duckdb` submodule. Regenerate them with
+`pixi run generate-api` after updating DuckDB.
+
+`pixi build` builds a conda package of the bindings, and
+`conda.recipe/recipe.yaml` is the recipe submitted to modular-community.
