@@ -7947,11 +7947,21 @@ def _pin_finalize_q5(
     gp.emit_agg = 0  # gate on revenue
     gp.emit_gt0 = False  # emit iff revenue != 0 (stock GROUP BY over passers)
     gp.kind = d.kind  # routes Q5 to the comptime-specialized dense kernel
+
+    ref dst = m[key]
+    if q5_pred_on:
+        # The predicate-independent path was enabled but declined (G > 64), so
+        # this result depends on the filter constants while `sig` leaves them out.
+        # Caching it would let a later query with other constants reuse it. Run
+        # uncached instead: every such query is cold, but correct.
+        _assemble(dst, gp)
+        for k in range(len(gp.pool_lease_keys)):
+            release_lease(gp.pool_lease_keys[k])
+        return 0
+
     var _fp5 = _gp_footprint_bytes(gp) if _colpool_on() else 0
     p2[sig] = gp^
     _pin2_track(sig, _fp5)
-
-    ref dst = m[key]
     _assemble(dst, p2[sig])
     return 0
 

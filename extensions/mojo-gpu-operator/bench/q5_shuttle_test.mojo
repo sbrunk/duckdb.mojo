@@ -64,6 +64,7 @@ from raw_plan_tags import (
     IDX_NONE,
 )
 from std.memory.alloc import unsafe_alloc
+from std.os import getenv
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -297,8 +298,26 @@ def _table_of(sql: String) raises -> String:
 def main() raises:
     comptime assert has_accelerator(), "q5_shuttle_test requires a GPU"
 
-    var o_lo = 8766  # 1994-01-01-ish date days (arbitrary)
-    var o_hi = 9131  # 1995-01-01-ish
+    # Q5_WIDE_NATION_KEYS=1 spreads the nation keys out to 0, 10, ..., 90. With
+    # GPU_OP_NATIVE_DECODE=1 the predicate-independent path then declines
+    # (G = max key + 1 > 64) and falls back to the per-constant path.
+    var key_stride = 10 if getenv("Q5_WIDE_NATION_KEYS", "") != "" else 1
+
+    # Two queries in one process with different date ranges. The second one is
+    # a warm hit if its pin signature leaves out the constants, so it checks
+    # that a warm hit never returns the first query's result.
+    var pb1 = run_q5(8766, 9131, key_stride)  # 1994-01-01-ish to 1995-01-01-ish
+    var pb2 = run_q5(8900, 9200, key_stride)
+    print("pin_begin per query:", pb1, pb2, "(0=WARM, 1=COLD)")
+    print("ALL PASS")
+
+
+def run_q5(o_lo: Int, o_hi: Int, key_stride: Int) raises -> Int:
+    """Run Q5 through the shuttle, check it against a CPU reference, and return
+    the pin_begin result (0 = warm, 1 = cold).
+
+    Nation keys in the fed columns are `k * key_stride` for k in 0..N_NATIONS-1.
+    """
 
     # ---- nation: keys 0..N_NATIONS-1; region = key % N_REGIONS; ASIA region=2 ----
     var nation_name: List[String] = []
@@ -327,7 +346,7 @@ def main() raises:
         var nk = Int32((r * 2654435761) % N_NATIONS)
         cust_nation[unsafe_offset=ck] = nk
         cck_vals[unsafe_offset=r] = Int64(ck)
-        cnk_vals[unsafe_offset=r] = nk
+        cnk_vals[unsafe_offset=r] = nk * Int32(key_stride)
 
     # ---- supplier: s_suppkey 1..N_SUPP, s_nationkey. Assign nation = suppkey %
     #      N_NATIONS so each nation has a known supplier (one per residue), which
@@ -344,7 +363,7 @@ def main() raises:
         var nk = Int32(sk % N_NATIONS)
         supp_nation[unsafe_offset=sk] = nk
         ssk_vals[unsafe_offset=r] = Int64(sk)
-        snk_vals[unsafe_offset=r] = nk
+        snk_vals[unsafe_offset=r] = nk * Int32(key_stride)
         if first_supp_of_nation[unsafe_offset=Int(nk)] == 0:
             first_supp_of_nation[unsafe_offset=Int(nk)] = Int64(sk)
 
@@ -456,8 +475,9 @@ def main() raises:
     var pb = mojo_gpu_pin_begin(h)
     print("pin_begin:", pb, "(0=WARM, 1=COLD)")
 
-    # Feed each request by parsing its SQL column order + table.
-    for req in range(count):
+    # Feed each request by parsing its SQL column order + table. On a warm hit
+    # nothing is fed, as on the C++ side.
+    for req in range(count if pb == 1 else 0):
         var slen = mojo_gpu_desc_materialize_sql(h, req, sql_buf, cap)
         var sql = String("")
         for k in range(slen):
@@ -492,7 +512,7 @@ def main() raises:
             elif nm == "s_nationkey":
                 rc = mojo_gpu_feed_column(h, req, j, snk_vals.unsafe_bitcast[NoneType](), N_SUPP, TYPE_INTEGER)
             elif nm == "n_nationkey":
-                rc = _feed_nat_key(h, req, j)
+                rc = _feed_nat_key(h, req, j, key_stride)
             elif nm == "n_name":
                 rc = mojo_gpu_feed_column(h, req, j, nat_str[0].unsafe_bitcast[NoneType](), N_NATIONS, TYPE_VARCHAR)
             elif nm == "n_regionkey":
@@ -557,16 +577,16 @@ def main() raises:
     for r in range(len(reg_str[1])):
         reg_str[1][r].unsafe_free()
     mojo_gpu_desc_free(h)
-    print("ALL PASS")
+    return pb
 
 
-# n_nationkey is an INTEGER column 0..N_NATIONS-1 (dense by row order).
+# n_nationkey is an INTEGER column k * key_stride for k in 0..N_NATIONS-1.
 def _feed_nat_key(
-    h: Pointer[NoneType, MutUntrackedOrigin], req: Int, j: Int
+    h: Pointer[NoneType, MutUntrackedOrigin], req: Int, j: Int, key_stride: Int
 ) raises -> Int:
     var nk = unsafe_alloc[Int32](N_NATIONS)
     for k in range(N_NATIONS):
-        nk[unsafe_offset=k] = Int32(k)
+        nk[unsafe_offset=k] = Int32(k * key_stride)
     return mojo_gpu_feed_column(h, req, j, nk.unsafe_bitcast[NoneType](), N_NATIONS, TYPE_INTEGER)
 
 

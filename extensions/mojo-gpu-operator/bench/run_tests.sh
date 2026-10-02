@@ -41,6 +41,9 @@ TESTS=(
     "q1_shuttle_test|"
     "q3_shuttle_test|"
     "q5_shuttle_test|"
+    "q5_shuttle_test|GPU_OP_NATIVE_DECODE=1"
+    # Nation keys above 63 make the predicate-independent path decline.
+    "q5_shuttle_test|GPU_OP_NATIVE_DECODE=1 Q5_WIDE_NATION_KEYS=1"
     "q6_shuttle_test|"
     "q14_shuttle_test|"
     "or_filter_shuttle_test|"
