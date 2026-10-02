@@ -35,7 +35,7 @@ from std.sys.info import (
 from max.gpu.sync import barrier
 from std.math import sqrt, ceildiv, nan
 from std.memory import unsafe_memcpy, stack_allocation
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import unsafe_alloc, alloc, Layout
 from std.time import perf_counter_ns
 from max.algorithm import parallelize
 
@@ -714,12 +714,13 @@ def mojo_gpu_pin_f16(
         # emb_dev.map_to_host() instead is ~3.4x slower, since map_to_host is
         # bidirectional and DMAs device to host on enter (measured on RTX 4090).
         var total = n_rows * K
-        var h16 = unsafe_alloc[Float16](total)
+        var h16_mem = alloc(Layout[Float16](count=total)).into_managed()
+        var h16 = h16_mem.unsafe_ptr()
         for j in range(total):
             h16[unsafe_offset=j] = emb[unsafe_offset=j].cast[DType.float16]()
         ctx.enqueue_copy(emb_dev, h16)
         ctx.synchronize()  # kernels read emb_dev later; safe to free h16 now
-        h16.unsafe_free()
+        deinit(h16_mem^)
 
         var cand_dist_h = unsafe_alloc[Float32](cand_cap)
         var cand_id_h = unsafe_alloc[Int64](cand_cap)
@@ -1542,7 +1543,8 @@ def _run_topk_batch[
 
     # Precompute all M query norms on the host (matches the kernel denom) and
     # upload the M*K queries + M norms once for the whole batch.
-    var qnorms_h = unsafe_alloc[Float32](M)
+    var qnorms_h_mem = alloc(Layout[Float32](count=M)).into_managed()
+    var qnorms_h = qnorms_h_mem.unsafe_ptr()
     for m in range(M):
         var s = Float32(0)
         var qoff = m * K
@@ -1560,8 +1562,10 @@ def _run_topk_batch[
     # merge runs on the GPU (topk_batch_merge_kernel), so the host does no top-k.
     var merged_dist_dev = ctx.enqueue_create_buffer[DType.float32](qtile * k)
     var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](qtile * k)
-    var merged_dist_h = unsafe_alloc[Float32](qtile * k)
-    var merged_id_h = unsafe_alloc[Int64](qtile * k)
+    var merged_dist_h_mem = alloc(Layout[Float32](count=qtile * k)).into_managed()
+    var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+    var merged_id_h_mem = alloc(Layout[Int64](count=qtile * k)).into_managed()
+    var merged_id_h = merged_id_h_mem.unsafe_ptr()
     ctx.synchronize()
     ctx.enqueue_copy(qs_dev, qs)
     var qnorm_imm = Pointer[Float32, ImmUntrackedOrigin](
@@ -1636,9 +1640,9 @@ def _run_topk_batch[
                 out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
         q0 += qtile
 
-    qnorms_h.unsafe_free()
-    merged_dist_h.unsafe_free()
-    merged_id_h.unsafe_free()
+    deinit(qnorms_h_mem^)
+    deinit(merged_dist_h_mem^)
+    deinit(merged_id_h_mem^)
 
 
 # Batched exact top-k (fp32-resident). M query vectors (row-major M*K) scored
@@ -1774,7 +1778,8 @@ def _host_merge_topk(
     out_ids: Pointer[Int64, MutUntrackedOrigin],
     out_dists: Pointer[Float32, MutUntrackedOrigin],
 ):
-    var taken = unsafe_alloc[Bool](ncand if ncand > 0 else 1)
+    var taken_mem = alloc(Layout[Bool](count=ncand if ncand > 0 else 1)).into_managed()
+    var taken = taken_mem.unsafe_ptr()
     for c in range(ncand):
         taken[unsafe_offset=c] = False
     for slot in range(k):
@@ -1799,7 +1804,7 @@ def _host_merge_topk(
             taken[unsafe_offset=best] = True
             out_ids[unsafe_offset=slot] = best_id
             out_dists[unsafe_offset=slot] = best_d
-    taken.unsafe_free()
+    deinit(taken_mem^)
 
 
 
@@ -2733,7 +2738,7 @@ def _colpool_assemble_cols_d(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols_host: Pointer[Scalar[DType.int64], _],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2758,7 +2763,7 @@ def _colpool_assemble_cols_d(
         # For an omitted slot this host region is unfilled (the packing loop and
         # the feed both skipped it), so it must be sourced from the pool, never from
         # host. For a non-omitted slot it holds the freshly-packed bytes.
-        var slot_host = cols_host.unsafe_offset(slot * n)
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
@@ -2826,7 +2831,7 @@ def _colpool_assemble_cols_d(
     # --- derived slots (gid, pass): H2D straight from the packed host buffer. ---
     for slot in range(n_numeric, n_slots):
         var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
-        var slot_host = cols_host.unsafe_offset(slot * n)
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         ctx.enqueue_copy(dst, slot_host)
 
     ctx.synchronize()
@@ -2862,7 +2867,7 @@ def _colpool_assemble_col_ptrs(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols_host: Pointer[Scalar[DType.int64], _],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2876,14 +2881,15 @@ def _colpool_assemble_col_ptrs(
     var skipped_cols = 0
     fail = False
     # Host array of the n_slots device addresses (uploaded to the table at the end).
-    var addr_h = unsafe_alloc[Int64](n_slots if n_slots > 0 else 1)
+    var addr_h_mem = alloc(Layout[Int64](count=n_slots if n_slots > 0 else 1)).into_managed()
+    var addr_h = addr_h_mem.unsafe_ptr()
 
     # --- numeric fact slots: pooled uses the pool pointer; fallback a per-query buf. ---
     for slot in range(n_numeric):
         var mj = numeric_matcols[slot]
         var col_name = st.mat_cols[mj]
         var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
-        var slot_host = cols_host.unsafe_offset(slot * n)
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
@@ -2892,7 +2898,7 @@ def _colpool_assemble_col_ptrs(
             var er = col_pool_borrow(ctx, key)
             if not (er.ok and er.was_hit):
                 fail = True
-                addr_h.unsafe_free()
+                deinit(addr_h_mem^)
                 if pin_log:
                     print(
                         "[gpu-op colptr] OMIT-MISS (fallback) col=", col_name,
@@ -2926,7 +2932,7 @@ def _colpool_assemble_col_ptrs(
     # --- derived slots (gid/pass): per-query buffers, H2D from packed host. ---
     for slot in range(n_numeric, n_slots):
         var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
-        ctx.enqueue_copy(buf, cols_host.unsafe_offset(slot * n))
+        ctx.enqueue_copy(buf, cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n))
         addr_h[unsafe_offset=slot] = Int64(Int(buf.unsafe_ptr()))
         out_derived_bufs.append(buf)
 
@@ -2938,7 +2944,7 @@ def _colpool_assemble_col_ptrs(
     )
     ctx.enqueue_copy(col_ptrs_d, addr_h.unsafe_origin_cast[MutUntrackedOrigin]())
     ctx.synchronize()
-    addr_h.unsafe_free()
+    deinit(addr_h_mem^)
     if pin_log and skipped_cols > 0:
         print(
             "[gpu-op colptr] skipped_cols=", skipped_cols,
@@ -5303,7 +5309,7 @@ def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
 # parallelized over `_finalize_workers()` chunks. Used for the numeric fact
 # columns. Equivalent serial loop: `for i in range(n): cols[slot*n+i] = ...`.
 def _pack_col_par(
-    cols: Pointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     slot: Int,
     n: Int,
     base: Int,
@@ -5326,10 +5332,10 @@ def _pack_col_par(
 # Copy `cols[slot*n + i] = src[i]` for i in [0,n), parallelized. Used for the
 # gid column (a precomputed Int64 array) and the host pass column.
 def _pack_copy_par(
-    cols: Pointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     slot: Int,
     n: Int,
-    src: Pointer[Int64, MutUntrackedOrigin],
+    src: Pointer[Int64, _],
 ):
     var nw = _finalize_workers()
     var chunk = ceildiv(n, nw)
@@ -5352,7 +5358,7 @@ def _pack_copy_par(
 # column base addresses + element sizes (in filter order); `cmps`/`ks` the
 # per-filter cmp ops + constants. Equivalent to the serial AND-of-predicates bake.
 def _bake_pass_par(
-    pass_col: Pointer[Int64, MutUntrackedOrigin],
+    pass_col: Pointer[Int64, _],
     n: Int,
     bases: List[Int],
     esizes: List[Int],
@@ -5420,12 +5426,12 @@ def _bake_pass_par(
 # (when `guard_nonneg`) a negative group value becomes 0. Parallel over row chunks;
 # disjoint writes. Equivalent to the serial Q5 gid-gather loop.
 def _q5_gid_gather_par(
-    cols: Pointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     gid_slot: Int,
     n: Int,
     sk_base: Int,
     sk_es: Int,
-    grp: Pointer[Int64, MutUntrackedOrigin],
+    grp: Pointer[Int64, _],
     max_sk: Int,
     guard_nonneg: Bool,
 ):
@@ -6032,7 +6038,8 @@ def _pin_finalize_generic(
     # dense-gid bookkeeping (sorted distinct tuple to gid)
     var order: List[Int] = []
     var gkey_vals: List[List[String]] = []  # per group-key col, per distinct-idx
-    var row_gid = unsafe_alloc[Int64](n if n > 0 else 1)
+    var row_gid_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var row_gid = row_gid_mem.unsafe_ptr()
     # GPU_OP_TRANSCENDENTAL HASH_GROUP (integer fact group key, no FK-join dims):
     # no dense gid is built; the float64 hash accumulator keys directly on the fact
     # key column read from `hash_gk_slot`. Only reachable when the transcendental
@@ -6051,7 +6058,7 @@ def _pin_finalize_generic(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "":
-            row_gid.unsafe_free()
+            deinit(row_gid_mem^)
             return 3  # integer fact group key not materialized: CPU fallback
         hash_gk_slot = col_slot[fact_gk]
         # cap = next pow2 >= 2*(distinct bound). Fact row count `n` is a safe
@@ -6071,14 +6078,15 @@ def _pin_finalize_generic(
         for gk in range(n_keys):
             var gj = _col_index(st, d.group_keys[gk].column)
             if gj < 0:
-                row_gid.unsafe_free()
+                deinit(row_gid_mem^)
                 return 3
             gk_j.append(gj)
         var tuple_keys: List[String] = []
         for _ in range(n_keys):
             gkey_vals.append(List[String]())
         var seen = Dict[String, Int]()
-        var row_didx = unsafe_alloc[Int32](n if n > 0 else 1)
+        var row_didx_mem = alloc(Layout[Int32](count=n if n > 0 else 1)).into_managed()
+        var row_didx = row_didx_mem.unsafe_ptr()
         for i in range(n):
             var tk = String("")
             var parts: List[String] = []
@@ -6099,8 +6107,8 @@ def _pin_finalize_generic(
                 row_didx[unsafe_offset=i] = Int32(idx)
         n_groups = len(tuple_keys)
         if n_groups <= 0:
-            row_didx.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(row_didx_mem^)
+            deinit(row_gid_mem^)
             return 7
         for g in range(n_groups):
             order.append(g)
@@ -6110,13 +6118,14 @@ def _pin_finalize_generic(
                     var t = order[a]
                     order[a] = order[b]
                     order[b] = t
-        var didx_to_gid = unsafe_alloc[Int32](n_groups)
+        var didx_to_gid_mem = alloc(Layout[Int32](count=n_groups)).into_managed()
+        var didx_to_gid = didx_to_gid_mem.unsafe_ptr()
         for g in range(n_groups):
             didx_to_gid[unsafe_offset=order[g]] = Int32(g)
         for i in range(n):
             row_gid[unsafe_offset=i] = Int64(Int(didx_to_gid[unsafe_offset=Int(row_didx[unsafe_offset=i])]))
-        didx_to_gid.unsafe_free()
-        row_didx.unsafe_free()
+        deinit(didx_to_gid_mem^)
+        deinit(row_didx_mem^)
         G = n_groups
         gid_slot = n_numeric  # gid is the slot right after the numeric cols
 
@@ -6151,7 +6160,8 @@ def _pin_finalize_generic(
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
     # feed it via a 1-op `LOAD_COL(pass_slot)` pass program (exact and simplest).
     var pass_slot = n_numeric + (1 if gid_slot >= 0 else 0)
-    var pass_col = unsafe_alloc[Int64](n if n > 0 else 1)
+    var pass_col_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var pass_col = pass_col_mem.unsafe_ptr()
     # Collect fact filters as (slot, cmp, const-lo); skip non-fact filters.
     var f_slot: List[Int] = []
     var f_cmp: List[Int64] = []
@@ -6165,8 +6175,8 @@ def _pin_finalize_generic(
             if p.col.table != d.fact_table:
                 continue
             if p.col.column not in col_slot:
-                pass_col.unsafe_free()
-                row_gid.unsafe_free()
+                deinit(pass_col_mem^)
+                deinit(row_gid_mem^)
                 return 8
             f_slot.append(col_slot[p.col.column])
             f_cmp.append(p.cmp)
@@ -6234,8 +6244,8 @@ def _pin_finalize_generic(
         # if it somehow does, rather than return a silent wrong result. (A1: any
         # nullable column, filter or agg-input, is unhandled on these paths.)
         if n_valid > 0 or len(aggin_valid_slots) > 0:
-            pass_col.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         # Cheap memset; left serial in both modes (the pack loops are the cost).
@@ -6251,8 +6261,8 @@ def _pin_finalize_generic(
         for fi in range(n_filters):
             var fs = f_slot[fi]
             if fs < len(omit_slot) and omit_slot[fs]:
-                pass_col.unsafe_free()
-                row_gid.unsafe_free()
+                deinit(pass_col_mem^)
+                deinit(row_gid_mem^)
                 return 8
         # A1 unified pass model: fold only filter-column validity into the host pass
         # column (a NULL filter row makes the predicate UNKNOWN, so it is excluded from
@@ -6762,8 +6772,8 @@ def _pin_finalize_generic(
     # unbounded global atomic kernel (dense_global, see _assemble) for G*M > 64.
     if mode == STRAT_DENSE_GROUP and not is_float64 and G * M > 64:
         cols.unsafe_free()
-        pass_col.unsafe_free()
-        row_gid.unsafe_free()
+        deinit(pass_col_mem^)
+        deinit(row_gid_mem^)
         return 3
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
@@ -6816,15 +6826,15 @@ def _pin_finalize_generic(
     if fact_passget >= 0:
         if q6_pred_on or gen_pred_on or f64_pred_on:
             cols.unsafe_free()
-            pass_col.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         var missing = False
         var or_ops = _resolve_pass_prog(d, fact_passget, col_slot, missing)
         if missing:
             cols.unsafe_free()
-            pass_col.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         for x in range(len(or_ops)):
             pass_prog.append(or_ops[x])
@@ -6863,11 +6873,14 @@ def _pin_finalize_generic(
     # and it is column-pool eligible. When GPU_OP_COLPOOL is on we dedup the per-
     # column H2D via the pool and assemble cols_d by D2D repack; when off, verbatim.
     var ctx = shared_device_context()
-    var seg_off_dummy = unsafe_alloc[Int64](1)
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
     seg_off_dummy[unsafe_offset=0] = 0
-    var dims_dummy = unsafe_alloc[Int64](1)
+    var dims_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var dims_dummy = dims_dummy_mem.unsafe_ptr()
     dims_dummy[unsafe_offset=0] = 0
-    var doff_dummy = unsafe_alloc[Int64](1)
+    var doff_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var doff_dummy = doff_dummy_mem.unsafe_ptr()
     doff_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
@@ -6887,12 +6900,12 @@ def _pin_finalize_generic(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.unsafe_free()
-            dims_dummy.unsafe_free()
-            doff_dummy.unsafe_free()
+            deinit(seg_off_dummy_mem^)
+            deinit(dims_dummy_mem^)
+            deinit(doff_dummy_mem^)
             cols.unsafe_free()
-            pass_col.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 11
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -6918,12 +6931,12 @@ def _pin_finalize_generic(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.unsafe_free()
-            dims_dummy.unsafe_free()
-            doff_dummy.unsafe_free()
+            deinit(seg_off_dummy_mem^)
+            deinit(dims_dummy_mem^)
+            deinit(doff_dummy_mem^)
             cols.unsafe_free()
-            pass_col.unsafe_free()
-            row_gid.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 11
         # Success: transfer the materialize-time omit leases into the per-signature
         # lease set so the GpuPinned owns them (released when it is evicted). Clear
@@ -6938,12 +6951,12 @@ def _pin_finalize_generic(
         resident = segreduce_upload(
             ctx, cols, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
         )
-    seg_off_dummy.unsafe_free()
-    dims_dummy.unsafe_free()
-    doff_dummy.unsafe_free()
+    deinit(seg_off_dummy_mem^)
+    deinit(dims_dummy_mem^)
+    deinit(doff_dummy_mem^)
     cols.unsafe_free()
-    pass_col.unsafe_free()
-    row_gid.unsafe_free()
+    deinit(pass_col_mem^)
+    deinit(row_gid_mem^)
 
     # --- construct + cache the GpuPinned, then assemble via the shared path ---
     var gp = GpuPinned(resident^)
@@ -7306,7 +7319,8 @@ def _pin_finalize_q5(
         # is still correct, only not warm across constants.
         var G = max_nk + 1
         if G <= 64:
-            var nation_region = unsafe_alloc[Int64](max_nk + 1)
+            var nation_region_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+            var nation_region = nation_region_mem.unsafe_ptr()
             var nation_name: List[String] = []
             for _ in range(max_nk + 1):
                 nation_name.append(String(""))
@@ -7336,7 +7350,8 @@ def _pin_finalize_q5(
                 var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
                 if ck > max_ck:
                     max_ck = ck
-            var cust_nation = unsafe_alloc[Int64](max_ck + 1)
+            var cust_nation_mem = alloc(Layout[Int64](count=max_ck + 1)).into_managed()
+            var cust_nation = cust_nation_mem.unsafe_ptr()
             for k in range(max_ck + 1):
                 cust_nation[unsafe_offset=k] = -1
             for i in range(cdn):
@@ -7352,8 +7367,10 @@ def _pin_finalize_q5(
                 var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
                 if sk > max_sk:
                     max_sk = sk
-            var supp_nation = unsafe_alloc[Int64](max_sk + 1)
-            var supp_region = unsafe_alloc[Int64](max_sk + 1)
+            var supp_nation_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+            var supp_nation = supp_nation_mem.unsafe_ptr()
+            var supp_region_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+            var supp_region = supp_region_mem.unsafe_ptr()
             for k in range(max_sk + 1):
                 supp_nation[unsafe_offset=k] = -1
                 supp_region[unsafe_offset=k] = -1
@@ -7375,8 +7392,10 @@ def _pin_finalize_q5(
                 var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
                 if ok > max_ok:
                     max_ok = ok
-            var order_date = unsafe_alloc[Int64](max_ok + 1)
-            var order_cust_nation = unsafe_alloc[Int64](max_ok + 1)
+            var order_date_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+            var order_date = order_date_mem.unsafe_ptr()
+            var order_cust_nation_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+            var order_cust_nation = order_cust_nation_mem.unsafe_ptr()
             for k in range(max_ok + 1):
                 order_date[unsafe_offset=k] = 0
                 order_cust_nation[unsafe_offset=k] = -1
@@ -7395,7 +7414,8 @@ def _pin_finalize_q5(
             var len2 = max_sk + 1
             var len3 = max_sk + 1
             var total_dim = len0 + len1 + len2 + len3
-            var dims_host = unsafe_alloc[Int64](total_dim)
+            var dims_host_mem = alloc(Layout[Int64](count=total_dim)).into_managed()
+            var dims_host = dims_host_mem.unsafe_ptr()
             var w = 0
             for i in range(len0):
                 dims_host[unsafe_offset=w] = order_date[unsafe_offset=i]; w += 1
@@ -7406,7 +7426,8 @@ def _pin_finalize_q5(
             for i in range(len3):
                 dims_host[unsafe_offset=w] = supp_region[unsafe_offset=i]; w += 1
             var n_dim_arrays = 4
-            var doff_host = unsafe_alloc[Int64](n_dim_arrays + 1)
+            var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+            var doff_host = doff_host_mem.unsafe_ptr()
             doff_host[unsafe_offset=0] = 0
             doff_host[unsafe_offset=1] = Int64(len0)
             doff_host[unsafe_offset=2] = Int64(len0 + len1)
@@ -7417,7 +7438,8 @@ def _pin_finalize_q5(
             #     [l_suppkey]; the in-kernel region gate zeroes non-region nations). ---
             var gid_slot = n_numeric
             var n_slots = n_numeric + 1
-            var cols = unsafe_alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+            var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+            var cols = cols_mem.unsafe_ptr()
             # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
             var par_on = _parallel_finalize_on()
             var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
@@ -7467,10 +7489,10 @@ def _pin_finalize_q5(
                     rev_ai = ai
                     break
             if rev_ai < 0:
-                nation_region.unsafe_free(); cust_nation.unsafe_free()
-                supp_nation.unsafe_free(); supp_region.unsafe_free()
-                order_date.unsafe_free(); order_cust_nation.unsafe_free()
-                dims_host.unsafe_free(); doff_host.unsafe_free(); cols.unsafe_free()
+                deinit(nation_region_mem^); deinit(cust_nation_mem^)
+                deinit(supp_nation_mem^); deinit(supp_region_mem^)
+                deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+                deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
                 return 25
             var plan = _resolve_program(d, d.aggregates[rev_ai], col_slot)
             var metric_ops = plan.ops.copy()
@@ -7502,7 +7524,8 @@ def _pin_finalize_q5(
             # column-pool eligible. gid_slot (raw supp_nation[l_suppkey]) is a
             # per-query derived slot (>= n_numeric), so it is not pooled and is copied whole.
             var ctx = shared_device_context()
-            var seg_off_dummy = unsafe_alloc[Int64](1)
+            var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+            var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
             seg_off_dummy[unsafe_offset=0] = 0
             var pool_lease_keys: List[String] = []
             var resident: SegResident
@@ -7527,11 +7550,11 @@ def _pin_finalize_q5(
                     for li in range(len(st.colpool_omit_leases)):
                         release_lease(st.colpool_omit_leases[li])
                     st.colpool_omit_leases = []
-                    seg_off_dummy.unsafe_free()
-                    nation_region.unsafe_free(); cust_nation.unsafe_free()
-                    supp_nation.unsafe_free(); supp_region.unsafe_free()
-                    order_date.unsafe_free(); order_cust_nation.unsafe_free()
-                    dims_host.unsafe_free(); doff_host.unsafe_free(); cols.unsafe_free()
+                    deinit(seg_off_dummy_mem^)
+                    deinit(nation_region_mem^); deinit(cust_nation_mem^)
+                    deinit(supp_nation_mem^); deinit(supp_region_mem^)
+                    deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+                    deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
                     return 11
                 for li in range(len(st.colpool_omit_leases)):
                     pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -7559,12 +7582,12 @@ def _pin_finalize_q5(
                     ctx, cols, n_slots, n, seg_off_dummy, 0,
                     dims_host, doff_host, n_dim_arrays,
                 )
-            seg_off_dummy.unsafe_free()
+            deinit(seg_off_dummy_mem^)
 
-            nation_region.unsafe_free(); cust_nation.unsafe_free()
-            supp_nation.unsafe_free(); supp_region.unsafe_free()
-            order_date.unsafe_free(); order_cust_nation.unsafe_free()
-            dims_host.unsafe_free(); doff_host.unsafe_free(); cols.unsafe_free()
+            deinit(nation_region_mem^); deinit(cust_nation_mem^)
+            deinit(supp_nation_mem^); deinit(supp_region_mem^)
+            deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+            deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
 
             # --- construct + cache the GpuPinned, then assemble (emit revenue!=0). ---
             var agg_kind: List[Int64] = [AGG_SUM]
@@ -7644,8 +7667,10 @@ def _pin_finalize_q5(
         var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
         if nk > max_nk:
             max_nk = nk
-    var nation_in_asia = unsafe_alloc[Int64](max_nk + 1)
-    var gid_of_nation = unsafe_alloc[Int64](max_nk + 1)
+    var nation_in_asia_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+    var nation_in_asia = nation_in_asia_mem.unsafe_ptr()
+    var gid_of_nation_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+    var gid_of_nation = gid_of_nation_mem.unsafe_ptr()
     var nation_name: List[String] = []
     for _ in range(max_nk + 1):
         nation_name.append(String(""))
@@ -7667,7 +7692,7 @@ def _pin_finalize_q5(
             gid_to_nation.append(k)
             G += 1
     if G <= 0:
-        nation_in_asia.unsafe_free(); gid_of_nation.unsafe_free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^)
         return 23
     # Fix D (int128 DENSE_GROUP overrun guard): the Q5 dense kernel
     # (seg_dense_kernel_q5 / _q5_pred) accumulates into a per-lane Array of
@@ -7677,7 +7702,7 @@ def _pin_finalize_q5(
     # closed to CPU stock. (The pred-independent path above has the same G>64 guard,
     # which falls back to this per-constant path; the guard here is its backstop.)
     if G > 64:
-        nation_in_asia.unsafe_free(); gid_of_nation.unsafe_free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^)
         return 23
 
     # --- customer: cust_nation[c_custkey] ---
@@ -7689,7 +7714,8 @@ def _pin_finalize_q5(
         var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
         if ck > max_ck:
             max_ck = ck
-    var cust_nation = unsafe_alloc[Int64](max_ck + 1)
+    var cust_nation_mem = alloc(Layout[Int64](count=max_ck + 1)).into_managed()
+    var cust_nation = cust_nation_mem.unsafe_ptr()
     for k in range(max_ck + 1):
         cust_nation[unsafe_offset=k] = -1
     for i in range(cdn):
@@ -7705,9 +7731,12 @@ def _pin_finalize_q5(
         var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
         if sk > max_sk:
             max_sk = sk
-    var supp_nation = unsafe_alloc[Int64](max_sk + 1)
-    var supp_in_asia = unsafe_alloc[Int64](max_sk + 1)
-    var supp_group = unsafe_alloc[Int64](max_sk + 1)
+    var supp_nation_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_nation = supp_nation_mem.unsafe_ptr()
+    var supp_in_asia_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_in_asia = supp_in_asia_mem.unsafe_ptr()
+    var supp_group_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_group = supp_group_mem.unsafe_ptr()
     for k in range(max_sk + 1):
         supp_nation[unsafe_offset=k] = -1
         supp_in_asia[unsafe_offset=k] = 0
@@ -7748,8 +7777,8 @@ def _pin_finalize_q5(
             elif p.cmp == CMP_LE:
                 o_hi = c.lo + 1; have_hi = True
     if not have_lo or not have_hi:
-        nation_in_asia.unsafe_free(); gid_of_nation.unsafe_free(); cust_nation.unsafe_free()
-        supp_nation.unsafe_free(); supp_in_asia.unsafe_free(); supp_group.unsafe_free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+        deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
         return 24
     var odn = st.dim_n_rows[de_orders]
     var max_ok = 0
@@ -7757,8 +7786,10 @@ def _pin_finalize_q5(
         var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
         if ok > max_ok:
             max_ok = ok
-    var order_pass = unsafe_alloc[Int64](max_ok + 1)
-    var order_cust_nation = unsafe_alloc[Int64](max_ok + 1)
+    var order_pass_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+    var order_pass = order_pass_mem.unsafe_ptr()
+    var order_cust_nation_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+    var order_cust_nation = order_cust_nation_mem.unsafe_ptr()
     for k in range(max_ok + 1):
         order_pass[unsafe_offset=k] = 0
         order_cust_nation[unsafe_offset=k] = -1
@@ -7777,7 +7808,8 @@ def _pin_finalize_q5(
     var len2 = max_sk + 1  # supp_nation
     var len3 = max_sk + 1  # supp_in_asia
     var total_dim = len0 + len1 + len2 + len3
-    var dims_host = unsafe_alloc[Int64](total_dim)
+    var dims_host_mem = alloc(Layout[Int64](count=total_dim)).into_managed()
+    var dims_host = dims_host_mem.unsafe_ptr()
     var w = 0
     for i in range(len0):
         dims_host[unsafe_offset=w] = order_pass[unsafe_offset=i]; w += 1
@@ -7788,7 +7820,8 @@ def _pin_finalize_q5(
     for i in range(len3):
         dims_host[unsafe_offset=w] = supp_in_asia[unsafe_offset=i]; w += 1
     var n_dim_arrays = 4
-    var doff_host = unsafe_alloc[Int64](n_dim_arrays + 1)
+    var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+    var doff_host = doff_host_mem.unsafe_ptr()
     doff_host[unsafe_offset=0] = 0
     doff_host[unsafe_offset=1] = Int64(len0)
     doff_host[unsafe_offset=2] = Int64(len0 + len1)
@@ -7799,7 +7832,8 @@ def _pin_finalize_q5(
     # slot layout: numeric fact slots [0..n_numeric), then gid slot.
     var gid_slot = n_numeric
     var n_slots = n_numeric + 1
-    var cols = unsafe_alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+    var cols = cols_mem.unsafe_ptr()
     # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
@@ -7854,10 +7888,10 @@ def _pin_finalize_q5(
             rev_ai = ai
             break
     if rev_ai < 0:
-        nation_in_asia.unsafe_free(); gid_of_nation.unsafe_free(); cust_nation.unsafe_free()
-        supp_nation.unsafe_free(); supp_in_asia.unsafe_free(); supp_group.unsafe_free()
-        order_pass.unsafe_free(); order_cust_nation.unsafe_free()
-        dims_host.unsafe_free(); doff_host.unsafe_free(); cols.unsafe_free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+        deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
+        deinit(order_pass_mem^); deinit(order_cust_nation_mem^)
+        deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
         return 25
     var plan = _resolve_program(d, d.aggregates[rev_ai], col_slot)
     var metric_ops = plan.ops.copy()
@@ -7887,7 +7921,8 @@ def _pin_finalize_q5(
     # DENSE_GROUP uses STORAGE row order; fact columns are column-pool eligible.
     # gid_slot (per-query derived supp-group) is >= n_numeric, so it is copied whole.
     var ctx = shared_device_context()
-    var seg_off_dummy = unsafe_alloc[Int64](1)
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
     seg_off_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
@@ -7908,12 +7943,12 @@ def _pin_finalize_q5(
             ctx, cols, n_slots, n, seg_off_dummy, 0,
             dims_host, doff_host, n_dim_arrays,
         )
-    seg_off_dummy.unsafe_free()
+    deinit(seg_off_dummy_mem^)
 
-    nation_in_asia.unsafe_free(); gid_of_nation.unsafe_free(); cust_nation.unsafe_free()
-    supp_nation.unsafe_free(); supp_in_asia.unsafe_free(); supp_group.unsafe_free()
-    order_pass.unsafe_free(); order_cust_nation.unsafe_free()
-    dims_host.unsafe_free(); doff_host.unsafe_free(); cols.unsafe_free()
+    deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+    deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
+    deinit(order_pass_mem^); deinit(order_cust_nation_mem^)
+    deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
 
     # --- construct + cache the GpuPinned, then assemble (emit only revenue!=0) ---
     var agg_kind: List[Int64] = [AGG_SUM]
@@ -8353,8 +8388,10 @@ def _pin_finalize_generic_dims(
     for ax in range(n_dim_arrays):
         total_dim += len(dim_arrays[ax])
         dim_offsets.append(Int64(total_dim))
-    var dims_host = unsafe_alloc[Int64](total_dim if total_dim > 0 else 1)
-    var doff_host = unsafe_alloc[Int64](n_dim_arrays + 1)
+    var dims_host_mem = alloc(Layout[Int64](count=total_dim if total_dim > 0 else 1)).into_managed()
+    var dims_host = dims_host_mem.unsafe_ptr()
+    var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+    var doff_host = doff_host_mem.unsafe_ptr()
     var w = 0
     for ax in range(n_dim_arrays):
         for i in range(len(dim_arrays[ax])):
@@ -8381,7 +8418,8 @@ def _pin_finalize_generic_dims(
     # dim pass-flag arrays via OP_LOAD_DIM in the pass program (not the host col).
     var pass_slot = n_numeric
     var n_slots = n_numeric + 1
-    var pass_col = unsafe_alloc[Int64](n if n > 0 else 1)
+    var pass_col_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var pass_col = pass_col_mem.unsafe_ptr()
     var f_slot: List[Int] = []
     var f_cmp: List[Int64] = []
     var f_k: List[Int64] = []
@@ -8414,7 +8452,7 @@ def _pin_finalize_generic_dims(
         for fi in range(n_filters):
             var fs = f_slot[fi]
             if fs < len(omit_slot) and omit_slot[fs]:
-                pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+                deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
                 return 8
         if par_on:
             var f_base: List[Int] = []
@@ -8438,7 +8476,8 @@ def _pin_finalize_generic_dims(
                 pass_col[unsafe_offset=i] = Int64(1) if ok else Int64(0)
 
     # --- pack the fact columns + pass column ---
-    var cols = unsafe_alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+    var cols = cols_mem.unsafe_ptr()
     for slot in range(n_numeric):
         # SKIP-MATERIALIZE: an omitted slot is sourced from the pool (D2D); its
         # st.cols[mj] is unfilled, so do not pack it (the host region is unread).
@@ -8512,7 +8551,7 @@ def _pin_finalize_generic_dims(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "" or fact_gk not in col_slot:
-            cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 10
         var gk_slot = col_slot[fact_gk]
 
@@ -8558,7 +8597,8 @@ def _pin_finalize_generic_dims(
         # HASH_GROUP appends no ORDER BY, so rows are in STORAGE order and the fact
         # columns (incl. the integer fact group key l_orderkey, read in storage order)
         # are column-pool eligible. pass_slot is per-query derived, so it is copied whole.
-        var seg_off_dummy_h = unsafe_alloc[Int64](1)
+        var seg_off_dummy_h_mem = alloc(Layout[Int64](count=1)).into_managed()
+        var seg_off_dummy_h = seg_off_dummy_h_mem.unsafe_ptr()
         seg_off_dummy_h[unsafe_offset=0] = 0
         var pool_lease_keys_h: List[String] = []
         var resident: SegResident
@@ -8582,8 +8622,8 @@ def _pin_finalize_generic_dims(
                 for li in range(len(st.colpool_omit_leases)):
                     release_lease(st.colpool_omit_leases[li])
                 st.colpool_omit_leases = []
-                seg_off_dummy_h.unsafe_free()
-                cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+                deinit(seg_off_dummy_h_mem^)
+                deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
                 return 11
             for li in range(len(st.colpool_omit_leases)):
                 pool_lease_keys_h.append(st.colpool_omit_leases[li])
@@ -8610,8 +8650,8 @@ def _pin_finalize_generic_dims(
                 ctx, cols, n_slots, n, seg_off_dummy_h, 0,
                 dims_host, doff_host, n_dim_arrays,
             )
-        seg_off_dummy_h.unsafe_free()
-        cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+        deinit(seg_off_dummy_h_mem^)
+        deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
 
         var agg_scale: List[Int64] = []
         var agg_m1: List[Int] = []
@@ -8679,7 +8719,7 @@ def _pin_finalize_generic_dims(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "" or fact_gk not in col_slot:
-            cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 10
         var gk_slot = col_slot[fact_gk]
 
@@ -8697,7 +8737,8 @@ def _pin_finalize_generic_dims(
                     cur = v
             seg_off_l.append(Int64(n))
         var n_seg = len(seg_key_l)
-        var seg_off_h = unsafe_alloc[Int64](n_seg + 1)
+        var seg_off_h_mem = alloc(Layout[Int64](count=n_seg + 1)).into_managed()
+        var seg_off_h = seg_off_h_mem.unsafe_ptr()
         for s in range(n_seg + 1):
             seg_off_h[unsafe_offset=s] = seg_off_l[s]
 
@@ -8741,8 +8782,8 @@ def _pin_finalize_generic_dims(
             ctx, cols, n_slots, n, seg_off_h, n_seg,
             dims_host, doff_host, n_dim_arrays,
         )
-        seg_off_h.unsafe_free()
-        cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+        deinit(seg_off_h_mem^)
+        deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
 
         # COUNT/SUM only here (no AVG), so neutral scale/m1.
         var agg_scale: List[Int64] = []
@@ -8787,7 +8828,8 @@ def _pin_finalize_generic_dims(
     # columns are column-pool eligible. pass_slot is per-query derived (copied
     # whole). (The SORT_SEGREDUCE branch above returned already; it is the only
     # ineligible strategy here and stays unchanged. It never pools.)
-    var seg_off_dummy = unsafe_alloc[Int64](1)
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
     seg_off_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
@@ -8807,8 +8849,8 @@ def _pin_finalize_generic_dims(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.unsafe_free()
-            cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+            deinit(seg_off_dummy_mem^)
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 11
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -8833,8 +8875,8 @@ def _pin_finalize_generic_dims(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.unsafe_free()
-            cols.unsafe_free(); pass_col.unsafe_free(); dims_host.unsafe_free(); doff_host.unsafe_free()
+            deinit(seg_off_dummy_mem^)
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 11
         # Success: transfer the materialize-time omit leases to the per-signature
         # set (GpuPinned owns them); clear the exec-state copy (no double release).
@@ -8850,11 +8892,11 @@ def _pin_finalize_generic_dims(
             ctx, cols, n_slots, n, seg_off_dummy, 0,
             dims_host, doff_host, n_dim_arrays,
         )
-    seg_off_dummy.unsafe_free()
-    cols.unsafe_free()
-    pass_col.unsafe_free()
-    dims_host.unsafe_free()
-    doff_host.unsafe_free()
+    deinit(seg_off_dummy_mem^)
+    deinit(cols_mem^)
+    deinit(pass_col_mem^)
+    deinit(dims_host_mem^)
+    deinit(doff_host_mem^)
 
     # UNGROUPED: 1 candidate, no group keys (Q14: 2 SUMs / COUNT, no AVG).
     var gk_is_str: List[Bool] = []

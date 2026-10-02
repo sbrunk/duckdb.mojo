@@ -65,7 +65,7 @@ from max.gpu.primitives import warp
 from max.gpu.memory import AddressSpace
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import stack_allocation
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import alloc, Layout
 from std.atomic import Atomic
 from std.os import abort, getenv
 from std.sys.info import is_nvidia_gpu, is_amd_gpu
@@ -1567,13 +1567,13 @@ struct SegResident(Movable):
 # ---------------------------------------------------------------------------
 def segreduce_upload(
     ctx: DeviceContext,
-    cols_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols_host: Pointer[Scalar[DType.int64], _],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    seg_off_host: Pointer[Scalar[DType.int64], _],
     n_seg: Int,
-    dims_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dims_host: Pointer[Scalar[DType.int64], _],
+    dim_offsets_host: Pointer[Scalar[DType.int64], _],
     n_dims: Int,
 ) raises -> SegResident:
     # These resident uploads are one-time (the pin-resident design uploads once
@@ -1635,10 +1635,10 @@ def segreduce_upload_from_packed(
     var cols_d: DeviceBuffer[DType.int64],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    seg_off_host: Pointer[Scalar[DType.int64], _],
     n_seg: Int,
-    dims_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dims_host: Pointer[Scalar[DType.int64], _],
+    dim_offsets_host: Pointer[Scalar[DType.int64], _],
     n_dims: Int,
 ) raises -> SegResident:
     # ---- packed columns: already assembled on device; no upload here. ----
@@ -1690,10 +1690,10 @@ def segreduce_upload_from_colptr(
     var derived_bufs: List[DeviceBuffer[DType.int64]],
     n_cols: Int,
     n_rows: Int,
-    seg_off_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    seg_off_host: Pointer[Scalar[DType.int64], _],
     n_seg: Int,
-    dims_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets_host: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dims_host: Pointer[Scalar[DType.int64], _],
+    dim_offsets_host: Pointer[Scalar[DType.int64], _],
     n_dims: Int,
 ) raises -> SegResident:
     # ---- FK-join dim arrays (concatenated). Identical to the other uploaders. ----
@@ -1835,14 +1835,15 @@ def segreduce_run(
             dims_d, doff_d,
             out_d,
             grid_dim=n_seg, block_dim=WARP)
-        var out_h = unsafe_alloc[Int64](n_seg * M)
+        var out_h_mem = alloc(Layout[Int64](count=n_seg * M)).into_managed()
+        var out_h = out_h_mem.unsafe_ptr()
         var out_sub = out_d.create_sub_buffer[DType.int64](0, n_seg * M)
         ctx.enqueue_copy(out_h, out_sub)
         ctx.synchronize()
         for s in range(n_seg):
             for m in range(M):
                 result.append(Int128(out_h[unsafe_offset=s * M + m]))
-        out_h.unsafe_free()
+        deinit(out_h_mem^)
         return result^
 
     if mode == STRAT_DENSE_GROUP:
@@ -1935,7 +1936,8 @@ def segreduce_run(
                 dims_d, doff_d,
                 part_d,
                 grid_dim=SEG_NBLOCKS, block_dim=WARP)
-        var part_h = unsafe_alloc[Int64](npart)
+        var part_h_mem = alloc(Layout[Int64](count=npart)).into_managed()
+        var part_h = part_h_mem.unsafe_ptr()
         var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
         ctx.enqueue_copy(part_h, part_sub)
         ctx.synchronize()
@@ -1945,7 +1947,7 @@ def segreduce_run(
                 for b in range(SEG_NBLOCKS):
                     acc += Int128(part_h[unsafe_offset=(b * G + g) * M + m])
                 result.append(acc)
-        part_h.unsafe_free()
+        deinit(part_h_mem^)
         return result^
 
     # default: STRAT_UNGROUPED
@@ -2037,7 +2039,8 @@ def segreduce_run(
             dims_d, doff_d,
             part_d,
             grid_dim=SEG_NBLOCKS, block_dim=WARP)
-    var part_h = unsafe_alloc[Int64](npart)
+    var part_h_mem = alloc(Layout[Int64](count=npart)).into_managed()
+    var part_h = part_h_mem.unsafe_ptr()
     var part_sub = part_d.create_sub_buffer[DType.int64](0, npart)
     ctx.enqueue_copy(part_h, part_sub)
     ctx.synchronize()
@@ -2046,7 +2049,7 @@ def segreduce_run(
         for b in range(SEG_NBLOCKS):
             acc += Int128(part_h[unsafe_offset=b * M + m])
         result.append(acc)
-    part_h.unsafe_free()
+    deinit(part_h_mem^)
     return result^
 
 
@@ -2232,11 +2235,13 @@ def segreduce_run_f64(
             fpart_d,
             fpred_d, Int64(n_fpred),
             grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK)
-    var fpart_h = unsafe_alloc[Float64](nout)
+    var fpart_h_mem = alloc(Layout[Float64](count=nout)).into_managed()
+    var fpart_h = fpart_h_mem.unsafe_ptr()
     var fpart_sub = fpart_d.create_sub_buffer[DType.float64](0, nout)
     ctx.enqueue_copy(fpart_h, fpart_sub)
     # DENSE: also read back the per-group passing-row counts (appended to result).
-    var gcnt_h = unsafe_alloc[Float64](gcnt_n)
+    var gcnt_h_mem = alloc(Layout[Float64](count=gcnt_n)).into_managed()
+    var gcnt_h = gcnt_h_mem.unsafe_ptr()
     if mode == STRAT_DENSE_GROUP:
         var gcnt_sub = gcnt_d.create_sub_buffer[DType.float64](0, gcnt_n)
         ctx.enqueue_copy(gcnt_h, gcnt_sub)
@@ -2248,8 +2253,8 @@ def segreduce_run_f64(
     if mode == STRAT_DENSE_GROUP:
         for g in range(G):
             result.append(gcnt_h[unsafe_offset=g])
-    fpart_h.unsafe_free()
-    gcnt_h.unsafe_free()
+    deinit(fpart_h_mem^)
+    deinit(gcnt_h_mem^)
     return result^
 
 
@@ -2359,8 +2364,10 @@ def segreduce_run_hash(
             grid_dim=nblocks, block_dim=HASH_BLOCK)
 
     # ---- read back occupied slots, widen int64 to int128 on the host ----
-    var key_h = unsafe_alloc[Int64](cap)
-    var acc_h = unsafe_alloc[Int64](cap * M)
+    var key_h_mem = alloc(Layout[Int64](count=cap)).into_managed()
+    var key_h = key_h_mem.unsafe_ptr()
+    var acc_h_mem = alloc(Layout[Int64](count=cap * M)).into_managed()
+    var acc_h = acc_h_mem.unsafe_ptr()
     ctx.enqueue_copy(key_h, slot_key_d)
     ctx.enqueue_copy(acc_h, slot_acc_d)
     ctx.synchronize()
@@ -2373,8 +2380,8 @@ def segreduce_run_hash(
         keys.append(key_h[unsafe_offset=slot])
         for m in range(M):
             sums.append(Int128(acc_h[unsafe_offset=slot * M + m]))
-    key_h.unsafe_free()
-    acc_h.unsafe_free()
+    deinit(key_h_mem^)
+    deinit(acc_h_mem^)
     return HashGroupResult(keys^, sums^, M)
 
 
@@ -2481,8 +2488,10 @@ def segreduce_run_hash_f64(
             slot_key_d, slot_facc_d,
             grid_dim=nblocks, block_dim=HASH_BLOCK)
 
-    var key_h = unsafe_alloc[Int64](cap)
-    var acc_h = unsafe_alloc[Float64](cap * M)
+    var key_h_mem = alloc(Layout[Int64](count=cap)).into_managed()
+    var key_h = key_h_mem.unsafe_ptr()
+    var acc_h_mem = alloc(Layout[Float64](count=cap * M)).into_managed()
+    var acc_h = acc_h_mem.unsafe_ptr()
     ctx.enqueue_copy(key_h, slot_key_d)
     var acc_sub = slot_facc_d.create_sub_buffer[DType.float64](0, cap * M)
     ctx.enqueue_copy(acc_h, acc_sub)
@@ -2496,8 +2505,8 @@ def segreduce_run_hash_f64(
         keys.append(key_h[unsafe_offset=slot])
         for m in range(M):
             fsums.append(acc_h[unsafe_offset=slot * M + m])
-    key_h.unsafe_free()
-    acc_h.unsafe_free()
+    deinit(key_h_mem^)
+    deinit(acc_h_mem^)
     return HashGroupResultF64(keys^, fsums^, M)
 
 

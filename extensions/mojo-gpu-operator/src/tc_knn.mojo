@@ -40,7 +40,7 @@ from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace, async_copy_wait_all
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import stack_allocation
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import alloc, Layout as MemLayout
 from layout import Layout, LayoutTensor, UNKNOWN_VALUE
 from layout.runtime_layout import RuntimeLayout
 from layout.layout_tensor import copy_dram_to_sram_async
@@ -432,8 +432,10 @@ def _run_tc_knn_for_kd[
             TC_BM * k
         )
         var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](TC_BM * k)
-        var merged_dist_h = unsafe_alloc[Float32](TC_BM * k)
-        var merged_id_h = unsafe_alloc[Int64](TC_BM * k)
+        var merged_dist_h_mem = alloc(MemLayout[Float32](count=TC_BM * k)).into_managed()
+        var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+        var merged_id_h_mem = alloc(MemLayout[Int64](count=TC_BM * k)).into_managed()
+        var merged_id_h = merged_id_h_mem.unsafe_ptr()
         ctx.synchronize()
 
         comptime fk = tc_fused_knn_kernel[KD, metric, q_layout, e_layout]
@@ -499,8 +501,8 @@ def _run_tc_knn_for_kd[
                     out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
             q0 += TC_BM
 
-        merged_dist_h.unsafe_free()
-        merged_id_h.unsafe_free()
+        deinit(merged_dist_h_mem^)
+        deinit(merged_id_h_mem^)
 
 
 # ===-------------------------------------------------------------------===#
@@ -557,8 +559,10 @@ def run_tc_knn_batch(
         # Host: fp16 query tile (padded to a multiple of BM rows so the kernel's
         # full-BM q tile is always in bounds), fp32 query norms, fp32 emb norms.
         var ntile = ((M + TC_BM - 1) // TC_BM) * TC_BM
-        var qh16 = unsafe_alloc[Float16](ntile * K)
-        var qnorm_h = unsafe_alloc[Float32](ntile)
+        var qh16_mem = alloc(MemLayout[Float16](count=ntile * K)).into_managed()
+        var qh16 = qh16_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var qnorm_h_mem = alloc(MemLayout[Float32](count=ntile)).into_managed()
+        var qnorm_h = qnorm_h_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         for m in range(M):
             var qoff = m * K
             var s = Float32(0)
@@ -678,8 +682,8 @@ def run_tc_knn_batch(
             else:
                 raise Error("tc_knn: unsupported K (guard tc_knn_supported)")
 
-        qh16.unsafe_free()
-        qnorm_h.unsafe_free()
+        deinit(qh16_mem^)
+        deinit(qnorm_h_mem^)
 
 
 # Per-row norm of the fp16-resident matrix (one warp per row, warp-strided).

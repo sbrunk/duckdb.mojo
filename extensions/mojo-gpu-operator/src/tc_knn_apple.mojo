@@ -42,7 +42,7 @@ from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import stack_allocation
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import alloc, Layout
 from std.math import sqrt
 
 
@@ -411,8 +411,10 @@ def run_tc_knn_apple_batch(
         # Host: fp16 query tile (padded to a multiple of MM rows so the kernel's
         # full-MM q tile is always in bounds), fp32 query L2 norms.
         var ntile = ((M + AP_MM - 1) // AP_MM) * AP_MM
-        var qh16 = unsafe_alloc[Float16](ntile * K)
-        var qnorm_h = unsafe_alloc[Float32](ntile)
+        var qh16_mem = alloc(Layout[Float16](count=ntile * K)).into_managed()
+        var qh16 = qh16_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var qnorm_h_mem = alloc(Layout[Float32](count=ntile)).into_managed()
+        var qnorm_h = qnorm_h_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         for m in range(M):
             var qoff = m * K
             var s = Float32(0)
@@ -462,8 +464,10 @@ def run_tc_knn_apple_batch(
             AP_MM * k
         )
         var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](AP_MM * k)
-        var merged_dist_h = unsafe_alloc[Float32](AP_MM * k)
-        var merged_id_h = unsafe_alloc[Int64](AP_MM * k)
+        var merged_dist_h_mem = alloc(Layout[Float32](count=AP_MM * k)).into_managed()
+        var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+        var merged_id_h_mem = alloc(Layout[Int64](count=AP_MM * k)).into_managed()
+        var merged_id_h = merged_id_h_mem.unsafe_ptr()
         ctx.synchronize()
 
         var q0 = 0
@@ -509,7 +513,7 @@ def run_tc_knn_apple_batch(
                     out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
             q0 += AP_MM
 
-        qh16.unsafe_free()
-        qnorm_h.unsafe_free()
-        merged_dist_h.unsafe_free()
-        merged_id_h.unsafe_free()
+        deinit(qh16_mem^)
+        deinit(qnorm_h_mem^)
+        deinit(merged_dist_h_mem^)
+        deinit(merged_id_h_mem^)
