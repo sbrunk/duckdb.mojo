@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" width="160" alt="duckdb.mojo logo: the DuckDB duck inside the Mojo flame">
+</p>
+
 # duckdb.mojo
 
 [![Run tests](https://github.com/sbrunk/duckdb.mojo/actions/workflows/test.yml/badge.svg)](https://github.com/sbrunk/duckdb.mojo/actions/workflows/test.yml)
