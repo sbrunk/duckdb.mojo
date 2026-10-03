@@ -45,6 +45,8 @@ pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with Duck
 pixi build                    # Build conda package
 pixi run overrides-build      # Build the mojo-kernel-overrides extension
 pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
+pixi run -e gpu gpu-op-build  # Build the mojo-gpu-operator extension
+pixi run -e gpu gpu-op-test   # Build it and run its GPU tests (needs a GPU)
 # Consolidated benchmarks (see benchmark/README.md):
 pixi run bench-build          # Build DuckDB's benchmark_runner (w/ load-ext hook), once
 pixi run bench-sql <group> --engines=stock,cpu,gpu   # warm compare (mojo_simd|gpu_xover|gpu_knn|tpch/...)
@@ -89,13 +91,9 @@ Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
   (`benchmark/drivers/runner_load_extension.patch`) that `LOAD`s the extension via the
   `DUCKDB_BENCH_EXTENSION` environment variable, so no libduckdb fork is needed.
 
-## FFI Struct ABI Workaround
-
-Mojo's `abi("C")` lowering on Linux x86_64 still miscompiles by-value struct arguments larger than 16 bytes when the struct type carries no register-passable marker. As a workaround, the generator emits `duckdb_result` with `RegisterPassable` in its trait list, which routes it through the working ABI path. Both `RegisterPassable` and `TrivialRegisterPassable` select the working path (verified equivalent on Mojo `1.0.0` stable); we use the non-trivial `RegisterPassable`. Track upstream resolution at https://github.com/modular/modular/issues/6511 (the fix landed for register-passable-marked structs; a follow-up is still needed for plain/unmarked structs).
-
 ## Updating Mojo
 
-The Mojo compiler version is pinned in `pixi.toml` (currently `1.0.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
+The Mojo compiler version is pinned in `pixi.toml` (currently `1.1.0` from the `https://conda.modular.com/max/` stable channel, set in `package.host-dependencies`, `package.build-dependencies`, the `[dependencies]` `mojo`, and the `operator-replacement` feature's `mojo`) and also in `conda.recipe/recipe.yaml` (`requirements.build`/`host`/`run`). To update:
 
 1. Check available versions: query `https://conda.modular.com/max/osx-arm64/repodata.json` (stable releases) or `https://conda.modular.com/max-nightly/osx-arm64/repodata.json` (nightlies) for `mojo-compiler` packages. Check `linux-64` and `linux-aarch64` too. `curl` must follow redirects (`-L`).
 2. Update the version pin in `pixi.toml` (both `host-dependencies` and `build-dependencies`); when moving between stable and nightly also update the channel in `[workspace] channels` (stable = `.../max/`, nightly = `.../max-nightly/`)
@@ -135,7 +133,7 @@ warns when they drift. To bump (for example from `1.5.6` to `1.5.7`):
 Two independent paths build a conda package of the bindings, and they must be kept in sync (see the pin checklist above):
 
 - `pixi build`: the `[package]` block and the `pixi-build-mojo` backend in `pixi.toml`. The backend infers the build steps (no recipe). Used for local builds and for consuming duckdb.mojo as a source dependency from other Pixi workspaces.
-- `conda.recipe/recipe.yaml` (rattler-build): an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. The `run` dependency pins `mojo-compiler` exactly, because a precompiled `.mojoc` only loads under the exact compiler it was built with (`pin_compatible` would let a newer nightly fail at import). `libduckdb` is a `run` dependency because the bindings `dlopen` it. Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
+- `conda.recipe/recipe.yaml` (rattler-build): an explicit recipe. This is what gets submitted to the [modular-community](https://github.com/modular/modular-community) channel, whose CI runs `rattler-build` on it. The `run` dependency pins `mojo-compiler` exactly, because a precompiled `.mojoc` only loads under the exact compiler it was built with (`pin_compatible` would let a newer nightly fail at import). `libduckdb` is a `run` dependency because the bindings `dlopen` it. Verify locally with `conda.recipe/recipe.local.yaml`, which builds from the working tree instead of a pushed git SHA. Build it with `rattler-build build --recipe conda.recipe/recipe.local.yaml -c conda-forge -c https://conda.modular.com/max -c https://repo.prefix.dev/modular-community`. A successful build runs the in-package smoke test and writes the `.conda` under `output/<platform>/`. Before submitting a release, set `source.rev` in `recipe.yaml` to the full release commit SHA.
 
 The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler-build` backend, which runs rattler-build on their own `recipe.yaml` via `pixi build`). It is unrelated to publishing the `duckdb-mojo` package.
 

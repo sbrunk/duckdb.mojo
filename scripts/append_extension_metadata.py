@@ -35,7 +35,6 @@ Example:
 import argparse
 import platform
 import shutil
-import struct
 import subprocess
 import sys
 

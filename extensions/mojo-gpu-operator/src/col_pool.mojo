@@ -163,7 +163,7 @@ def _make_col_pool() -> ColPoolState:
 comptime _col_pool = _Global["mojo_gpu_col_pool", _make_col_pool]
 
 
-def col_pool_ptr() raises -> UnsafePointer[ColPoolState, MutUntrackedOrigin]:
+def col_pool_ptr() raises -> Pointer[ColPoolState, MutUntrackedOrigin]:
     return _col_pool.get_or_create_ptr()
 
 
@@ -642,7 +642,7 @@ def ensure_column(
     key: String,
     representation: Int,
     ordering: String,
-    host_col_ptr: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    host_col_ptr: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     type_tag: Int64,
 ) raises -> EnsureResult:

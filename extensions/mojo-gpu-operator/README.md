@@ -21,7 +21,7 @@ DuckDB ABI; the planner and execution logic live in Mojo.
 > **Scope and caveats.** This is a CPP-ABI extension that links DuckDB's
 > internal C++ headers, so it only works with the exact DuckDB build it was
 > compiled against (currently `v1.5.6`). It is not part of the conda package. It
-> has been validated on Apple (Metal) and NVIDIA (RTX 4090, Linux); see
+> has been validated on Apple (Metal) and NVIDIA (RTX 4090, Linux). See
 > [DESIGN.md](DESIGN.md#hardware-portability) for the Linux/NixOS build notes.
 > You need to load the extension with `-unsigned` / `allow_unsigned_extensions`.
 
@@ -140,25 +140,23 @@ execution.
 
 ## Tasks
 
-Only build and clean are wrapped as pixi tasks:
-
 ```
 gpu-op-build / gpu-op-clean        build / clean the extension
+gpu-op-test [name]                 build, then run the GPU tests in bench/ (needs a GPU)
 ```
 
-The `bench/` tests (end-to-end shuttle tests, kernel algorithm oracles,
-nullable/native-decode tests), the unified-memory allocator probes, and the
-pin-resident micro-benchmark are run directly with `mojo run` (the former
-`pixi run gpu-op-*` wrappers were removed). The kernel oracles run as they are.
-The descriptor C-ABI "shuttle" tests, and anything else that imports the
-operator's Mojo modules, need the package `src/` on the import path:
+`pixi run -e gpu gpu-op-test` runs the tests in `bench/`: unit tests for the
+descriptor, expression VM, segmented reduction, native decode and column pool;
+shuttle tests that drive each query class through the C-ABI entry points
+without DuckDB; SQL tests that compare the loaded extension with stock DuckDB;
+and the vector-search tests. Tests that need NVIDIA (the float64 kernels and
+the non-cosine tensor-core metrics) are skipped on macOS. Pass part of a test
+name to run a subset, for example `pixi run -e gpu gpu-op-test q6_shuttle`.
+
+To run a single test directly, put `src/` on the import path:
 
 ```bash
-# kernel-algorithm oracles (q1/q3/q5/q6/q14, q3groupby) + the pin-resident bench:
-pixi run mojo run extensions/mojo-gpu-operator/bench/q6_kernel_test.mojo
-
-# shuttle / nullable / native-decode tests (need -I src):
-pixi run mojo run -I extensions/mojo-gpu-operator/src \
+pixi run -e gpu mojo run -I extensions/mojo-gpu-operator/src \
   extensions/mojo-gpu-operator/bench/q6_shuttle_test.mojo
 ```
 

@@ -58,7 +58,7 @@ from raw_plan_tags import (
     KIND_Q6,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
@@ -147,6 +147,7 @@ def build_q6_tape(
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_ext)
     b.put(OP_LOAD_COL); b.puti(s_li); b.puti(s_disc)
     b.put(OP_MUL); b.puti(0); b.puti(0)
+    b.puti(0)  # PASS_PROGRAMS: none
 
 
 # Parse the comma-separated projection between "SELECT " and " FROM ".
@@ -178,24 +179,24 @@ def _projection_cols(sql: String) raises -> List[String]:
 
 
 def _feed_q6(
-    h: UnsafePointer[NoneType, MutAnyOrigin],
+    h: Pointer[NoneType, MutUntrackedOrigin],
     order: List[String],
-    ship: UnsafePointer[Int32, MutAnyOrigin],
-    disc: UnsafePointer[Int64, MutAnyOrigin],
-    ext: UnsafePointer[Int64, MutAnyOrigin],
-    qty: UnsafePointer[Int64, MutAnyOrigin],
+    ship: Pointer[Int32, MutUntrackedOrigin],
+    disc: Pointer[Int64, MutUntrackedOrigin],
+    ext: Pointer[Int64, MutUntrackedOrigin],
+    qty: Pointer[Int64, MutUntrackedOrigin],
 ) raises:
     for j in range(len(order)):
         var nm = order[j]
         var rc: Int
         if nm == "l_shipdate":
-            rc = mojo_gpu_feed_column(h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE)
+            rc = mojo_gpu_feed_column(h, 0, j, ship.unsafe_bitcast[NoneType](), N, TYPE_DATE)
         elif nm == "l_discount":
-            rc = mojo_gpu_feed_column(h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL)
+            rc = mojo_gpu_feed_column(h, 0, j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
         elif nm == "l_extendedprice":
-            rc = mojo_gpu_feed_column(h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL)
+            rc = mojo_gpu_feed_column(h, 0, j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
         elif nm == "l_quantity":
-            rc = mojo_gpu_feed_column(h, 0, j, qty.bitcast[NoneType](), N, TYPE_DECIMAL)
+            rc = mojo_gpu_feed_column(h, 0, j, qty.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL)
         else:
             raise Error("unexpected fact column: " + nm)
         assert_equal(rc, 0, "feed rc for " + nm)
@@ -224,42 +225,42 @@ def main() raises:
     var disc_hi = Int64(7)
     var qty_hi = Int64(2400)
 
-    var ship = alloc[Int32](N)
-    var disc = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var qty = alloc[Int64](N)
+    var ship = unsafe_alloc[Int32](N)
+    var disc = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var qty = unsafe_alloc[Int64](N)
     for i in range(N):
-        ship[i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)
-        disc[i] = Int64((i * 48271) % 11)
-        ext[i] = Int64(100 + (i * 16807) % 9_999_900)
-        qty[i] = Int64(1 + (i * 22695477) % 5000)
+        ship[unsafe_offset=i] = Int32(8000 + (i * 1103515245 + 12345) % 2000)
+        disc[unsafe_offset=i] = Int64((i * 48271) % 11)
+        ext[unsafe_offset=i] = Int64(100 + (i * 16807) % 9_999_900)
+        qty[unsafe_offset=i] = Int64(1 + (i * 22695477) % 5000)
 
     var cpu = Int128(0)
     for i in range(N):
-        var sd = ship[i]
+        var sd = ship[unsafe_offset=i]
         if sd >= Int32(ship_lo) and sd < Int32(ship_hi):
-            var dd = disc[i]
-            if dd >= disc_lo and dd <= disc_hi and qty[i] < qty_hi:
-                cpu += Int128(ext[i]) * Int128(dd)
+            var dd = disc[unsafe_offset=i]
+            if dd >= disc_lo and dd <= disc_hi and qty[unsafe_offset=i] < qty_hi:
+                cpu += Int128(ext[unsafe_offset=i]) * Int128(dd)
 
     var b = TapeBuilder()
     build_q6_tape(b, ship_lo, ship_hi, Int(disc_lo), Int(disc_hi), Int(qty_hi))
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
 
     var cap = 512
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
 
     # ---- run #1: cold, uploads all 4 fact columns into the pool ----
     var h1_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h1_int != 0, "build #1 returned 0")
-    var h1 = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h1_int)
+    var h1 = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h1_int)
     assert_equal(Int64(mojo_gpu_desc_kind(h1)), KIND_Q6, "kind != Q6")
     assert_equal(mojo_gpu_desc_materialize_count(h1), 1, "mat_count != 1")
     assert_equal(
@@ -268,7 +269,7 @@ def main() raises:
     var sql1_len = mojo_gpu_desc_materialize_sql(h1, 0, sql_buf, cap)
     var sql1 = String("")
     for i in range(sql1_len):
-        sql1 += chr(Int(sql_buf[i]))
+        sql1 += chr(Int(sql_buf[unsafe_offset=i]))
     var proj1 = _projection_cols(sql1)
     print("run #1 projection cols:", len(proj1), " (expect 4 -- pool empty)")
     assert_equal(len(proj1), 4, "run #1 should select all 4 fact cols")
@@ -276,10 +277,10 @@ def main() raises:
     assert_equal(pb1, 1, "run #1 should be COLD")
     _feed_q6(h1, proj1, ship, disc, ext, qty)
     assert_equal(mojo_gpu_pin_finalize(h1), 0, "finalize #1 rc")
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
     _ = mojo_gpu_result_i128(h1, 0, 0, lo, hi)
-    var gpu1 = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+    var gpu1 = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
     assert_equal(gpu1, cpu, "run #1 GPU sum != CPU")
 
     # ---- run #2: a fresh handle. All 4 cols are now pool-resident, so the
@@ -287,11 +288,11 @@ def main() raises:
     # materialize must seed n_rows so the C++ side can skip the illegal query. ----
     var h2_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(h2_int != 0, "build #2 returned 0")
-    var h2 = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h2_int)
+    var h2 = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h2_int)
     var sql2_len = mojo_gpu_desc_materialize_sql(h2, 0, sql_buf, cap)
     var sql2 = String("")
     for i in range(sql2_len):
-        sql2 += chr(Int(sql_buf[i]))
+        sql2 += chr(Int(sql_buf[unsafe_offset=i]))
     print("run #2 narrowed SQL: '", sql2, "'")
     var proj2 = _projection_cols(sql2)
     print("run #2 projection cols:", len(proj2), " (expect 0 -- all resident)")
@@ -315,7 +316,7 @@ def main() raises:
     print("run #2 pin_begin:", pb2, "(0=WARM expected -- same signature)")
     assert_equal(mojo_gpu_pin_finalize(h2), 0, "finalize #2 rc")
     _ = mojo_gpu_result_i128(h2, 0, 0, lo, hi)
-    var gpu2 = (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+    var gpu2 = (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
     print("CPU ref =", cpu, "  run#2 GPU =", gpu2)
     assert_equal(gpu2, cpu, "run #2 GPU sum != CPU (all-resident path)")
 

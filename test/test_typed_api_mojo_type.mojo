@@ -110,9 +110,9 @@ def test_mojo_type_to_logical_type() raises:
 
 def test_struct_deserialization_numeric() raises:
     """Test deserializing DuckDB STRUCT into a Mojo struct with numeric fields."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute(
+    var result = con.execute(
         "SELECT {'x': 1.5::DOUBLE, 'y': 2.5::DOUBLE} AS pt"
     )
     var chunk = result.fetch_chunk()
@@ -123,9 +123,9 @@ def test_struct_deserialization_numeric() raises:
 
 def test_struct_deserialization_column() raises:
     """Test deserializing a column of DuckDB STRUCTs."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("""
+    var result = con.execute("""
         SELECT * FROM (VALUES
             ({'x': 0.0::DOUBLE, 'y': 0.0::DOUBLE}),
             ({'x': 1.0::DOUBLE, 'y': 2.0::DOUBLE}),
@@ -148,9 +148,9 @@ def test_struct_deserialization_column() raises:
 
 def test_struct_deserialization_mixed_int_types() raises:
     """Test struct with mixed integer types."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute(
+    var result = con.execute(
         "SELECT {'a': 10::INTEGER, 'b': 20::BIGINT} AS pair"
     )
     var chunk = result.fetch_chunk()
@@ -161,9 +161,9 @@ def test_struct_deserialization_mixed_int_types() raises:
 
 def test_struct_null_handling() raises:
     """Test NULL handling for struct columns."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
 
-    result = con.execute("""
+    var result = con.execute("""
         SELECT * FROM (VALUES
             ({'x': 1.0::DOUBLE, 'y': 2.0::DOUBLE}),
             (NULL),

@@ -12,7 +12,7 @@ from duckdb.typed_api import (
 )
 from std.collections import Optional
 from std.memory import UnsafePointer
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import unsafe_alloc, alloc, Layout
 from std.builtin.rebind import downcast, rebind_var
 from std.iter import Iterator, Iterable, StopIteration
 from std.reflection import Reflected
@@ -75,12 +75,13 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         ref libduckdb = DuckDB().libduckdb()
         
         # Create array of duckdb_logical_type pointers
-        var type_ptrs = unsafe_alloc[duckdb_logical_type](len(types))
+        var type_ptrs_mem = alloc(Layout[duckdb_logical_type](count=len(types))).into_managed()
+        var type_ptrs = type_ptrs_mem.unsafe_ptr()
         for i in range(len(types)):
             type_ptrs[unsafe_offset=i] = types[i]._logical_type
         
         var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, UInt64(len(types)))
-        type_ptrs.unsafe_free()
+        deinit(type_ptrs_mem^)
         
         self._chunk = chunk
 
@@ -770,7 +771,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
 
         # Validate types and NULL constraints
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
             comptime ETC = downcast[ET, Copyable & Deinitable]
             var actual_type = self.type(idx)
 
@@ -873,7 +874,7 @@ struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
         )
 
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
             comptime ETC = downcast[ET, Copyable & Deinitable]
             var vector = self.get_vector(idx)
 

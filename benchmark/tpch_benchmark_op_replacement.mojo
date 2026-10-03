@@ -142,13 +142,13 @@ def register_decimal_op[
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
-    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
+    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_span().ptr())
 
     var type = lib.duckdb_create_decimal_type(18, 4)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_set_return_type(function, type)
-    lib.duckdb_destroy_logical_type(UnsafePointer(to=type))
+    lib.duckdb_destroy_logical_type(Pointer(to=type))
 
     lib.duckdb_scalar_function_set_function(function, func)
 
@@ -156,7 +156,7 @@ def register_decimal_op[
     if status != DuckDBSuccess:
         raise Error("Failed to register function: " + name)
 
-    lib.duckdb_destroy_scalar_function(UnsafePointer(to=function))
+    lib.duckdb_destroy_scalar_function(Pointer(to=function))
 
 
 def register_double_op[
@@ -166,13 +166,13 @@ def register_double_op[
     ref lib = DuckDB().libduckdb()
     var function = lib.duckdb_create_scalar_function()
     var name_copy = name
-    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_slice().unsafe_ptr())
+    lib.duckdb_scalar_function_set_name(function, name_copy.as_c_string_span().ptr())
 
     var type = lib.duckdb_create_logical_type(DUCKDB_TYPE_DOUBLE)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_add_parameter(function, type)
     lib.duckdb_scalar_function_set_return_type(function, type)
-    lib.duckdb_destroy_logical_type(UnsafePointer(to=type))
+    lib.duckdb_destroy_logical_type(Pointer(to=type))
 
     lib.duckdb_scalar_function_set_function(function, func)
 
@@ -180,7 +180,7 @@ def register_double_op[
     if status != DuckDBSuccess:
         raise Error("Failed to register function: " + name)
 
-    lib.duckdb_destroy_scalar_function(UnsafePointer(to=function))
+    lib.duckdb_destroy_scalar_function(Pointer(to=function))
 
 
 # ===--------------------------------------------------------------------===#
@@ -203,10 +203,10 @@ def bench_single_query(
     for _ in range(warmup_iters):
         run_tpch_query(conn, query_nr)
 
-    def bench_fn() capturing raises:
+    def bench_fn() raises {imm}:
         run_tpch_query(conn, query_nr)
 
-    return benchmark.run[bench_fn](max_iters=max_iters)
+    return benchmark.run(bench_fn, max_iters=max_iters)
 
 
 # ===--------------------------------------------------------------------===#

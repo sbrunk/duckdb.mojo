@@ -90,8 +90,8 @@ from std.sys.info import size_of
 from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
-from std.builtin.rebind import downcast, rebind_var, trait_downcast
-from std.memory.alloc import unsafe_alloc
+from std.builtin.rebind import downcast, rebind, rebind_var
+from std.memory.alloc import alloc, Layout
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
 from duckdb.api import DuckDB, _get_duckdb_interface
@@ -212,7 +212,7 @@ __extension String(Appendable):
         var copy = String(self)
         appender._check(
             libduckdb.duckdb_append_varchar(
-                appender._appender, copy.as_c_string_slice().unsafe_ptr()
+                appender._appender, copy.as_c_string_span().ptr()
             ),
         )
 
@@ -325,12 +325,13 @@ __extension TimeNS(Appendable):
 __extension Bit(Appendable):
     def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
-        var buf = unsafe_alloc[UInt8](len(self._data))
+        var buf_mem = alloc(Layout[UInt8](count=len(self._data))).into_managed()
+        var buf = buf_mem.unsafe_ptr()
         for i in range(len(self._data)):
             buf[unsafe_offset=i] = self._data[i]
-        var raw = duckdb_bit(buf, idx_t(len(self._data)))
+        var raw = duckdb_bit(buf.unsafe_origin_cast[MutUntrackedOrigin](), idx_t(len(self._data)))
         var val = libduckdb.duckdb_create_bit(raw)
-        buf.unsafe_free()
+        deinit(buf_mem^)
         appender._check(libduckdb.duckdb_append_value(appender._appender, val))
         libduckdb.duckdb_destroy_value(Pointer(to=val))
 
@@ -359,7 +360,8 @@ __extension List(Appendable):
             var n = len(src_ptr[])
 
             # Create duckdb_values for each element
-            var values = unsafe_alloc[duckdb_value](n)
+            var values_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
+            var values = values_mem.unsafe_ptr()
             for i in range(n):
                 values[unsafe_offset=i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
 
@@ -401,7 +403,7 @@ __extension List(Appendable):
                 libduckdb.duckdb_destroy_value(
                     Pointer(to=values[unsafe_offset=i])
                 )
-            values.unsafe_free()
+            deinit(values_mem^)
             libduckdb.duckdb_destroy_value(Pointer(to=val))
             libduckdb.duckdb_destroy_logical_type(Pointer(to=col_type))
         else:
@@ -440,8 +442,10 @@ __extension Dict(Appendable):
         )
 
         var n = len(self)
-        var keys = unsafe_alloc[duckdb_value](n)
-        var vals = unsafe_alloc[duckdb_value](n)
+        var keys_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
+        var keys = keys_mem.unsafe_ptr()
+        var vals_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
+        var vals = vals_mem.unsafe_ptr()
 
         # Refine K and V so they satisfy _to_duckdb_value's bounds. Any type
         # convertible to a duckdb_value is copyable, movable and deinitable.
@@ -468,8 +472,8 @@ __extension Dict(Appendable):
         for j in range(n):
             libduckdb.duckdb_destroy_value(Pointer(to=keys[unsafe_offset=j]))
             libduckdb.duckdb_destroy_value(Pointer(to=vals[unsafe_offset=j]))
-        keys.unsafe_free()
-        vals.unsafe_free()
+        deinit(keys_mem^)
+        deinit(vals_mem^)
         libduckdb.duckdb_destroy_value(Pointer(to=map_val))
         libduckdb.duckdb_destroy_logical_type(Pointer(to=col_type))
 
@@ -565,15 +569,15 @@ struct Appender(Movable):
             state = libduckdb.duckdb_appender_create(
                 con._conn,
                 _null_ptr[c_char, ImmutAnyOrigin](),
-                _table.as_c_string_slice().unsafe_ptr(),
+                _table.as_c_string_span().ptr(),
                 Pointer(to=self._appender),
             )
         else:
             var _schema = schema.copy()
             state = libduckdb.duckdb_appender_create(
                 con._conn,
-                _schema.as_c_string_slice().unsafe_ptr(),
-                _table.as_c_string_slice().unsafe_ptr(),
+                _schema.as_c_string_span().ptr(),
+                _table.as_c_string_span().ptr(),
                 Pointer(to=self._appender),
             )
         if state == DuckDBError:
@@ -698,7 +702,7 @@ struct Appender(Movable):
             comptime FieldType = Reflected[T].field_types()[idx]
 
             comptime if conforms_to(FieldType, Appendable):
-                trait_downcast[Appendable](
+                rebind[downcast[FieldType, Appendable]](
                     __struct_field_ref(idx, row)
                 ).append(self)
                 self._current_col += 1
@@ -737,7 +741,7 @@ struct Appender(Movable):
         comptime n = T.__len__()
 
         comptime for idx in range(n):
-            comptime ET = T.element_types[idx]
+            comptime ET = T.Ts[idx]
 
             comptime if conforms_to(ET, Appendable):
                 row[idx].append(self)

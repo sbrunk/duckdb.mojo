@@ -728,7 +728,6 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
 def _generate_header() -> str:
     return """from std.ffi import c_char
 from std.utils import StaticTuple
-from std.collections import InlineArray
 from duckdb.duckdb_type import *
 from std.sys.info import CompilationTarget
 from std.os import abort
@@ -923,13 +922,13 @@ def _generate_types(duckdb_dir: str) -> str:
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_string_t_pointer(Copyable, Movable):")
     lines.append("    var length: UInt32")
-    lines.append("    var prefix: InlineArray[c_char, 4]")
+    lines.append("    var prefix: Array[c_char, 4]")
     lines.append("    var ptr: Pointer[c_char, MutUntrackedOrigin]")
     lines.append("")
     lines.append("@fieldwise_init")
     lines.append("struct duckdb_string_t_inlined(Copyable, Movable):")
     lines.append("    var length: UInt32")
-    lines.append("    var inlined: InlineArray[c_char, 12]")
+    lines.append("    var inlined: Array[c_char, 12]")
     lines.append("")
     lines.append("comptime duckdb_string_t = UnsafeUnion[duckdb_string_t_pointer, duckdb_string_t_inlined]")
     lines.append("")
@@ -999,16 +998,7 @@ def _generate_types(duckdb_dir: str) -> str:
 
     # duckdb_result
     lines.append("@fieldwise_init")
-    # WORKAROUND: a register-passable marker is required for `abi("C")` to
-    # lower the by-value struct ABI correctly on Linux x86_64 (verified through
-    # Mojo 1.0.0b2 stable). Without it, calls like
-    # `duckdb_fetch_chunk(result)` either return NULL or crash. The fix for the
-    # abi("C") lowering bug (https://github.com/modular/modular/issues/6511)
-    # only covers structs that carry a register-passable marker; plain
-    # (unmarked) structs still miscompile, so an upstream follow-up is still
-    # needed. `RegisterPassable` and `TrivialRegisterPassable` both select the
-    # working path.
-    lines.append("struct duckdb_result(RegisterPassable, ImplicitlyCopyable):")
+    lines.append("struct duckdb_result(ImplicitlyCopyable):")
     lines.append("    var __deprecated_column_count: idx_t")
     lines.append("    var __deprecated_row_count: idx_t")
     lines.append("    var __deprecated_rows_changed: idx_t")

@@ -19,8 +19,8 @@ The compute core is the tested warp kernel from
 `benchmark/gpu_table_function_poc.mojo`, with K promoted to a runtime argument.
 """
 
-from std.gpu import block_idx, thread_idx
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx
+from max.gpu.primitives import warp
 from max.gpu.memory import AddressSpace
 from gpu_platform import WARP
 from max.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
@@ -34,7 +34,8 @@ from std.sys.info import (
 )
 from max.gpu.sync import barrier
 from std.math import sqrt, ceildiv, nan
-from std.memory import alloc, memcpy, stack_allocation
+from std.memory import unsafe_memcpy, stack_allocation
+from std.memory.alloc import unsafe_alloc, alloc, Layout
 from std.time import perf_counter_ns
 from max.algorithm import parallelize
 
@@ -206,9 +207,9 @@ def mojo_gpu_ctx_init() abi("C"):
 # Kernel: one warp (32 lanes) per row; lane-strided dot/norm, warp.sum, no barriers.
 # ---------------------------------------------------------------------------
 def cosine_kernel_warp(
-    emb: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    q: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    res: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    q: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    res: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     qnorm: Float32,
@@ -224,15 +225,15 @@ def cosine_kernel_warp(
     var na = Float32(0)
     var i = lane
     while i < K:
-        var av = emb[base + i]
-        dot += av * q[i]
+        var av = emb[unsafe_offset=base + i]
+        dot += av * q[unsafe_offset=i]
         na += av * av
         i += WARP
     dot = warp.sum(dot)
     na = warp.sum(na)
     if lane == 0:
         var denom = sqrt(na) * qnorm
-        res[row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
+        res[unsafe_offset=row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +247,9 @@ def cosine_kernel_warp(
 # accuracy for unit-normalized embeddings while halving the bandwidth-bound read.
 # ---------------------------------------------------------------------------
 def cosine_kernel_warp_f16(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    q: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    res: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    q: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    res: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     qnorm: Float32,
@@ -266,15 +267,15 @@ def cosine_kernel_warp_f16(
     while i < K:
         # Load the stored half, cast to fp32 before any arithmetic so the dot and
         # norm accumulate in fp32 (only the storage/read is half-width).
-        var av = emb[base + i].cast[DType.float32]()
-        dot += av * q[i]
+        var av = emb[unsafe_offset=base + i].cast[DType.float32]()
+        dot += av * q[unsafe_offset=i]
         na += av * av
         i += WARP
     dot = warp.sum(dot)
     na = warp.sum(na)
     if lane == 0:
         var denom = sqrt(na) * qnorm
-        res[row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
+        res[unsafe_offset=row] = Float32(1) - dot / denom if denom != 0 else Float32(0)
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +316,7 @@ struct CosineState(Movable):
 # non-nullable, and an Int return is ABI-compatible with the C++ `void*`.
 @export("mojo_gpu_cosine_init")
 def mojo_gpu_cosine_init(
-    q: UnsafePointer[Float32, ImmUntrackedOrigin],
+    q: Pointer[Float32, ImmUntrackedOrigin],
     K: Int,
     capacity_rows: Int,
 ) abi("C") -> Int:
@@ -331,34 +332,34 @@ def mojo_gpu_cosine_init(
         with q_buf.map_to_host() as h:
             var hp = h.unsafe_ptr()
             for i in range(K):
-                var v = q[i]
-                hp[i] = v
+                var v = q[unsafe_offset=i]
+                hp[unsafe_offset=i] = v
                 nrm += v * v
         var qnorm = sqrt(nrm)
         ctx.synchronize()
 
-        var p = alloc[CosineState](1)
-        p.init_pointee_move(
+        var p = unsafe_alloc[CosineState](1)
+        p.unsafe_write(
             CosineState(
                 ctx^, in_buf^, out_buf^, q_buf^, qnorm, K, capacity_rows
             )
         )
-        return Int(p.bitcast[NoneType]())
+        return Int(p.unsafe_bitcast[NoneType]())
     except:
         return 0
 
 
 @export("mojo_gpu_cosine_run")
 def mojo_gpu_cosine_run(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    emb: Pointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
-    out_ptr: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ptr: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
     try:
-        var s = handle.bitcast[CosineState]()
+        var s = handle.unsafe_bitcast[CosineState]()
         ref st = s[]
         if n_rows > st.capacity:
             return 2
@@ -367,9 +368,10 @@ def mojo_gpu_cosine_run(
         # through its own pinned bounce buffer in one shot. (map_to_host is the
         # wrong tool here: it is bidirectional, DMAing device to host on enter, so
         # for a pure upload it is ~3.4x slower on PCIe; measured on RTX 4090.)
-        var in_sub = DeviceBuffer(
-            st.ctx, st.in_buf.unsafe_ptr(), n_rows * st.K, owning=False
-        )
+        # Views of device buffers must come from create_sub_buffer. A view built
+        # from a raw device pointer (DeviceBuffer(ctx, ptr, n, owning=False))
+        # works on CUDA, but Metal rejects copies from it ("Invalid source buffer").
+        var in_sub = st.in_buf.create_sub_buffer[DType.float32](0, n_rows * st.K)
         st.ctx.enqueue_copy(in_sub, emb)
         st.ctx.enqueue_function[cosine_kernel_warp](
             st.in_buf,
@@ -380,9 +382,7 @@ def mojo_gpu_cosine_run(
             st.qnorm,
             grid_dim=n_rows,
             block_dim=WARP)
-        var out_sub = DeviceBuffer(
-            st.ctx, st.out_buf.unsafe_ptr(), n_rows, owning=False
-        )
+        var out_sub = st.out_buf.create_sub_buffer[DType.float32](0, n_rows)
         st.ctx.enqueue_copy(out_ptr, out_sub)
         st.ctx.synchronize()
         return 0
@@ -392,13 +392,13 @@ def mojo_gpu_cosine_run(
 
 @export("mojo_gpu_cosine_free")
 def mojo_gpu_cosine_free(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C"):
     if Int(handle) == 0:
         return
-    var p = handle.bitcast[CosineState]()
-    p.destroy_pointee()
-    p.free()
+    var p = handle.unsafe_bitcast[CosineState]()
+    p.unsafe_deinit_pointee()
+    p.unsafe_free()
 
 
 # ===-------------------------------------------------------------------===#
@@ -419,8 +419,8 @@ struct PinState(Movable):
     # the largest k we support (TOPK_MAX), giving cand_cap candidates.
     var cand_dist_dev: DeviceBuffer[DType.float32]
     var cand_id_dev: DeviceBuffer[DType.int64]
-    var cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin]
-    var cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin]
+    var cand_dist_h: Pointer[Float32, MutUntrackedOrigin]
+    var cand_id_h: Pointer[Int64, MutUntrackedOrigin]
     var cand_cap: Int  # capacity of the candidate buffers (>= nblocks*k)
     var n_rows: Int
     var K: Int
@@ -433,8 +433,8 @@ struct PinState(Movable):
         var out_dev: DeviceBuffer[DType.float32],
         var cand_dist_dev: DeviceBuffer[DType.float32],
         var cand_id_dev: DeviceBuffer[DType.int64],
-        cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
-        cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
+        cand_dist_h: Pointer[Float32, MutUntrackedOrigin],
+        cand_id_h: Pointer[Int64, MutUntrackedOrigin],
         cand_cap: Int,
         n_rows: Int,
         K: Int,
@@ -456,7 +456,7 @@ struct PinState(Movable):
 # Returns the handle as an integer address (0 == failure).
 @export("mojo_gpu_pin")
 def mojo_gpu_pin(
-    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
+    emb: Pointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
     K: Int,
 ) abi("C") -> Int:
@@ -479,10 +479,10 @@ def mojo_gpu_pin(
         # the buffer allocs above are ordered on the one runtime stream.
         ctx.enqueue_copy(emb_dev, emb)
         ctx.synchronize()
-        var cand_dist_h = alloc[Float32](cand_cap)
-        var cand_id_h = alloc[Int64](cand_cap)
-        var p = alloc[PinState](1)
-        p.init_pointee_move(
+        var cand_dist_h = unsafe_alloc[Float32](cand_cap)
+        var cand_id_h = unsafe_alloc[Int64](cand_cap)
+        var p = unsafe_alloc[PinState](1)
+        p.unsafe_write(
             PinState(
                 ctx^,
                 emb_dev^,
@@ -497,7 +497,7 @@ def mojo_gpu_pin(
                 K,
             )
         )
-        return Int(p.bitcast[NoneType]())
+        return Int(p.unsafe_bitcast[NoneType]())
     except:
         return 0
 
@@ -506,18 +506,18 @@ def mojo_gpu_pin(
 # resident rows, copy the n_rows distances back into out_ptr.
 @export("mojo_gpu_pin_query")
 def mojo_gpu_pin_query(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    q: UnsafePointer[Float32, ImmUntrackedOrigin],
-    out_ptr: UnsafePointer[Float32, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    q: Pointer[Float32, ImmUntrackedOrigin],
+    out_ptr: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
     try:
-        var s = handle.bitcast[PinState]()
+        var s = handle.unsafe_bitcast[PinState]()
         ref st = s[]
         var qnorm = Float32(0)
         for i in range(st.K):
-            qnorm += q[i] * q[i]
+            qnorm += q[unsafe_offset=i] * q[unsafe_offset=i]
         qnorm = sqrt(qnorm)
         st.ctx.enqueue_copy(st.q_dev, q)
         st.ctx.enqueue_function[cosine_kernel_warp](
@@ -537,17 +537,17 @@ def mojo_gpu_pin_query(
 
 
 @export("mojo_gpu_pin_free")
-def mojo_gpu_pin_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi("C"):
+def mojo_gpu_pin_free(handle: Pointer[NoneType, MutUntrackedOrigin]) abi("C"):
     if Int(handle) == 0:
         return
-    var p = handle.bitcast[PinState]()
+    var p = handle.unsafe_bitcast[PinState]()
     # Free the cached host candidate buffers; the device buffers are owned by the
     # PinState's DeviceBuffer fields and released by destroy_pointee.
     ref st = p[]
-    st.cand_dist_h.free()
-    st.cand_id_h.free()
-    p.destroy_pointee()
-    p.free()
+    st.cand_dist_h.unsafe_free()
+    st.cand_id_h.unsafe_free()
+    p.unsafe_deinit_pointee()
+    p.unsafe_free()
 
 
 # Phase 1 column-pool measurement hook: the monotonic count of bytes actually
@@ -656,8 +656,8 @@ struct PinStateF16(Movable):
     var out_dev: DeviceBuffer[DType.float32]  # resident dist scratch: n_rows
     var cand_dist_dev: DeviceBuffer[DType.float32]
     var cand_id_dev: DeviceBuffer[DType.int64]
-    var cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin]
-    var cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin]
+    var cand_dist_h: Pointer[Float32, MutUntrackedOrigin]
+    var cand_id_h: Pointer[Int64, MutUntrackedOrigin]
     var cand_cap: Int
     var n_rows: Int
     var K: Int
@@ -670,8 +670,8 @@ struct PinStateF16(Movable):
         var out_dev: DeviceBuffer[DType.float32],
         var cand_dist_dev: DeviceBuffer[DType.float32],
         var cand_id_dev: DeviceBuffer[DType.int64],
-        cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
-        cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
+        cand_dist_h: Pointer[Float32, MutUntrackedOrigin],
+        cand_id_h: Pointer[Int64, MutUntrackedOrigin],
         cand_cap: Int,
         n_rows: Int,
         K: Int,
@@ -694,7 +694,7 @@ struct PinStateF16(Movable):
 # Returns the handle as an integer address (0 == failure).
 @export("mojo_gpu_pin_f16")
 def mojo_gpu_pin_f16(
-    emb: UnsafePointer[Float32, ImmUntrackedOrigin],
+    emb: Pointer[Float32, ImmUntrackedOrigin],
     n_rows: Int,
     K: Int,
 ) abi("C") -> Int:
@@ -714,17 +714,18 @@ def mojo_gpu_pin_f16(
         # emb_dev.map_to_host() instead is ~3.4x slower, since map_to_host is
         # bidirectional and DMAs device to host on enter (measured on RTX 4090).
         var total = n_rows * K
-        var h16 = alloc[Float16](total)
+        var h16_mem = alloc(Layout[Float16](count=total)).into_managed()
+        var h16 = h16_mem.unsafe_ptr()
         for j in range(total):
-            h16[j] = emb[j].cast[DType.float16]()
+            h16[unsafe_offset=j] = emb[unsafe_offset=j].cast[DType.float16]()
         ctx.enqueue_copy(emb_dev, h16)
         ctx.synchronize()  # kernels read emb_dev later; safe to free h16 now
-        h16.free()
+        deinit(h16_mem^)
 
-        var cand_dist_h = alloc[Float32](cand_cap)
-        var cand_id_h = alloc[Int64](cand_cap)
-        var p = alloc[PinStateF16](1)
-        p.init_pointee_move(
+        var cand_dist_h = unsafe_alloc[Float32](cand_cap)
+        var cand_id_h = unsafe_alloc[Int64](cand_cap)
+        var p = unsafe_alloc[PinStateF16](1)
+        p.unsafe_write(
             PinStateF16(
                 ctx^,
                 emb_dev^,
@@ -739,7 +740,7 @@ def mojo_gpu_pin_f16(
                 K,
             )
         )
-        return Int(p.bitcast[NoneType]())
+        return Int(p.unsafe_bitcast[NoneType]())
     except:
         return 0
 
@@ -750,34 +751,30 @@ def mojo_gpu_pin_f16(
 # the distance kernel reads halves and casts to fp32 (math stays fp32).
 @export("mojo_gpu_pin_query_topk_f16")
 def mojo_gpu_pin_query_topk_f16(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    q: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    q: Pointer[Float32, ImmUntrackedOrigin],
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
     if k <= 0 or k > TOPK_MAX:
         return 2
     try:
-        var s = handle.bitcast[PinStateF16]()
+        var s = handle.unsafe_bitcast[PinStateF16]()
         ref st = s[]
         # qnorm computed in fp32 from the fp32 query (matches the kernel denom).
         var qnorm = Float32(0)
         for i in range(st.K):
-            qnorm += q[i] * q[i]
+            qnorm += q[unsafe_offset=i] * q[unsafe_offset=i]
         qnorm = sqrt(qnorm)
         st.ctx.enqueue_copy(st.q_dev, q)
 
         var nblocks = _topk_nblocks(st.n_rows, k)
         var ncand = nblocks * k
-        var cand_dist_dev = DeviceBuffer(
-            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
-        )
-        var cand_id_dev = DeviceBuffer(
-            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
-        )
+        var cand_dist_dev = st.cand_dist_dev.create_sub_buffer[DType.float32](0, ncand)
+        var cand_id_dev = st.cand_id_dev.create_sub_buffer[DType.int64](0, ncand)
 
         st.ctx.enqueue_function[cosine_kernel_warp_f16](
             st.emb_dev,
@@ -811,16 +808,16 @@ def mojo_gpu_pin_query_topk_f16(
 
 @export("mojo_gpu_pin_free_f16")
 def mojo_gpu_pin_free_f16(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C"):
     if Int(handle) == 0:
         return
-    var p = handle.bitcast[PinStateF16]()
+    var p = handle.unsafe_bitcast[PinStateF16]()
     ref st = p[]
-    st.cand_dist_h.free()
-    st.cand_id_h.free()
-    p.destroy_pointee()
-    p.free()
+    st.cand_dist_h.unsafe_free()
+    st.cand_id_h.unsafe_free()
+    p.unsafe_deinit_pointee()
+    p.unsafe_free()
 
 
 # ===-------------------------------------------------------------------===#
@@ -864,9 +861,9 @@ comptime TOPK_MAX = 1024
 # stays consistent without atomics. The expensive cosine math already ran in
 # kernel A; this is a cheap scan over N float distances.
 def topk_partial_kernel(
-    dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     k_dp: Int64,
     nblocks_dp: Int64,
@@ -891,7 +888,7 @@ def topk_partial_kernel(
     var lane = Int(thread_idx.x)
     var bid = Int(block_idx.x)
     if lane == 0:
-        scnt[0] = 0
+        scnt[unsafe_offset=0] = 0
     barrier()
 
     # Uniform wave count across the whole block: every lane runs the same number
@@ -912,20 +909,20 @@ def topk_partial_kernel(
         # atomics. A barrier between turns publishes the previous insert.
         var i = bid * WARP + lane + w * stride
         var valid = i < n_rows
-        var my_d = dist[i] if valid else Float32(3.0e38)
+        var my_d = dist[unsafe_offset=i] if valid else Float32(3.0e38)
         var my_id = Int64(i) if valid else Int64(-1)
         for src in range(WARP):
             barrier()
             if lane == src and my_id >= 0:
-                var cnt = Int(scnt[0])
+                var cnt = Int(scnt[unsafe_offset=0])
                 var cd = my_d
                 var ci = my_id
                 # Reject early iff buffer full and candidate not better than the
                 # worst kept (the (dist, rowid) tie-break: smaller key wins).
                 var accept = True
                 if cnt >= k:
-                    var wd = sd[k - 1]
-                    var wi = si[k - 1]
+                    var wd = sd[unsafe_offset=k - 1]
+                    var wi = si[unsafe_offset=k - 1]
                     if cd > wd or (cd == wd and ci >= wi):
                         accept = False
                 if accept:
@@ -933,32 +930,32 @@ def topk_partial_kernel(
                     # shifting larger keys right (dropping the worst if full).
                     var pos = cnt if cnt < k else k - 1
                     while pos > 0:
-                        var pd = sd[pos - 1]
-                        var pi = si[pos - 1]
+                        var pd = sd[unsafe_offset=pos - 1]
+                        var pi = si[unsafe_offset=pos - 1]
                         if pd > cd or (pd == cd and pi > ci):
-                            sd[pos] = pd
-                            si[pos] = pi
+                            sd[unsafe_offset=pos] = pd
+                            si[unsafe_offset=pos] = pi
                             pos -= 1
                         else:
                             break
-                    sd[pos] = cd
-                    si[pos] = ci
+                    sd[unsafe_offset=pos] = cd
+                    si[unsafe_offset=pos] = ci
                     if cnt < k:
-                        scnt[0] = Int32(cnt + 1)
+                        scnt[unsafe_offset=0] = Int32(cnt + 1)
     barrier()
 
     # Emit this block's k candidates (pad unused slots with +inf / -1 so the host
     # merge ignores them deterministically).
-    var cnt = Int(scnt[0])
+    var cnt = Int(scnt[unsafe_offset=0])
     var out_base = bid * k
     var j = lane
     while j < k:
         if j < cnt:
-            cand_dist[out_base + j] = sd[j]
-            cand_id[out_base + j] = si[j]
+            cand_dist[unsafe_offset=out_base + j] = sd[unsafe_offset=j]
+            cand_id[unsafe_offset=out_base + j] = si[unsafe_offset=j]
         else:
-            cand_dist[out_base + j] = Float32(3.0e38)
-            cand_id[out_base + j] = Int64(-1)
+            cand_dist[unsafe_offset=out_base + j] = Float32(3.0e38)
+            cand_id[unsafe_offset=out_base + j] = Int64(-1)
         j += WARP
 
 
@@ -998,23 +995,23 @@ def _topk_nblocks_batch(n_rows: Int) -> Int:
 # stays resident. Returns the k smallest into out_ids/out_dists (ascending).
 @export("mojo_gpu_pin_query_topk")
 def mojo_gpu_pin_query_topk(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    q: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    q: Pointer[Float32, ImmUntrackedOrigin],
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
     if k <= 0 or k > TOPK_MAX:
         return 2
     try:
-        var s = handle.bitcast[PinState]()
+        var s = handle.unsafe_bitcast[PinState]()
         ref st = s[]
         # qnorm on the host (matches the cosine kernel's denom).
         var qnorm = Float32(0)
         for i in range(st.K):
-            qnorm += q[i] * q[i]
+            qnorm += q[unsafe_offset=i] * q[unsafe_offset=i]
         qnorm = sqrt(qnorm)
         st.ctx.enqueue_copy(st.q_dev, q)
 
@@ -1022,12 +1019,8 @@ def mojo_gpu_pin_query_topk(
         var ncand = nblocks * k
         # Sub-views over the resident candidate scratch (sized for TOPK_MAX at pin
         # time, so ncand <= cand_cap always); no per-call device allocation.
-        var cand_dist_dev = DeviceBuffer(
-            st.ctx, st.cand_dist_dev.unsafe_ptr(), ncand, owning=False
-        )
-        var cand_id_dev = DeviceBuffer(
-            st.ctx, st.cand_id_dev.unsafe_ptr(), ncand, owning=False
-        )
+        var cand_dist_dev = st.cand_dist_dev.create_sub_buffer[DType.float32](0, ncand)
+        var cand_id_dev = st.cand_id_dev.create_sub_buffer[DType.int64](0, ncand)
 
         # Enqueue the whole pipeline on the stream, then a single synchronize
         # before the host merge: q H2D, distance kernel, partial top-k kernel,
@@ -1116,11 +1109,11 @@ comptime BATCH_MAX_LANE_DIMS = 64
 # the tile. `qnorms` holds all M precomputed query norms. Candidates are written
 # row-major [block*qcount*k + local_q*k + slot] into cand_dist/cand_id.
 def topk_batch_kernel(
-    emb: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    qs: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    qnorms: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qs: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qnorms: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     q0_dp: Int64,
@@ -1155,7 +1148,7 @@ def topk_batch_kernel(
     # Lane 0 initializes the per-query fill counters.
     if lane == 0:
         for lq in range(qcount):
-            scnt[lq] = 0
+            scnt[unsafe_offset=lq] = 0
     barrier()
 
     # In-register cache of this lane's strided slice of the current embedding row
@@ -1174,8 +1167,8 @@ def topk_batch_kernel(
         var nd = 0
         var i = lane
         while i < K:
-            var av = emb[base + i]
-            rowvals[nd] = av
+            var av = emb[unsafe_offset=base + i]
+            rowvals[unsafe_offset=nd] = av
             na += av * av
             nd += 1
             i += WARP
@@ -1188,41 +1181,41 @@ def topk_batch_kernel(
             var ii = lane
             var c = 0
             while ii < K:
-                dot += rowvals[c] * qs[qbase + ii]
+                dot += rowvals[unsafe_offset=c] * qs[unsafe_offset=qbase + ii]
                 c += 1
                 ii += WARP
             dot = warp.sum(dot)
             # Lane 0 forms the distance (identical formula + tie-break to the
             # single-query kernel) and inserts into query lq's shared top-k.
             if lane == 0:
-                var denom = sqrt(na) * qnorms[q0 + lq]
+                var denom = sqrt(na) * qnorms[unsafe_offset=q0 + lq]
                 var cd = (
                     Float32(1) - dot / denom if denom != 0 else Float32(0)
                 )
                 var ci = Int64(row)
                 var off = lq * k
-                var cnt = Int(scnt[lq])
+                var cnt = Int(scnt[unsafe_offset=lq])
                 var accept = True
                 if cnt >= k:
-                    var wd = sd[off + k - 1]
-                    var wi = si[off + k - 1]
+                    var wd = sd[unsafe_offset=off + k - 1]
+                    var wi = si[unsafe_offset=off + k - 1]
                     if cd > wd or (cd == wd and ci >= wi):
                         accept = False
                 if accept:
                     var pos = cnt if cnt < k else k - 1
                     while pos > 0:
-                        var pd = sd[off + pos - 1]
-                        var pi = si[off + pos - 1]
+                        var pd = sd[unsafe_offset=off + pos - 1]
+                        var pi = si[unsafe_offset=off + pos - 1]
                         if pd > cd or (pd == cd and pi > ci):
-                            sd[off + pos] = pd
-                            si[off + pos] = pi
+                            sd[unsafe_offset=off + pos] = pd
+                            si[unsafe_offset=off + pos] = pi
                             pos -= 1
                         else:
                             break
-                    sd[off + pos] = cd
-                    si[off + pos] = ci
+                    sd[unsafe_offset=off + pos] = cd
+                    si[unsafe_offset=off + pos] = ci
                     if cnt < k:
-                        scnt[lq] = Int32(cnt + 1)
+                        scnt[unsafe_offset=lq] = Int32(cnt + 1)
         # Only lane 0 reads/writes the shared top-k; warp.sum already synchronizes
         # the warp each query, so no extra barrier is needed between rows.
         row += nblocks
@@ -1232,27 +1225,27 @@ def topk_batch_kernel(
     # would race lane 0's last inserts without a barrier); k <= TOPK_MAX is small.
     if lane == 0:
         for lq in range(qcount):
-            var cnt = Int(scnt[lq])
+            var cnt = Int(scnt[unsafe_offset=lq])
             var soff = lq * k
             var out_base = (bid * qcount + lq) * k
             for j in range(k):
                 if j < cnt:
-                    cand_dist[out_base + j] = sd[soff + j]
-                    cand_id[out_base + j] = si[soff + j]
+                    cand_dist[unsafe_offset=out_base + j] = sd[unsafe_offset=soff + j]
+                    cand_id[unsafe_offset=out_base + j] = si[unsafe_offset=soff + j]
                 else:
-                    cand_dist[out_base + j] = Float32(3.0e38)
-                    cand_id[out_base + j] = Int64(-1)
+                    cand_dist[unsafe_offset=out_base + j] = Float32(3.0e38)
+                    cand_id[unsafe_offset=out_base + j] = Int64(-1)
 
 
 # fp16-resident variant of topk_batch_kernel: the matrix is read as halves and
 # each element cast to fp32 before any arithmetic (math stays fp32). Identical
 # tiling, tie-break and amortization to the fp32 kernel above.
 def topk_batch_kernel_f16(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    qs: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    qnorms: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    qs: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    qnorms: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     q0_dp: Int64,
@@ -1284,7 +1277,7 @@ def topk_batch_kernel_f16(
     var bid = Int(block_idx.x)
     if lane == 0:
         for lq in range(qcount):
-            scnt[lq] = 0
+            scnt[unsafe_offset=lq] = 0
     barrier()
 
     var rowvals = stack_allocation[BATCH_MAX_LANE_DIMS, Scalar[DType.float32]]()
@@ -1297,8 +1290,8 @@ def topk_batch_kernel_f16(
         var i = lane
         while i < K:
             # Cast the stored half to fp32 before arithmetic (storage-only loss).
-            var av = emb[base + i].cast[DType.float32]()
-            rowvals[nd] = av
+            var av = emb[unsafe_offset=base + i].cast[DType.float32]()
+            rowvals[unsafe_offset=nd] = av
             na += av * av
             nd += 1
             i += WARP
@@ -1310,53 +1303,53 @@ def topk_batch_kernel_f16(
             var ii = lane
             var c = 0
             while ii < K:
-                dot += rowvals[c] * qs[qbase + ii]
+                dot += rowvals[unsafe_offset=c] * qs[unsafe_offset=qbase + ii]
                 c += 1
                 ii += WARP
             dot = warp.sum(dot)
             if lane == 0:
-                var denom = sqrt(na) * qnorms[q0 + lq]
+                var denom = sqrt(na) * qnorms[unsafe_offset=q0 + lq]
                 var cd = (
                     Float32(1) - dot / denom if denom != 0 else Float32(0)
                 )
                 var ci = Int64(row)
                 var off = lq * k
-                var cnt = Int(scnt[lq])
+                var cnt = Int(scnt[unsafe_offset=lq])
                 var accept = True
                 if cnt >= k:
-                    var wd = sd[off + k - 1]
-                    var wi = si[off + k - 1]
+                    var wd = sd[unsafe_offset=off + k - 1]
+                    var wi = si[unsafe_offset=off + k - 1]
                     if cd > wd or (cd == wd and ci >= wi):
                         accept = False
                 if accept:
                     var pos = cnt if cnt < k else k - 1
                     while pos > 0:
-                        var pd = sd[off + pos - 1]
-                        var pi = si[off + pos - 1]
+                        var pd = sd[unsafe_offset=off + pos - 1]
+                        var pi = si[unsafe_offset=off + pos - 1]
                         if pd > cd or (pd == cd and pi > ci):
-                            sd[off + pos] = pd
-                            si[off + pos] = pi
+                            sd[unsafe_offset=off + pos] = pd
+                            si[unsafe_offset=off + pos] = pi
                             pos -= 1
                         else:
                             break
-                    sd[off + pos] = cd
-                    si[off + pos] = ci
+                    sd[unsafe_offset=off + pos] = cd
+                    si[unsafe_offset=off + pos] = ci
                     if cnt < k:
-                        scnt[lq] = Int32(cnt + 1)
+                        scnt[unsafe_offset=lq] = Int32(cnt + 1)
         row += nblocks
 
     if lane == 0:
         for lq in range(qcount):
-            var cnt = Int(scnt[lq])
+            var cnt = Int(scnt[unsafe_offset=lq])
             var soff = lq * k
             var out_base = (bid * qcount + lq) * k
             for j in range(k):
                 if j < cnt:
-                    cand_dist[out_base + j] = sd[soff + j]
-                    cand_id[out_base + j] = si[soff + j]
+                    cand_dist[unsafe_offset=out_base + j] = sd[unsafe_offset=soff + j]
+                    cand_id[unsafe_offset=out_base + j] = si[unsafe_offset=soff + j]
                 else:
-                    cand_dist[out_base + j] = Float32(3.0e38)
-                    cand_id[out_base + j] = Int64(-1)
+                    cand_dist[unsafe_offset=out_base + j] = Float32(3.0e38)
+                    cand_id[unsafe_offset=out_base + j] = Int64(-1)
 
 
 # GPU second-stage merge: one block (one warp) per query reduces that query's
@@ -1370,10 +1363,10 @@ def topk_batch_kernel_f16(
 # k candidates live at cand[(b*qcount + lq)*k + j]. The merged final k for query
 # lq are written to out[lq*k + j].
 def topk_batch_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     qcount_dp: Int64,
     nblocks_dp: Int64,
     k_dp: Int64,
@@ -1396,7 +1389,7 @@ def topk_batch_merge_kernel(
     if lq >= qcount:
         return
     if lane == 0:
-        scnt[0] = 0
+        scnt[unsafe_offset=0] = 0
     barrier()
 
     # Total candidates for this query: nblocks blocks * k each. Lane-strided scan,
@@ -1413,47 +1406,47 @@ def topk_batch_merge_kernel(
             var b = c // k
             var j = c % k
             var idx = (b * qcount + lq) * k + j
-            my_id = cand_id[idx]
-            my_d = cand_dist[idx]
+            my_id = cand_id[unsafe_offset=idx]
+            my_d = cand_dist[unsafe_offset=idx]
         for src in range(WARP):
             barrier()
             if lane == src and my_id >= 0:
-                var cnt = Int(scnt[0])
+                var cnt = Int(scnt[unsafe_offset=0])
                 var cd = my_d
                 var ci = my_id
                 var accept = True
                 if cnt >= k:
-                    var wd = sd[k - 1]
-                    var wi = si[k - 1]
+                    var wd = sd[unsafe_offset=k - 1]
+                    var wi = si[unsafe_offset=k - 1]
                     if cd > wd or (cd == wd and ci >= wi):
                         accept = False
                 if accept:
                     var pos = cnt if cnt < k else k - 1
                     while pos > 0:
-                        var pd = sd[pos - 1]
-                        var pi = si[pos - 1]
+                        var pd = sd[unsafe_offset=pos - 1]
+                        var pi = si[unsafe_offset=pos - 1]
                         if pd > cd or (pd == cd and pi > ci):
-                            sd[pos] = pd
-                            si[pos] = pi
+                            sd[unsafe_offset=pos] = pd
+                            si[unsafe_offset=pos] = pi
                             pos -= 1
                         else:
                             break
-                    sd[pos] = cd
-                    si[pos] = ci
+                    sd[unsafe_offset=pos] = cd
+                    si[unsafe_offset=pos] = ci
                     if cnt < k:
-                        scnt[0] = Int32(cnt + 1)
+                        scnt[unsafe_offset=0] = Int32(cnt + 1)
     barrier()
 
     # Emit this query's final k (ascending; pad with +inf / -1 if fewer than k).
-    var cnt = Int(scnt[0])
+    var cnt = Int(scnt[unsafe_offset=0])
     var j = lane
     while j < k:
         if j < cnt:
-            out_dist[lq * k + j] = sd[j]
-            out_id[lq * k + j] = si[j]
+            out_dist[unsafe_offset=lq * k + j] = sd[unsafe_offset=j]
+            out_id[unsafe_offset=lq * k + j] = si[unsafe_offset=j]
         else:
-            out_dist[lq * k + j] = Float32(3.0e38)
-            out_id[lq * k + j] = Int64(-1)
+            out_dist[unsafe_offset=lq * k + j] = Float32(3.0e38)
+            out_id[unsafe_offset=lq * k + j] = Int64(-1)
         j += WARP
 
 
@@ -1481,12 +1474,12 @@ def _run_topk_batch[
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     # `metric` (0=cosine, 1=L2, 2=inner-product; see tc_knn.TC_METRIC_*). Only
     # the fused tensor-core path below honors non-cosine metrics; the scalar
@@ -1550,13 +1543,14 @@ def _run_topk_batch[
 
     # Precompute all M query norms on the host (matches the kernel denom) and
     # upload the M*K queries + M norms once for the whole batch.
-    var qnorms_h = alloc[Float32](M)
+    var qnorms_h_mem = alloc(Layout[Float32](count=M)).into_managed()
+    var qnorms_h = qnorms_h_mem.unsafe_ptr()
     for m in range(M):
         var s = Float32(0)
         var qoff = m * K
         for i in range(K):
-            s += qs[qoff + i] * qs[qoff + i]
-        qnorms_h[m] = sqrt(s)
+            s += qs[unsafe_offset=qoff + i] * qs[unsafe_offset=qoff + i]
+        qnorms_h[unsafe_offset=m] = sqrt(s)
 
     var qs_dev = ctx.enqueue_create_buffer[DType.float32](M * K)
     var qnorm_dev = ctx.enqueue_create_buffer[DType.float32](M)
@@ -1568,11 +1562,13 @@ def _run_topk_batch[
     # merge runs on the GPU (topk_batch_merge_kernel), so the host does no top-k.
     var merged_dist_dev = ctx.enqueue_create_buffer[DType.float32](qtile * k)
     var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](qtile * k)
-    var merged_dist_h = alloc[Float32](qtile * k)
-    var merged_id_h = alloc[Int64](qtile * k)
+    var merged_dist_h_mem = alloc(Layout[Float32](count=qtile * k)).into_managed()
+    var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+    var merged_id_h_mem = alloc(Layout[Int64](count=qtile * k)).into_managed()
+    var merged_id_h = merged_id_h_mem.unsafe_ptr()
     ctx.synchronize()
     ctx.enqueue_copy(qs_dev, qs)
-    var qnorm_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
+    var qnorm_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qnorms_h)
     )
     ctx.enqueue_copy(qnorm_dev, qnorm_imm)
@@ -1584,18 +1580,10 @@ def _run_topk_batch[
         if q0 + qcount > M:
             qcount = M - q0
         var ncand_tile = nblocks * qcount * k
-        var cd_view = DeviceBuffer(
-            ctx, cand_dist_dev.unsafe_ptr(), ncand_tile, owning=False
-        )
-        var cid_view = DeviceBuffer(
-            ctx, cand_id_dev.unsafe_ptr(), ncand_tile, owning=False
-        )
-        var md_view = DeviceBuffer(
-            ctx, merged_dist_dev.unsafe_ptr(), qcount * k, owning=False
-        )
-        var mid_view = DeviceBuffer(
-            ctx, merged_id_dev.unsafe_ptr(), qcount * k, owning=False
-        )
+        var cd_view = cand_dist_dev.create_sub_buffer[DType.float32](0, ncand_tile)
+        var cid_view = cand_id_dev.create_sub_buffer[DType.int64](0, ncand_tile)
+        var md_view = merged_dist_dev.create_sub_buffer[DType.float32](0, qcount * k)
+        var mid_view = merged_id_dev.create_sub_buffer[DType.int64](0, qcount * k)
 
         # Stage 1: fused distance + per-block per-query top-k (matrix read once).
         comptime if is_f16:
@@ -1648,13 +1636,13 @@ def _run_topk_batch[
         for lq in range(qcount):
             var m = q0 + lq
             for j in range(k):
-                out_ids[m * k + j] = merged_id_h[lq * k + j]
-                out_dists[m * k + j] = merged_dist_h[lq * k + j]
+                out_ids[unsafe_offset=m * k + j] = merged_id_h[unsafe_offset=lq * k + j]
+                out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
         q0 += qtile
 
-    qnorms_h.free()
-    merged_dist_h.free()
-    merged_id_h.free()
+    deinit(qnorms_h_mem^)
+    deinit(merged_dist_h_mem^)
+    deinit(merged_id_h_mem^)
 
 
 # Batched exact top-k (fp32-resident). M query vectors (row-major M*K) scored
@@ -1664,19 +1652,19 @@ def _run_topk_batch[
 # sharply with M. Returns the same exact (ids, dists) as M single-query calls.
 @export("mojo_gpu_pin_query_topk_batch")
 def mojo_gpu_pin_query_topk_batch(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if Int(handle) == 0:
         return 1
     if k <= 0 or k > TOPK_MAX or M <= 0:
         return 2
     try:
-        var s = handle.bitcast[PinState]()
+        var s = handle.unsafe_bitcast[PinState]()
         ref st = s[]
         # 0-length fp16 placeholder (unused on the fp32 path).
         var emb16 = st.ctx.enqueue_create_buffer[DType.float16](1)
@@ -1707,13 +1695,13 @@ def mojo_gpu_pin_query_topk_batch(
 # tensor-core path (see _run_topk_batch); otherwise it returns a nonzero rc so
 # the C++ caller falls back to stock DuckDB.
 def _pin_query_topk_batch_f16_impl(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) -> Int32:
     if Int(handle) == 0:
         return 1
@@ -1722,7 +1710,7 @@ def _pin_query_topk_batch_f16_impl(
     if metric < 0 or metric > 2:
         return 2
     try:
-        var s = handle.bitcast[PinStateF16]()
+        var s = handle.unsafe_bitcast[PinStateF16]()
         ref st = s[]
         # 0-length fp32 placeholder (unused on the fp16 path).
         var emb32 = st.ctx.enqueue_create_buffer[DType.float32](1)
@@ -1746,12 +1734,12 @@ def _pin_query_topk_batch_f16_impl(
 
 @export("mojo_gpu_pin_query_topk_batch_f16")
 def mojo_gpu_pin_query_topk_batch_f16(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     # Unchanged signature/behavior: cosine (metric 0).
     return _pin_query_topk_batch_f16_impl(
@@ -1766,13 +1754,13 @@ def mojo_gpu_pin_query_topk_batch_f16(
 # supported K/k); a nonzero rc signals the C++ caller to fall back to DuckDB.
 @export("mojo_gpu_pin_query_topk_batch_f16_metric")
 def mojo_gpu_pin_query_topk_batch_f16_metric(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     return _pin_query_topk_batch_f16_impl(
         handle, qs, M, k, metric, out_ids, out_dists
@@ -1783,39 +1771,40 @@ def mojo_gpu_pin_query_topk_batch_f16_metric(
 # `ncand` candidates produced by the partial kernel. Padded slots carry rowid -1
 # and are skipped. k is small, so a simple k-pass selection is exact + cheap.
 def _host_merge_topk(
-    cand_dist_h: UnsafePointer[Float32, MutUntrackedOrigin],
-    cand_id_h: UnsafePointer[Int64, MutUntrackedOrigin],
+    cand_dist_h: Pointer[Float32, MutUntrackedOrigin],
+    cand_id_h: Pointer[Int64, MutUntrackedOrigin],
     ncand: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ):
-    var taken = alloc[Bool](ncand if ncand > 0 else 1)
+    var taken_mem = alloc(Layout[Bool](count=ncand if ncand > 0 else 1)).into_managed()
+    var taken = taken_mem.unsafe_ptr()
     for c in range(ncand):
-        taken[c] = False
+        taken[unsafe_offset=c] = False
     for slot in range(k):
         var best = -1
         var best_d = Float32(3.0e38)
         var best_id = Int64(-1)
         for c in range(ncand):
-            if taken[c]:
+            if taken[unsafe_offset=c]:
                 continue
-            var cid = cand_id_h[c]
+            var cid = cand_id_h[unsafe_offset=c]
             if cid < 0:
                 continue
-            var cd = cand_dist_h[c]
+            var cd = cand_dist_h[unsafe_offset=c]
             if best < 0 or cd < best_d or (cd == best_d and cid < best_id):
                 best = c
                 best_d = cd
                 best_id = cid
         if best < 0:
-            out_ids[slot] = Int64(-1)
-            out_dists[slot] = Float32(0)
+            out_ids[unsafe_offset=slot] = Int64(-1)
+            out_dists[unsafe_offset=slot] = Float32(0)
         else:
-            taken[best] = True
-            out_ids[slot] = best_id
-            out_dists[slot] = best_d
-    taken.free()
+            taken[unsafe_offset=best] = True
+            out_ids[unsafe_offset=slot] = best_id
+            out_dists[unsafe_offset=slot] = best_d
+    deinit(taken_mem^)
 
 
 
@@ -1830,9 +1819,9 @@ def _host_merge_topk(
 # ===-------------------------------------------------------------------===#
 @export("mojo_gpu_build_descriptor")
 def mojo_gpu_build_descriptor(
-    tape: UnsafePointer[Int64, MutUntrackedOrigin],
+    tape: Pointer[Int64, MutUntrackedOrigin],
     tape_len: Int,
-    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
+    blob: Pointer[UInt8, MutUntrackedOrigin],
     blob_len: Int,
 ) abi("C") -> Int:
     try:
@@ -1840,32 +1829,32 @@ def mojo_gpu_build_descriptor(
         var maybe = build_descriptor_impl(r)
         if not maybe:
             return 0
-        var p = alloc[GpuPlanDescriptor](1)
-        p.init_pointee_move(maybe.unsafe_take())
-        return Int(p.bitcast[NoneType]())
+        var p = unsafe_alloc[GpuPlanDescriptor](1)
+        p.unsafe_write(maybe.unsafe_take())
+        return Int(p.unsafe_bitcast[NoneType]())
     except:
         return 0
 
 
 @export("mojo_gpu_desc_free")
-def mojo_gpu_desc_free(handle: UnsafePointer[NoneType, MutUntrackedOrigin]) abi("C"):
+def mojo_gpu_desc_free(handle: Pointer[NoneType, MutUntrackedOrigin]) abi("C"):
     if Int(handle) == 0:
         return
     # Drop any Stage-2 exec state keyed by this handle (the pin cache is
     # process-lifetime and intentionally not evicted here).
     _exec_drop(Int(handle))
-    var p = handle.bitcast[GpuPlanDescriptor]()
-    p.destroy_pointee()
-    p.free()
+    var p = handle.unsafe_bitcast[GpuPlanDescriptor]()
+    p.unsafe_deinit_pointee()
+    p.unsafe_free()
 
 
 @export("mojo_gpu_desc_kind")
 def mojo_gpu_desc_kind(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(KIND_UNKNOWN)
-    return Int(handle.bitcast[GpuPlanDescriptor]()[].kind)
+    return Int(handle.unsafe_bitcast[GpuPlanDescriptor]()[].kind)
 
 
 # GPU_OP_TRANSCENDENTAL: 1 if any aggregate's metric program contains a
@@ -1877,11 +1866,11 @@ def mojo_gpu_desc_kind(
 # handle, so this only ever sees an accepted transcendental descriptor.
 @export("mojo_gpu_desc_is_transcendental")
 def mojo_gpu_desc_is_transcendental(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    return 1 if _has_transcendental(handle.bitcast[GpuPlanDescriptor]()[]) else 0
+    return 1 if _has_transcendental(handle.unsafe_bitcast[GpuPlanDescriptor]()[]) else 0
 
 
 # GPU_OP_STATS: 1 if any aggregate is a statistical aggregate (stddev/var/covar/
@@ -1890,11 +1879,11 @@ def mojo_gpu_desc_is_transcendental(
 # DENSE, no FK dims, NVIDIA-only); a non-buildable shape returns a null handle.
 @export("mojo_gpu_desc_is_stats")
 def mojo_gpu_desc_is_stats(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    return 1 if _has_stats(handle.bitcast[GpuPlanDescriptor]()[]) else 0
+    return 1 if _has_stats(handle.unsafe_bitcast[GpuPlanDescriptor]()[]) else 0
 
 
 # A1 unified pass model (GPU_OP_NULLABLE): 1 iff this descriptor is an UNGROUPED,
@@ -1908,11 +1897,11 @@ def mojo_gpu_desc_is_stats(
 # KIND_Q6, so this only adds the multi-agg case.
 @export("mojo_gpu_desc_a1_ungrouped_ok")
 def mojo_gpu_desc_a1_ungrouped_ok(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     if d.strategy != STRAT_UNGROUPED:
         return 0
     if _has_transcendental(d) or _has_stats(d):
@@ -1937,11 +1926,11 @@ def mojo_gpu_desc_a1_ungrouped_ok(
 # mixing an int128 SUM with an f64 stat on the f64 dense path.
 @export("mojo_gpu_desc_a1_grouped_ok")
 def mojo_gpu_desc_a1_grouped_ok(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     if d.strategy != STRAT_DENSE_GROUP:
         return 0
     if _has_transcendental(d) or _has_stats(d):
@@ -1957,45 +1946,45 @@ def mojo_gpu_desc_a1_grouped_ok(
 
 @export("mojo_gpu_desc_strategy")
 def mojo_gpu_desc_strategy(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(STRAT_UNGROUPED)
-    return Int(handle.bitcast[GpuPlanDescriptor]()[].strategy)
+    return Int(handle.unsafe_bitcast[GpuPlanDescriptor]()[].strategy)
 
 
 @export("mojo_gpu_desc_n_dims")
 def mojo_gpu_desc_n_dims(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    return len(handle.bitcast[GpuPlanDescriptor]()[].dim_edges)
+    return len(handle.unsafe_bitcast[GpuPlanDescriptor]()[].dim_edges)
 
 
 @export("mojo_gpu_desc_n_aggs")
 def mojo_gpu_desc_n_aggs(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    return len(handle.bitcast[GpuPlanDescriptor]()[].aggregates)
+    return len(handle.unsafe_bitcast[GpuPlanDescriptor]()[].aggregates)
 
 
 @export("mojo_gpu_desc_fact_table")
 def mojo_gpu_desc_fact_table(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
-    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
+    out_ptr: Pointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    ref name = handle.bitcast[GpuPlanDescriptor]()[].fact_table
+    ref name = handle.unsafe_bitcast[GpuPlanDescriptor]()[].fact_table
     var n = name.byte_length()
     var bytes = name.as_bytes()
     var to_copy = n if n < cap else cap
     for i in range(to_copy):
-        out_ptr[i] = bytes[i]
+        out_ptr[unsafe_offset=i] = bytes[i]
     return n
 
 
@@ -2008,7 +1997,7 @@ def mojo_gpu_desc_fact_table(
 # One fed flat column: an owned host copy of the transient DuckDB pointer, plus
 # its element width (bytes) and the contract TypeTag it arrived as.
 struct FedColumn(Movable):
-    var data: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
+    var data: Optional[Pointer[UInt8, MutUntrackedOrigin]]
     var n_rows: Int
     var elem_size: Int
     var type_tag: Int64
@@ -2021,14 +2010,14 @@ struct FedColumn(Movable):
     # non-inlined string's bytes. The copied string_t structs in `data` are
     # rewritten to point into this heap so the column is self-contained after the
     # source DuckDB result (and its string heap) is freed. None for non-VARCHAR.
-    var str_heap: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
+    var str_heap: Optional[Pointer[UInt8, MutUntrackedOrigin]]
     # GPU_OP_NULLABLE: optional per-row validity (1 byte/row, 1=valid, 0=SQL NULL).
     # None when the column carries no NULLs (the common case / all NOT NULL columns),
     # meaning every row is valid. C++ feeds this (via mojo_gpu_feed_validity) only for a
     # column the materialize scan observed an actual NULL in; the finalize pass-bake
     # ANDs it into the host pass column so a NULL row is excluded exactly like a
     # filtered-out row (SQL aggregate NULL semantics). See _pin_finalize_generic.
-    var validity: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
+    var validity: Optional[Pointer[UInt8, MutUntrackedOrigin]]
 
     def __init__(out self):
         self.data = None
@@ -2041,18 +2030,18 @@ struct FedColumn(Movable):
 
     def fill(
         mut self,
-        src: UnsafePointer[NoneType, MutUntrackedOrigin],
+        src: Pointer[NoneType, MutUntrackedOrigin],
         n_rows: Int,
         elem_size: Int,
         type_tag: Int64,
     ):
         self.free_data()
         var nbytes = n_rows * elem_size
-        var p = alloc[UInt8](nbytes if nbytes > 0 else 1)
-        var src_b = UnsafePointer[UInt8, ImmUntrackedOrigin](
+        var p = unsafe_alloc[UInt8](nbytes if nbytes > 0 else 1)
+        var src_b = Pointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=Int(src)
         )
-        memcpy(dest=p, src=src_b, count=nbytes)
+        unsafe_memcpy(dest=p, src=src_b, count=nbytes)
         self.data = p
         self.n_rows = n_rows
         self.elem_size = elem_size
@@ -2069,17 +2058,17 @@ struct FedColumn(Movable):
     # 0=NULL, n_rows bytes) into an owned buffer. Called after fill() for a column
     # the scan saw a NULL in. No-op semantics elsewhere (validity stays None).
     def set_validity(
-        mut self, src: UnsafePointer[NoneType, MutUntrackedOrigin], n_rows: Int
+        mut self, src: Pointer[NoneType, MutUntrackedOrigin], n_rows: Int
     ):
         if self.validity:
-            self.validity.value().free()
+            self.validity.value().unsafe_free()
             self.validity = None
         var nb = n_rows if n_rows > 0 else 1
-        var p = alloc[UInt8](nb)
-        var src_b = UnsafePointer[UInt8, ImmUntrackedOrigin](
+        var p = unsafe_alloc[UInt8](nb)
+        var src_b = Pointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=Int(src)
         )
-        memcpy(dest=p, src=src_b, count=n_rows if n_rows > 0 else 0)
+        unsafe_memcpy(dest=p, src=src_b, count=n_rows if n_rows > 0 else 0)
         self.validity = p
 
     # Deep-copy every non-inlined DuckDB string_t (length > 12) into an owned heap
@@ -2092,41 +2081,41 @@ struct FedColumn(Movable):
         # First pass: total bytes for non-inlined strings.
         var total = 0
         for i in range(n_rows):
-            var p = base + i * 16
+            var p = base.unsafe_offset(i * 16)
             var length = (
-                Int(p[0])
-                | (Int(p[1]) << 8)
-                | (Int(p[2]) << 16)
-                | (Int(p[3]) << 24)
+                Int(p[unsafe_offset=0])
+                | (Int(p[unsafe_offset=1]) << 8)
+                | (Int(p[unsafe_offset=2]) << 16)
+                | (Int(p[unsafe_offset=3]) << 24)
             )
             if length > 12:
                 total += length
-        var heap = alloc[UInt8](total if total > 0 else 1)
+        var heap = unsafe_alloc[UInt8](total if total > 0 else 1)
         var w = 0
         for i in range(n_rows):
-            var p = base + i * 16
+            var p = base.unsafe_offset(i * 16)
             var length = (
-                Int(p[0])
-                | (Int(p[1]) << 8)
-                | (Int(p[2]) << 16)
-                | (Int(p[3]) << 24)
+                Int(p[unsafe_offset=0])
+                | (Int(p[unsafe_offset=1]) << 8)
+                | (Int(p[unsafe_offset=2]) << 16)
+                | (Int(p[unsafe_offset=3]) << 24)
             )
             if length <= 12:
                 continue
             # current (source) pointer is bytes 8..15.
             var addr = 0
             for b in range(8):
-                addr |= Int(p[8 + b]) << (8 * b)
-            var srcp = UnsafePointer[UInt8, ImmUntrackedOrigin](
+                addr |= Int(p[unsafe_offset=8 + b]) << (8 * b)
+            var srcp = Pointer[UInt8, ImmUntrackedOrigin](
                 unsafe_from_address=addr
             )
-            var dstp = heap + w
+            var dstp = heap.unsafe_offset(w)
             for k in range(length):
-                dstp[k] = srcp[k]
+                dstp[unsafe_offset=k] = srcp[unsafe_offset=k]
             # rewrite the struct pointer to the owned heap location.
             var newaddr = Int(dstp)
             for b in range(8):
-                p[8 + b] = UInt8((newaddr >> (8 * b)) & 0xFF)
+                p[unsafe_offset=8 + b] = UInt8((newaddr >> (8 * b)) & 0xFF)
             w += length
         self.str_heap = heap
 
@@ -2138,13 +2127,13 @@ struct FedColumn(Movable):
 
     def free_data(mut self):
         if self.data:
-            self.data.value().free()
+            self.data.value().unsafe_free()
             self.data = None
         if self.str_heap:
-            self.str_heap.value().free()
+            self.str_heap.value().unsafe_free()
             self.str_heap = None
         if self.validity:
-            self.validity.value().free()
+            self.validity.value().unsafe_free()
             self.validity = None
 
 
@@ -2251,7 +2240,7 @@ def _make_exec_map() -> Dict[Int, GpuExecState]:
 comptime _exec_map = _Global["mojo_gpu_exec_map", _make_exec_map]
 
 
-def _exec_ptr() raises -> UnsafePointer[Dict[Int, GpuExecState], MutUntrackedOrigin]:
+def _exec_ptr() raises -> Pointer[Dict[Int, GpuExecState], MutUntrackedOrigin]:
     return _exec_map.get_or_create_ptr()
 
 
@@ -2504,7 +2493,7 @@ def _make_pin2() -> Dict[String, GpuPinned]:
 comptime _pin2 = _Global["mojo_gpu_pin2", _make_pin2]
 
 
-def _pin2_ptr() raises -> UnsafePointer[Dict[String, GpuPinned], MutUntrackedOrigin]:
+def _pin2_ptr() raises -> Pointer[Dict[String, GpuPinned], MutUntrackedOrigin]:
     return _pin2.get_or_create_ptr()
 
 
@@ -2749,7 +2738,7 @@ def _colpool_assemble_cols_d(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols_host: Pointer[Scalar[DType.int64], _],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2774,7 +2763,7 @@ def _colpool_assemble_cols_d(
         # For an omitted slot this host region is unfilled (the packing loop and
         # the feed both skipped it), so it must be sourced from the pool, never from
         # host. For a non-omitted slot it holds the freshly-packed bytes.
-        var slot_host = cols_host + slot * n
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
@@ -2842,7 +2831,7 @@ def _colpool_assemble_cols_d(
     # --- derived slots (gid, pass): H2D straight from the packed host buffer. ---
     for slot in range(n_numeric, n_slots):
         var dst = cols_d.create_sub_buffer[DType.int64](slot * n, n)
-        var slot_host = cols_host + slot * n
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         ctx.enqueue_copy(dst, slot_host)
 
     ctx.synchronize()
@@ -2878,7 +2867,7 @@ def _colpool_assemble_col_ptrs(
     ctx: DeviceContext,
     fact_table: String,
     st: GpuExecState,
-    cols_host: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols_host: Pointer[Scalar[DType.int64], _],
     n_slots: Int,
     n: Int,
     numeric_matcols: List[Int],
@@ -2892,14 +2881,15 @@ def _colpool_assemble_col_ptrs(
     var skipped_cols = 0
     fail = False
     # Host array of the n_slots device addresses (uploaded to the table at the end).
-    var addr_h = alloc[Int64](n_slots if n_slots > 0 else 1)
+    var addr_h_mem = alloc(Layout[Int64](count=n_slots if n_slots > 0 else 1)).into_managed()
+    var addr_h = addr_h_mem.unsafe_ptr()
 
     # --- numeric fact slots: pooled uses the pool pointer; fallback a per-query buf. ---
     for slot in range(n_numeric):
         var mj = numeric_matcols[slot]
         var col_name = st.mat_cols[mj]
         var key = col_key(fact_table, col_name, REPR_INT64_PACKED, ORDERING_STORAGE, n)
-        var slot_host = cols_host + slot * n
+        var slot_host = cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n)
         var omit = omit_slot[slot] if slot < len(omit_slot) else False
 
         if omit:
@@ -2908,14 +2898,14 @@ def _colpool_assemble_col_ptrs(
             var er = col_pool_borrow(ctx, key)
             if not (er.ok and er.was_hit):
                 fail = True
-                addr_h.free()
+                deinit(addr_h_mem^)
                 if pin_log:
                     print(
                         "[gpu-op colptr] OMIT-MISS (fallback) col=", col_name,
                         file=FileDescriptor(2),
                     )
                 return ctx.enqueue_create_buffer[DType.int64](1)
-            addr_h[slot] = Int64(Int(er.buf.unsafe_ptr()))
+            addr_h[unsafe_offset=slot] = Int64(Int(er.buf.unsafe_ptr()))
             skipped_cols += 1
             continue
 
@@ -2926,7 +2916,7 @@ def _colpool_assemble_col_ptrs(
         )
         if er.ok:
             out_lease_keys.append(key)
-            addr_h[slot] = Int64(Int(er.buf.unsafe_ptr()))  # pooled buffer ptr
+            addr_h[unsafe_offset=slot] = Int64(Int(er.buf.unsafe_ptr()))  # pooled buffer ptr
             if pin_log:
                 var tag = "HIT" if er.was_hit else "MISS"
                 print("[gpu-op colptr] ", tag, " col=", col_name, file=FileDescriptor(2))
@@ -2934,7 +2924,7 @@ def _colpool_assemble_col_ptrs(
             # Not poolable: per-query buffer, H2D from host (kept alive).
             var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
             ctx.enqueue_copy(buf, slot_host)
-            addr_h[slot] = Int64(Int(buf.unsafe_ptr()))
+            addr_h[unsafe_offset=slot] = Int64(Int(buf.unsafe_ptr()))
             out_derived_bufs.append(buf)
             if pin_log:
                 print("[gpu-op colptr] FALLBACK col=", col_name, file=FileDescriptor(2))
@@ -2942,8 +2932,8 @@ def _colpool_assemble_col_ptrs(
     # --- derived slots (gid/pass): per-query buffers, H2D from packed host. ---
     for slot in range(n_numeric, n_slots):
         var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
-        ctx.enqueue_copy(buf, cols_host + slot * n)
-        addr_h[slot] = Int64(Int(buf.unsafe_ptr()))
+        ctx.enqueue_copy(buf, cols_host.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(slot * n))
+        addr_h[unsafe_offset=slot] = Int64(Int(buf.unsafe_ptr()))
         out_derived_bufs.append(buf)
 
     # Upload the address table. Sync first so every pooled/derived buffer's address
@@ -2954,7 +2944,7 @@ def _colpool_assemble_col_ptrs(
     )
     ctx.enqueue_copy(col_ptrs_d, addr_h.unsafe_origin_cast[MutUntrackedOrigin]())
     ctx.synchronize()
-    addr_h.free()
+    deinit(addr_h_mem^)
     if pin_log and skipped_cols > 0:
         print(
             "[gpu-op colptr] skipped_cols=", skipped_cols,
@@ -3653,42 +3643,42 @@ def _assemble_hash(mut dst: GpuExecState, mut gp: GpuPinned) raises:
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_desc_group_index")
 def mojo_gpu_desc_group_index(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(IDX_NONE)
-    return Int(handle.bitcast[GpuPlanDescriptor]()[].group_index)
+    return Int(handle.unsafe_bitcast[GpuPlanDescriptor]()[].group_index)
 
 
 @export("mojo_gpu_desc_aggregate_index")
 def mojo_gpu_desc_aggregate_index(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return Int(IDX_NONE)
-    return Int(handle.bitcast[GpuPlanDescriptor]()[].aggregate_index)
+    return Int(handle.unsafe_bitcast[GpuPlanDescriptor]()[].aggregate_index)
 
 
 @export("mojo_gpu_desc_out_arity")
 def mojo_gpu_desc_out_arity(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    return len(handle.bitcast[GpuPlanDescriptor]()[].out_types)
+    return len(handle.unsafe_bitcast[GpuPlanDescriptor]()[].out_types)
 
 
 @export("mojo_gpu_desc_out_type")
 def mojo_gpu_desc_out_type(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     i: Int,
-    out_tag: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_scale: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_width: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_tag: Pointer[Int64, MutUntrackedOrigin],
+    out_scale: Pointer[Int64, MutUntrackedOrigin],
+    out_width: Pointer[Int64, MutUntrackedOrigin],
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
-    ref ots = handle.bitcast[GpuPlanDescriptor]()[].out_types
+    ref ots = handle.unsafe_bitcast[GpuPlanDescriptor]()[].out_types
     if i < 0 or i >= len(ots):
         return 1
     ref t = ots[i]
@@ -3703,11 +3693,11 @@ def mojo_gpu_desc_out_type(
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_desc_materialize_count")
 def mojo_gpu_desc_materialize_count(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     # Request 0 is always the fact-table query. For an FK-join plan each dim_edge
     # adds one dim request (request index 1..n_dims), so the count is 1 + n_dims.
     # 0-dim shapes (ungrouped Q6 / grouped DENSE_GROUP Q1) have one fact request.
@@ -3839,15 +3829,15 @@ def _dim_columns(d: GpuPlanDescriptor, de: Int) -> List[String]:
 # `ORDER BY` is appended iff strategy == SORT_SEGREDUCE (no-op for Q6).
 @export("mojo_gpu_desc_materialize_sql")
 def mojo_gpu_desc_materialize_sql(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     i: Int,
-    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
+    out_ptr: Pointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
     try:
-        ref d = handle.bitcast[GpuPlanDescriptor]()[]
+        ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
         var n_dims = len(d.dim_edges)
         ref m = _exec_ptr()[]
         var key = Int(handle)
@@ -4007,7 +3997,7 @@ def mojo_gpu_desc_materialize_sql(
         var bytes = sql.as_bytes()
         var to_copy = n if n < cap else cap
         for k in range(to_copy):
-            out_ptr[k] = bytes[k]
+            out_ptr[unsafe_offset=k] = bytes[k]
         return n
     except:
         return 0
@@ -4294,7 +4284,7 @@ def _signature(d: GpuPlanDescriptor) -> String:
 
 @export("mojo_gpu_pin_begin")
 def mojo_gpu_pin_begin(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     # 0 = warm (resident buffers cached, skip feeding), 1 = cold.
     # Warm iff the signature is already in the process-global resident pin cache
@@ -4306,7 +4296,7 @@ def mojo_gpu_pin_begin(
     if Int(handle) == 0:
         return 1
     try:
-        ref d = handle.bitcast[GpuPlanDescriptor]()[]
+        ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
         ref m = _exec_ptr()[]
         var key = Int(handle)
         if key not in m:
@@ -4342,10 +4332,10 @@ def mojo_gpu_pin_begin(
 # (the DuckDB pointer is transient).
 @export("mojo_gpu_feed_column")
 def mojo_gpu_feed_column(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     req_i: Int,
     col_j: Int,
-    ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
+    ptr: Pointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
     type_tag: Int64,
     # GPU_OP_STATS: source-column decimal scale (0 for non-DECIMAL). Used to build
@@ -4416,7 +4406,7 @@ def mojo_gpu_feed_column(
 # scan), so this is harmless/idempotent. Returns 0 on success.
 @export("mojo_gpu_feed_rowcount")
 def mojo_gpu_feed_rowcount(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -4441,10 +4431,10 @@ def mojo_gpu_feed_rowcount(
 # Must be called after mojo_gpu_feed_column for that column (fill resets validity).
 @export("mojo_gpu_feed_validity")
 def mojo_gpu_feed_validity(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     req_i: Int,
     col_j: Int,
-    ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
+    ptr: Pointer[NoneType, MutUntrackedOrigin],
     n_rows: Int,
 ) abi("C") -> Int:
     if Int(handle) == 0:
@@ -4483,11 +4473,11 @@ def mojo_gpu_feed_validity(
 # omit decision so C++ and Mojo agree exactly.
 @export("mojo_gpu_skipmat_active")
 def mojo_gpu_skipmat_active(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     return 1 if _skipmat_active(d) else 0
 
 
@@ -4495,16 +4485,16 @@ def mojo_gpu_skipmat_active(
 # host buffer, the origin `mojo_q6_pin` expects. Rebuilt from the raw address.
 def _col_i32(
     st: GpuExecState, j: Int
-) -> UnsafePointer[Int32, ImmUntrackedOrigin]:
-    return UnsafePointer[Int32, ImmUntrackedOrigin](
+) -> Pointer[Int32, ImmUntrackedOrigin]:
+    return Pointer[Int32, ImmUntrackedOrigin](
         unsafe_from_address=st.cols[j].addr()
     )
 
 
 def _col_i64(
     st: GpuExecState, j: Int
-) -> UnsafePointer[Int64, ImmUntrackedOrigin]:
-    return UnsafePointer[Int64, ImmUntrackedOrigin](
+) -> Pointer[Int64, ImmUntrackedOrigin]:
+    return Pointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=st.cols[j].addr()
     )
 
@@ -4527,32 +4517,32 @@ def _col_str(st: GpuExecState, j: Int, i: Int) raises -> String:
     var base = st.cols[j].addr()
     if base == 0:
         return String("")
-    var p = UnsafePointer[UInt8, ImmUntrackedOrigin](
+    var p = Pointer[UInt8, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 16
     )
     # length: little-endian uint32 in the first 4 bytes.
     var length = (
-        Int(p[0])
-        | (Int(p[1]) << 8)
-        | (Int(p[2]) << 16)
-        | (Int(p[3]) << 24)
+        Int(p[unsafe_offset=0])
+        | (Int(p[unsafe_offset=1]) << 8)
+        | (Int(p[unsafe_offset=2]) << 16)
+        | (Int(p[unsafe_offset=3]) << 24)
     )
     if length <= 0:
         return String("")
-    var data_ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
+    var data_ptr: Pointer[UInt8, ImmUntrackedOrigin]
     if length <= 12:
-        data_ptr = p + 4  # inlined right after the length
+        data_ptr = p.unsafe_offset(4)  # inlined right after the length
     else:
         # bytes 8..15 hold the pointer (native-endian uintptr).
         var addr = 0
         for b in range(8):
-            addr |= Int(p[8 + b]) << (8 * b)
-        data_ptr = UnsafePointer[UInt8, ImmUntrackedOrigin](
+            addr |= Int(p[unsafe_offset=8 + b]) << (8 * b)
+        data_ptr = Pointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=addr
         )
     var s = String("")
     for k in range(length):
-        s += chr(Int(data_ptr[k]))
+        s += chr(Int(data_ptr[unsafe_offset=k]))
     return s
 
 
@@ -4649,11 +4639,11 @@ def _col_val(st: GpuExecState, j: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if c.elem_size == 4:
-        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
+        var p = Pointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
+    var p = Pointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -4668,7 +4658,7 @@ def _col_valid(st: GpuExecState, j: Int, i: Int) -> Bool:
     if not c.validity:
         return True
     var vp = c.validity.value()
-    return vp[i] != 0
+    return vp[unsafe_offset=i] != 0
 
 
 # Read dim-request `de`'s fed numeric column `c` at row `i` as Int64 (widening
@@ -4679,11 +4669,11 @@ def _dim_col_val(st: GpuExecState, de: Int, c: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if col.elem_size == 4:
-        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
+        var p = Pointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
+    var p = Pointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -4695,27 +4685,27 @@ def _dim_col_str(st: GpuExecState, de: Int, c: Int, i: Int) raises -> String:
     var base = st.dim_cols[de][c].addr()
     if base == 0:
         return String("")
-    var p = UnsafePointer[UInt8, ImmUntrackedOrigin](
+    var p = Pointer[UInt8, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 16
     )
     var length = (
-        Int(p[0]) | (Int(p[1]) << 8) | (Int(p[2]) << 16) | (Int(p[3]) << 24)
+        Int(p[unsafe_offset=0]) | (Int(p[unsafe_offset=1]) << 8) | (Int(p[unsafe_offset=2]) << 16) | (Int(p[unsafe_offset=3]) << 24)
     )
     if length <= 0:
         return String("")
-    var data_ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
+    var data_ptr: Pointer[UInt8, ImmUntrackedOrigin]
     if length <= 12:
-        data_ptr = p + 4
+        data_ptr = p.unsafe_offset(4)
     else:
         var addr = 0
         for b in range(8):
-            addr |= Int(p[8 + b]) << (8 * b)
-        data_ptr = UnsafePointer[UInt8, ImmUntrackedOrigin](
+            addr |= Int(p[unsafe_offset=8 + b]) << (8 * b)
+        data_ptr = Pointer[UInt8, ImmUntrackedOrigin](
             unsafe_from_address=addr
         )
     var s = String("")
     for k in range(length):
-        s += chr(Int(data_ptr[k]))
+        s += chr(Int(data_ptr[unsafe_offset=k]))
     return s
 
 
@@ -4941,7 +4931,7 @@ def _resolve_stat_args(
 # Concatenate op tapes a ++ b ++ MUL (product metric: <a><b>MUL). Both inputs are
 # already resolved (op,a,b) triples; the result is a valid f64-VM metric program.
 def _mul_metric(
-    read a_ops: List[Int64], read b_ops: List[Int64]
+    imm a_ops: List[Int64], imm b_ops: List[Int64]
 ) -> List[Int64]:
     var ops: List[Int64] = []
     for i in range(len(a_ops)):
@@ -4970,7 +4960,7 @@ def _mul_metric(
 # `valid_col_slot_of`; returns the corresponding validity column slots. Empty when
 # the tape reads no nullable agg-input column (the common case), so no multiply.
 def _aggin_valid_cols_in_tape(
-    read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
+    imm ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
 ) raises -> List[Int]:
     var out: List[Int] = []
     var seen = Dict[Int, Bool]()
@@ -4992,8 +4982,8 @@ def _aggin_valid_cols_in_tape(
 # nullable agg-input the tape is returned unchanged (byte-identical to the flag-off
 # / no-NULL path). `divs` may be empty (int path); it then stays empty (never read).
 def _append_valid_mul(
-    read ops: List[Int64],
-    read divs: List[Float64],
+    imm ops: List[Int64],
+    imm divs: List[Float64],
     valid_col_slot_of: Dict[Int, Int],
 ) raises -> Tuple[List[Int64], List[Float64]]:
     var vcols = _aggin_valid_cols_in_tape(ops, valid_col_slot_of)
@@ -5020,7 +5010,7 @@ def _append_valid_mul(
 # empty (ops,divs) when the tape reads no nullable agg-input; the caller then falls back
 # to the canonical PUSH_CONST(1) count (count of all filter-passing rows).
 def _valid_product_tape(
-    read ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
+    imm ops: List[Int64], valid_col_slot_of: Dict[Int, Int]
 ) raises -> Tuple[List[Int64], List[Float64]]:
     var vcols = _aggin_valid_cols_in_tape(ops, valid_col_slot_of)
     var out_ops: List[Int64] = []
@@ -5089,8 +5079,8 @@ struct StatShift(Copyable, Movable):
 # buffer), or an unexpected op appears. FK-join dim gathers cannot appear in stat
 # args (n_dims==0 gate), so OP_LOAD_DIM is not handled.
 def _metric_arg_shift(
-    read ops: List[Int64],
-    read divs: List[Float64],
+    imm ops: List[Int64],
+    imm divs: List[Float64],
     col_scale_of_slot: List[Int64],
     st: GpuExecState,
     numeric_matcols: List[Int],
@@ -5131,13 +5121,13 @@ def _metric_arg_shift(
         if slot < len(omit_slot) and omit_slot[slot]:
             return StatShift(Int64(0), Float64(1), Float64(0), False)
         var mj = numeric_matcols[slot]
-        var raw = _col_i64(st, mj)[r0]  # first VALID row
+        var raw = _col_i64(st, mj)[unsafe_offset=r0]  # first VALID row
         var div = Float64(1)
         for _ in range(Int(col_scale_of_slot[slot])):
             div *= 10.0
         return StatShift(raw, div, Float64(raw) / div, True)
     # General path: evaluate the expression on row 0 as a double, integer-round it.
-    var stack = InlineArray[Float64, 16](fill=0.0)
+    var stack = Array[Float64, 16](fill=0.0)
     var sp = 0
     for k in range(n_op):
         var op = ops[3 * k + 0]
@@ -5147,7 +5137,7 @@ def _metric_arg_shift(
             if slot < len(omit_slot) and omit_slot[slot]:
                 return StatShift(Int64(0), Float64(1), Float64(0), False)
             var mj = numeric_matcols[slot]
-            var raw = _col_i64(st, mj)[r0]  # first VALID row (see above)
+            var raw = _col_i64(st, mj)[unsafe_offset=r0]  # first VALID row (see above)
             var div = Float64(1)
             for _ in range(Int(col_scale_of_slot[slot])):
                 div *= 10.0
@@ -5186,7 +5176,7 @@ def _metric_arg_shift(
 # ok (legacy fallback) the original tape is returned unchanged, giving byte-identical
 # legacy behavior (no extra ops, dedup key unchanged).
 def _shift_arg(
-    read ops: List[Int64], read divs: List[Float64], sh: StatShift
+    imm ops: List[Int64], imm divs: List[Float64], sh: StatShift
 ) -> Tuple[List[Int64], List[Float64]]:
     if not sh.ok:
         return (ops.copy(), divs.copy())
@@ -5204,7 +5194,7 @@ def _shift_arg(
 
 
 # A stable key for a resolved metric op tape (for cross-aggregate dedup).
-def _metric_key(read ops: List[Int64]) -> String:
+def _metric_key(imm ops: List[Int64]) -> String:
     var s = String("")
     for i in range(len(ops)):
         s += String(ops[i])
@@ -5305,11 +5295,11 @@ def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
     if base == 0:
         return Int64(0)
     if elem_size == 4:
-        var p = UnsafePointer[Int32, ImmUntrackedOrigin](
+        var p = Pointer[Int32, ImmUntrackedOrigin](
             unsafe_from_address=base + i * 4
         )
         return Int64(p[])
-    var p = UnsafePointer[Int64, ImmUntrackedOrigin](
+    var p = Pointer[Int64, ImmUntrackedOrigin](
         unsafe_from_address=base + i * 8
     )
     return p[]
@@ -5319,7 +5309,7 @@ def _read_packed(base: Int, elem_size: Int, i: Int) -> Int64:
 # parallelized over `_finalize_workers()` chunks. Used for the numeric fact
 # columns. Equivalent serial loop: `for i in range(n): cols[slot*n+i] = ...`.
 def _pack_col_par(
-    cols: UnsafePointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     slot: Int,
     n: Int,
     base: Int,
@@ -5329,42 +5319,38 @@ def _pack_col_par(
     var chunk = ceildiv(n, nw)
     var dst = Int(cols) + slot * n * 8
 
-    @parameter
-    @__copy_capture(dst, chunk, n, base, elem_size)
-    def work(t: Int):
+    def work(t: Int) {var dst, var chunk, var n, var base, var elem_size}:
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var out = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
         for i in range(start, end):
-            out[i] = _read_packed(base, elem_size, i)
+            out[unsafe_offset=i] = _read_packed(base, elem_size, i)
 
-    parallelize[work](nw, nw)
+    parallelize(work, nw, nw)
 
 
 # Copy `cols[slot*n + i] = src[i]` for i in [0,n), parallelized. Used for the
 # gid column (a precomputed Int64 array) and the host pass column.
 def _pack_copy_par(
-    cols: UnsafePointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     slot: Int,
     n: Int,
-    src: UnsafePointer[Int64, MutUntrackedOrigin],
+    src: Pointer[Int64, _],
 ):
     var nw = _finalize_workers()
     var chunk = ceildiv(n, nw)
     var dst = Int(cols) + slot * n * 8
     var s = Int(src)
 
-    @parameter
-    @__copy_capture(dst, s, chunk, n)
-    def work(t: Int):
+    def work(t: Int) {var dst, var s, var chunk, var n}:
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
-        var sp = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=s)
+        var out = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var sp = Pointer[Int64, ImmUntrackedOrigin](unsafe_from_address=s)
         for i in range(start, end):
-            out[i] = sp[i]
+            out[unsafe_offset=i] = sp[unsafe_offset=i]
 
-    parallelize[work](nw, nw)
+    parallelize(work, nw, nw)
 
 
 # Bake the host pass column `pass_col[i] = AND_f _pred_pass(read(f), cmp_f, k_f)`
@@ -5372,7 +5358,7 @@ def _pack_copy_par(
 # column base addresses + element sizes (in filter order); `cmps`/`ks` the
 # per-filter cmp ops + constants. Equivalent to the serial AND-of-predicates bake.
 def _bake_pass_par(
-    pass_col: UnsafePointer[Int64, MutUntrackedOrigin],
+    pass_col: Pointer[Int64, _],
     n: Int,
     bases: List[Int],
     esizes: List[Int],
@@ -5388,53 +5374,51 @@ def _bake_pass_par(
     # parallel work fn captures only raw pointers + counts (List[Int] is not
     # ImplicitlyCopyable, so it cannot be @__copy_capture'd). Layout per filter:
     # [base, esize, cmp, k] x nf.
-    var fb = alloc[Int64](4 * nf if nf > 0 else 1)
+    var fb = unsafe_alloc[Int64](4 * nf if nf > 0 else 1)
     for fi in range(nf):
-        fb[4 * fi + 0] = Int64(bases[fi])
-        fb[4 * fi + 1] = Int64(esizes[fi])
-        fb[4 * fi + 2] = cmps[fi]
-        fb[4 * fi + 3] = ks[fi]
+        fb[unsafe_offset=4 * fi + 0] = Int64(bases[fi])
+        fb[unsafe_offset=4 * fi + 1] = Int64(esizes[fi])
+        fb[unsafe_offset=4 * fi + 2] = cmps[fi]
+        fb[unsafe_offset=4 * fi + 3] = ks[fi]
     var fbp = Int(fb)
     # GPU_OP_NULLABLE: flatten the per-valid-slot validity base addresses (1 byte/
     # row) into a contiguous Int64 buffer (same capture constraint as fb). nv == 0
     # in the common all-valid case, so the inner validity loop is skipped, byte-
     # identical to the pre-nullable parallel bake. Must mirror the serial AND.
     var nv = len(valid_bases)
-    var vb = alloc[Int64](nv if nv > 0 else 1)
+    var vb = unsafe_alloc[Int64](nv if nv > 0 else 1)
     for vi in range(nv):
-        vb[vi] = Int64(valid_bases[vi])
+        vb[unsafe_offset=vi] = Int64(valid_bases[vi])
     var vbp = Int(vb)
 
-    @parameter
-    @__copy_capture(dst, chunk, n, nf, fbp, nv, vbp)
-    def work(t: Int):
+    def work(t: Int) {var dst, var chunk, var n, var nf, var fbp, var nv, var vbp}:
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
-        var f = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=fbp)
-        var vv = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=vbp)
+        var out = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var f = Pointer[Int64, ImmUntrackedOrigin](unsafe_from_address=fbp)
+        var vv = Pointer[Int64, ImmUntrackedOrigin](unsafe_from_address=vbp)
         for i in range(start, end):
             var ok = True
             for fi in range(nf):
                 var v = _read_packed(
-                    Int(f[4 * fi + 0]), Int(f[4 * fi + 1]), i
+                    Int(f[unsafe_offset=4 * fi + 0]), Int(f[unsafe_offset=4 * fi + 1]), i
                 )
-                if not _pred_pass(v, f[4 * fi + 2], f[4 * fi + 3]):
+                if not _pred_pass(v, f[unsafe_offset=4 * fi + 2], f[unsafe_offset=4 * fi + 3]):
                     ok = False
                     break
             if ok:
                 for vi in range(nv):
-                    var vp = UnsafePointer[UInt8, ImmUntrackedOrigin](
-                        unsafe_from_address=Int(vv[vi]) + i
+                    var vp = Pointer[UInt8, ImmUntrackedOrigin](
+                        unsafe_from_address=Int(vv[unsafe_offset=vi]) + i
                     )
                     if vp[] == 0:
                         ok = False
                         break
-            out[i] = Int64(1) if ok else Int64(0)
+            out[unsafe_offset=i] = Int64(1) if ok else Int64(0)
 
-    parallelize[work](nw, nw)
-    fb.free()
-    vb.free()
+    parallelize(work, nw, nw)
+    fb.unsafe_free()
+    vb.unsafe_free()
 
 
 # Q5 gid gather: `cols[gid_slot*n + i] = grp[ supp ]` where supp = the row's
@@ -5442,12 +5426,12 @@ def _bake_pass_par(
 # (when `guard_nonneg`) a negative group value becomes 0. Parallel over row chunks;
 # disjoint writes. Equivalent to the serial Q5 gid-gather loop.
 def _q5_gid_gather_par(
-    cols: UnsafePointer[Int64, MutUntrackedOrigin],
+    cols: Pointer[Int64, _],
     gid_slot: Int,
     n: Int,
     sk_base: Int,
     sk_es: Int,
-    grp: UnsafePointer[Int64, MutUntrackedOrigin],
+    grp: Pointer[Int64, _],
     max_sk: Int,
     guard_nonneg: Bool,
 ):
@@ -5456,23 +5440,21 @@ def _q5_gid_gather_par(
     var dst = Int(cols) + gid_slot * n * 8
     var g = Int(grp)
 
-    @parameter
-    @__copy_capture(dst, chunk, n, sk_base, sk_es, g, max_sk, guard_nonneg)
-    def work(t: Int):
+    def work(t: Int) {var dst, var chunk, var n, var sk_base, var sk_es, var g, var max_sk, var guard_nonneg}:
         var start = t * chunk
         var end = min(start + chunk, n)
-        var out = UnsafePointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
-        var gp = UnsafePointer[Int64, ImmUntrackedOrigin](unsafe_from_address=g)
+        var out = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=dst)
+        var gp = Pointer[Int64, ImmUntrackedOrigin](unsafe_from_address=g)
         for i in range(start, end):
             var sk = Int(_read_packed(sk_base, sk_es, i))
             var gv = Int64(0)
             if sk >= 0 and sk <= max_sk:
-                var sv = gp[sk]
+                var sv = gp[unsafe_offset=sk]
                 if (not guard_nonneg) or sv >= 0:
                     gv = sv
-            out[i] = gv
+            out[unsafe_offset=i] = gv
 
-    parallelize[work](nw, nw)
+    parallelize(work, nw, nw)
 
 
 # ---------------------------------------------------------------------------
@@ -5944,9 +5926,9 @@ def _q5_pred_params(
 
 # The fully generic finalize for n_dims == 0 (UNGROUPED + DENSE_GROUP).
 def _pin_finalize_generic(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
     var key = Int(handle)
     if key not in m:
@@ -6056,7 +6038,8 @@ def _pin_finalize_generic(
     # dense-gid bookkeeping (sorted distinct tuple to gid)
     var order: List[Int] = []
     var gkey_vals: List[List[String]] = []  # per group-key col, per distinct-idx
-    var row_gid = alloc[Int64](n if n > 0 else 1)
+    var row_gid_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var row_gid = row_gid_mem.unsafe_ptr()
     # GPU_OP_TRANSCENDENTAL HASH_GROUP (integer fact group key, no FK-join dims):
     # no dense gid is built; the float64 hash accumulator keys directly on the fact
     # key column read from `hash_gk_slot`. Only reachable when the transcendental
@@ -6075,7 +6058,7 @@ def _pin_finalize_generic(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "":
-            row_gid.free()
+            deinit(row_gid_mem^)
             return 3  # integer fact group key not materialized: CPU fallback
         hash_gk_slot = col_slot[fact_gk]
         # cap = next pow2 >= 2*(distinct bound). Fact row count `n` is a safe
@@ -6095,14 +6078,15 @@ def _pin_finalize_generic(
         for gk in range(n_keys):
             var gj = _col_index(st, d.group_keys[gk].column)
             if gj < 0:
-                row_gid.free()
+                deinit(row_gid_mem^)
                 return 3
             gk_j.append(gj)
         var tuple_keys: List[String] = []
         for _ in range(n_keys):
             gkey_vals.append(List[String]())
         var seen = Dict[String, Int]()
-        var row_didx = alloc[Int32](n if n > 0 else 1)
+        var row_didx_mem = alloc(Layout[Int32](count=n if n > 0 else 1)).into_managed()
+        var row_didx = row_didx_mem.unsafe_ptr()
         for i in range(n):
             var tk = String("")
             var parts: List[String] = []
@@ -6113,18 +6097,18 @@ def _pin_finalize_generic(
                     tk += String("\x01")
                 tk += sv
             if tk in seen:
-                row_didx[i] = Int32(seen[tk])
+                row_didx[unsafe_offset=i] = Int32(seen[tk])
             else:
                 var idx = len(tuple_keys)
                 seen[tk] = idx
                 tuple_keys.append(tk)
                 for gk in range(n_keys):
                     gkey_vals[gk].append(parts[gk])
-                row_didx[i] = Int32(idx)
+                row_didx[unsafe_offset=i] = Int32(idx)
         n_groups = len(tuple_keys)
         if n_groups <= 0:
-            row_didx.free()
-            row_gid.free()
+            deinit(row_didx_mem^)
+            deinit(row_gid_mem^)
             return 7
         for g in range(n_groups):
             order.append(g)
@@ -6134,13 +6118,14 @@ def _pin_finalize_generic(
                     var t = order[a]
                     order[a] = order[b]
                     order[b] = t
-        var didx_to_gid = alloc[Int32](n_groups)
+        var didx_to_gid_mem = alloc(Layout[Int32](count=n_groups)).into_managed()
+        var didx_to_gid = didx_to_gid_mem.unsafe_ptr()
         for g in range(n_groups):
-            didx_to_gid[order[g]] = Int32(g)
+            didx_to_gid[unsafe_offset=order[g]] = Int32(g)
         for i in range(n):
-            row_gid[i] = Int64(Int(didx_to_gid[Int(row_didx[i])]))
-        didx_to_gid.free()
-        row_didx.free()
+            row_gid[unsafe_offset=i] = Int64(Int(didx_to_gid[unsafe_offset=Int(row_didx[unsafe_offset=i])]))
+        deinit(didx_to_gid_mem^)
+        deinit(row_didx_mem^)
         G = n_groups
         gid_slot = n_numeric  # gid is the slot right after the numeric cols
 
@@ -6175,7 +6160,8 @@ def _pin_finalize_generic(
     # The VM has no CMP/AND ops, so we compute the pass column on the host and
     # feed it via a 1-op `LOAD_COL(pass_slot)` pass program (exact and simplest).
     var pass_slot = n_numeric + (1 if gid_slot >= 0 else 0)
-    var pass_col = alloc[Int64](n if n > 0 else 1)
+    var pass_col_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var pass_col = pass_col_mem.unsafe_ptr()
     # Collect fact filters as (slot, cmp, const-lo); skip non-fact filters.
     var f_slot: List[Int] = []
     var f_cmp: List[Int64] = []
@@ -6189,8 +6175,8 @@ def _pin_finalize_generic(
             if p.col.table != d.fact_table:
                 continue
             if p.col.column not in col_slot:
-                pass_col.free()
-                row_gid.free()
+                deinit(pass_col_mem^)
+                deinit(row_gid_mem^)
                 return 8
             f_slot.append(col_slot[p.col.column])
             f_cmp.append(p.cmp)
@@ -6258,13 +6244,13 @@ def _pin_finalize_generic(
         # if it somehow does, rather than return a silent wrong result. (A1: any
         # nullable column, filter or agg-input, is unhandled on these paths.)
         if n_valid > 0 or len(aggin_valid_slots) > 0:
-            pass_col.free()
-            row_gid.free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         # Cheap memset; left serial in both modes (the pack loops are the cost).
         for i in range(n):
-            pass_col[i] = Int64(0)
+            pass_col[unsafe_offset=i] = Int64(0)
     else:
         # SKIP-MATERIALIZE strict guard: the host pass-bake reads fact filter
         # columns. Omitting a filter column is only safe when the in-kernel
@@ -6275,8 +6261,8 @@ def _pin_finalize_generic(
         for fi in range(n_filters):
             var fs = f_slot[fi]
             if fs < len(omit_slot) and omit_slot[fs]:
-                pass_col.free()
-                row_gid.free()
+                deinit(pass_col_mem^)
+                deinit(row_gid_mem^)
                 return 8
         # A1 unified pass model: fold only filter-column validity into the host pass
         # column (a NULL filter row makes the predicate UNKNOWN, so it is excluded from
@@ -6318,7 +6304,7 @@ def _pin_finalize_generic(
                         ):
                             ok = False
                             break
-                pass_col[i] = Int64(1) if ok else Int64(0)
+                pass_col[unsafe_offset=i] = Int64(1) if ok else Int64(0)
 
     # --- build the packed columns buffer cols[slot*n_rows+row] ---
     # A1 unified pass model: each agg-input nullable column gets its own 0/1 int64
@@ -6333,7 +6319,7 @@ def _pin_finalize_generic(
     for vc in range(n_valid_cols):
         valid_col_slot_of[aggin_valid_slots[vc]] = first_valid_slot + vc
     var n_slots = pass_slot + 1 + n_valid_cols
-    var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    var cols = unsafe_alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
     for slot in range(n_numeric):
         # SKIP-MATERIALIZE: an omitted slot is sourced from the pool by
         # _colpool_assemble_cols_d (D2D); its st.cols[mj] is unfilled, so do not
@@ -6345,18 +6331,18 @@ def _pin_finalize_generic(
             _pack_col_par(cols, slot, n, st.cols[mj].addr(), st.cols[mj].elem_size)
         else:
             for i in range(n):
-                cols[slot * n + i] = _col_val(st, mj, i)
+                cols[unsafe_offset=slot * n + i] = _col_val(st, mj, i)
     if gid_slot >= 0:
         if par_on:
             _pack_copy_par(cols, gid_slot, n, row_gid)
         else:
             for i in range(n):
-                cols[gid_slot * n + i] = row_gid[i]
+                cols[unsafe_offset=gid_slot * n + i] = row_gid[unsafe_offset=i]
     if par_on:
         _pack_copy_par(cols, pass_slot, n, pass_col)
     else:
         for i in range(n):
-            cols[pass_slot * n + i] = pass_col[i]
+            cols[unsafe_offset=pass_slot * n + i] = pass_col[unsafe_offset=i]
     # A1: pack each agg-input validity column as a 0/1 int64 at its validity slot.
     # Read the C++-fed 1-byte validity mask for the data column (1=valid, 0=NULL);
     # an aggin slot is in aggin_valid_slots iff st.cols[mj].validity is present, so
@@ -6369,7 +6355,7 @@ def _pin_finalize_generic(
         var vmj = numeric_matcols[vdslot]
         var vp = st.cols[vmj].validity.value()
         for i in range(n):
-            cols[vslot * n + i] = Int64(1) if vp[i] != 0 else Int64(0)
+            cols[unsafe_offset=vslot * n + i] = Int64(1) if vp[unsafe_offset=i] != 0 else Int64(0)
     if pin_log:
         var dt = (perf_counter_ns() - t_packpass0) // 1000
         print(
@@ -6453,8 +6439,8 @@ def _pin_finalize_generic(
     # `divs` is parallel to the tape (one Float64 per op). For the count metric pass
     # an empty `ops`, which gives the canonical PUSH_CONST(1) (also deduplicated).
     def _emit_metric_dedup(
-        read ops: List[Int64],
-        read divs: List[Float64],
+        imm ops: List[Int64],
+        imm divs: List[Float64],
         mut metric_ops: List[Int64],
         mut metric_offsets: List[Int64],
         mut metric_lens: List[Int64],
@@ -6508,7 +6494,7 @@ def _pin_finalize_generic(
 
             # const_div for a product tape <a><b>MUL: a's divs ++ b's divs ++ [1.0].
             def _prod_div(
-                read da: List[Float64], read db: List[Float64]
+                imm da: List[Float64], imm db: List[Float64]
             ) -> List[Float64]:
                 var out: List[Float64] = []
                 for x in range(len(da)):
@@ -6775,7 +6761,7 @@ def _pin_finalize_generic(
 
     # Fix D (int128 DENSE_GROUP overrun guard): the int128 dense-group kernels
     # (seg_dense_kernel / _q1 / _q5 and their _pred variants) accumulate into a
-    # fixed per-lane InlineArray[Int64, SEG_MAX_METRICS*SEG_MAX_METRICS] (== 64)
+    # fixed per-lane Array[Int64, SEG_MAX_METRICS*SEG_MAX_METRICS] (== 64)
     # indexed acc[g*M+m]. The DENSE strategy is chosen by group-key column count at
     # plan time, not by the runtime distinct-group count G, so a high-cardinality
     # GROUP BY with many metrics can have G*M > 64 and overrun the accumulator
@@ -6785,9 +6771,9 @@ def _pin_finalize_generic(
     # it would overflow. The f64 dense path is exempt: it already switches to the
     # unbounded global atomic kernel (dense_global, see _assemble) for G*M > 64.
     if mode == STRAT_DENSE_GROUP and not is_float64 and G * M > 64:
-        cols.free()
-        pass_col.free()
-        row_gid.free()
+        cols.unsafe_free()
+        deinit(pass_col_mem^)
+        deinit(row_gid_mem^)
         return 3
 
     # GPU_OP_TRANSCENDENTAL: build col_div (10^scale per resident numeric slot) for
@@ -6839,16 +6825,16 @@ def _pin_finalize_generic(
             break
     if fact_passget >= 0:
         if q6_pred_on or gen_pred_on or f64_pred_on:
-            cols.free()
-            pass_col.free()
-            row_gid.free()
+            cols.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         var missing = False
         var or_ops = _resolve_pass_prog(d, fact_passget, col_slot, missing)
         if missing:
-            cols.free()
-            pass_col.free()
-            row_gid.free()
+            cols.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 8
         for x in range(len(or_ops)):
             pass_prog.append(or_ops[x])
@@ -6887,12 +6873,15 @@ def _pin_finalize_generic(
     # and it is column-pool eligible. When GPU_OP_COLPOOL is on we dedup the per-
     # column H2D via the pool and assemble cols_d by D2D repack; when off, verbatim.
     var ctx = shared_device_context()
-    var seg_off_dummy = alloc[Int64](1)
-    seg_off_dummy[0] = 0
-    var dims_dummy = alloc[Int64](1)
-    dims_dummy[0] = 0
-    var doff_dummy = alloc[Int64](1)
-    doff_dummy[0] = 0
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
+    seg_off_dummy[unsafe_offset=0] = 0
+    var dims_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var dims_dummy = dims_dummy_mem.unsafe_ptr()
+    dims_dummy[unsafe_offset=0] = 0
+    var doff_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var doff_dummy = doff_dummy_mem.unsafe_ptr()
+    doff_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colptr_eligible(d):
@@ -6911,12 +6900,12 @@ def _pin_finalize_generic(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.free()
-            dims_dummy.free()
-            doff_dummy.free()
-            cols.free()
-            pass_col.free()
-            row_gid.free()
+            deinit(seg_off_dummy_mem^)
+            deinit(dims_dummy_mem^)
+            deinit(doff_dummy_mem^)
+            cols.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 11
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -6942,12 +6931,12 @@ def _pin_finalize_generic(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.free()
-            dims_dummy.free()
-            doff_dummy.free()
-            cols.free()
-            pass_col.free()
-            row_gid.free()
+            deinit(seg_off_dummy_mem^)
+            deinit(dims_dummy_mem^)
+            deinit(doff_dummy_mem^)
+            cols.unsafe_free()
+            deinit(pass_col_mem^)
+            deinit(row_gid_mem^)
             return 11
         # Success: transfer the materialize-time omit leases into the per-signature
         # lease set so the GpuPinned owns them (released when it is evicted). Clear
@@ -6962,12 +6951,12 @@ def _pin_finalize_generic(
         resident = segreduce_upload(
             ctx, cols, n_slots, n, seg_off_dummy, 0, dims_dummy, doff_dummy, 0
         )
-    seg_off_dummy.free()
-    dims_dummy.free()
-    doff_dummy.free()
-    cols.free()
-    pass_col.free()
-    row_gid.free()
+    deinit(seg_off_dummy_mem^)
+    deinit(dims_dummy_mem^)
+    deinit(doff_dummy_mem^)
+    cols.unsafe_free()
+    deinit(pass_col_mem^)
+    deinit(row_gid_mem^)
 
     # --- construct + cache the GpuPinned, then assemble via the shared path ---
     var gp = GpuPinned(resident^)
@@ -7248,9 +7237,9 @@ def _resolve_dim_program(
 # groups with revenue>0 (stock GROUP BY over passing rows).
 # ===-------------------------------------------------------------------===#
 def _pin_finalize_q5(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
     var key = Int(handle)
     if key not in m:
@@ -7329,18 +7318,17 @@ def _pin_finalize_q5(
         # schema appears, fall back to the per-constant (ASIA-rank gid) path, which
         # is still correct, only not warm across constants.
         var G = max_nk + 1
-        if G > 64:
-            q5_pred_on = False
-        else:
-            var nation_region = alloc[Int64](max_nk + 1)
+        if G <= 64:
+            var nation_region_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+            var nation_region = nation_region_mem.unsafe_ptr()
             var nation_name: List[String] = []
             for _ in range(max_nk + 1):
                 nation_name.append(String(""))
             for k in range(max_nk + 1):
-                nation_region[k] = -1
+                nation_region[unsafe_offset=k] = -1
             for i in range(ndn):
                 var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
-                nation_region[nk] = _dim_col_val(st, de_nation, c_nrk, i)
+                nation_region[unsafe_offset=nk] = _dim_col_val(st, de_nation, c_nrk, i)
                 nation_name[nk] = _dim_col_str(st, de_nation, c_nn, i)
 
             # --- region map: r_name to r_regionkey for all regions (region-indep). ---
@@ -7362,12 +7350,13 @@ def _pin_finalize_q5(
                 var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
                 if ck > max_ck:
                     max_ck = ck
-            var cust_nation = alloc[Int64](max_ck + 1)
+            var cust_nation_mem = alloc(Layout[Int64](count=max_ck + 1)).into_managed()
+            var cust_nation = cust_nation_mem.unsafe_ptr()
             for k in range(max_ck + 1):
-                cust_nation[k] = -1
+                cust_nation[unsafe_offset=k] = -1
             for i in range(cdn):
                 var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
-                cust_nation[ck] = _dim_col_val(st, de_customer, c_cnk, i)
+                cust_nation[unsafe_offset=ck] = _dim_col_val(st, de_customer, c_cnk, i)
 
             # --- supplier: supp_nation[sk] + supp_region[sk] (region-independent). ---
             var c_sk = _dim_src_col(st, de_supplier, "s_suppkey")
@@ -7378,17 +7367,19 @@ def _pin_finalize_q5(
                 var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
                 if sk > max_sk:
                     max_sk = sk
-            var supp_nation = alloc[Int64](max_sk + 1)
-            var supp_region = alloc[Int64](max_sk + 1)
+            var supp_nation_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+            var supp_nation = supp_nation_mem.unsafe_ptr()
+            var supp_region_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+            var supp_region = supp_region_mem.unsafe_ptr()
             for k in range(max_sk + 1):
-                supp_nation[k] = -1
-                supp_region[k] = -1
+                supp_nation[unsafe_offset=k] = -1
+                supp_region[unsafe_offset=k] = -1
             for i in range(sdn):
                 var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
                 var sn = Int(_dim_col_val(st, de_supplier, c_snk, i))
-                supp_nation[sk] = Int64(sn)
+                supp_nation[unsafe_offset=sk] = Int64(sn)
                 if sn >= 0 and sn <= max_nk:
-                    supp_region[sk] = nation_region[sn]
+                    supp_region[unsafe_offset=sk] = nation_region[unsafe_offset=sn]
 
             # --- orders: o_orderdate[ok] (raw) + order_cust_nation[ok] (region/
             #     date-independent; no host order_pass bake). ---
@@ -7401,17 +7392,19 @@ def _pin_finalize_q5(
                 var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
                 if ok > max_ok:
                     max_ok = ok
-            var order_date = alloc[Int64](max_ok + 1)
-            var order_cust_nation = alloc[Int64](max_ok + 1)
+            var order_date_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+            var order_date = order_date_mem.unsafe_ptr()
+            var order_cust_nation_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+            var order_cust_nation = order_cust_nation_mem.unsafe_ptr()
             for k in range(max_ok + 1):
-                order_date[k] = 0
-                order_cust_nation[k] = -1
+                order_date[unsafe_offset=k] = 0
+                order_cust_nation[unsafe_offset=k] = -1
             for i in range(odn):
                 var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
-                order_date[ok] = _dim_col_val(st, de_orders, c_od, i)
+                order_date[unsafe_offset=ok] = _dim_col_val(st, de_orders, c_od, i)
                 var ck = Int(_dim_col_val(st, de_orders, c_ock, i))
                 if ck >= 0 and ck <= max_ck:
-                    order_cust_nation[ok] = cust_nation[ck]
+                    order_cust_nation[unsafe_offset=ok] = cust_nation[unsafe_offset=ck]
 
             # --- pack the 4 dim arrays + offsets (fixed indices 0..3):
             #     arr0=o_orderdate[ok], arr1=order_cust_nation[ok],
@@ -7421,29 +7414,32 @@ def _pin_finalize_q5(
             var len2 = max_sk + 1
             var len3 = max_sk + 1
             var total_dim = len0 + len1 + len2 + len3
-            var dims_host = alloc[Int64](total_dim)
+            var dims_host_mem = alloc(Layout[Int64](count=total_dim)).into_managed()
+            var dims_host = dims_host_mem.unsafe_ptr()
             var w = 0
             for i in range(len0):
-                dims_host[w] = order_date[i]; w += 1
+                dims_host[unsafe_offset=w] = order_date[unsafe_offset=i]; w += 1
             for i in range(len1):
-                dims_host[w] = order_cust_nation[i]; w += 1
+                dims_host[unsafe_offset=w] = order_cust_nation[unsafe_offset=i]; w += 1
             for i in range(len2):
-                dims_host[w] = supp_nation[i]; w += 1
+                dims_host[unsafe_offset=w] = supp_nation[unsafe_offset=i]; w += 1
             for i in range(len3):
-                dims_host[w] = supp_region[i]; w += 1
+                dims_host[unsafe_offset=w] = supp_region[unsafe_offset=i]; w += 1
             var n_dim_arrays = 4
-            var doff_host = alloc[Int64](n_dim_arrays + 1)
-            doff_host[0] = 0
-            doff_host[1] = Int64(len0)
-            doff_host[2] = Int64(len0 + len1)
-            doff_host[3] = Int64(len0 + len1 + len2)
-            doff_host[4] = Int64(total_dim)
+            var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+            var doff_host = doff_host_mem.unsafe_ptr()
+            doff_host[unsafe_offset=0] = 0
+            doff_host[unsafe_offset=1] = Int64(len0)
+            doff_host[unsafe_offset=2] = Int64(len0 + len1)
+            doff_host[unsafe_offset=3] = Int64(len0 + len1 + len2)
+            doff_host[unsafe_offset=4] = Int64(total_dim)
 
             # --- packed fact columns + the per-row gid column (raw supp_nation
             #     [l_suppkey]; the in-kernel region gate zeroes non-region nations). ---
             var gid_slot = n_numeric
             var n_slots = n_numeric + 1
-            var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+            var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+            var cols = cols_mem.unsafe_ptr()
             # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
             var par_on = _parallel_finalize_on()
             var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
@@ -7457,7 +7453,7 @@ def _pin_finalize_q5(
                     )
                 else:
                     for i in range(n):
-                        cols[slot * n + i] = _col_val(st, mj, i)
+                        cols[unsafe_offset=slot * n + i] = _col_val(st, mj, i)
             if par_on:
                 ref skc = st.cols[numeric_matcols[lsk_slot]]
                 _q5_gid_gather_par(
@@ -7469,10 +7465,10 @@ def _pin_finalize_q5(
                     var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
                     var gv = Int64(0)
                     if sk >= 0 and sk <= max_sk:
-                        var sn = supp_nation[sk]
+                        var sn = supp_nation[unsafe_offset=sk]
                         if sn >= 0:
                             gv = sn
-                    cols[gid_slot * n + i] = gv
+                    cols[unsafe_offset=gid_slot * n + i] = gv
             if pin_log:
                 var dt = (perf_counter_ns() - t_pp0) // 1000
                 print(
@@ -7493,10 +7489,10 @@ def _pin_finalize_q5(
                     rev_ai = ai
                     break
             if rev_ai < 0:
-                nation_region.free(); cust_nation.free()
-                supp_nation.free(); supp_region.free()
-                order_date.free(); order_cust_nation.free()
-                dims_host.free(); doff_host.free(); cols.free()
+                deinit(nation_region_mem^); deinit(cust_nation_mem^)
+                deinit(supp_nation_mem^); deinit(supp_region_mem^)
+                deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+                deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
                 return 25
             var plan = _resolve_program(d, d.aggregates[rev_ai], col_slot)
             var metric_ops = plan.ops.copy()
@@ -7528,8 +7524,9 @@ def _pin_finalize_q5(
             # column-pool eligible. gid_slot (raw supp_nation[l_suppkey]) is a
             # per-query derived slot (>= n_numeric), so it is not pooled and is copied whole.
             var ctx = shared_device_context()
-            var seg_off_dummy = alloc[Int64](1)
-            seg_off_dummy[0] = 0
+            var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+            var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
+            seg_off_dummy[unsafe_offset=0] = 0
             var pool_lease_keys: List[String] = []
             var resident: SegResident
             if _colptr_eligible(d):
@@ -7553,11 +7550,11 @@ def _pin_finalize_q5(
                     for li in range(len(st.colpool_omit_leases)):
                         release_lease(st.colpool_omit_leases[li])
                     st.colpool_omit_leases = []
-                    seg_off_dummy.free()
-                    nation_region.free(); cust_nation.free()
-                    supp_nation.free(); supp_region.free()
-                    order_date.free(); order_cust_nation.free()
-                    dims_host.free(); doff_host.free(); cols.free()
+                    deinit(seg_off_dummy_mem^)
+                    deinit(nation_region_mem^); deinit(cust_nation_mem^)
+                    deinit(supp_nation_mem^); deinit(supp_region_mem^)
+                    deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+                    deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
                     return 11
                 for li in range(len(st.colpool_omit_leases)):
                     pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -7585,12 +7582,12 @@ def _pin_finalize_q5(
                     ctx, cols, n_slots, n, seg_off_dummy, 0,
                     dims_host, doff_host, n_dim_arrays,
                 )
-            seg_off_dummy.free()
+            deinit(seg_off_dummy_mem^)
 
-            nation_region.free(); cust_nation.free()
-            supp_nation.free(); supp_region.free()
-            order_date.free(); order_cust_nation.free()
-            dims_host.free(); doff_host.free(); cols.free()
+            deinit(nation_region_mem^); deinit(cust_nation_mem^)
+            deinit(supp_nation_mem^); deinit(supp_region_mem^)
+            deinit(order_date_mem^); deinit(order_cust_nation_mem^)
+            deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
 
             # --- construct + cache the GpuPinned, then assemble (emit revenue!=0). ---
             var agg_kind: List[Int64] = [AGG_SUM]
@@ -7670,40 +7667,42 @@ def _pin_finalize_q5(
         var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
         if nk > max_nk:
             max_nk = nk
-    var nation_in_asia = alloc[Int64](max_nk + 1)
-    var gid_of_nation = alloc[Int64](max_nk + 1)
+    var nation_in_asia_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+    var nation_in_asia = nation_in_asia_mem.unsafe_ptr()
+    var gid_of_nation_mem = alloc(Layout[Int64](count=max_nk + 1)).into_managed()
+    var gid_of_nation = gid_of_nation_mem.unsafe_ptr()
     var nation_name: List[String] = []
     for _ in range(max_nk + 1):
         nation_name.append(String(""))
     for k in range(max_nk + 1):
-        nation_in_asia[k] = 0
-        gid_of_nation[k] = -1
+        nation_in_asia[unsafe_offset=k] = 0
+        gid_of_nation[unsafe_offset=k] = -1
     for i in range(ndn):
         var nk = Int(_dim_col_val(st, de_nation, c_nk, i))
         var nrk = Int(_dim_col_val(st, de_nation, c_nrk, i))
-        nation_in_asia[nk] = Int64(1) if nrk == asia_region else Int64(0)
+        nation_in_asia[unsafe_offset=nk] = Int64(1) if nrk == asia_region else Int64(0)
         nation_name[nk] = _dim_col_str(st, de_nation, c_nn, i)
     # Dense gid per ASIA nation, in ascending nationkey order (deterministic;
     # the parent ORDER BY revenue re-sorts the output anyway).
     var G = 0
     var gid_to_nation: List[Int] = []
     for k in range(max_nk + 1):
-        if nation_in_asia[k] != 0:
-            gid_of_nation[k] = Int64(G)
+        if nation_in_asia[unsafe_offset=k] != 0:
+            gid_of_nation[unsafe_offset=k] = Int64(G)
             gid_to_nation.append(k)
             G += 1
     if G <= 0:
-        nation_in_asia.free(); gid_of_nation.free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^)
         return 23
     # Fix D (int128 DENSE_GROUP overrun guard): the Q5 dense kernel
-    # (seg_dense_kernel_q5 / _q5_pred) accumulates into a per-lane InlineArray of
+    # (seg_dense_kernel_q5 / _q5_pred) accumulates into a per-lane Array of
     # SEG_MAX_METRICS*SEG_MAX_METRICS == 64 cells indexed acc[g*M+m]. Q5 has M==1,
     # so the bound is G <= 64. G == number of ASIA nations here (schema-bounded to
     # ~25 for TPC-H), but a non-standard `nation` table could exceed it, so fail
     # closed to CPU stock. (The pred-independent path above has the same G>64 guard,
     # which falls back to this per-constant path; the guard here is its backstop.)
     if G > 64:
-        nation_in_asia.free(); gid_of_nation.free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^)
         return 23
 
     # --- customer: cust_nation[c_custkey] ---
@@ -7715,12 +7714,13 @@ def _pin_finalize_q5(
         var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
         if ck > max_ck:
             max_ck = ck
-    var cust_nation = alloc[Int64](max_ck + 1)
+    var cust_nation_mem = alloc(Layout[Int64](count=max_ck + 1)).into_managed()
+    var cust_nation = cust_nation_mem.unsafe_ptr()
     for k in range(max_ck + 1):
-        cust_nation[k] = -1
+        cust_nation[unsafe_offset=k] = -1
     for i in range(cdn):
         var ck = Int(_dim_col_val(st, de_customer, c_cck, i))
-        cust_nation[ck] = _dim_col_val(st, de_customer, c_cnk, i)
+        cust_nation[unsafe_offset=ck] = _dim_col_val(st, de_customer, c_cnk, i)
 
     # --- supplier: supp_nation / supp_in_asia / supp_group (by s_suppkey) ---
     var c_sk = _dim_src_col(st, de_supplier, "s_suppkey")
@@ -7731,21 +7731,24 @@ def _pin_finalize_q5(
         var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
         if sk > max_sk:
             max_sk = sk
-    var supp_nation = alloc[Int64](max_sk + 1)
-    var supp_in_asia = alloc[Int64](max_sk + 1)
-    var supp_group = alloc[Int64](max_sk + 1)
+    var supp_nation_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_nation = supp_nation_mem.unsafe_ptr()
+    var supp_in_asia_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_in_asia = supp_in_asia_mem.unsafe_ptr()
+    var supp_group_mem = alloc(Layout[Int64](count=max_sk + 1)).into_managed()
+    var supp_group = supp_group_mem.unsafe_ptr()
     for k in range(max_sk + 1):
-        supp_nation[k] = -1
-        supp_in_asia[k] = 0
-        supp_group[k] = 0
+        supp_nation[unsafe_offset=k] = -1
+        supp_in_asia[unsafe_offset=k] = 0
+        supp_group[unsafe_offset=k] = 0
     for i in range(sdn):
         var sk = Int(_dim_col_val(st, de_supplier, c_sk, i))
         var sn = Int(_dim_col_val(st, de_supplier, c_snk, i))
-        supp_nation[sk] = Int64(sn)
+        supp_nation[unsafe_offset=sk] = Int64(sn)
         if sn >= 0 and sn <= max_nk:
-            supp_in_asia[sk] = nation_in_asia[sn]
-            var g = gid_of_nation[sn]
-            supp_group[sk] = g if g >= 0 else Int64(0)
+            supp_in_asia[unsafe_offset=sk] = nation_in_asia[unsafe_offset=sn]
+            var g = gid_of_nation[unsafe_offset=sn]
+            supp_group[unsafe_offset=sk] = g if g >= 0 else Int64(0)
 
     # --- orders: order_pass (o_orderdate range) + order_cust_nation ---
     var c_ook = _dim_src_col(st, de_orders, "o_orderkey")
@@ -7774,8 +7777,8 @@ def _pin_finalize_q5(
             elif p.cmp == CMP_LE:
                 o_hi = c.lo + 1; have_hi = True
     if not have_lo or not have_hi:
-        nation_in_asia.free(); gid_of_nation.free(); cust_nation.free()
-        supp_nation.free(); supp_in_asia.free(); supp_group.free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+        deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
         return 24
     var odn = st.dim_n_rows[de_orders]
     var max_ok = 0
@@ -7783,18 +7786,20 @@ def _pin_finalize_q5(
         var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
         if ok > max_ok:
             max_ok = ok
-    var order_pass = alloc[Int64](max_ok + 1)
-    var order_cust_nation = alloc[Int64](max_ok + 1)
+    var order_pass_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+    var order_pass = order_pass_mem.unsafe_ptr()
+    var order_cust_nation_mem = alloc(Layout[Int64](count=max_ok + 1)).into_managed()
+    var order_cust_nation = order_cust_nation_mem.unsafe_ptr()
     for k in range(max_ok + 1):
-        order_pass[k] = 0
-        order_cust_nation[k] = -1
+        order_pass[unsafe_offset=k] = 0
+        order_cust_nation[unsafe_offset=k] = -1
     for i in range(odn):
         var ok = Int(_dim_col_val(st, de_orders, c_ook, i))
         var od = _dim_col_val(st, de_orders, c_od, i)
-        order_pass[ok] = Int64(1) if (od >= o_lo and od < o_hi) else Int64(0)
+        order_pass[unsafe_offset=ok] = Int64(1) if (od >= o_lo and od < o_hi) else Int64(0)
         var ck = Int(_dim_col_val(st, de_orders, c_ock, i))
         if ck >= 0 and ck <= max_ck:
-            order_cust_nation[ok] = cust_nation[ck]
+            order_cust_nation[unsafe_offset=ok] = cust_nation[unsafe_offset=ck]
 
     # --- pack the 4 dim arrays + offsets (order_pass, order_cust_nation,
     #     supp_nation, supp_in_asia). ---
@@ -7803,29 +7808,32 @@ def _pin_finalize_q5(
     var len2 = max_sk + 1  # supp_nation
     var len3 = max_sk + 1  # supp_in_asia
     var total_dim = len0 + len1 + len2 + len3
-    var dims_host = alloc[Int64](total_dim)
+    var dims_host_mem = alloc(Layout[Int64](count=total_dim)).into_managed()
+    var dims_host = dims_host_mem.unsafe_ptr()
     var w = 0
     for i in range(len0):
-        dims_host[w] = order_pass[i]; w += 1
+        dims_host[unsafe_offset=w] = order_pass[unsafe_offset=i]; w += 1
     for i in range(len1):
-        dims_host[w] = order_cust_nation[i]; w += 1
+        dims_host[unsafe_offset=w] = order_cust_nation[unsafe_offset=i]; w += 1
     for i in range(len2):
-        dims_host[w] = supp_nation[i]; w += 1
+        dims_host[unsafe_offset=w] = supp_nation[unsafe_offset=i]; w += 1
     for i in range(len3):
-        dims_host[w] = supp_in_asia[i]; w += 1
+        dims_host[unsafe_offset=w] = supp_in_asia[unsafe_offset=i]; w += 1
     var n_dim_arrays = 4
-    var doff_host = alloc[Int64](n_dim_arrays + 1)
-    doff_host[0] = 0
-    doff_host[1] = Int64(len0)
-    doff_host[2] = Int64(len0 + len1)
-    doff_host[3] = Int64(len0 + len1 + len2)
-    doff_host[4] = Int64(total_dim)
+    var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+    var doff_host = doff_host_mem.unsafe_ptr()
+    doff_host[unsafe_offset=0] = 0
+    doff_host[unsafe_offset=1] = Int64(len0)
+    doff_host[unsafe_offset=2] = Int64(len0 + len1)
+    doff_host[unsafe_offset=3] = Int64(len0 + len1 + len2)
+    doff_host[unsafe_offset=4] = Int64(total_dim)
 
     # --- packed fact columns + the per-row gid column (supp_group[l_suppkey]) ---
     # slot layout: numeric fact slots [0..n_numeric), then gid slot.
     var gid_slot = n_numeric
     var n_slots = n_numeric + 1
-    var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+    var cols = cols_mem.unsafe_ptr()
     # Rank 3: parallelize the fact-column pack + gid gather (flag-gated).
     var par_on = _parallel_finalize_on()
     var pin_log = getenv("GPU_OP_PIN_LOG", "") != ""
@@ -7838,7 +7846,7 @@ def _pin_finalize_q5(
             )
         else:
             for i in range(n):
-                cols[slot * n + i] = _col_val(st, mj, i)
+                cols[unsafe_offset=slot * n + i] = _col_val(st, mj, i)
     if par_on:
         ref skc = st.cols[numeric_matcols[lsk_slot]]
         _q5_gid_gather_par(
@@ -7850,8 +7858,8 @@ def _pin_finalize_q5(
             var sk = Int(_col_val(st, numeric_matcols[lsk_slot], i))
             var gv = Int64(0)
             if sk >= 0 and sk <= max_sk:
-                gv = supp_group[sk]
-            cols[gid_slot * n + i] = gv
+                gv = supp_group[unsafe_offset=sk]
+            cols[unsafe_offset=gid_slot * n + i] = gv
     if pin_log:
         var dt = (perf_counter_ns() - t_pp0) // 1000
         print(
@@ -7880,10 +7888,10 @@ def _pin_finalize_q5(
             rev_ai = ai
             break
     if rev_ai < 0:
-        nation_in_asia.free(); gid_of_nation.free(); cust_nation.free()
-        supp_nation.free(); supp_in_asia.free(); supp_group.free()
-        order_pass.free(); order_cust_nation.free()
-        dims_host.free(); doff_host.free(); cols.free()
+        deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+        deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
+        deinit(order_pass_mem^); deinit(order_cust_nation_mem^)
+        deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
         return 25
     var plan = _resolve_program(d, d.aggregates[rev_ai], col_slot)
     var metric_ops = plan.ops.copy()
@@ -7913,8 +7921,9 @@ def _pin_finalize_q5(
     # DENSE_GROUP uses STORAGE row order; fact columns are column-pool eligible.
     # gid_slot (per-query derived supp-group) is >= n_numeric, so it is copied whole.
     var ctx = shared_device_context()
-    var seg_off_dummy = alloc[Int64](1)
-    seg_off_dummy[0] = 0
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
+    seg_off_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colpool_on():
@@ -7934,12 +7943,12 @@ def _pin_finalize_q5(
             ctx, cols, n_slots, n, seg_off_dummy, 0,
             dims_host, doff_host, n_dim_arrays,
         )
-    seg_off_dummy.free()
+    deinit(seg_off_dummy_mem^)
 
-    nation_in_asia.free(); gid_of_nation.free(); cust_nation.free()
-    supp_nation.free(); supp_in_asia.free(); supp_group.free()
-    order_pass.free(); order_cust_nation.free()
-    dims_host.free(); doff_host.free(); cols.free()
+    deinit(nation_in_asia_mem^); deinit(gid_of_nation_mem^); deinit(cust_nation_mem^)
+    deinit(supp_nation_mem^); deinit(supp_in_asia_mem^); deinit(supp_group_mem^)
+    deinit(order_pass_mem^); deinit(order_cust_nation_mem^)
+    deinit(dims_host_mem^); deinit(doff_host_mem^); deinit(cols_mem^)
 
     # --- construct + cache the GpuPinned, then assemble (emit only revenue!=0) ---
     var agg_kind: List[Int64] = [AGG_SUM]
@@ -7973,19 +7982,29 @@ def _pin_finalize_q5(
     gp.emit_agg = 0  # gate on revenue
     gp.emit_gt0 = False  # emit iff revenue != 0 (stock GROUP BY over passers)
     gp.kind = d.kind  # routes Q5 to the comptime-specialized dense kernel
+
+    ref dst = m[key]
+    if q5_pred_on:
+        # The predicate-independent path was enabled but declined (G > 64), so
+        # this result depends on the filter constants while `sig` leaves them out.
+        # Caching it would let a later query with other constants reuse it. Run
+        # uncached instead: every such query is cold, but correct.
+        _assemble(dst, gp)
+        for k in range(len(gp.pool_lease_keys)):
+            release_lease(gp.pool_lease_keys[k])
+        return 0
+
     var _fp5 = _gp_footprint_bytes(gp) if _colpool_on() else 0
     p2[sig] = gp^
     _pin2_track(sig, _fp5)
-
-    ref dst = m[key]
     _assemble(dst, p2[sig])
     return 0
 
 
 def _pin_finalize_generic_dims(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) raises -> Int:
-    ref d = handle.bitcast[GpuPlanDescriptor]()[]
+    ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
     ref m = _exec_ptr()[]
     var key = Int(handle)
     if key not in m:
@@ -8369,15 +8388,17 @@ def _pin_finalize_generic_dims(
     for ax in range(n_dim_arrays):
         total_dim += len(dim_arrays[ax])
         dim_offsets.append(Int64(total_dim))
-    var dims_host = alloc[Int64](total_dim if total_dim > 0 else 1)
-    var doff_host = alloc[Int64](n_dim_arrays + 1)
+    var dims_host_mem = alloc(Layout[Int64](count=total_dim if total_dim > 0 else 1)).into_managed()
+    var dims_host = dims_host_mem.unsafe_ptr()
+    var doff_host_mem = alloc(Layout[Int64](count=n_dim_arrays + 1)).into_managed()
+    var doff_host = doff_host_mem.unsafe_ptr()
     var w = 0
     for ax in range(n_dim_arrays):
         for i in range(len(dim_arrays[ax])):
-            dims_host[w] = dim_arrays[ax][i]
+            dims_host[unsafe_offset=w] = dim_arrays[ax][i]
             w += 1
     for ax in range(n_dim_arrays + 1):
-        doff_host[ax] = dim_offsets[ax]
+        doff_host[unsafe_offset=ax] = dim_offsets[ax]
 
     # Generalized Q14 (UNGROUPED) predicate-independent path: flag on + canonical
     # Q14 shape (single fact column, all-range, no dim filters, so dim_pass_de is
@@ -8397,7 +8418,8 @@ def _pin_finalize_generic_dims(
     # dim pass-flag arrays via OP_LOAD_DIM in the pass program (not the host col).
     var pass_slot = n_numeric
     var n_slots = n_numeric + 1
-    var pass_col = alloc[Int64](n if n > 0 else 1)
+    var pass_col_mem = alloc(Layout[Int64](count=n if n > 0 else 1)).into_managed()
+    var pass_col = pass_col_mem.unsafe_ptr()
     var f_slot: List[Int] = []
     var f_cmp: List[Int64] = []
     var f_k: List[Int64] = []
@@ -8421,7 +8443,7 @@ def _pin_finalize_generic_dims(
     if gen_pred_on:
         # No host pass bake: zero the slot (the in-kernel predicate gates rows).
         for i in range(n):
-            pass_col[i] = Int64(0)
+            pass_col[unsafe_offset=i] = Int64(0)
     else:
         # SKIP-MATERIALIZE strict guard (see _pin_finalize_generic): omitting a
         # fact filter column is only safe when the in-kernel predicate replaces the
@@ -8430,7 +8452,7 @@ def _pin_finalize_generic_dims(
         for fi in range(n_filters):
             var fs = f_slot[fi]
             if fs < len(omit_slot) and omit_slot[fs]:
-                pass_col.free(); dims_host.free(); doff_host.free()
+                deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
                 return 8
         if par_on:
             var f_base: List[Int] = []
@@ -8451,10 +8473,11 @@ def _pin_finalize_generic_dims(
                     if not _pred_pass(v, f_cmp[fi], f_k[fi]):
                         ok = False
                         break
-                pass_col[i] = Int64(1) if ok else Int64(0)
+                pass_col[unsafe_offset=i] = Int64(1) if ok else Int64(0)
 
     # --- pack the fact columns + pass column ---
-    var cols = alloc[Int64](n_slots * n if n_slots * n > 0 else 1)
+    var cols_mem = alloc(Layout[Int64](count=n_slots * n if n_slots * n > 0 else 1)).into_managed()
+    var cols = cols_mem.unsafe_ptr()
     for slot in range(n_numeric):
         # SKIP-MATERIALIZE: an omitted slot is sourced from the pool (D2D); its
         # st.cols[mj] is unfilled, so do not pack it (the host region is unread).
@@ -8465,12 +8488,12 @@ def _pin_finalize_generic_dims(
             _pack_col_par(cols, slot, n, st.cols[mj].addr(), st.cols[mj].elem_size)
         else:
             for i in range(n):
-                cols[slot * n + i] = _col_val(st, mj, i)
+                cols[unsafe_offset=slot * n + i] = _col_val(st, mj, i)
     if par_on:
         _pack_copy_par(cols, pass_slot, n, pass_col)
     else:
         for i in range(n):
-            cols[pass_slot * n + i] = pass_col[i]
+            cols[unsafe_offset=pass_slot * n + i] = pass_col[unsafe_offset=i]
     if pin_log:
         var dt = (perf_counter_ns() - t_pp0) // 1000
         print(
@@ -8528,7 +8551,7 @@ def _pin_finalize_generic_dims(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "" or fact_gk not in col_slot:
-            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 10
         var gk_slot = col_slot[fact_gk]
 
@@ -8574,8 +8597,9 @@ def _pin_finalize_generic_dims(
         # HASH_GROUP appends no ORDER BY, so rows are in STORAGE order and the fact
         # columns (incl. the integer fact group key l_orderkey, read in storage order)
         # are column-pool eligible. pass_slot is per-query derived, so it is copied whole.
-        var seg_off_dummy_h = alloc[Int64](1)
-        seg_off_dummy_h[0] = 0
+        var seg_off_dummy_h_mem = alloc(Layout[Int64](count=1)).into_managed()
+        var seg_off_dummy_h = seg_off_dummy_h_mem.unsafe_ptr()
+        seg_off_dummy_h[unsafe_offset=0] = 0
         var pool_lease_keys_h: List[String] = []
         var resident: SegResident
         if _colptr_eligible(d):
@@ -8598,8 +8622,8 @@ def _pin_finalize_generic_dims(
                 for li in range(len(st.colpool_omit_leases)):
                     release_lease(st.colpool_omit_leases[li])
                 st.colpool_omit_leases = []
-                seg_off_dummy_h.free()
-                cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+                deinit(seg_off_dummy_h_mem^)
+                deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
                 return 11
             for li in range(len(st.colpool_omit_leases)):
                 pool_lease_keys_h.append(st.colpool_omit_leases[li])
@@ -8626,8 +8650,8 @@ def _pin_finalize_generic_dims(
                 ctx, cols, n_slots, n, seg_off_dummy_h, 0,
                 dims_host, doff_host, n_dim_arrays,
             )
-        seg_off_dummy_h.free()
-        cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+        deinit(seg_off_dummy_h_mem^)
+        deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
 
         var agg_scale: List[Int64] = []
         var agg_m1: List[Int] = []
@@ -8695,7 +8719,7 @@ def _pin_finalize_generic_dims(
                 fact_gk = d.group_keys[gk].column
                 break
         if fact_gk == "" or fact_gk not in col_slot:
-            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 10
         var gk_slot = col_slot[fact_gk]
 
@@ -8713,9 +8737,10 @@ def _pin_finalize_generic_dims(
                     cur = v
             seg_off_l.append(Int64(n))
         var n_seg = len(seg_key_l)
-        var seg_off_h = alloc[Int64](n_seg + 1)
+        var seg_off_h_mem = alloc(Layout[Int64](count=n_seg + 1)).into_managed()
+        var seg_off_h = seg_off_h_mem.unsafe_ptr()
         for s in range(n_seg + 1):
-            seg_off_h[s] = seg_off_l[s]
+            seg_off_h[unsafe_offset=s] = seg_off_l[s]
 
         # Locate the single SUM metric (Q3 revenue) for the emit-rule test.
         var rev_ai = -1
@@ -8743,11 +8768,11 @@ def _pin_finalize_generic_dims(
                     iv.append(seg_key_l[s])  # the fact key == seg key
                 else:
                     var ai2 = gkey_dim_arr[gk]
-                    var off = Int(doff_host[ai2])
-                    var dlen = Int(doff_host[ai2 + 1]) - off
+                    var off = Int(doff_host[unsafe_offset=ai2])
+                    var dlen = Int(doff_host[unsafe_offset=ai2 + 1]) - off
                     var v = Int64(0)
                     if skey >= 0 and skey < dlen:
-                        v = dims_host[off + skey]
+                        v = dims_host[unsafe_offset=off + skey]
                     iv.append(v)
             gk_str_vals.append(sv^)
             gk_i64_vals.append(iv^)
@@ -8757,8 +8782,8 @@ def _pin_finalize_generic_dims(
             ctx, cols, n_slots, n, seg_off_h, n_seg,
             dims_host, doff_host, n_dim_arrays,
         )
-        seg_off_h.free()
-        cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+        deinit(seg_off_h_mem^)
+        deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
 
         # COUNT/SUM only here (no AVG), so neutral scale/m1.
         var agg_scale: List[Int64] = []
@@ -8803,8 +8828,9 @@ def _pin_finalize_generic_dims(
     # columns are column-pool eligible. pass_slot is per-query derived (copied
     # whole). (The SORT_SEGREDUCE branch above returned already; it is the only
     # ineligible strategy here and stays unchanged. It never pools.)
-    var seg_off_dummy = alloc[Int64](1)
-    seg_off_dummy[0] = 0
+    var seg_off_dummy_mem = alloc(Layout[Int64](count=1)).into_managed()
+    var seg_off_dummy = seg_off_dummy_mem.unsafe_ptr()
+    seg_off_dummy[unsafe_offset=0] = 0
     var pool_lease_keys: List[String] = []
     var resident: SegResident
     if _colptr_eligible(d):
@@ -8823,8 +8849,8 @@ def _pin_finalize_generic_dims(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.free()
-            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            deinit(seg_off_dummy_mem^)
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 11
         for li in range(len(st.colpool_omit_leases)):
             pool_lease_keys.append(st.colpool_omit_leases[li])
@@ -8849,8 +8875,8 @@ def _pin_finalize_generic_dims(
             for li in range(len(st.colpool_omit_leases)):
                 release_lease(st.colpool_omit_leases[li])
             st.colpool_omit_leases = []
-            seg_off_dummy.free()
-            cols.free(); pass_col.free(); dims_host.free(); doff_host.free()
+            deinit(seg_off_dummy_mem^)
+            deinit(cols_mem^); deinit(pass_col_mem^); deinit(dims_host_mem^); deinit(doff_host_mem^)
             return 11
         # Success: transfer the materialize-time omit leases to the per-signature
         # set (GpuPinned owns them); clear the exec-state copy (no double release).
@@ -8866,11 +8892,11 @@ def _pin_finalize_generic_dims(
             ctx, cols, n_slots, n, seg_off_dummy, 0,
             dims_host, doff_host, n_dim_arrays,
         )
-    seg_off_dummy.free()
-    cols.free()
-    pass_col.free()
-    dims_host.free()
-    doff_host.free()
+    deinit(seg_off_dummy_mem^)
+    deinit(cols_mem^)
+    deinit(pass_col_mem^)
+    deinit(dims_host_mem^)
+    deinit(doff_host_mem^)
 
     # UNGROUPED: 1 candidate, no group keys (Q14: 2 SUMs / COUNT, no AVG).
     var gk_is_str: List[Bool] = []
@@ -8935,12 +8961,12 @@ def _pin_finalize_generic_dims(
 
 @export("mojo_gpu_pin_finalize")
 def mojo_gpu_pin_finalize(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
     try:
-        ref d = handle.bitcast[GpuPlanDescriptor]()[]
+        ref d = handle.unsafe_bitcast[GpuPlanDescriptor]()[]
         ref m = _exec_ptr()[]
         var key = Int(handle)
         if key not in m:
@@ -9018,7 +9044,7 @@ def mojo_gpu_pin_finalize(
 # ---------------------------------------------------------------------------
 @export("mojo_gpu_result_rows")
 def mojo_gpu_result_rows(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin]
+    handle: Pointer[NoneType, MutUntrackedOrigin]
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 0
@@ -9034,11 +9060,11 @@ def mojo_gpu_result_rows(
 
 @export("mojo_gpu_result_i128")
 def mojo_gpu_result_i128(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     row: Int,
     col: Int,
-    out_lo: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_hi: UnsafePointer[Int64, MutUntrackedOrigin],
+    out_lo: Pointer[Int64, MutUntrackedOrigin],
+    out_hi: Pointer[Int64, MutUntrackedOrigin],
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -9060,7 +9086,7 @@ def mojo_gpu_result_i128(
 
 @export("mojo_gpu_result_i64")
 def mojo_gpu_result_i64(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
+    handle: Pointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Int64:
     # BIGINT/INTEGER/DATE cells are stored as a plain int64 in res_lo.
     if Int(handle) == 0:
@@ -9080,7 +9106,7 @@ def mojo_gpu_result_i64(
 
 @export("mojo_gpu_result_f64")
 def mojo_gpu_result_f64(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
+    handle: Pointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Float64:
     if Int(handle) == 0:
         return 0.0
@@ -9103,7 +9129,7 @@ def mojo_gpu_result_f64(
 # paths never populate res_valid), so those readbacks are byte-identical.
 @export("mojo_gpu_result_valid")
 def mojo_gpu_result_valid(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
+    handle: Pointer[NoneType, MutUntrackedOrigin], row: Int, col: Int
 ) abi("C") -> Int:
     if Int(handle) == 0:
         return 1
@@ -9125,10 +9151,10 @@ def mojo_gpu_result_valid(
 
 @export("mojo_gpu_result_str")
 def mojo_gpu_result_str(
-    handle: UnsafePointer[NoneType, MutUntrackedOrigin],
+    handle: Pointer[NoneType, MutUntrackedOrigin],
     row: Int,
     col: Int,
-    out_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
+    out_ptr: Pointer[UInt8, MutUntrackedOrigin],
     cap: Int,
 ) abi("C") -> Int:
     # Write the cell string's UTF-8 bytes into out_ptr (up to cap) and return the
@@ -9148,7 +9174,7 @@ def mojo_gpu_result_str(
         var bytes = s.as_bytes()
         var to_copy = nbytes if nbytes < cap else cap
         for k in range(to_copy):
-            out_ptr[k] = bytes[k]
+            out_ptr[unsafe_offset=k] = bytes[k]
         return nbytes
     except:
         return 0
@@ -9171,11 +9197,11 @@ def mojo_gpu_result_str(
 def _decode_segment_typed[
     T: DType
 ](
-    seg_bytes: UnsafePointer[UInt8, ImmUntrackedOrigin],
+    seg_bytes: Pointer[UInt8, ImmUntrackedOrigin],
     seg_nbytes: Int,
     n_rows: Int,
     codec: Int,
-    out_ptr: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    out_ptr: Pointer[Scalar[T], MutUntrackedOrigin],
 ) raises -> Int32:
     var ctx = shared_device_context()
     var seg_d = ctx.enqueue_create_buffer[DType.uint8](seg_nbytes)
@@ -9206,7 +9232,7 @@ def _decode_segment_typed[
     ctx.synchronize()
 
     # Copy decoded values back into the caller's host out-buffer.
-    var out_sub = DeviceBuffer(ctx, out_d.unsafe_ptr(), n_rows, owning=False)
+    var out_sub = out_d.create_sub_buffer[T](0, n_rows)
     ctx.enqueue_copy(out_ptr, out_sub)
     ctx.synchronize()
     return 0
@@ -9214,12 +9240,12 @@ def _decode_segment_typed[
 
 @export("mojo_gpu_decode_segment")
 def mojo_gpu_decode_segment(
-    seg_bytes: UnsafePointer[UInt8, ImmUntrackedOrigin],
+    seg_bytes: Pointer[UInt8, ImmUntrackedOrigin],
     seg_nbytes: Int,
     n_rows: Int,
     codec: Int,
     type_code: Int,
-    out_ptr: UnsafePointer[NoneType, MutUntrackedOrigin],
+    out_ptr: Pointer[NoneType, MutUntrackedOrigin],
 ) abi("C") -> Int32:
     if seg_nbytes <= 0 or n_rows <= 0:
         return 1
@@ -9229,12 +9255,12 @@ def mojo_gpu_decode_segment(
         if type_code == 0:
             return _decode_segment_typed[DType.int32](
                 seg_bytes, seg_nbytes, n_rows, codec,
-                out_ptr.bitcast[Scalar[DType.int32]](),
+                out_ptr.unsafe_bitcast[Scalar[DType.int32]](),
             )
         elif type_code == 1:
             return _decode_segment_typed[DType.int64](
                 seg_bytes, seg_nbytes, n_rows, codec,
-                out_ptr.bitcast[Scalar[DType.int64]](),
+                out_ptr.unsafe_bitcast[Scalar[DType.int64]](),
             )
         else:
             return 2

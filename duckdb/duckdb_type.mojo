@@ -153,7 +153,7 @@ struct DuckDBType(
         self = other
 
     def __hash__[H: Hasher](self, mut hasher: H):
-        hasher.update(self.value)
+        self.value.__hash__(hasher)
 
     @always_inline("nodebug")
     def __repr__(self) -> String:

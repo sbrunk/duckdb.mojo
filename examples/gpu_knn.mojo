@@ -12,8 +12,8 @@ Needs the `gpu` environment (it provides `max.gpu`):
 """
 
 from duckdb import *
-from std.gpu import block_idx, thread_idx, WARP_SIZE
-from std.gpu.primitives import warp
+from max.gpu import block_idx, thread_idx, WARP_SIZE
+from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext
 from std.math import sqrt
 from std.memory import unsafe_memcpy

@@ -72,7 +72,7 @@ from std.reflection import Reflected
 from std.collections import Optional, List, Dict
 from std.utils import Variant
 from std.memory import unsafe_memcpy
-from std.memory.alloc import unsafe_alloc
+from std.memory.alloc import unsafe_alloc, alloc, Layout
 from std.builtin.rebind import downcast
 from duckdb._libduckdb import *
 from duckdb.duckdb_type import *
@@ -156,7 +156,7 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
     elif T == String:
         var s = String(vp.unsafe_bitcast[String]()[])
         return libduckdb.duckdb_create_varchar_length(
-            s.as_c_string_slice().unsafe_ptr(), idx_t(s.byte_length())
+            s.as_c_string_span().ptr(), idx_t(s.byte_length())
         )
     elif T == Date:
         return libduckdb.duckdb_create_date(vp.unsafe_bitcast[Date]()[])
@@ -193,12 +193,13 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
     elif T == Bit:
         var bit_ref = vp.unsafe_bitcast[Bit]()[].copy()
         # Allocate temp buffer for duckdb_bit.data (padding byte plus bit bytes)
-        var buf = unsafe_alloc[UInt8](len(bit_ref._data))
+        var buf_mem = alloc(Layout[UInt8](count=len(bit_ref._data))).into_managed()
+        var buf = buf_mem.unsafe_ptr()
         for i in range(len(bit_ref._data)):
             buf[unsafe_offset=i] = bit_ref._data[i]
-        var raw = duckdb_bit(buf, idx_t(len(bit_ref._data)))
+        var raw = duckdb_bit(buf.unsafe_origin_cast[MutUntrackedOrigin](), idx_t(len(bit_ref._data)))
         var val = libduckdb.duckdb_create_bit(raw)
-        buf.unsafe_free()
+        deinit(buf_mem^)
         return val
     else:
         raise Error(
@@ -638,7 +639,7 @@ def mojo_logical_type[T: Copyable & Deinitable]() -> MojoType:
 
             comptime for idx in range(field_count):
                 # Extract individual field name at compile time (avoids
-                # materialising the whole InlineArray[StaticString, N])
+                # materialising the whole Array[StaticString, N])
                 comptime field_name = Reflected[T].field_names()[idx]
                 names.append(String(field_name))
                 comptime ft = field_type_arr[idx]
@@ -1075,11 +1076,12 @@ def _deserialize_union_row[
                 dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
             else:
                 # Non-Optional inactive member: zero-init
-                var zero = unsafe_alloc[Byte](size_of[FT]())
+                var zero_mem = alloc(Layout[Byte](count=size_of[FT]())).into_managed()
+                var zero = zero_mem.unsafe_ptr()
                 for i in range(size_of[FT]()):
                     zero[unsafe_offset=i] = 0
                 unsafe_memcpy(dest=dst.unsafe_bitcast[Byte](), src=zero, count=size_of[FT]())
-                zero.unsafe_free()
+                deinit(zero_mem^)
 
     var result = ptr.unsafe_take_pointee()
     ptr.unsafe_free()
@@ -1235,12 +1237,13 @@ __extension List(_VectorListConstructible):
                         "NULL in DuckDB list but target element type is not"
                         " Optional. Use List[Optional[...]] to handle NULLs."
                     )
-            var result = Self(capacity=length)
+            # Build the list over the downcast element type, then rebind the
+            # whole list: `List` itself is always movable, while `Self.T` is
+            # only known to be `AnyType` here.
+            var result = List[downcast[Self.T, _DBase]](capacity=length)
             for i in range(len(deserialized)):
-                result.append(
-                    rebind_var[Self.T](deserialized[i].value().copy())
-                )
-            return result^
+                result.append(deserialized[i].value().copy())
+            return rebind_var[Self](result^)
 
 
 # ──────────────────────────────────────────────────────────────────

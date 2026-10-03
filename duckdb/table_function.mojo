@@ -18,7 +18,7 @@ struct TableFunctionInfo:
     from duckdb import Chunk
     from duckdb.table_function import TableFunctionInfo
 
-    fn my_function(info: TableFunctionInfo, mut output: Chunk):
+    def my_function(info: TableFunctionInfo, mut output: Chunk):
         var bind_data = info.get_bind_data()
         var init_data = info.get_init_data()
         # ... produce rows into output chunk
@@ -85,7 +85,7 @@ struct TableFunctionInfo:
         var error_copy = error.copy()
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_function_set_error(
-            self._info, error_copy.as_c_string_slice().unsafe_ptr()
+            self._info, error_copy.as_c_string_span().ptr()
         )
 
 
@@ -101,7 +101,7 @@ struct TableBindInfo:
     from duckdb.table_function import TableBindInfo
     from duckdb.logical_type import LogicalType
 
-    fn my_bind(info: TableBindInfo):
+    def my_bind(info: TableBindInfo):
         info.add_result_column("id", LogicalType(DuckDBType.integer))
         info.add_result_column("name", LogicalType(DuckDBType.varchar))
     ```
@@ -128,7 +128,7 @@ struct TableBindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_bind_add_result_column(
             self._info,
-            name_copy.as_c_string_slice().unsafe_ptr(),
+            name_copy.as_c_string_span().ptr(),
             type._logical_type,
         )
 
@@ -169,7 +169,7 @@ struct TableBindInfo:
         return DuckDBValue(
             libduckdb.duckdb_bind_get_named_parameter(
                 self._info,
-                name_copy.as_c_string_slice().unsafe_ptr(),
+                name_copy.as_c_string_span().ptr(),
             )
         )
 
@@ -210,7 +210,7 @@ struct TableBindInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_bind_set_error(
             self._info,
-            error_copy.as_c_string_slice().unsafe_ptr(),
+            error_copy.as_c_string_span().ptr(),
         )
 
     def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
@@ -233,7 +233,7 @@ struct TableInitInfo:
     ```mojo
     from duckdb.table_function import TableInitInfo
 
-    fn my_init(info: TableInitInfo):
+    def my_init(info: TableInitInfo):
         # Optionally set init data and max threads
         info.set_max_threads(4)
     ```
@@ -328,7 +328,7 @@ struct TableInitInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_init_set_error(
             self._info,
-            error_copy.as_c_string_slice().unsafe_ptr(),
+            error_copy.as_c_string_span().ptr(),
         )
 
 
@@ -349,13 +349,13 @@ struct TableFunction(Movable):
     from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
     from duckdb.logical_type import LogicalType
 
-    fn my_bind(info: TableBindInfo):
+    def my_bind(info: TableBindInfo):
         info.add_result_column("i", LogicalType(DuckDBType.integer))
 
-    fn my_init(info: TableInitInfo):
+    def my_init(info: TableInitInfo):
         pass  # No per-thread state needed
 
-    fn my_function(info: TableFunctionInfo, mut output: Chunk):
+    def my_function(info: TableFunctionInfo, mut output: Chunk):
         # Produce up to VECTOR_SIZE rows
         var data = output.get_vector(0).get_data().bitcast[Int32]()
         for i in range(5):
@@ -405,7 +405,7 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_set_name(
             self._function,
-            name_copy.as_c_string_slice().unsafe_ptr(),
+            name_copy.as_c_string_span().ptr(),
         )
 
     def add_parameter(self, type: LogicalType):
@@ -430,7 +430,7 @@ struct TableFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_table_function_add_named_parameter(
             self._function,
-            name_copy.as_c_string_slice().unsafe_ptr(),
+            name_copy.as_c_string_span().ptr(),
             type._logical_type,
         )
 
@@ -548,7 +548,7 @@ struct TableFunction(Movable):
         from duckdb import Chunk
         from duckdb.table_function import TableFunctionInfo, TableFunction
 
-        fn my_function(info: TableFunctionInfo, mut output: Chunk):
+        def my_function(info: TableFunctionInfo, mut output: Chunk):
             var data = output.get_vector(0).get_data().bitcast[Int32]()
             for i in range(5):
                 data[i] = Int32(i)

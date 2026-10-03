@@ -8,14 +8,14 @@ preview = ["pixi-build"]
 
 [package]
 name = "duckdb.mojo"
-version = "0.0.1"
+version = "0.1.0"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "==1.0.0"
+mojo-compiler = "==1.1.0"
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0"
+mojo-compiler = "==1.1.0"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -39,10 +39,9 @@ generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
 
 # Demo extension.
-# The mojo build/run calls are wrapped in `bash -c` so $MOJO_TARGET_FLAGS (set
-# only in CI, see .github/workflows/test.yml) is applied as a codegen target
-# override on the affected runners. Locally it is unset, expands to nothing,
-# and the build targets the native CPU.
+# The mojo build/run calls are wrapped in `bash -c` so the optional
+# $MOJO_TARGET_FLAGS (see scripts/run_tests.sh) is applied. When it is unset,
+# it expands to nothing and the build targets the native CPU.
 build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
@@ -68,6 +67,9 @@ overrides-clean = "rm -rf extensions/mojo-kernel-overrides/build"
 # Needs the `gpu` environment (max-core): `pixi run -e gpu gpu-op-build`.
 gpu-op-build = "bash extensions/mojo-gpu-operator/build.sh"
 gpu-op-clean = "rm -rf extensions/mojo-gpu-operator/build"
+# Run the GPU tests in extensions/mojo-gpu-operator/bench (needs a GPU). Pass a
+# name to run a subset, e.g. `pixi run -e gpu gpu-op-test q6_shuttle`.
+gpu-op-test = { cmd = "bash extensions/mojo-gpu-operator/bench/run_tests.sh", depends-on = ["gpu-op-build"] }
 
 # Benchmarks. See benchmark/README.md for an overview.
 # One-time: build DuckDB's benchmark_runner (NixOS: see benchmark/drivers/build_runner.sh).
@@ -85,17 +87,17 @@ bench-sql = "python3 benchmark/drivers/bench_runner.py"
 # if those are not available.
 bench-knn = "mojo run -I . -I benchmark/mojo benchmark/mojo/knn_compare.mojo"
 
-# Compile-check (no run) the benchmarks so they can't silently rot when the
-# stdlib or duckdb API drifts. The op-replacement benchmark needs the `full`
-# environment and is excluded here (see scripts/compile_check.sh).
-compile-benchmarks = { cmd = "bash scripts/compile_check.sh benchmark" }
+# Compile-check (no run) the benchmarks and examples so they can't silently rot
+# when the stdlib or duckdb API drifts. Files that need the `full` or `gpu`
+# environment are excluded (see scripts/compile_check.sh).
+compile-check = { cmd = "bash scripts/compile_check.sh benchmark examples" }
 
 # for local development
 [dependencies]
 libduckdb-devel = "=1.5.6"
 duckdb-cli = "=1.5.6"
 pyyaml = "*"
-mojo = "==1.0.0"
+mojo = "==1.1.0"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
@@ -113,7 +115,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "duckdb-from-source" }
 duckdb-operator-replacement = { path = "extensions/operator-replacement" }
-mojo = "==1.0.0"
+mojo = "==1.1.0"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
@@ -129,7 +131,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 # the GPU kernels import. It pins mojo-compiler exactly, so its version has to move in
 # lockstep with the `mojo` pin above.
 [feature.gpu.dependencies]
-max-core = "==26.5.0"
+max-core = "==26.6.0"
 
 [feature.gpu.activation.env]
 MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"

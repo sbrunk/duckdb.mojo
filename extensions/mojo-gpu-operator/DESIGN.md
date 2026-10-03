@@ -140,8 +140,8 @@ arguments into a small postfix integer program that `expr_vm` runs
 > [src/segreduce.mojo](src/segreduce.mojo)). It is dispatched by `desc.kind` from
 > the single warm/cold `_assemble` call site. cuDF needs a runtime `nvrtc` JIT
 > (`AST_JIT`) for this; Mojo does it at compile time, portable to NVIDIA, Apple
-> and AMD with no runtime compiler. Results are bit-identical to the interpreter
-> (asserted in `bench/expr_comptime_probe.mojo`). Measured at the kernel level:
+> and AMD with no runtime compiler. Results are bit-identical to the interpreter.
+> Measured at the kernel level:
 > 4.7× (Q1) / 1.8× (Q6) on Apple M3 Max and 17.9× (Q1) / 5.5× (Q6) on RTX 4090.
 > The wide SIMT GPU pays more for the interpreter's branch divergence and its
 > per-op reads of the program from global memory. Any unrecognized shape runs

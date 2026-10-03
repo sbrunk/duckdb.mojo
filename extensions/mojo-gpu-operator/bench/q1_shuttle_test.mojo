@@ -57,7 +57,7 @@ from raw_plan_tags import (
     STRAT_DENSE_GROUP,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true
 from std.math import abs
@@ -211,19 +211,19 @@ def build_q1_tape(mut b: TapeBuilder, ship_cutoff: Int):
 # Build a synthetic DuckDB string_t (16 bytes) for a short ASCII string into the
 # 16-byte slot at `slot` (already pointing at row i). Short strings (<=12 bytes,
 # always the case here since they are single chars) are inlined.
-def write_string_t(slot: UnsafePointer[UInt8, MutAnyOrigin], s: String):
+def write_string_t(slot: Pointer[UInt8, MutUntrackedOrigin], s: String):
     var n = s.byte_length()
     # length (little-endian uint32)
-    slot[0] = UInt8(n & 0xFF)
-    slot[1] = UInt8((n >> 8) & 0xFF)
-    slot[2] = UInt8((n >> 16) & 0xFF)
-    slot[3] = UInt8((n >> 24) & 0xFF)
+    slot[unsafe_offset=0] = UInt8(n & 0xFF)
+    slot[unsafe_offset=1] = UInt8((n >> 8) & 0xFF)
+    slot[unsafe_offset=2] = UInt8((n >> 16) & 0xFF)
+    slot[unsafe_offset=3] = UInt8((n >> 24) & 0xFF)
     # zero the 12 inline bytes, then copy (n <= 12 here).
     for k in range(12):
-        slot[4 + k] = 0
+        slot[unsafe_offset=4 + k] = 0
     var bytes = s.as_bytes()
     for k in range(n):
-        slot[4 + k] = bytes[k]
+        slot[unsafe_offset=4 + k] = bytes[k]
 
 
 def main() raises:
@@ -246,25 +246,25 @@ def main() raises:
     ]
 
     # ---- synthetic lineitem-like columns ----
-    var qty = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var disc = alloc[Int64](N)
-    var tax = alloc[Int64](N)
-    var ship = alloc[Int32](N)
+    var qty = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var disc = unsafe_alloc[Int64](N)
+    var tax = unsafe_alloc[Int64](N)
+    var ship = unsafe_alloc[Int32](N)
     # group keys as DuckDB string_t arrays (16 bytes each).
-    var rf = alloc[UInt8](N * 16)
-    var ls = alloc[UInt8](N * 16)
-    var grp = alloc[Int32](N)  # which (rf,ls) tuple index per row
+    var rf = unsafe_alloc[UInt8](N * 16)
+    var ls = unsafe_alloc[UInt8](N * 16)
+    var grp = unsafe_alloc[Int32](N)  # which (rf,ls) tuple index per row
     for i in range(N):
         var g = (i * 2654435761) % NG
-        grp[i] = Int32(g)
-        write_string_t(rf + i * 16, rf_tab[g])
-        write_string_t(ls + i * 16, ls_tab[g])
-        qty[i] = Int64(1 + (i * 22695477) % 5000)  # 1..5000 (scale2)
-        ext[i] = Int64(100 + (i * 16807) % 9_999_900)  # up to ~1e7 (scale2)
-        disc[i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
-        tax[i] = Int64((i * 69069) % 9)  # 0..8 (scale2)
-        ship[i] = Int32(7000 + (i * 1103515245 + 12345) % 3000)  # 7000..9999
+        grp[unsafe_offset=i] = Int32(g)
+        write_string_t(rf.unsafe_offset(i * 16), rf_tab[g])
+        write_string_t(ls.unsafe_offset(i * 16), ls_tab[g])
+        qty[unsafe_offset=i] = Int64(1 + (i * 22695477) % 5000)  # 1..5000 (scale2)
+        ext[unsafe_offset=i] = Int64(100 + (i * 16807) % 9_999_900)  # up to ~1e7 (scale2)
+        disc[unsafe_offset=i] = Int64((i * 48271) % 11)  # 0..10 (scale2)
+        tax[unsafe_offset=i] = Int64((i * 69069) % 9)  # 0..8 (scale2)
+        ship[unsafe_offset=i] = Int32(7000 + (i * 1103515245 + 12345) % 3000)  # 7000..9999
 
     # ---- CPU int128/double reference, per distinct sorted (rf,ls) tuple ----
     # Build sorted distinct tuple list to define the expected dense gid order.
@@ -294,9 +294,9 @@ def main() raises:
                 ord[a] = ord[b]
                 ord[b] = t
     # tuple-distinct-idx -> dense gid (sorted rank)
-    var didx_gid = alloc[Int32](ng_distinct)
+    var didx_gid = unsafe_alloc[Int32](ng_distinct)
     for g in range(ng_distinct):
-        didx_gid[ord[g]] = Int32(g)
+        didx_gid[unsafe_offset=ord[g]] = Int32(g)
     # map original tuple index g(0..NG) -> distinct idx
     def distinct_idx_of(g: Int, seen: List[String], rf_tab: List[String], ls_tab: List[String]) raises -> Int:
         var tk = rf_tab[g] + String("\x01") + ls_tab[g]
@@ -305,51 +305,51 @@ def main() raises:
                 return j
         raise Error("tuple not found")
 
-    var ref_cnt = alloc[Int64](ng_distinct)
-    var ref_sqty = alloc[Int128](ng_distinct)
-    var ref_sext = alloc[Int128](ng_distinct)
-    var ref_sdp = alloc[Int128](ng_distinct)
-    var ref_sch = alloc[Int128](ng_distinct)
-    var ref_sdisc = alloc[Int128](ng_distinct)
+    var ref_cnt = unsafe_alloc[Int64](ng_distinct)
+    var ref_sqty = unsafe_alloc[Int128](ng_distinct)
+    var ref_sext = unsafe_alloc[Int128](ng_distinct)
+    var ref_sdp = unsafe_alloc[Int128](ng_distinct)
+    var ref_sch = unsafe_alloc[Int128](ng_distinct)
+    var ref_sdisc = unsafe_alloc[Int128](ng_distinct)
     for g in range(ng_distinct):
-        ref_cnt[g] = 0
-        ref_sqty[g] = Int128(0)
-        ref_sext[g] = Int128(0)
-        ref_sdp[g] = Int128(0)
-        ref_sch[g] = Int128(0)
-        ref_sdisc[g] = Int128(0)
+        ref_cnt[unsafe_offset=g] = 0
+        ref_sqty[unsafe_offset=g] = Int128(0)
+        ref_sext[unsafe_offset=g] = Int128(0)
+        ref_sdp[unsafe_offset=g] = Int128(0)
+        ref_sch[unsafe_offset=g] = Int128(0)
+        ref_sdisc[unsafe_offset=g] = Int128(0)
     for i in range(N):
-        if ship[i] <= Int32(ship_cutoff):
-            var didx = distinct_idx_of(Int(grp[i]), seen, rf_tab, ls_tab)
-            var gid = Int(didx_gid[didx])
-            var e = Int128(ext[i])
-            var d = Int128(disc[i])
-            var t = Int128(tax[i])
+        if ship[unsafe_offset=i] <= Int32(ship_cutoff):
+            var didx = distinct_idx_of(Int(grp[unsafe_offset=i]), seen, rf_tab, ls_tab)
+            var gid = Int(didx_gid[unsafe_offset=didx])
+            var e = Int128(ext[unsafe_offset=i])
+            var d = Int128(disc[unsafe_offset=i])
+            var t = Int128(tax[unsafe_offset=i])
             var ed = e * (Int128(100) - d)  # scale4
             var charge = ed * (Int128(100) + t)  # scale6
-            ref_cnt[gid] += 1
-            ref_sqty[gid] += Int128(qty[i])
-            ref_sext[gid] += e
-            ref_sdisc[gid] += d
-            ref_sdp[gid] += ed
-            ref_sch[gid] += charge
+            ref_cnt[unsafe_offset=gid] += 1
+            ref_sqty[unsafe_offset=gid] += Int128(qty[unsafe_offset=i])
+            ref_sext[unsafe_offset=gid] += e
+            ref_sdisc[unsafe_offset=gid] += d
+            ref_sdp[unsafe_offset=gid] += ed
+            ref_sch[unsafe_offset=gid] += charge
 
     # ---- build the Q1 RawPlan tape ----
     var b = TapeBuilder()
     build_q1_tape(b, ship_cutoff)
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
 
     # ---- drive the shuttle ----
     var handle_int = mojo_gpu_build_descriptor(tptr, tlen, bptr, blen)
     assert_true(handle_int != 0, "build_descriptor returned 0 (rejected)")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](
+    var h = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=handle_int
     )
 
@@ -365,12 +365,12 @@ def main() raises:
     assert_equal(count, 1, "materialize_count != 1")
 
     var cap = 1024
-    var sql_buf = alloc[UInt8](cap)
+    var sql_buf = unsafe_alloc[UInt8](cap)
     var sql_len = mojo_gpu_desc_materialize_sql(h, 0, sql_buf, cap)
     assert_true(sql_len > 0, "materialize_sql returned empty")
     var sql = String("")
     for i in range(sql_len):
-        sql += chr(Int(sql_buf[i]))
+        sql += chr(Int(sql_buf[unsafe_offset=i]))
     print("materialize SQL:", sql)
 
     # Expected order: group keys first (l_returnflag, l_linestatus), then fact
@@ -402,15 +402,15 @@ def main() raises:
         var rc: Int
         if name == "l_returnflag":
             rc = mojo_gpu_feed_column(
-                h, 0, j, rf.bitcast[NoneType](), N, TYPE_VARCHAR
+                h, 0, j, rf.unsafe_bitcast[NoneType](), N, TYPE_VARCHAR
             )
         elif name == "l_linestatus":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ls.bitcast[NoneType](), N, TYPE_VARCHAR
+                h, 0, j, ls.unsafe_bitcast[NoneType](), N, TYPE_VARCHAR
             )
         elif name == "l_shipdate":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ship.bitcast[NoneType](), N, TYPE_DATE
+                h, 0, j, ship.unsafe_bitcast[NoneType](), N, TYPE_DATE
             )
         elif name == "l_quantity":
             # Feed the real decimal scale (2), as the C++ extension does via
@@ -419,19 +419,19 @@ def main() raises:
             # scale 2 for plain AVG. That hardcoded value was a bug. AVG now uses
             # the fed scale, so the test must feed the real scale like production.)
             rc = mojo_gpu_feed_column(
-                h, 0, j, qty.bitcast[NoneType](), N, TYPE_DECIMAL, 2
+                h, 0, j, qty.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_extendedprice":
             rc = mojo_gpu_feed_column(
-                h, 0, j, ext.bitcast[NoneType](), N, TYPE_DECIMAL, 2
+                h, 0, j, ext.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_discount":
             rc = mojo_gpu_feed_column(
-                h, 0, j, disc.bitcast[NoneType](), N, TYPE_DECIMAL, 2
+                h, 0, j, disc.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         elif name == "l_tax":
             rc = mojo_gpu_feed_column(
-                h, 0, j, tax.bitcast[NoneType](), N, TYPE_DECIMAL, 2
+                h, 0, j, tax.unsafe_bitcast[NoneType](), N, TYPE_DECIMAL, 2
             )
         else:
             raise Error("unexpected column: " + name)
@@ -444,31 +444,31 @@ def main() raises:
     assert_equal(rows, ng_distinct, "result_rows != n_groups")
 
     # ---- verify each group x metric ----
-    var lo = alloc[Int64](1)
-    var hi = alloc[Int64](1)
-    var sbuf = alloc[UInt8](64)
+    var lo = unsafe_alloc[Int64](1)
+    var hi = unsafe_alloc[Int64](1)
+    var sbuf = unsafe_alloc[UInt8](64)
 
     def read_i128(
-        h: UnsafePointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutUntrackedOrigin],
         row: Int,
         col: Int,
-        lo: UnsafePointer[Int64, MutAnyOrigin],
-        hi: UnsafePointer[Int64, MutAnyOrigin],
+        lo: Pointer[Int64, MutUntrackedOrigin],
+        hi: Pointer[Int64, MutUntrackedOrigin],
     ) raises -> Int128:
         var rc = mojo_gpu_result_i128(h, row, col, lo, hi)
         assert_equal(rc, 0, "result_i128 rc")
-        return (Int128(hi[0]) << 64) + Int128(UInt64(lo[0]))
+        return (Int128(hi[unsafe_offset=0]) << 64) + Int128(UInt64(lo[unsafe_offset=0]))
 
     def read_str(
-        h: UnsafePointer[NoneType, MutAnyOrigin],
+        h: Pointer[NoneType, MutUntrackedOrigin],
         row: Int,
         col: Int,
-        sbuf: UnsafePointer[UInt8, MutAnyOrigin],
+        sbuf: Pointer[UInt8, MutUntrackedOrigin],
     ) raises -> String:
         var n = mojo_gpu_result_str(h, row, col, sbuf, 64)
         var s = String("")
         for k in range(n):
-            s += chr(Int(sbuf[k]))
+            s += chr(Int(sbuf[unsafe_offset=k]))
         return s
 
     for g in range(ng_distinct):
@@ -485,24 +485,24 @@ def main() raises:
         var sum_ext = read_i128(h, g, 3, lo, hi)
         var sum_dp = read_i128(h, g, 4, lo, hi)
         var sum_ch = read_i128(h, g, 5, lo, hi)
-        assert_equal(sum_qty, ref_sqty[g], "sum_qty mismatch row " + String(g))
-        assert_equal(sum_ext, ref_sext[g], "sum_ext mismatch row " + String(g))
-        assert_equal(sum_dp, ref_sdp[g], "sum_disc_price mismatch row " + String(g))
-        assert_equal(sum_ch, ref_sch[g], "sum_charge mismatch row " + String(g))
+        assert_equal(sum_qty, ref_sqty[unsafe_offset=g], "sum_qty mismatch row " + String(g))
+        assert_equal(sum_ext, ref_sext[unsafe_offset=g], "sum_ext mismatch row " + String(g))
+        assert_equal(sum_dp, ref_sdp[unsafe_offset=g], "sum_disc_price mismatch row " + String(g))
+        assert_equal(sum_ch, ref_sch[unsafe_offset=g], "sum_charge mismatch row " + String(g))
 
         var cnt = mojo_gpu_result_i64(h, g, 9)
-        assert_equal(cnt, ref_cnt[g], "count mismatch row " + String(g))
+        assert_equal(cnt, ref_cnt[unsafe_offset=g], "count mismatch row " + String(g))
 
-        var dcnt = Float64(ref_cnt[g])
+        var dcnt = Float64(ref_cnt[unsafe_offset=g])
         var exp_aqty = (
-            Float64(ref_sqty[g].cast[DType.int64]()) / 100.0 / dcnt
-        ) if ref_cnt[g] != 0 else 0.0
+            Float64(ref_sqty[unsafe_offset=g].cast[DType.int64]()) / 100.0 / dcnt
+        ) if ref_cnt[unsafe_offset=g] != 0 else 0.0
         var exp_aprice = (
-            Float64(ref_sext[g].cast[DType.int64]()) / 100.0 / dcnt
-        ) if ref_cnt[g] != 0 else 0.0
+            Float64(ref_sext[unsafe_offset=g].cast[DType.int64]()) / 100.0 / dcnt
+        ) if ref_cnt[unsafe_offset=g] != 0 else 0.0
         var exp_adisc = (
-            Float64(ref_sdisc[g].cast[DType.int64]()) / 100.0 / dcnt
-        ) if ref_cnt[g] != 0 else 0.0
+            Float64(ref_sdisc[unsafe_offset=g].cast[DType.int64]()) / 100.0 / dcnt
+        ) if ref_cnt[unsafe_offset=g] != 0 else 0.0
         var got_aqty = mojo_gpu_result_f64(h, g, 6)
         var got_aprice = mojo_gpu_result_f64(h, g, 7)
         var got_adisc = mojo_gpu_result_f64(h, g, 8)

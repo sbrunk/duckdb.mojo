@@ -20,7 +20,7 @@ Comparing the per-query latency of the two passes gives scalar vs fused.
 from std.sys import has_accelerator
 from std.os import getenv
 from std.math import sqrt, sin, cos
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.time import perf_counter_ns
 
 from gpu_kernels import (
@@ -47,7 +47,7 @@ def _center_val(c: Int, i: Int) -> Float32:
     )
 
 
-def build_embeddings(emb: UnsafePointer[Float32, MutAnyOrigin], N: Int, K: Int):
+def build_embeddings(emb: Pointer[Float32, MutUntrackedOrigin], N: Int, K: Int):
     for row in range(N):
         var c = row % NCLUST
         var base = row * K
@@ -55,29 +55,29 @@ def build_embeddings(emb: UnsafePointer[Float32, MutAnyOrigin], N: Int, K: Int):
         var jit = Float32(0.10) + Float32(row % 4096) * (Float32(0.30) / 4096.0)
         for i in range(K):
             var v = _center_val(c, i) + jit * _hash01(row, i)
-            emb[base + i] = v
+            emb[unsafe_offset=base + i] = v
             nrm += v * v
         nrm = sqrt(nrm)
         if nrm == 0:
             nrm = 1
         var inv = Float32(1) / nrm
         for i in range(K):
-            emb[base + i] = emb[base + i] * inv
+            emb[unsafe_offset=base + i] = emb[unsafe_offset=base + i] * inv
 
 
-def build_query(q: UnsafePointer[Float32, MutAnyOrigin], m: Int, K: Int):
+def build_query(q: Pointer[Float32, MutUntrackedOrigin], m: Int, K: Int):
     var c = m % NCLUST
     var nrm = Float32(0)
     for i in range(K):
         var v = _center_val(c, i) + 0.05 * _hash01(m * 131 + 7, i)
-        q[i] = v
+        q[unsafe_offset=i] = v
         nrm += v * v
     nrm = sqrt(nrm)
     if nrm == 0:
         nrm = 1
     var inv = Float32(1) / nrm
     for i in range(K):
-        q[i] = q[i] * inv
+        q[unsafe_offset=i] = q[unsafe_offset=i] * inv
 
 
 @fieldwise_init
@@ -87,29 +87,29 @@ struct RecallResult(Copyable, Movable):
 
 
 def recall_one(
-    ref_ids: UnsafePointer[Int64, MutAnyOrigin],
-    ref_dists: UnsafePointer[Float32, MutAnyOrigin],
-    got_ids: UnsafePointer[Int64, MutAnyOrigin],
-    got_dists: UnsafePointer[Float32, MutAnyOrigin],
+    ref_ids: Pointer[Int64, MutUntrackedOrigin],
+    ref_dists: Pointer[Float32, MutUntrackedOrigin],
+    got_ids: Pointer[Int64, MutUntrackedOrigin],
+    got_dists: Pointer[Float32, MutUntrackedOrigin],
     k: Int,
 ) -> RecallResult:
     var got_worst = Float32(0)
     for j in range(k):
-        if got_dists[j] > got_worst:
-            got_worst = got_dists[j]
+        if got_dists[unsafe_offset=j] > got_worst:
+            got_worst = got_dists[unsafe_offset=j]
     var overlap = 0
     var genuine_miss = 0
     for a in range(k):
-        var idr = ref_ids[a]
+        var idr = ref_ids[unsafe_offset=a]
         var found = False
         for b in range(k):
-            if got_ids[b] == idr:
+            if got_ids[unsafe_offset=b] == idr:
                 found = True
                 break
         if found:
             overlap += 1
         else:
-            var d = ref_dists[a]
+            var d = ref_dists[unsafe_offset=a]
             if abs(d - got_worst) > TIE_EPS:
                 genuine_miss += 1
     return RecallResult(overlap, genuine_miss)
@@ -131,41 +131,41 @@ def run_case(N: Int, K: Int, M: Int) raises:
         "APPLE-FUSED-MMA" if on else "SCALAR",
     )
 
-    var emb = alloc[Float32](N * K)
+    var emb = unsafe_alloc[Float32](N * K)
     build_embeddings(emb, N, K)
-    var emb_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+    var emb_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(emb)
     )
 
     var h_i = mojo_gpu_pin_f16(emb_imm, N, K)
     if h_i == 0:
         raise Error("mojo_gpu_pin_f16 failed")
-    var h = UnsafePointer[NoneType, MutAnyOrigin](unsafe_from_address=h_i)
+    var h = Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=h_i)
 
     # Query set.
-    var qbuf = alloc[Float32](M * K)
+    var qbuf = unsafe_alloc[Float32](M * K)
     for m in range(M):
-        build_query(qbuf + m * K, m, K)
-    var qbuf_imm = UnsafePointer[Float32, ImmutAnyOrigin](
+        build_query(qbuf.unsafe_offset(m * K), m, K)
+    var qbuf_imm = Pointer[Float32, ImmUntrackedOrigin](
         unsafe_from_address=Int(qbuf)
     )
 
     # --- ground truth: scalar single-query top-k for every query ---
-    var ref_ids = alloc[Int64](M * TOPK)
-    var ref_dists = alloc[Float32](M * TOPK)
+    var ref_ids = unsafe_alloc[Int64](M * TOPK)
+    var ref_dists = unsafe_alloc[Float32](M * TOPK)
     for m in range(M):
-        var q = UnsafePointer[Float32, ImmutAnyOrigin](
+        var q = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qbuf) + m * K * 4
         )
         var rc = mojo_gpu_pin_query_topk_f16(
-            h, q, TOPK, ref_ids + m * TOPK, ref_dists + m * TOPK
+            h, q, TOPK, ref_ids.unsafe_offset(m * TOPK), ref_dists.unsafe_offset(m * TOPK)
         )
         if rc != 0:
             raise Error(String("scalar single rc=") + String(Int(rc)))
 
     # --- system under test: batched path (scalar or Apple-fused per flag) ---
-    var got_ids = alloc[Int64](M * TOPK)
-    var got_dists = alloc[Float32](M * TOPK)
+    var got_ids = unsafe_alloc[Int64](M * TOPK)
+    var got_dists = unsafe_alloc[Float32](M * TOPK)
     var rcb = mojo_gpu_pin_query_topk_batch_f16(
         h, qbuf_imm, M, TOPK, got_ids, got_dists
     )
@@ -176,10 +176,10 @@ def run_case(N: Int, K: Int, M: Int) raises:
     var total_miss = 0
     for m in range(M):
         var r = recall_one(
-            ref_ids + m * TOPK,
-            ref_dists + m * TOPK,
-            got_ids + m * TOPK,
-            got_dists + m * TOPK,
+            ref_ids.unsafe_offset(m * TOPK),
+            ref_dists.unsafe_offset(m * TOPK),
+            got_ids.unsafe_offset(m * TOPK),
+            got_dists.unsafe_offset(m * TOPK),
             TOPK,
         )
         total_overlap += r.overlap
@@ -222,12 +222,12 @@ def run_case(N: Int, K: Int, M: Int) raises:
     )
 
     mojo_gpu_pin_free_f16(h)
-    emb.free()
-    qbuf.free()
-    ref_ids.free()
-    ref_dists.free()
-    got_ids.free()
-    got_dists.free()
+    emb.unsafe_free()
+    qbuf.unsafe_free()
+    ref_ids.unsafe_free()
+    ref_dists.unsafe_free()
+    got_ids.unsafe_free()
+    got_dists.unsafe_free()
 
 
 def main() raises:

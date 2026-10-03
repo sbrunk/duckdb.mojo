@@ -4,9 +4,9 @@ from std.testing.suite import TestSuite
 
 
 def test_range() raises:
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT unnest(range(10))")
-    chunk = result.fetch_chunk()
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT unnest(range(10))")
+    var chunk = result.fetch_chunk()
     for i in range(10):
         assert_equal(chunk.get[Int64](col=0, row=i), Int64(i))
 
@@ -16,8 +16,8 @@ def test_range() raises:
 
 
 def test_materialized_result() raises:
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT unnest(range(10))").fetchall()
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT unnest(range(10))").fetchall()
     for i in range(10):
         assert_equal(result.get[Int64](col=0, row=i), Int64(i))
 

@@ -133,42 +133,41 @@ comptime EXPR_STACK_MAX = 16
 #
 # AddressSpace.GLOBAL is required: a pointer reconstructed from a raw integer with
 # the default GENERIC address space reads 0 on Apple Metal (separate address
-# spaces). GLOBAL works on both Apple M3 + NVIDIA (verified by bench/colptr_probe).
+# spaces). GLOBAL works on both Apple M3 + NVIDIA.
 # The value read is identical to the packed layout, so results are bit-exact.
 # ---------------------------------------------------------------------------
 @always_inline
 def _col_at[
     USE_COLPTR: Bool
 ](
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     slot: Int,
     row: Int,
 ) -> Int64:
-    @parameter
-    if USE_COLPTR:
-        var addr = Int(cols[slot])
-        var p = UnsafePointer[
+    comptime if USE_COLPTR:
+        var addr = Int(cols[unsafe_offset=slot])
+        var p = Pointer[
             Scalar[DType.int64],
             MutUntrackedOrigin,
             address_space = AddressSpace.GLOBAL,
         ](unsafe_from_address=addr)
-        return p[row]
+        return p[unsafe_offset=row]
     else:
-        return cols[slot * n_rows + row]
+        return cols[unsafe_offset=slot * n_rows + row]
 
 
 @always_inline
 def eval_program[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    prog: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dims: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Int64:
     """Evaluate one postfix program for a single row, returning its int64 value.
 
@@ -187,20 +186,20 @@ def eval_program[
     Returns:
         The per-row int64 metric value (at the metric's decimal scale).
     """
-    var stack = InlineArray[Int64, EXPR_STACK_MAX](fill=0)
+    var stack = Array[Int64, EXPR_STACK_MAX](fill=0)
     var sp = 0  # next free slot (stack depth)
     var k = 0
     while k < prog_len:
-        var op = prog[3 * k + 0]
-        var a = prog[3 * k + 1]
-        var b = prog[3 * k + 2]
+        var op = prog[unsafe_offset=3 * k + 0]
+        var a = prog[unsafe_offset=3 * k + 1]
+        var b = prog[unsafe_offset=3 * k + 2]
         if op == OP_LOAD_COL:
             stack[sp] = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
             sp += 1
         elif op == OP_LOAD_DIM:
             # FK gather: key = cols[b][row]; push dims[dim_offsets[a] + key].
             var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
-            stack[sp] = dims[Int(dim_offsets[Int(a)]) + key]
+            stack[sp] = dims[unsafe_offset=Int(dim_offsets[unsafe_offset=Int(a)]) + key]
             sp += 1
         elif op == OP_PUSH_CONST:
             stack[sp] = a
@@ -365,15 +364,15 @@ def _vm_cos_f64(x: Float64) -> Float64:
 def eval_program_f64[
     USE_COLPTR: Bool = False
 ](
-    prog: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    prog: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     prog_len: Int,
-    cols: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cols: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows: Int,
     row: Int,
-    col_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
-    const_div: UnsafePointer[Scalar[DType.float64], MutUntrackedOrigin],
-    dims: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    dim_offsets: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    col_div: Pointer[Scalar[DType.float64], MutUntrackedOrigin],
+    const_div: Pointer[Scalar[DType.float64], MutUntrackedOrigin],
+    dims: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    dim_offsets: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
 ) -> Float64:
     """Evaluate one postfix program for a single row on a float64 stack.
 
@@ -381,23 +380,23 @@ def eval_program_f64[
     `col_div` / `const_div`, then applies arithmetic + transcendental ops.
     Returns the per-row float64 metric value. See module note above.
     """
-    var stack = InlineArray[Float64, EXPR_STACK_MAX](fill=0.0)
+    var stack = Array[Float64, EXPR_STACK_MAX](fill=0.0)
     var sp = 0
     var k = 0
     while k < prog_len:
-        var op = prog[3 * k + 0]
-        var a = prog[3 * k + 1]
+        var op = prog[unsafe_offset=3 * k + 0]
+        var a = prog[unsafe_offset=3 * k + 1]
         if op == OP_LOAD_COL:
             var raw = _col_at[USE_COLPTR](cols, n_rows, Int(a), row)
-            stack[sp] = Float64(raw) / col_div[Int(a)]
+            stack[sp] = Float64(raw) / col_div[unsafe_offset=Int(a)]
             sp += 1
         elif op == OP_LOAD_DIM:
-            var b = prog[3 * k + 2]
+            var b = prog[unsafe_offset=3 * k + 2]
             var key = Int(_col_at[USE_COLPTR](cols, n_rows, Int(b), row))
-            stack[sp] = Float64(dims[Int(dim_offsets[Int(a)]) + key])
+            stack[sp] = Float64(dims[unsafe_offset=Int(dim_offsets[unsafe_offset=Int(a)]) + key])
             sp += 1
         elif op == OP_PUSH_CONST:
-            stack[sp] = Float64(a) / const_div[k]
+            stack[sp] = Float64(a) / const_div[unsafe_offset=k]
             sp += 1
         elif op == OP_ADD:
             var rhs = stack[sp - 1]

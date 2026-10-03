@@ -18,27 +18,20 @@ build:
 
 requirements:
   build:
-    - mojo-compiler ==1.0.0
+    - mojo-compiler ==1.1.0
   host:
-    - mojo-compiler ==1.0.0
+    - mojo-compiler ==1.1.0
   run:
     # Exact pin, not pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would allow a newer
     # release at install time, which fails with a version-mismatch error.
-    - mojo-compiler ==1.0.0
+    - mojo-compiler ==1.1.0
     - libduckdb >=1.5.6,<1.6
 
 tests:
   - script:
-      # On GitHub's linux-64 runners, host-CPU codegen can emit AVX-512
-      # instructions that the runner has disabled, causing SIGILL at runtime.
-      # Pin a safe baseline there (every CI runner has AVX2). This mirrors
-      # MOJO_TARGET_FLAGS in test.yml. Test scripts can't read env vars, so the
-      # target is hard-coded with a selector.
-      - if: linux and x86_64
+      - if: unix
         then:
-          - mojo run --target-cpu=x86-64-v3 smoke_test.mojo
-        else:
           - mojo run smoke_test.mojo
     files:
       recipe:

@@ -13,13 +13,13 @@ Reference (DuckDB sf1, stock):
   count(*)                   = 6001215
   avg(sqrt(l_extendedprice)) = 184.260753...  (= sum/count)
 
-Run (frederick; after the COPY in transcendental_scale_probe produces the bin):
-    pixi run mojo run -I extensions/mojo-gpu-operator/src \
-        extensions/mojo-gpu-operator/bench/seg_f64_kernel_test.mojo
+NVIDIA only (Metal has no kernel float64). Run with
+`pixi run -e gpu gpu-op-test seg_f64`, which first writes the input file
+($LEXT_BIN, default /tmp/lext_scaled.bin) from TPC-H sf1.
 """
 
 from max.gpu.host import DeviceContext
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, abs
 from std.sys import has_accelerator
 from std.os import getenv
@@ -54,11 +54,11 @@ def main() raises:
     var ctx = DeviceContext()
 
     # One column (slot 0): scaled l_extendedprice. Packed col-major (1 slot).
-    var cols_h = alloc[Int64](n)
+    var cols_h = unsafe_alloc[Int64](n)
     for i in range(n):
-        cols_h[i] = vals[i]
+        cols_h[unsafe_offset=i] = vals[i]
     var cols_d = ctx.enqueue_create_buffer[DType.int64](n)
-    ctx.enqueue_copy(cols_d, cols_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(cols_d, cols_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
     # No filter: pass_len 0 (every row passes).
     var pass_d = ctx.enqueue_create_buffer[DType.int64](1)
@@ -66,43 +66,43 @@ def main() raises:
     # Two metrics: m0 = LOAD_COL(0); SQRT   (2 ops) ; m1 = PUSH_CONST(1) (1 op).
     # metric_progs is the concatenated op tape; metric_offsets/lens index it.
     # ops as (op,a,b) triples.
-    var progs_h = alloc[Int64](3 * 3)
+    var progs_h = unsafe_alloc[Int64](3 * 3)
     # m0 @ op-offset 0: LOAD_COL(0); SQRT
-    progs_h[0] = OP_LOAD_COL; progs_h[1] = 0; progs_h[2] = 0
-    progs_h[3] = OP_SQRT;     progs_h[4] = 0; progs_h[5] = 0
+    progs_h[unsafe_offset=0] = OP_LOAD_COL; progs_h[unsafe_offset=1] = 0; progs_h[unsafe_offset=2] = 0
+    progs_h[unsafe_offset=3] = OP_SQRT;     progs_h[unsafe_offset=4] = 0; progs_h[unsafe_offset=5] = 0
     # m1 @ op-offset 2: PUSH_CONST(1)  (count: const 1, const_div 1.0)
-    progs_h[6] = OP_PUSH_CONST; progs_h[7] = 1; progs_h[8] = 0
+    progs_h[unsafe_offset=6] = OP_PUSH_CONST; progs_h[unsafe_offset=7] = 1; progs_h[unsafe_offset=8] = 0
     var progs_d = ctx.enqueue_create_buffer[DType.int64](3 * 3)
-    ctx.enqueue_copy(progs_d, progs_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(progs_d, progs_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
-    var moff_h = alloc[Int64](2)
-    moff_h[0] = 0; moff_h[1] = 2
+    var moff_h = unsafe_alloc[Int64](2)
+    moff_h[unsafe_offset=0] = 0; moff_h[unsafe_offset=1] = 2
     var moff_d = ctx.enqueue_create_buffer[DType.int64](2)
-    ctx.enqueue_copy(moff_d, moff_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(moff_d, moff_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
-    var mlen_h = alloc[Int64](2)
-    mlen_h[0] = 2; mlen_h[1] = 1
+    var mlen_h = unsafe_alloc[Int64](2)
+    mlen_h[unsafe_offset=0] = 2; mlen_h[unsafe_offset=1] = 1
     var mlen_d = ctx.enqueue_create_buffer[DType.int64](2)
-    ctx.enqueue_copy(mlen_d, mlen_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(mlen_d, mlen_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
     # col_div: slot 0 is DECIMAL(_,2), so 100.0
-    var cdiv_h = alloc[Float64](1)
-    cdiv_h[0] = 100.0
+    var cdiv_h = unsafe_alloc[Float64](1)
+    cdiv_h[unsafe_offset=0] = 100.0
     var cdiv_d = ctx.enqueue_create_buffer[DType.float64](1)
-    ctx.enqueue_copy(cdiv_d, cdiv_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(cdiv_d, cdiv_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
     # const_div: parallel to op index; the PUSH_CONST(1) at op-index 2 is a plain
     # count (1.0), divisor 1.0. (The float VM indexes const_div by op position k.)
-    var nstdiv_h = alloc[Float64](3)
-    nstdiv_h[0] = 1.0; nstdiv_h[1] = 1.0; nstdiv_h[2] = 1.0
+    var nstdiv_h = unsafe_alloc[Float64](3)
+    nstdiv_h[unsafe_offset=0] = 1.0; nstdiv_h[unsafe_offset=1] = 1.0; nstdiv_h[unsafe_offset=2] = 1.0
     var nstdiv_d = ctx.enqueue_create_buffer[DType.float64](3)
-    ctx.enqueue_copy(nstdiv_d, nstdiv_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(nstdiv_d, nstdiv_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
     var dims_d = ctx.enqueue_create_buffer[DType.int64](1)
-    var dimoff_h = alloc[Int64](1)
-    dimoff_h[0] = 0
+    var dimoff_h = unsafe_alloc[Int64](1)
+    dimoff_h[unsafe_offset=0] = 0
     var dimoff_d = ctx.enqueue_create_buffer[DType.int64](1)
-    ctx.enqueue_copy(dimoff_d, dimoff_h.unsafe_origin_cast[MutAnyOrigin]())
+    ctx.enqueue_copy(dimoff_d, dimoff_h.unsafe_origin_cast[MutUntrackedOrigin]())
 
     var fpart_d = ctx.enqueue_create_buffer[DType.float64](2)
     fpart_d.enqueue_fill(0.0)
@@ -113,23 +113,23 @@ def main() raises:
 
     comptime k = seg_ungrouped_kernel_f64[False]
     ctx.enqueue_function[k](
-        cols_d.unsafe_ptr(), n,
-        pass_d.unsafe_ptr(), 0,
-        progs_d.unsafe_ptr(), moff_d.unsafe_ptr(), mlen_d.unsafe_ptr(), 2,
+        cols_d.unsafe_ptr(), Int64(n),
+        pass_d.unsafe_ptr(), Int64(0),
+        progs_d.unsafe_ptr(), moff_d.unsafe_ptr(), mlen_d.unsafe_ptr(), Int64(2),
         cdiv_d.unsafe_ptr(), nstdiv_d.unsafe_ptr(),
         dims_d.unsafe_ptr(), dimoff_d.unsafe_ptr(),
         fpart_d.unsafe_ptr(),
-        fpred_d.unsafe_ptr(), 0,
+        fpred_d.unsafe_ptr(), Int64(0),
         grid_dim=SEG_NBLOCKS, block_dim=SEG_BLK,
     )
     ctx.synchronize()
 
-    var res_h = alloc[Float64](2)
-    ctx.enqueue_copy(res_h.unsafe_origin_cast[MutAnyOrigin](), fpart_d)
+    var res_h = unsafe_alloc[Float64](2)
+    ctx.enqueue_copy(res_h.unsafe_origin_cast[MutUntrackedOrigin](), fpart_d)
     ctx.synchronize()
 
-    var gsum = res_h[0]
-    var gcnt = res_h[1]
+    var gsum = res_h[unsafe_offset=0]
+    var gcnt = res_h[unsafe_offset=1]
     var rel_sum = abs(gsum - REF_SQRT) / abs(REF_SQRT)
     print("  sum(sqrt) =", gsum, " duckdb =", REF_SQRT, " rel =", rel_sum)
     print("  count     =", gcnt, " duckdb =", REF_COUNT)
@@ -141,4 +141,4 @@ def main() raises:
     else:
         print("FAIL")
 
-    cols_h.free()
+    cols_h.unsafe_free()

@@ -48,10 +48,10 @@ struct NumOrStrOrBool(Copyable, Movable):
 
 def test_list_column_int32() raises:
     """Deserialize a LIST(INTEGER) column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
     _ = con.execute("INSERT INTO t VALUES ([1, 2, 3]), ([4, 5]), ([6])")
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[Int32]]](col=0)
 
@@ -78,10 +78,10 @@ def test_list_column_int32() raises:
 
 def test_list_column_varchar() raises:
     """Deserialize a LIST(VARCHAR) column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (words VARCHAR[])")
     _ = con.execute("INSERT INTO t VALUES (['hello', 'world']), (['mojo'])")
-    result = con.execute("SELECT words FROM t")
+    var result = con.execute("SELECT words FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[String]]](col=0)
 
@@ -99,12 +99,12 @@ def test_list_column_varchar() raises:
 
 def test_list_column_with_nulls() raises:
     """Deserialize a LIST column with NULL rows and NULL elements."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
     _ = con.execute(
         "INSERT INTO t VALUES ([1, NULL, 3]), (NULL), ([4])"
     )
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[Optional[List[Optional[Int32]]]](col=0)
 
@@ -128,10 +128,10 @@ def test_list_column_with_nulls() raises:
 
 def test_list_column_empty_lists() raises:
     """Deserialize empty lists."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
     _ = con.execute("INSERT INTO t VALUES ([]), ([42])")
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[Int32]]](col=0)
 
@@ -146,8 +146,8 @@ def test_list_column_empty_lists() raises:
 
 def test_list_column_float64() raises:
     """Deserialize a LIST(DOUBLE) column."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT [1.5, 2.5, 3.5]::DOUBLE[] AS vals")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT [1.5, 2.5, 3.5]::DOUBLE[] AS vals")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[Float64]]](col=0)
 
@@ -166,10 +166,10 @@ def test_list_column_float64() raises:
 
 def test_list_via_get() raises:
     """Deserialize a LIST(INTEGER) column."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
     _ = con.execute("INSERT INTO t VALUES ([10, 20]), ([30])")
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
 
     # T = List[Optional[Int32]] returns List[List[Optional[Int32]]]
@@ -189,10 +189,10 @@ def test_list_via_get() raises:
 
 def test_list_via_get_with_nulls() raises:
     """LIST(INTEGER) column with NULLs."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[])")
     _ = con.execute("INSERT INTO t VALUES ([1, NULL, 3]), (NULL), ([4])")
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[Optional[List[Optional[Int32]]]](col=0)
 
@@ -216,12 +216,12 @@ def test_list_via_get_with_nulls() raises:
 
 def test_nested_list() raises:
     """Deserialize a LIST(LIST(INTEGER)) column (arbitrarily nested)."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[][])")
     _ = con.execute(
         "INSERT INTO t VALUES ([[1, 2], [3]]), ([[4, 5, 6]])"
     )
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
 
     # T = List[Optional[List[Optional[Int32]]]]
@@ -258,12 +258,12 @@ def test_nested_list() raises:
 
 def test_nested_list_with_nulls() raises:
     """Nested LIST(LIST(INTEGER)) with NULLs at various levels."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (nums INTEGER[][])")
     _ = con.execute(
         "INSERT INTO t VALUES ([[1, NULL], NULL]), (NULL)"
     )
-    result = con.execute("SELECT nums FROM t")
+    var result = con.execute("SELECT nums FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[
         Optional[List[Optional[List[Optional[Int32]]]]]
@@ -295,12 +295,12 @@ def test_nested_list_with_nulls() raises:
 
 def test_array_column_int32() raises:
     """Deserialize an ARRAY column of fixed-size INTEGER[3]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr INTEGER[3])")
     _ = con.execute(
         "INSERT INTO t VALUES ([1, 2, 3]), ([4, 5, 6]), ([7, 8, 9])"
     )
-    result = con.execute("SELECT arr FROM t")
+    var result = con.execute("SELECT arr FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[Int32]]](col=0)
 
@@ -330,8 +330,8 @@ def test_array_column_int32() raises:
 
 def test_array_single_row() raises:
     """Deserialize a single ARRAY row."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT [10, 20]::INTEGER[2] AS arr")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT [10, 20]::INTEGER[2] AS arr")
     var chunk = result.fetch_chunk()
     var arr = chunk.get[List[Optional[Int32]]](col=0, row=0)
     assert_equal(len(arr), 2)
@@ -341,12 +341,12 @@ def test_array_single_row() raises:
 
 def test_array_column_varchar() raises:
     """Deserialize an ARRAY column of VARCHAR[2]."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr VARCHAR[2])")
     _ = con.execute(
         "INSERT INTO t VALUES (['hello', 'world']), (['foo', 'bar'])"
     )
-    result = con.execute("SELECT arr FROM t")
+    var result = con.execute("SELECT arr FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[List[Optional[String]]](col=0)
 
@@ -362,10 +362,10 @@ def test_array_column_varchar() raises:
 
 def test_array_column_with_null_rows() raises:
     """Deserialize an ARRAY column where some rows are NULL."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (arr INTEGER[2])")
     _ = con.execute("INSERT INTO t VALUES ([1, 2]), (NULL), ([3, 4])")
-    result = con.execute("SELECT arr FROM t")
+    var result = con.execute("SELECT arr FROM t")
     var chunk = result.fetch_chunk()
     var lists = chunk.get[Optional[List[Optional[Int32]]]](col=0)
 
@@ -379,8 +379,8 @@ def test_array_column_with_null_rows() raises:
 
 def test_array_column_float64() raises:
     """Deserialize an ARRAY column of DOUBLE[2]."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT [1.5, 2.5]::DOUBLE[2] AS arr"
     )
     var chunk = result.fetch_chunk()
@@ -397,8 +397,8 @@ def test_array_column_float64() raises:
 
 def test_map_single_row() raises:
     """Deserialize a single MAP(VARCHAR, INTEGER) row as Dict."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'a': 1, 'b': 2} AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'a': 1, 'b': 2} AS m")
     var chunk = result.fetch_chunk()
     var d = chunk.get[Dict[String, Int32]](col=0, row=0)
 
@@ -409,12 +409,12 @@ def test_map_single_row() raises:
 
 def test_map_column() raises:
     """Deserialize a column of MAPs as Dicts."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
     _ = con.execute(
         "INSERT INTO t VALUES (MAP {'x': 10}), (MAP {'y': 20, 'z': 30})"
     )
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var dicts = chunk.get[Dict[String, Int32]](col=0)
 
@@ -432,8 +432,8 @@ def test_map_column() raises:
 
 def test_map_with_null_values() raises:
     """Deserialize a MAP where some values are NULL using Optional."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
     var chunk = result.fetch_chunk()
     var d = chunk.get[Dict[String, Optional[Int32]]](col=0, row=0)
 
@@ -444,12 +444,12 @@ def test_map_with_null_values() raises:
 
 def test_map_with_null_rows() raises:
     """Deserialize a MAP column where some rows are NULL."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
     _ = con.execute(
         "INSERT INTO t VALUES (MAP {'a': 1}), (NULL), (MAP {'c': 3})"
     )
-    result = con.execute("SELECT m FROM t")
+    var result = con.execute("SELECT m FROM t")
     var chunk = result.fetch_chunk()
     var dicts = chunk.get[Optional[Dict[String, Int32]]](col=0)
 
@@ -463,8 +463,8 @@ def test_map_with_null_rows() raises:
 
 def test_map_int_keys() raises:
     """Deserialize a MAP with integer keys."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {1: 'one', 2: 'two'} AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {1: 'one', 2: 'two'} AS m")
     var chunk = result.fetch_chunk()
     var d = chunk.get[Dict[Int32, String]](col=0, row=0)
 
@@ -479,8 +479,8 @@ def test_map_with_mojo_int() raises:
     Int is platform-dependent (64-bit on most modern systems). DuckDB's
     INTEGER is always 32-bit, so the values are widened on read.
     """
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'a': 1, 'b': 2}::MAP(VARCHAR, BIGINT) AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'a': 1, 'b': 2}::MAP(VARCHAR, BIGINT) AS m")
     var chunk = result.fetch_chunk()
     var d = chunk.get[Dict[String, Int]](col=0, row=0)
 
@@ -495,8 +495,8 @@ def test_map_with_mojo_uint() raises:
     UInt is platform-dependent (64-bit on most modern systems). Maps to
     UBIGINT on 64-bit platforms.
     """
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'x': 10, 'y': 20}::MAP(VARCHAR, UBIGINT) AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'x': 10, 'y': 20}::MAP(VARCHAR, UBIGINT) AS m")
     var chunk = result.fetch_chunk()
     var d = chunk.get[Dict[String, UInt]](col=0, row=0)
 
@@ -516,8 +516,8 @@ def test_map_as_list_struct_single_row() raises:
     DuckDB MAPs are internally LIST(STRUCT(key K, value V)),
     so they can also be accessed as List[MapEntryStrInt].
     """
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'a': 1, 'b': 2} AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'a': 1, 'b': 2} AS m")
     var chunk = result.fetch_chunk()
     var entries = chunk.get[List[MapEntryStrInt]](col=0, row=0)
 
@@ -530,8 +530,8 @@ def test_map_as_list_struct_single_row() raises:
 
 def test_map_as_list_struct_with_nulls() raises:
     """Deserialize a MAP as List[Struct] with NULL values."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT MAP {'a': 1, 'b': NULL::INTEGER} AS m")
     var chunk = result.fetch_chunk()
     var entries = chunk.get[List[MapEntryStrInt]](col=0, row=0)
 
@@ -549,8 +549,8 @@ def test_map_as_list_struct_with_nulls() raises:
 
 def test_union_single_int_member() raises:
     """Deserialize a UNION value where the INTEGER member is active."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT union_value(num := 42::INTEGER)::UNION(num INTEGER, str VARCHAR) AS u"
     )
     var chunk = result.fetch_chunk()
@@ -561,8 +561,8 @@ def test_union_single_int_member() raises:
 
 def test_union_single_str_member() raises:
     """Deserialize a UNION value where the VARCHAR member is active."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT union_value(str := 'hello')::UNION(num INTEGER, str VARCHAR) AS u"
     )
     var chunk = result.fetch_chunk()
@@ -573,10 +573,10 @@ def test_union_single_str_member() raises:
 
 def test_union_column() raises:
     """Deserialize a full column of UNION values with mixed active tags."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
     _ = con.execute("INSERT INTO t VALUES (1), ('two'), (3)")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[NumOrStr](col=0)
 
@@ -597,12 +597,12 @@ def test_union_column() raises:
 
 def test_union_three_members() raises:
     """Deserialize a UNION with three member types."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR, flag BOOLEAN))"
     )
     _ = con.execute("INSERT INTO t VALUES (42), ('hello'), (true)")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[NumOrStrOrBool](col=0)
 
@@ -626,10 +626,10 @@ def test_union_three_members() raises:
 
 def test_union_with_null() raises:
     """Deserialize a UNION column where some rows are NULL."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
     _ = con.execute("INSERT INTO t VALUES (1), (NULL), ('three')")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Optional[NumOrStr]](col=0)
 
@@ -648,8 +648,8 @@ def test_union_with_null() raises:
 
 def test_variant_union_int_member() raises:
     """Deserialize a UNION value as Variant with the INTEGER member active."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT union_value(num := 42::INTEGER)::UNION(num INTEGER, str"
         " VARCHAR) AS u"
     )
@@ -662,8 +662,8 @@ def test_variant_union_int_member() raises:
 
 def test_variant_union_str_member() raises:
     """Deserialize a UNION value as Variant with the VARCHAR member active."""
-    con = DuckDB.connect(":memory:")
-    result = con.execute(
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute(
         "SELECT union_value(str := 'hello')::UNION(num INTEGER, str"
         " VARCHAR) AS u"
     )
@@ -676,10 +676,10 @@ def test_variant_union_str_member() raises:
 
 def test_variant_union_column() raises:
     """Deserialize a full column of UNION values as Variant."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
     _ = con.execute("INSERT INTO t VALUES (1), ('two'), (3)")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Variant[Int32, String]](col=0)
 
@@ -700,12 +700,12 @@ def test_variant_union_column() raises:
 
 def test_variant_union_three_members() raises:
     """Deserialize a UNION with three member types as Variant."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute(
         "CREATE TABLE t (u UNION(num INTEGER, str VARCHAR, flag BOOLEAN))"
     )
     _ = con.execute("INSERT INTO t VALUES (42), ('hello'), (true)")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Variant[Int32, String, Bool]](col=0)
 
@@ -726,10 +726,10 @@ def test_variant_union_three_members() raises:
 
 def test_variant_union_with_null() raises:
     """Deserialize a UNION column as Optional[Variant] (NULL handling)."""
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (u UNION(num INTEGER, str VARCHAR))")
     _ = con.execute("INSERT INTO t VALUES (1), (NULL), ('three')")
-    result = con.execute("SELECT u FROM t")
+    var result = con.execute("SELECT u FROM t")
     var chunk = result.fetch_chunk()
     var vals = chunk.get[Optional[Variant[Int32, String]]](col=0)
 

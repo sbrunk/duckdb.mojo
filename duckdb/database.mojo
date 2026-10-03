@@ -29,7 +29,7 @@ struct Database(Movable):
         self._is_owned = True
         var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
-        var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
+        var path_ptr = resolved_path.as_c_string_span().ptr()
         var out_error = unsafe_alloc[Pointer[c_char, MutAnyOrigin]](1)
         # config=NULL signals "use default config" to DuckDB.
         if (
@@ -54,7 +54,7 @@ struct Database(Movable):
         self._is_owned = True
         var db_addr = Pointer(to=self._db)
         var resolved_path = path.value() if path else ":memory:"
-        var path_ptr = resolved_path.as_c_string_slice().unsafe_ptr()
+        var path_ptr = resolved_path.as_c_string_span().ptr()
         var out_error = unsafe_alloc[Pointer[c_char, MutAnyOrigin]](1)
         if (
             libduckdb.duckdb_open_ext(path_ptr, db_addr, config=config._handle(), out_error=out_error)

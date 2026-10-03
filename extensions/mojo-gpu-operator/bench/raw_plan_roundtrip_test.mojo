@@ -44,7 +44,7 @@ from raw_plan_tags import (
     STRAT_HASH_GROUP,
     IDX_NONE,
 )
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys.info import has_nvidia_gpu_accelerator, has_amd_gpu_accelerator
 from std.testing import assert_equal, assert_true
 
@@ -100,13 +100,13 @@ struct TapeBuilder(Movable):
 # reader's raw pointers stay valid.
 def reader_from(b: TapeBuilder) -> RawPlanReader:
     var tlen = len(b.tape)
-    var tptr = alloc[Int64](tlen if tlen > 0 else 1)
+    var tptr = unsafe_alloc[Int64](tlen if tlen > 0 else 1)
     for i in range(tlen):
-        tptr[i] = b.tape[i]
+        tptr[unsafe_offset=i] = b.tape[i]
     var blen = len(b.blob)
-    var bptr = alloc[UInt8](blen if blen > 0 else 1)
+    var bptr = unsafe_alloc[UInt8](blen if blen > 0 else 1)
     for i in range(blen):
-        bptr[i] = b.blob[i]
+        bptr[unsafe_offset=i] = b.blob[i]
     return RawPlanReader(tptr, tlen, bptr, blen)
 
 

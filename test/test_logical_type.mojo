@@ -50,7 +50,7 @@ def test_geometry_crs_value() raises:
     assert_equal(crs.value(), "OGC:CRS84")
 
 def test_geometry_crs_non_geometry() raises:
-    """geometry_type_crs() returns None for a non-GEOMETRY type."""
+    """`geometry_type_crs()` returns None for a non-GEOMETRY type."""
     var bigint = LogicalType(DuckDBType.bigint)
     assert_false(Bool(bigint.geometry_type_crs()))
 

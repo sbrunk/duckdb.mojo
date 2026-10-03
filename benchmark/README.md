@@ -36,8 +36,8 @@ if they are not available.
 ## Raw-kernel microbenchmarks (no DuckDB)
 
 Mojo `perf_counter_ns` microbenchmarks that call kernels directly:
-- `extensions/mojo-gpu-operator/bench/*.mojo`: GPU C-ABI latency checks, correctness tests
-  against a reference result, and experiments.
+- `extensions/mojo-gpu-operator/bench/*.mojo`: mostly GPU correctness tests, run with
+  `pixi run -e gpu gpu-op-test`; a few print timings.
 - top-level `benchmark/*.mojo`: early SIMD/GPU math and reduction prototypes.
 - `extensions/mojo-kernel-overrides/bench/benchmark.cpp`: standalone C++ timer comparing
   stock and Mojo (`pixi run overrides-bench`).

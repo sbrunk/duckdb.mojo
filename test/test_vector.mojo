@@ -19,7 +19,7 @@ def test_vector_get_column_type() raises:
     
     # Validate actual values
     var int_data = vec_int.get_data().unsafe_bitcast[Int32]()
-    assert_equal(int_data[0], 42)
+    assert_equal(int_data[unsafe_offset=0], 42)
 
 
 def test_vector_create_standalone() raises:
@@ -77,7 +77,7 @@ def test_vector_get_data() raises:
     
     # Validate actual values
     var int_data = data_ptr.unsafe_bitcast[Int32]()
-    assert_equal(int_data[0], 1)
+    assert_equal(int_data[unsafe_offset=0], 1)
 
 
 def test_vector_get_validity() raises:
@@ -95,11 +95,11 @@ def test_vector_get_validity() raises:
 
     # Validate the actual data and validity
     var data_ptr = vec.get_data().unsafe_bitcast[Int32]()
-    assert_true(Bool((mask[0] >> 0) & 1))  # Row 0: valid
-    assert_equal(data_ptr[0], 1)
-    assert_false(Bool((mask[0] >> 1) & 1))  # Row 1: NULL
-    assert_true(Bool((mask[0] >> 2) & 1))  # Row 2: valid
-    assert_equal(data_ptr[2], 3)
+    assert_true(Bool((mask[unsafe_offset=0] >> 0) & 1))  # Row 0: valid
+    assert_equal(data_ptr[unsafe_offset=0], 1)
+    assert_false(Bool((mask[unsafe_offset=0] >> 1) & 1))  # Row 1: NULL
+    assert_true(Bool((mask[unsafe_offset=0] >> 2) & 1))  # Row 2: valid
+    assert_equal(data_ptr[unsafe_offset=2], 3)
 
 
 def test_vector_ensure_validity_writable() raises:
@@ -136,9 +136,9 @@ def test_vector_list_operations() raises:
     
     # Validate actual values in child
     var int_data = child_vec.get_data().unsafe_bitcast[Int32]()
-    assert_equal(int_data[0], 1)
-    assert_equal(int_data[1], 2)
-    assert_equal(int_data[2], 3)
+    assert_equal(int_data[unsafe_offset=0], 1)
+    assert_equal(int_data[unsafe_offset=1], 2)
+    assert_equal(int_data[unsafe_offset=2], 3)
 
 
 def test_vector_list_nested() raises:
@@ -157,7 +157,7 @@ def test_vector_list_nested() raises:
     assert_equal(outer_list.list_get_size(), 2)  # 2 inner lists: [1,2] and [3,4,5]
     # Get the list_entry data to see how many inner lists there are
     var outer_data = outer_list.get_data().unsafe_bitcast[duckdb_list_entry]()
-    var outer_entry = outer_data[0]  # First (and only) row
+    var outer_entry = outer_data[unsafe_offset=0]  # First (and only) row
     assert_equal(outer_entry.length, 2)  # 2 inner lists: [1,2] and [3,4,5]
 
     # Get outer child - contains the inner lists flattened
@@ -171,11 +171,11 @@ def test_vector_list_nested() raises:
 
     # Validate the actual integer values
     var int_data = values.get_data().unsafe_bitcast[Int32]()
-    assert_equal(int_data[0], 1)
-    assert_equal(int_data[1], 2)
-    assert_equal(int_data[2], 3)
-    assert_equal(int_data[3], 4)
-    assert_equal(int_data[4], 5)
+    assert_equal(int_data[unsafe_offset=0], 1)
+    assert_equal(int_data[unsafe_offset=1], 2)
+    assert_equal(int_data[unsafe_offset=2], 3)
+    assert_equal(int_data[unsafe_offset=3], 4)
+    assert_equal(int_data[unsafe_offset=4], 5)
 
 
 def test_vector_struct_operations() raises:
@@ -200,7 +200,7 @@ def test_vector_struct_operations() raises:
     
     # Validate actual values
     var int_data = field0.get_data().unsafe_bitcast[Int32]()
-    assert_equal(int_data[0], 1)
+    assert_equal(int_data[unsafe_offset=0], 1)
 
 
 def test_vector_array_operations() raises:
@@ -223,9 +223,9 @@ def test_vector_array_operations() raises:
 
     # Read the actual integer data from the child vector
     var data_ptr = child_vec.get_data().unsafe_bitcast[Int32]()
-    assert_equal(data_ptr[0], 1)
-    assert_equal(data_ptr[1], 2)
-    assert_equal(data_ptr[2], 3)
+    assert_equal(data_ptr[unsafe_offset=0], 1)
+    assert_equal(data_ptr[unsafe_offset=1], 2)
+    assert_equal(data_ptr[unsafe_offset=2], 3)
 
 
 def test_vector_array_multiple_rows() raises:
@@ -249,10 +249,10 @@ def test_vector_array_multiple_rows() raises:
 
     # Validate the actual data: [1, 2, 3, 4]
     var data_ptr = child_vec.get_data().unsafe_bitcast[Int32]()
-    assert_equal(data_ptr[0], 1)
-    assert_equal(data_ptr[1], 2)
-    assert_equal(data_ptr[2], 3)
-    assert_equal(data_ptr[3], 4)
+    assert_equal(data_ptr[unsafe_offset=0], 1)
+    assert_equal(data_ptr[unsafe_offset=1], 2)
+    assert_equal(data_ptr[unsafe_offset=2], 3)
+    assert_equal(data_ptr[unsafe_offset=3], 4)
 
 
 def test_vector_types_boolean() raises:
@@ -267,7 +267,7 @@ def test_vector_types_boolean() raises:
     
     # Validate actual boolean values
     var bool_data = vec.get_data().unsafe_bitcast[Bool]()
-    assert_true(bool_data[0])
+    assert_true(bool_data[unsafe_offset=0])
 
 
 def test_vector_types_integers() raises:
@@ -295,10 +295,10 @@ def test_vector_types_integers() raises:
     var si_data = vec_si.get_data().unsafe_bitcast[Int16]()
     var i_data = vec_i.get_data().unsafe_bitcast[Int32]()
     var bi_data = vec_bi.get_data().unsafe_bitcast[Int64]()
-    assert_equal(ti_data[0], 1)
-    assert_equal(si_data[0], 2)
-    assert_equal(i_data[0], 3)
-    assert_equal(bi_data[0], 4)
+    assert_equal(ti_data[unsafe_offset=0], 1)
+    assert_equal(si_data[unsafe_offset=0], 2)
+    assert_equal(i_data[unsafe_offset=0], 3)
+    assert_equal(bi_data[unsafe_offset=0], 4)
 
 
 def test_vector_types_unsigned_integers() raises:
@@ -326,10 +326,10 @@ def test_vector_types_unsigned_integers() raises:
     var usi_data = vec_usi.get_data().unsafe_bitcast[UInt16]()
     var ui_data = vec_ui.get_data().unsafe_bitcast[UInt32]()
     var ubi_data = vec_ubi.get_data().unsafe_bitcast[UInt64]()
-    assert_equal(uti_data[0], 1)
-    assert_equal(usi_data[0], 2)
-    assert_equal(ui_data[0], 3)
-    assert_equal(ubi_data[0], 4)
+    assert_equal(uti_data[unsafe_offset=0], 1)
+    assert_equal(usi_data[unsafe_offset=0], 2)
+    assert_equal(ui_data[unsafe_offset=0], 3)
+    assert_equal(ubi_data[unsafe_offset=0], 4)
 
 
 def test_vector_types_floats() raises:
@@ -348,8 +348,8 @@ def test_vector_types_floats() raises:
     # Validate actual values
     var f_data = vec_f.get_data().unsafe_bitcast[Float32]()
     var d_data = vec_d.get_data().unsafe_bitcast[Float64]()
-    assert_equal(f_data[0], 1.5)
-    assert_equal(d_data[0], 2.5)
+    assert_equal(f_data[unsafe_offset=0], 1.5)
+    assert_equal(d_data[unsafe_offset=0], 2.5)
 
 
 def test_vector_types_temporal() raises:
@@ -406,15 +406,15 @@ def test_vector_mixed_nulls() raises:
     var mask = validity.value()
 
     # Row 0: value = 1, valid
-    assert_true(Bool((mask[0] >> 0) & 1))
-    assert_equal(data_ptr[0], 1)
+    assert_true(Bool((mask[unsafe_offset=0] >> 0) & 1))
+    assert_equal(data_ptr[unsafe_offset=0], 1)
 
     # Row 1: NULL
-    assert_false(Bool((mask[0] >> 1) & 1))
+    assert_false(Bool((mask[unsafe_offset=0] >> 1) & 1))
 
     # Row 2: value = 3, valid
-    assert_true(Bool((mask[0] >> 2) & 1))
-    assert_equal(data_ptr[2], 3)
+    assert_true(Bool((mask[unsafe_offset=0] >> 2) & 1))
+    assert_equal(data_ptr[unsafe_offset=2], 3)
 
 
 def test_vector_empty_list() raises:
@@ -432,7 +432,7 @@ def test_vector_empty_list() raises:
     
     # Verify list entry shows empty list
     var list_data = list_vec.get_data().unsafe_bitcast[duckdb_list_entry]()
-    assert_equal(list_data[0].length, 0)
+    assert_equal(list_data[unsafe_offset=0].length, 0)
 
 
 def test_vector_map_type() raises:

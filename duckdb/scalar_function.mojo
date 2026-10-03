@@ -21,7 +21,7 @@ struct FunctionInfo:
     from duckdb.logical_type import LogicalType
     from duckdb.vector import Vector
     
-    fn my_function(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+    def my_function(info: FunctionInfo, mut input: Chunk, mut output: Vector):
         # Access extra info
         var extra = info.get_extra_info()
         
@@ -84,7 +84,7 @@ struct FunctionInfo:
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_error(
             self._info,
-            error_copy.as_c_string_slice().unsafe_ptr()
+            error_copy.as_c_string_span().ptr()
         )
 
 
@@ -103,7 +103,7 @@ struct ScalarFunction(Movable):
     from duckdb import Chunk
     from duckdb.vector import Vector
     
-    fn add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+    def add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
         var size = len(input)
         var in_vec = input.get_vector(0)
         var in_data = in_vec.get_data().bitcast[Int32]()
@@ -151,7 +151,7 @@ struct ScalarFunction(Movable):
         ref libduckdb = DuckDB().libduckdb()
         libduckdb.duckdb_scalar_function_set_name(
             self._function, 
-            name_copy.as_c_string_slice().unsafe_ptr()
+            name_copy.as_c_string_span().ptr()
         )
 
     def set_varargs(self, type: LogicalType):
@@ -241,7 +241,7 @@ struct ScalarFunction(Movable):
         ```mojo
         from duckdb import Chunk, Vector
         from duckdb.scalar_function import FunctionInfo, ScalarFunction
-        fn my_add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+        def my_add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_vec = input.get_vector(0)
             var in_data = in_vec.get_data().bitcast[Int32]()
@@ -290,7 +290,7 @@ struct ScalarFunction(Movable):
         Parameters:
             In1: The DType of the input data in memory.
             Out: The DType of the output data in memory.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
@@ -298,7 +298,7 @@ struct ScalarFunction(Movable):
         from duckdb.logical_type import decimal_type
         from duckdb.connection import Connection
 
-        fn add_one[w: SIMDLength](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        def add_one[w: SIMDLength](x: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return x + 1
 
         var conn = Connection(":memory:")
@@ -340,7 +340,7 @@ struct ScalarFunction(Movable):
             In1: The DType of the first input in memory.
             In2: The DType of the second input in memory.
             Out: The DType of the output data in memory.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
@@ -348,7 +348,7 @@ struct ScalarFunction(Movable):
         from duckdb.logical_type import decimal_type
         from duckdb.connection import Connection
 
-        fn my_add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
+        def my_add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
             return a + b
 
         var conn = Connection(":memory:")
@@ -381,17 +381,19 @@ struct ScalarFunction(Movable):
         self.set_function[wrapper]()
 
     # --- Overloads accepting stdlib math function signatures ----------------
-    # These accept def[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]
-    # so you can pass math.sqrt, math.sin, etc. directly.
+    # These accept the stdlib math signature,
+    # def[dtype: DType, width: SIMDLength, //](SIMD[dtype, width]) -> SIMD[dtype, width],
+    # so you can pass math.sqrt, math.sin, etc. directly. They are limited to
+    # floating-point dtypes, since most stdlib math functions require one.
 
     def set_simd_function[
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](self):
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ](self) where D.is_floating_point():
         """Sets a unary SIMD function using the stdlib math function signature.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `def[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
         (e.g. `math.sqrt`, `math.sin`, `math.cos`, `math.exp`, `math.log`).
 
         Parameters:
@@ -402,15 +404,16 @@ struct ScalarFunction(Movable):
         ```mojo
         import math
         from duckdb.scalar_function import ScalarFunction
-        from duckdb.logical_type import decimal_type
+        from duckdb.logical_type import LogicalType
+        from duckdb.duckdb_type import DuckDBType
         from duckdb.connection import Connection
 
         var conn = Connection(":memory:")
         var sf = ScalarFunction()
         sf.set_name("my_sqrt")
-        sf.add_parameter(decimal_type(18, 4))  # Custom DECIMAL type
-        sf.set_return_type(decimal_type(18, 4))
-        sf.set_simd_function[DType.int64, math.sqrt]()
+        sf.add_parameter(LogicalType(DuckDBType.double))
+        sf.set_return_type(LogicalType(DuckDBType.double))
+        sf.set_simd_function[DType.float64, math.sqrt]()
         sf.register(conn)
         ```
         """
@@ -428,12 +431,12 @@ struct ScalarFunction(Movable):
 
     def set_simd_function[
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](self):
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ](self) where D.is_floating_point():
         """Sets a binary SIMD function using the stdlib math function signature.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `def[dtype: DType, width: SIMDLength](SIMD[dtype, width], SIMD[dtype, width]) -> SIMD[dtype, width]`
         (e.g. `math.atan2`).
 
         Parameters:
@@ -518,7 +521,7 @@ struct ScalarFunction(Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn constant_42(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+        def constant_42(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var out_data = output.get_data().bitcast[Int32]()
             for i in range(len(input)):
                 out_data[i] = 42
@@ -557,7 +560,7 @@ struct ScalarFunction(Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+        def add_one(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var in_data = input.get_vector(0).get_data().bitcast[Int32]()
             var out_data = output.get_data().bitcast[Int32]()
@@ -599,7 +602,7 @@ struct ScalarFunction(Movable):
         from duckdb.vector import Vector
         from duckdb.connection import Connection
 
-        fn my_add(info: FunctionInfo, mut input: Chunk, mut output: Vector):
+        def my_add(info: FunctionInfo, mut input: Chunk, mut output: Vector):
             var size = len(input)
             var a = input.get_vector(0).get_data().bitcast[Int32]()
             var b = input.get_vector(1).get_data().bitcast[Int32]()
@@ -674,7 +677,7 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
-        fn add_one(x: Int32) -> Int32:
+        def add_one(x: Int32) -> Int32:
             return x + 1
 
         var func = ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one]()
@@ -715,7 +718,7 @@ struct ScalarFunction(Movable):
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn add_one(x: Int32) -> Int32:
+        def add_one(x: Int32) -> Int32:
             return x + 1
 
         var conn = Connection(":memory:")
@@ -746,7 +749,7 @@ struct ScalarFunction(Movable):
 
         Example:
         ```mojo
-        fn my_add(a: Int64, b: Int64) -> Int64:
+        def my_add(a: Int64, b: Int64) -> Int64:
             return a + b
 
         var func = ScalarFunction.from_function["my_add", DType.int64, DType.int64, DType.int64, my_add]()
@@ -791,7 +794,7 @@ struct ScalarFunction(Movable):
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn my_add(a: Int32, b: Int32) -> Int32:
+        def my_add(a: Int32, b: Int32) -> Int32:
             return a + b
 
         var conn = Connection(":memory:")
@@ -820,11 +823,11 @@ struct ScalarFunction(Movable):
             name: The SQL function name.
             In1: The input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
-        fn add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+        def add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
             return x + 1
 
         var func = ScalarFunction.from_simd_function["add_one", DType.int32, DType.int32, add_one]()
@@ -851,14 +854,14 @@ struct ScalarFunction(Movable):
             name: The SQL function name.
             In1: The input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
+        def add_one[width: SIMDLength](x: SIMD[DType.int32, width]) -> SIMD[DType.int32, width]:
             return x + 1
 
         var conn = Connection(":memory:")
@@ -885,11 +888,11 @@ struct ScalarFunction(Movable):
             In1: The first input DType.
             In2: The second input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
-        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        def my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
 
         var func = ScalarFunction.from_simd_function["my_add", DType.float64, DType.float64, DType.float64, my_add]()
@@ -919,14 +922,14 @@ struct ScalarFunction(Movable):
             In1: The first input DType.
             In2: The second input DType.
             Out: The return DType.
-            func: A SIMD function `fn[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
+            func: A SIMD function `def[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) -> SIMD[Out, width]`.
 
         Example:
         ```mojo
         from duckdb.scalar_function import ScalarFunction
         from duckdb.connection import Connection
 
-        fn my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
+        def my_add[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
             return a + b
 
         var conn = Connection(":memory:")
@@ -942,14 +945,14 @@ struct ScalarFunction(Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ]() -> ScalarFunction where D.is_floating_point():
         """Create a unary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
 
         Accepts functions with the standard library signature
-        `fn[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
+        `def[dtype: DType, width: SIMDLength](SIMD[dtype, width]) -> SIMD[dtype, width]`
         so you can pass `math.sqrt`, `math.sin`, `math.cos`, etc. directly.
 
         Parameters:
@@ -976,8 +979,8 @@ struct ScalarFunction(Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](conn: Connection) raises:
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ](conn: Connection) raises where D.is_floating_point():
         """Create and register a unary scalar function from a stdlib math function.
 
         Parameters:
@@ -1003,8 +1006,8 @@ struct ScalarFunction(Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ]() -> ScalarFunction:
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ]() -> ScalarFunction where D.is_floating_point():
         """Create a binary scalar function from a stdlib math function.
 
         Returns the configured ScalarFunction without registering it.
@@ -1036,8 +1039,8 @@ struct ScalarFunction(Movable):
     def from_simd_function[
         name: StringLiteral,
         D: DType,
-        func: def[dtype: DType, width: SIMDLength] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width],
-    ](conn: Connection) raises:
+        func: def[dtype: DType, width: SIMDLength, //] (SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
+    ](conn: Connection) raises where D.is_floating_point():
         """Create and register a binary scalar function from a stdlib math function.
 
         Parameters:
@@ -1092,7 +1095,7 @@ struct ScalarFunction(Movable):
         """
         var error_copy = error.copy()
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_scalar_function_set_error(info, error_copy.as_c_string_slice().unsafe_ptr().unsafe_bitcast[c_char]())
+        libduckdb.duckdb_scalar_function_set_error(info, error_copy.as_c_string_span().ptr().unsafe_bitcast[c_char]())
 
 
 struct BindInfo:
@@ -1143,7 +1146,7 @@ struct BindInfo:
         """
         var error_copy = error.copy()
         ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_scalar_function_bind_set_error(self._info, error_copy.as_c_string_slice().unsafe_ptr())
+        libduckdb.duckdb_scalar_function_bind_set_error(self._info, error_copy.as_c_string_span().ptr())
 
     def get_extra_info(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Retrieves the extra info set via `ScalarFunction.set_extra_info`.
@@ -1218,7 +1221,7 @@ struct ScalarFunctionSet(Movable):
         """
         var name_copy = name.copy()
         ref libduckdb = DuckDB().libduckdb()
-        self._function_set = libduckdb.duckdb_create_scalar_function_set(name_copy.as_c_string_slice().unsafe_ptr())
+        self._function_set = libduckdb.duckdb_create_scalar_function_set(name_copy.as_c_string_span().ptr())
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor that transfers ownership."""

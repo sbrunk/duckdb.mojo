@@ -8,13 +8,12 @@
 # depending on runtime behavior, which is all we need to catch API/ABI drift.
 #
 # Usage: scripts/compile_check.sh <dir> [<dir> ...]
-# Runs via `pixi run compile-benchmarks` (see pixi.toml). Like run_tests.sh, it
+# Runs via `pixi run compile-check` (see pixi.toml). Like run_tests.sh, it
 # compiles the duckdb package from source for each file.
 set -e
 
-# Optional Mojo codegen target override, set only in CI. See run_tests.sh and
-# .github/workflows/test.yml for the reason. When unset (locally), the build is
-# native.
+# Optional extra mojo flags, see scripts/run_tests.sh. Unset by default, so the
+# build targets the native CPU.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
 # Files that can't be compiled in the default environment. Keep this list short
@@ -24,6 +23,8 @@ EXCLUDE=(
     # operator_replacement package). Covered separately; see the full-env CI
     # job rather than this default-env check.
     "benchmark/tpch_benchmark_op_replacement.mojo"
+    # Requires the `gpu` environment (max.gpu).
+    "examples/gpu_knn.mojo"
 )
 
 is_excluded() {
@@ -43,7 +44,7 @@ checked=0
 for dir in "$@"; do
     for f in "$dir"/*.mojo; do
         if is_excluded "$f"; then
-            echo "--- Skipping (needs full env): $f ---"
+            echo "--- Skipping (needs another environment): $f ---"
             continue
         fi
         echo "--- Compiling: $f ---"

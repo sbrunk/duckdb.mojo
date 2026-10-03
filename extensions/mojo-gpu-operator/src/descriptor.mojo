@@ -61,9 +61,9 @@ from raw_plan_tags import (
 # Tape reader: a cursor over the flat int64 tape + the raw string blob.
 # ---------------------------------------------------------------------------
 struct RawPlanReader(Copyable, Movable):
-    var tape: UnsafePointer[Int64, MutUntrackedOrigin]
+    var tape: Pointer[Int64, MutUntrackedOrigin]
     var tape_len: Int
-    var blob: UnsafePointer[UInt8, MutUntrackedOrigin]
+    var blob: Pointer[UInt8, MutUntrackedOrigin]
     var blob_len: Int
     var cursor: Int
     # STRING_TABLE entries, filled in by parse_raw_plan once the section is read.
@@ -72,9 +72,9 @@ struct RawPlanReader(Copyable, Movable):
 
     def __init__(
         out self,
-        tape: UnsafePointer[Int64, MutUntrackedOrigin],
+        tape: Pointer[Int64, MutUntrackedOrigin],
         tape_len: Int,
-        blob: UnsafePointer[UInt8, MutUntrackedOrigin],
+        blob: Pointer[UInt8, MutUntrackedOrigin],
         blob_len: Int,
     ):
         self.tape = tape
@@ -88,7 +88,7 @@ struct RawPlanReader(Copyable, Movable):
     def next(mut self) raises -> Int64:
         if self.cursor >= self.tape_len:
             raise Error("RawPlanReader: tape overrun")
-        var v = self.tape[self.cursor]
+        var v = self.tape[unsafe_offset=self.cursor]
         self.cursor += 1
         return v
 
@@ -103,7 +103,7 @@ struct RawPlanReader(Copyable, Movable):
         var s = String("")
         for i in range(n):
             # Append one byte; blob is UTF-8, ASCII table/column names in practice.
-            s += chr(Int(self.blob[off + i]))
+            s += chr(Int(self.blob[unsafe_offset=off + i]))
         return s
 
 

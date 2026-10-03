@@ -37,19 +37,20 @@ Tile shape (one simdgroup per block, kept simple, correctness first):
 
 from std.sys import llvm_intrinsic
 from std.sys.info import is_apple_gpu, has_apple_gpu_accelerator
-from std.gpu import lane_id, block_idx, thread_idx
+from max.gpu import lane_id, block_idx, thread_idx
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
 from max.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import alloc, stack_allocation
-from std.collections import InlineArray
+from std.memory import stack_allocation
+from std.memory.alloc import alloc, Layout
 from std.math import sqrt
 
 
 # ===-------------------------------------------------------------------===#
 # 8x8 simdgroup-matrix primitives (verified on this M3, K=64, fp16, err=0).
 # Lifted from `.repos/modular/.../apple/matmul_8x8.mojo` (`_frag8_layout`,
-# `_mma8x8`); see apple_8x8_probe.mojo for the bit-exact validation.
+# `_mma8x8`). bench/apple_tc_knn_test.mojo checks the result against a scalar
+# reference.
 # ===-------------------------------------------------------------------===#
 comptime AP_MMA = 8  # 8x8x8 simdgroup-matrix shape
 comptime FRAG8 = 2  # 8x8 = 64 elems / 32 lanes = 2 per lane
@@ -119,12 +120,12 @@ def _mma8x8[
 # Apple-only via the in-kernel `is_apple_gpu()` gate.
 # ===-------------------------------------------------------------------===#
 def tc_apple_fused_knn_kernel(
-    q: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    e: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    q: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    e: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    qnorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     k_dp: Int64,
@@ -166,7 +167,7 @@ def tc_apple_fused_knn_kernel(
 
         if lane == 0:
             for q_i in range(AP_MM):
-                scnt[q_i] = 0
+                scnt[unsafe_offset=q_i] = 0
         # `scnt` is owned by lane 0 throughout, so no fence needed for it; but the
         # `s_smem` S-tile is written by all lanes and read by lane 0 each
         # iteration, so it needs a threadgroup barrier on both sides of the read
@@ -181,7 +182,7 @@ def tc_apple_fused_knn_kernel(
             # once per K-step and reused across all query-blocks; only the A
             # (query) fragment differs per block. So the Emb chunk is read once
             # and shared by AP_MM = AP_QSUB*8 queries. ---
-            var acc = InlineArray[SIMD[DType.float32, FRAG8], AP_QSUB](
+            var acc = Array[SIMD[DType.float32, FRAG8], AP_QSUB](
                 fill=SIMD[DType.float32, FRAG8](0)
             )
             var ks = 0
@@ -194,12 +195,12 @@ def tc_apple_fused_knn_kernel(
                 comptime for s in range(FRAG8):
                     var gj = n0 + fcol + s
                     if gj < n_rows:
-                        bf[s] = e[gj * K + ks + frow]
+                        bf[s] = e[unsafe_offset=gj * K + ks + frow]
                 comptime for qb in range(AP_QSUB):
                     # A (queries) MM x K row-major: this query-block's row is
                     # qb*8 + frow; lane owns cols (ks+fcol, ks+fcol+1).
                     var qrow = qb * AP_MMA + frow
-                    var af = (q + qrow * K + ks + fcol).load[width=FRAG8]()
+                    var af = q.unsafe_offset(qrow * K + ks + fcol).unsafe_load[width=FRAG8]()
                     acc[qb] = _mma8x8[DType.float16, DType.float16](
                         af, bf, acc[qb]
                     )
@@ -208,7 +209,7 @@ def tc_apple_fused_knn_kernel(
             # S[qb*8 + frow, fcol{,+1}] for every query-block qb.
             comptime for qb in range(AP_QSUB):
                 comptime for s in range(FRAG8):
-                    s_smem[(qb * AP_MMA + frow) * AP_MN + fcol + s] = acc[qb][s]
+                    s_smem[unsafe_offset=(qb * AP_MMA + frow) * AP_MN + fcol + s] = acc[qb][s]
             # Publish all lanes' S-tile writes before lane 0 reads them.
             barrier()
 
@@ -217,15 +218,15 @@ def tc_apple_fused_knn_kernel(
             # (dist, rowid) tie-break, identical to tc_knn's cosine epilogue.
             if lane == 0:
                 for m in range(AP_MM):
-                    var qn = qnorm[m]
+                    var qn = qnorm[unsafe_offset=m]
                     var off = m * k
-                    var cnt = Int(scnt[m])
+                    var cnt = Int(scnt[unsafe_offset=m])
                     for nn in range(AP_MN):
                         var row = n0 + nn
                         if row >= n_rows:
                             break
-                        var dotv = s_smem[m * AP_MN + nn]
-                        var denom = enorm[row] * qn
+                        var dotv = s_smem[unsafe_offset=m * AP_MN + nn]
+                        var denom = enorm[unsafe_offset=row] * qn
                         var cd = (
                             Float32(1) - dotv / denom if denom
                             != 0 else Float32(0)
@@ -233,26 +234,26 @@ def tc_apple_fused_knn_kernel(
                         var ci = Int64(row)
                         var accept = True
                         if cnt >= k:
-                            var wd = sd[off + k - 1]
-                            var wi = si[off + k - 1]
+                            var wd = sd[unsafe_offset=off + k - 1]
+                            var wi = si[unsafe_offset=off + k - 1]
                             if cd > wd or (cd == wd and ci >= wi):
                                 accept = False
                         if accept:
                             var pos = cnt if cnt < k else k - 1
                             while pos > 0:
-                                var pd = sd[off + pos - 1]
-                                var pi = si[off + pos - 1]
+                                var pd = sd[unsafe_offset=off + pos - 1]
+                                var pi = si[unsafe_offset=off + pos - 1]
                                 if pd > cd or (pd == cd and pi > ci):
-                                    sd[off + pos] = pd
-                                    si[off + pos] = pi
+                                    sd[unsafe_offset=off + pos] = pd
+                                    si[unsafe_offset=off + pos] = pi
                                     pos -= 1
                                 else:
                                     break
-                            sd[off + pos] = cd
-                            si[off + pos] = ci
+                            sd[unsafe_offset=off + pos] = cd
+                            si[unsafe_offset=off + pos] = ci
                             if cnt < k:
                                 cnt += 1
-                    scnt[m] = Int32(cnt)
+                    scnt[unsafe_offset=m] = Int32(cnt)
             # Hold all lanes until lane 0 has consumed this S-tile, so the next
             # iteration's MMA stores don't overwrite s_smem mid-read.
             barrier()
@@ -262,16 +263,16 @@ def tc_apple_fused_knn_kernel(
         # Layout [(block*MM + m)*k + j], matching tc_merge / tc_apple_merge.
         if lane == 0:
             for m in range(AP_MM):
-                var cnt = Int(scnt[m])
+                var cnt = Int(scnt[unsafe_offset=m])
                 var off = m * k
                 var out_base = (Int(block_idx.x) * AP_MM + m) * k
                 for j in range(k):
                     if j < cnt:
-                        cand_dist[out_base + j] = sd[off + j]
-                        cand_id[out_base + j] = si[off + j]
+                        cand_dist[unsafe_offset=out_base + j] = sd[unsafe_offset=off + j]
+                        cand_id[unsafe_offset=out_base + j] = si[unsafe_offset=off + j]
                     else:
-                        cand_dist[out_base + j] = Float32(3.0e38)
-                        cand_id[out_base + j] = Int64(-1)
+                        cand_dist[unsafe_offset=out_base + j] = Float32(3.0e38)
+                        cand_id[unsafe_offset=out_base + j] = Int64(-1)
 
 
 # ===-------------------------------------------------------------------===#
@@ -282,10 +283,10 @@ def tc_apple_fused_knn_kernel(
 # candidate count nblocks*k is small, so a single-lane merge is fine).
 # ===-------------------------------------------------------------------===#
 def tc_apple_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     Mq_dp: Int64,
     nblocks_dp: Int64,
     k_dp: Int64,
@@ -316,39 +317,39 @@ def tc_apple_merge_kernel(
             var b = c // k
             var j = c % k
             var idx = (b * Mq + mq) * k + j
-            var ci = cand_id[idx]
+            var ci = cand_id[unsafe_offset=idx]
             if ci < 0:
                 continue
-            var cd = cand_dist[idx]
+            var cd = cand_dist[unsafe_offset=idx]
             var accept = True
             if cnt >= k:
-                var wd = sd[k - 1]
-                var wi = si[k - 1]
+                var wd = sd[unsafe_offset=k - 1]
+                var wi = si[unsafe_offset=k - 1]
                 if cd > wd or (cd == wd and ci >= wi):
                     accept = False
             if accept:
                 var pos = cnt if cnt < k else k - 1
                 while pos > 0:
-                    var pd = sd[pos - 1]
-                    var pi = si[pos - 1]
+                    var pd = sd[unsafe_offset=pos - 1]
+                    var pi = si[unsafe_offset=pos - 1]
                     if pd > cd or (pd == cd and pi > ci):
-                        sd[pos] = pd
-                        si[pos] = pi
+                        sd[unsafe_offset=pos] = pd
+                        si[unsafe_offset=pos] = pi
                         pos -= 1
                     else:
                         break
-                sd[pos] = cd
-                si[pos] = ci
+                sd[unsafe_offset=pos] = cd
+                si[unsafe_offset=pos] = ci
                 if cnt < k:
                     cnt += 1
 
         for j in range(k):
             if j < cnt:
-                out_dist[mq * k + j] = sd[j]
-                out_id[mq * k + j] = si[j]
+                out_dist[unsafe_offset=mq * k + j] = sd[unsafe_offset=j]
+                out_id[unsafe_offset=mq * k + j] = si[unsafe_offset=j]
             else:
-                out_dist[mq * k + j] = Float32(3.0e38)
-                out_id[mq * k + j] = Int64(-1)
+                out_dist[unsafe_offset=mq * k + j] = Float32(3.0e38)
+                out_id[unsafe_offset=mq * k + j] = Int64(-1)
 
 
 # Per-row L2 norm of the fp16-resident matrix (one simdgroup per row,
@@ -356,8 +357,8 @@ def tc_apple_merge_kernel(
 # (fp16-cast-to-fp32)^2), the same cosine denom as the scalar f16 path.
 # Apple-only via the in-kernel gate.
 def _tc_apple_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
 ):
@@ -377,15 +378,15 @@ def _tc_apple_enorm_kernel(
         var na = Float32(0)
         var i = lane
         while i < K:
-            var av = emb[base + i].cast[DType.float32]()
+            var av = emb[unsafe_offset=base + i].cast[DType.float32]()
             na += av * av
             i += AP_THREADS
-        part[lane] = na
+        part[unsafe_offset=lane] = na
         if lane == 0:
             var tot = Float32(0)
             for t in range(AP_THREADS):
-                tot += part[t]
-            enorm[row] = sqrt(tot)
+                tot += part[unsafe_offset=t]
+            enorm[unsafe_offset=row] = sqrt(tot)
 
 
 # ===-------------------------------------------------------------------===#
@@ -400,31 +401,33 @@ def run_tc_knn_apple_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     comptime if has_apple_gpu_accelerator():
         # Host: fp16 query tile (padded to a multiple of MM rows so the kernel's
         # full-MM q tile is always in bounds), fp32 query L2 norms.
         var ntile = ((M + AP_MM - 1) // AP_MM) * AP_MM
-        var qh16 = alloc[Float16](ntile * K)
-        var qnorm_h = alloc[Float32](ntile)
+        var qh16_mem = alloc(Layout[Float16](count=ntile * K)).into_managed()
+        var qh16 = qh16_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var qnorm_h_mem = alloc(Layout[Float32](count=ntile)).into_managed()
+        var qnorm_h = qnorm_h_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         for m in range(M):
             var qoff = m * K
             var s = Float32(0)
             for i in range(K):
-                var v = qs[qoff + i]
-                qh16[qoff + i] = v.cast[DType.float16]()
+                var v = qs[unsafe_offset=qoff + i]
+                qh16[unsafe_offset=qoff + i] = v.cast[DType.float16]()
                 s += v * v
-            qnorm_h[m] = sqrt(s)
+            qnorm_h[unsafe_offset=m] = sqrt(s)
         for m in range(M, ntile):
             var qoff = m * K
             for i in range(K):
-                qh16[qoff + i] = Float16(0)
-            qnorm_h[m] = Float32(1)  # padded queries discarded by qcount guard
+                qh16[unsafe_offset=qoff + i] = Float16(0)
+            qnorm_h[unsafe_offset=m] = Float32(1)  # padded queries discarded by qcount guard
 
         var qs_dev = ctx.enqueue_create_buffer[DType.float16](ntile * K)
         var qnorm_dev = ctx.enqueue_create_buffer[DType.float32](ntile)
@@ -432,13 +435,13 @@ def run_tc_knn_apple_batch(
         ctx.synchronize()
         ctx.enqueue_copy(
             qs_dev,
-            UnsafePointer[Float16, ImmUntrackedOrigin](
+            Pointer[Float16, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qh16)
             ),
         )
         ctx.enqueue_copy(
             qnorm_dev,
-            UnsafePointer[Float32, ImmUntrackedOrigin](
+            Pointer[Float32, ImmUntrackedOrigin](
                 unsafe_from_address=Int(qnorm_h)
             ),
         )
@@ -461,8 +464,10 @@ def run_tc_knn_apple_batch(
             AP_MM * k
         )
         var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](AP_MM * k)
-        var merged_dist_h = alloc[Float32](AP_MM * k)
-        var merged_id_h = alloc[Int64](AP_MM * k)
+        var merged_dist_h_mem = alloc(Layout[Float32](count=AP_MM * k)).into_managed()
+        var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+        var merged_id_h_mem = alloc(Layout[Int64](count=AP_MM * k)).into_managed()
+        var merged_id_h = merged_id_h_mem.unsafe_ptr()
         ctx.synchronize()
 
         var q0 = 0
@@ -471,8 +476,8 @@ def run_tc_knn_apple_batch(
             if q0 + qcount > M:
                 qcount = M - q0
 
-            var q_ptr = qs_dev.unsafe_ptr() + q0 * K
-            var qnorm_ptr = qnorm_dev.unsafe_ptr() + q0
+            var q_ptr = qs_dev.unsafe_ptr().unsafe_offset(q0 * K)
+            var qnorm_ptr = qnorm_dev.unsafe_ptr().unsafe_offset(q0)
 
             ctx.enqueue_function[tc_apple_fused_knn_kernel](
                 q_ptr.unsafe_mut_cast[True](),
@@ -504,11 +509,11 @@ def run_tc_knn_apple_batch(
             for lq in range(qcount):
                 var m = q0 + lq
                 for j in range(k):
-                    out_ids[m * k + j] = merged_id_h[lq * k + j]
-                    out_dists[m * k + j] = merged_dist_h[lq * k + j]
+                    out_ids[unsafe_offset=m * k + j] = merged_id_h[unsafe_offset=lq * k + j]
+                    out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
             q0 += AP_MM
 
-        qh16.free()
-        qnorm_h.free()
-        merged_dist_h.free()
-        merged_id_h.free()
+        deinit(qh16_mem^)
+        deinit(qnorm_h_mem^)
+        deinit(merged_dist_h_mem^)
+        deinit(merged_id_h_mem^)

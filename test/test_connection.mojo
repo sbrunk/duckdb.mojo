@@ -4,13 +4,13 @@ from std.testing.suite import TestSuite
 
 
 def test_connection() raises:
-    con = DuckDB.connect(":memory:")
-    result = con.execute("SELECT 42")
+    var con = DuckDB.connect(":memory:")
+    var result = con.execute("SELECT 42")
     assert_equal(result.fetch_chunk().get[Int32](col=0, row=0), 42)
 
 
 def test_failure() raises:
-    con = DuckDB.connect(":memory:")
+    var con = DuckDB.connect(":memory:")
     with assert_raises(contains="Parser Error"):
         _ = con.execute("invalid statement")
     try:

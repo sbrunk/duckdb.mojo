@@ -1,8 +1,6 @@
 """Fused tensor-core kNN for the batched fp16 top-k path (NVIDIA-only).
 
-Ported from `bench/tc_knn_fused.mojo` (measured: recall@10 = 1.0, 0 genuine misses
-at N=1M K=768 M=128 k=10; ~67x the scalar batched path on an RTX 4090). It
-computes per-query top-k via a tiled MMA `Q.Emb^T` (m16n8k8, transpose_b) fused
+It computes per-query top-k via a tiled MMA `Q.Emb^T` (m16n8k8, transpose_b) fused
 with a streaming per-query top-k, so the M x N similarity matrix is never
 materialized: only Emb is read, and only M x k results are written.
 
@@ -32,7 +30,7 @@ unsupported K falls back to the scalar path (the caller keeps the scalar driver)
 """
 
 from std.sys.info import is_nvidia_gpu, has_nvidia_gpu_accelerator
-from std.gpu import (
+from max.gpu import (
     WARP_SIZE,
     thread_idx,
     block_idx,
@@ -41,7 +39,8 @@ from std.gpu import (
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace, async_copy_wait_all
 from max.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import alloc, stack_allocation
+from std.memory import stack_allocation
+from std.memory.alloc import alloc, Layout as MemLayout
 from layout import Layout, LayoutTensor, UNKNOWN_VALUE
 from layout.runtime_layout import RuntimeLayout
 from layout.layout_tensor import copy_dram_to_sram_async
@@ -117,10 +116,10 @@ def tc_fused_knn_kernel[
 ](
     q: LayoutTensor[DType.float16, q_layout, MutUntrackedOrigin],
     e: LayoutTensor[DType.float16, e_layout, MutUntrackedOrigin],
-    qnorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    qnorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     n_rows_dp: Int64,
     k_dp: Int64,
     nblocks_dp: Int64,
@@ -136,7 +135,7 @@ def tc_fused_knn_kernel[
         ]()
 
         var warp_id = get_warp_id()
-        warp_y, warp_x = udivmod(warp_id, TC_BN // TC_WN)
+        var warp_y, warp_x = udivmod(warp_id, TC_BN // TC_WN)
 
         var a_smem = LayoutTensor[
             DType.float16, Layout.row_major(TC_BM, TC_BK), MutUntrackedOrigin,
@@ -167,7 +166,7 @@ def tc_fused_knn_kernel[
         var bi = stack_allocation[TC_QPT * TC_K_CAP, Scalar[DType.int64]]()
         var bcnt = stack_allocation[TC_QPT, Scalar[DType.int32]]()
         comptime for p in range(TC_QPT):
-            bcnt[p] = 0
+            bcnt[unsafe_offset=p] = 0
 
         comptime CPW = TC_BK // 4
         comptime CRows = TC_NUM_THREADS // CPW
@@ -220,9 +219,9 @@ def tc_fused_knn_kernel[
 
             comptime for p in range(TC_QPT):
                 var m = tid + p * TC_NUM_THREADS
-                var qn = qnorm[m]
+                var qn = qnorm[unsafe_offset=m]
                 var off = p * TC_K_CAP
-                var cnt = Int(bcnt[p])
+                var cnt = Int(bcnt[unsafe_offset=p])
                 for nn in range(TC_BN):
                     var row = n0 + nn
                     if row >= n_rows:
@@ -237,7 +236,7 @@ def tc_fused_knn_kernel[
                         # carry squared norms here (host/enorm-kernel skip sqrt
                         # for L2). Beware of catastrophic cancellation for
                         # non-normalized data + fp16 dot; see run_tc_knn_batch.
-                        cd = qn + enorm[row] - Float32(2) * dotv
+                        cd = qn + enorm[unsafe_offset=row] - Float32(2) * dotv
                     elif metric == TC_METRIC_IP:
                         # Negative inner product (top-k by largest dot = smallest
                         # -dot). Norms unused.
@@ -245,7 +244,7 @@ def tc_fused_knn_kernel[
                     else:
                         # Cosine (default): 1 - dot/(|q|*|e|). enorm pre-sqrt'd
                         # on host; byte-for-byte the original epilogue.
-                        var denom = enorm[row] * qn
+                        var denom = enorm[unsafe_offset=row] * qn
                         cd = (
                             Float32(1) - dotv / denom if denom
                             != 0 else Float32(0)
@@ -253,41 +252,41 @@ def tc_fused_knn_kernel[
                     var ci = Int64(row)
                     var accept = True
                     if cnt >= k:
-                        var wd = bd[off + k - 1]
-                        var wi = bi[off + k - 1]
+                        var wd = bd[unsafe_offset=off + k - 1]
+                        var wi = bi[unsafe_offset=off + k - 1]
                         if cd > wd or (cd == wd and ci >= wi):
                             accept = False
                     if accept:
                         var pos = cnt if cnt < k else k - 1
                         while pos > 0:
-                            var pd = bd[off + pos - 1]
-                            var pi = bi[off + pos - 1]
+                            var pd = bd[unsafe_offset=off + pos - 1]
+                            var pi = bi[unsafe_offset=off + pos - 1]
                             if pd > cd or (pd == cd and pi > ci):
-                                bd[off + pos] = pd
-                                bi[off + pos] = pi
+                                bd[unsafe_offset=off + pos] = pd
+                                bi[unsafe_offset=off + pos] = pi
                                 pos -= 1
                             else:
                                 break
-                        bd[off + pos] = cd
-                        bi[off + pos] = ci
+                        bd[unsafe_offset=off + pos] = cd
+                        bi[unsafe_offset=off + pos] = ci
                         if cnt < k:
                             cnt += 1
-                bcnt[p] = Int32(cnt)
+                bcnt[unsafe_offset=p] = Int32(cnt)
             barrier()
             n0 += NSTRIDE
 
         comptime for p in range(TC_QPT):
             var m = tid + p * TC_NUM_THREADS
             var off = p * TC_K_CAP
-            var cnt = Int(bcnt[p])
+            var cnt = Int(bcnt[unsafe_offset=p])
             var out_base = (Int(block_idx.x) * TC_BM + m) * k
             for j in range(k):
                 if j < cnt:
-                    cand_dist[out_base + j] = bd[off + j]
-                    cand_id[out_base + j] = bi[off + j]
+                    cand_dist[unsafe_offset=out_base + j] = bd[unsafe_offset=off + j]
+                    cand_id[unsafe_offset=out_base + j] = bi[unsafe_offset=off + j]
                 else:
-                    cand_dist[out_base + j] = Float32(3.0e38)
-                    cand_id[out_base + j] = Int64(-1)
+                    cand_dist[unsafe_offset=out_base + j] = Float32(3.0e38)
+                    cand_id[unsafe_offset=out_base + j] = Int64(-1)
 
 
 # ===-------------------------------------------------------------------===#
@@ -296,10 +295,10 @@ def tc_fused_knn_kernel[
 # `(block_idx.x*TC_BM + m)*k` emit). NVIDIA-only via the comptime gate.
 # ===-------------------------------------------------------------------===#
 def tc_merge_kernel(
-    cand_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    cand_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
-    out_dist: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
-    out_id: UnsafePointer[Scalar[DType.int64], MutUntrackedOrigin],
+    cand_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    cand_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
+    out_dist: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
+    out_id: Pointer[Scalar[DType.int64], MutUntrackedOrigin],
     Mq_dp: Int64,
     nblocks_dp: Int64,
     k_dp: Int64,
@@ -325,7 +324,7 @@ def tc_merge_kernel(
         if mq >= Mq:
             return
         if lane == 0:
-            scnt[0] = 0
+            scnt[unsafe_offset=0] = 0
         barrier()
 
         var ncand = nblocks * k
@@ -338,46 +337,46 @@ def tc_merge_kernel(
                 var b = c // k
                 var j = c % k
                 var idx = (b * Mq + mq) * k + j
-                my_id = cand_id[idx]
-                my_d = cand_dist[idx]
+                my_id = cand_id[unsafe_offset=idx]
+                my_d = cand_dist[unsafe_offset=idx]
             for src in range(WARP_SIZE):
                 barrier()
                 if lane == src and my_id >= 0:
-                    var cnt = Int(scnt[0])
+                    var cnt = Int(scnt[unsafe_offset=0])
                     var cd = my_d
                     var ci = my_id
                     var accept = True
                     if cnt >= k:
-                        var wd = sd[k - 1]
-                        var wi = si[k - 1]
+                        var wd = sd[unsafe_offset=k - 1]
+                        var wi = si[unsafe_offset=k - 1]
                         if cd > wd or (cd == wd and ci >= wi):
                             accept = False
                     if accept:
                         var pos = cnt if cnt < k else k - 1
                         while pos > 0:
-                            var pd = sd[pos - 1]
-                            var pi = si[pos - 1]
+                            var pd = sd[unsafe_offset=pos - 1]
+                            var pi = si[unsafe_offset=pos - 1]
                             if pd > cd or (pd == cd and pi > ci):
-                                sd[pos] = pd
-                                si[pos] = pi
+                                sd[unsafe_offset=pos] = pd
+                                si[unsafe_offset=pos] = pi
                                 pos -= 1
                             else:
                                 break
-                        sd[pos] = cd
-                        si[pos] = ci
+                        sd[unsafe_offset=pos] = cd
+                        si[unsafe_offset=pos] = ci
                         if cnt < k:
-                            scnt[0] = Int32(cnt + 1)
+                            scnt[unsafe_offset=0] = Int32(cnt + 1)
         barrier()
 
-        var cnt = Int(scnt[0])
+        var cnt = Int(scnt[unsafe_offset=0])
         var j = lane
         while j < k:
             if j < cnt:
-                out_dist[mq * k + j] = sd[j]
-                out_id[mq * k + j] = si[j]
+                out_dist[unsafe_offset=mq * k + j] = sd[unsafe_offset=j]
+                out_id[unsafe_offset=mq * k + j] = si[unsafe_offset=j]
             else:
-                out_dist[mq * k + j] = Float32(3.0e38)
-                out_id[mq * k + j] = Int64(-1)
+                out_dist[unsafe_offset=mq * k + j] = Float32(3.0e38)
+                out_id[unsafe_offset=mq * k + j] = Int64(-1)
             j += WARP_SIZE
 
 
@@ -403,8 +402,8 @@ def _run_tc_knn_for_kd[
     n_rows: Int,
     M: Int,
     k: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     # Host gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
     # is False in host context). On Apple this is comptime-False, so the body
@@ -433,8 +432,10 @@ def _run_tc_knn_for_kd[
             TC_BM * k
         )
         var merged_id_dev = ctx.enqueue_create_buffer[DType.int64](TC_BM * k)
-        var merged_dist_h = alloc[Float32](TC_BM * k)
-        var merged_id_h = alloc[Int64](TC_BM * k)
+        var merged_dist_h_mem = alloc(MemLayout[Float32](count=TC_BM * k)).into_managed()
+        var merged_dist_h = merged_dist_h_mem.unsafe_ptr()
+        var merged_id_h_mem = alloc(MemLayout[Int64](count=TC_BM * k)).into_managed()
+        var merged_id_h = merged_id_h_mem.unsafe_ptr()
         ctx.synchronize()
 
         comptime fk = tc_fused_knn_kernel[KD, metric, q_layout, e_layout]
@@ -451,7 +452,7 @@ def _run_tc_knn_for_kd[
 
             var q_sub = DeviceBuffer(
                 ctx,
-                qs_dev.unsafe_ptr() + q0 * KD,
+                qs_dev.unsafe_ptr().unsafe_offset(q0 * KD),
                 TC_BM * KD,
                 owning=False,
             )
@@ -465,7 +466,7 @@ def _run_tc_knn_for_kd[
                 DType.float16, q_layout, MutUntrackedOrigin
             ](q_span)
             # qnorm offset for this tile.
-            var qnorm_sub = qnorm_dev.unsafe_ptr() + q0
+            var qnorm_sub = qnorm_dev.unsafe_ptr().unsafe_offset(q0)
 
             ctx.enqueue_function[fk](
                 q_tensor,
@@ -496,12 +497,12 @@ def _run_tc_knn_for_kd[
             for lq in range(qcount):
                 var m = q0 + lq
                 for j in range(k):
-                    out_ids[m * k + j] = merged_id_h[lq * k + j]
-                    out_dists[m * k + j] = merged_dist_h[lq * k + j]
+                    out_ids[unsafe_offset=m * k + j] = merged_id_h[unsafe_offset=lq * k + j]
+                    out_dists[unsafe_offset=m * k + j] = merged_dist_h[unsafe_offset=lq * k + j]
             q0 += TC_BM
 
-        merged_dist_h.free()
-        merged_id_h.free()
+        deinit(merged_dist_h_mem^)
+        deinit(merged_id_h_mem^)
 
 
 # ===-------------------------------------------------------------------===#
@@ -537,12 +538,12 @@ def run_tc_knn_batch(
     emb16: DeviceBuffer[DType.float16],
     n_rows: Int,
     K: Int,
-    qs: UnsafePointer[Float32, ImmUntrackedOrigin],
+    qs: Pointer[Float32, ImmUntrackedOrigin],
     M: Int,
     k: Int,
     metric: Int,
-    out_ids: UnsafePointer[Int64, MutUntrackedOrigin],
-    out_dists: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_ids: Pointer[Int64, MutUntrackedOrigin],
+    out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
     # Host gate (see `_run_tc_knn_for_kd`): NVIDIA-accelerator-only via the
     # host-side comptime query; Apple never compiles this body.
@@ -558,35 +559,37 @@ def run_tc_knn_batch(
         # Host: fp16 query tile (padded to a multiple of BM rows so the kernel's
         # full-BM q tile is always in bounds), fp32 query norms, fp32 emb norms.
         var ntile = ((M + TC_BM - 1) // TC_BM) * TC_BM
-        var qh16 = alloc[Float16](ntile * K)
-        var qnorm_h = alloc[Float32](ntile)
+        var qh16_mem = alloc(MemLayout[Float16](count=ntile * K)).into_managed()
+        var qh16 = qh16_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var qnorm_h_mem = alloc(MemLayout[Float32](count=ntile)).into_managed()
+        var qnorm_h = qnorm_h_mem.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         for m in range(M):
             var qoff = m * K
             var s = Float32(0)
             for i in range(K):
-                var v = qs[qoff + i]
-                qh16[qoff + i] = v.cast[DType.float16]()
+                var v = qs[unsafe_offset=qoff + i]
+                qh16[unsafe_offset=qoff + i] = v.cast[DType.float16]()
                 s += v * v
             # Cosine wants the L2 norm; L2/IP want the squared norm (L2) or do
             # not read it (IP). For L2 we keep s (= |q|^2); for cosine sqrt(s).
             if metric == TC_METRIC_COSINE:
-                qnorm_h[m] = sqrt(s)
+                qnorm_h[unsafe_offset=m] = sqrt(s)
             else:
-                qnorm_h[m] = s
+                qnorm_h[unsafe_offset=m] = s
         # Pad rows [M, ntile) with zeros (qnorm 1 so the cosine denom != 0;
         # padded queries' results are discarded by the qcount guard).
         for m in range(M, ntile):
             var qoff = m * K
             for i in range(K):
-                qh16[qoff + i] = Float16(0)
-            qnorm_h[m] = Float32(1)
+                qh16[unsafe_offset=qoff + i] = Float16(0)
+            qnorm_h[unsafe_offset=m] = Float32(1)
 
         var qs_dev = ctx.enqueue_create_buffer[DType.float16](ntile * K)
         var qnorm_dev = ctx.enqueue_create_buffer[DType.float32](ntile)
         var enorm_dev = ctx.enqueue_create_buffer[DType.float32](n_rows)
         ctx.synchronize()
         ctx.enqueue_copy(qs_dev, qh16)
-        var qnorm_imm = UnsafePointer[Float32, ImmUntrackedOrigin](
+        var qnorm_imm = Pointer[Float32, ImmUntrackedOrigin](
             unsafe_from_address=Int(qnorm_h)
         )
         ctx.enqueue_copy(qnorm_dev, qnorm_imm)
@@ -679,8 +682,8 @@ def run_tc_knn_batch(
             else:
                 raise Error("tc_knn: unsupported K (guard tc_knn_supported)")
 
-        qh16.free()
-        qnorm_h.free()
+        deinit(qh16_mem^)
+        deinit(qnorm_h_mem^)
 
 
 # Per-row norm of the fp16-resident matrix (one warp per row, warp-strided).
@@ -689,8 +692,8 @@ def run_tc_knn_batch(
 # squared norm (sum of squares, no sqrt) for the L2-distance epilogue.
 # NVIDIA-only via the comptime gate.
 def _tc_enorm_kernel(
-    emb: UnsafePointer[Scalar[DType.float16], MutUntrackedOrigin],
-    enorm: UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin],
+    emb: Pointer[Scalar[DType.float16], MutUntrackedOrigin],
+    enorm: Pointer[Scalar[DType.float32], MutUntrackedOrigin],
     n_rows_dp: Int64,
     K_dp: Int64,
     squared_dp: Int64,
@@ -699,7 +702,7 @@ def _tc_enorm_kernel(
     var K = Int(K_dp)
     var squared = Int(squared_dp)
     comptime if is_nvidia_gpu():
-        from std.gpu.primitives import warp
+        from max.gpu.primitives import warp
 
         var row = Int(block_idx.x)
         if row >= n_rows:
@@ -709,9 +712,9 @@ def _tc_enorm_kernel(
         var na = Float32(0)
         var i = lane
         while i < K:
-            var av = emb[base + i].cast[DType.float32]()
+            var av = emb[unsafe_offset=base + i].cast[DType.float32]()
             na += av * av
             i += WARP_SIZE
         na = warp.sum(na)
         if lane == 0:
-            enorm[row] = na if squared != 0 else sqrt(na)
+            enorm[unsafe_offset=row] = na if squared != 0 else sqrt(na)

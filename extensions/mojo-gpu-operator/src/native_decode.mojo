@@ -48,7 +48,7 @@ These kernels live here and are imported by gpu_kernels.mojo (the dylib root,
 where the @export C-ABI wrappers must live per the build).
 """
 
-from std.gpu import block_idx, thread_idx, block_dim, grid_dim
+from max.gpu import block_idx, thread_idx, block_dim, grid_dim
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation, bitcast
@@ -101,7 +101,7 @@ def _tbytes[T: DType]() -> Int:
 # ---------------------------------------------------------------------------
 @always_inline
 def unpack_value(
-    packed: UnsafePointer[Scalar[DType.uint32], MutUntrackedOrigin],
+    packed: Pointer[Scalar[DType.uint32], MutUntrackedOrigin],
     idx: Int,
     width: SIMDLength,
 ) -> UInt64:
@@ -113,14 +113,14 @@ def unpack_value(
     var word_idx = Int(bit_pos // UInt64(WORD_BITS))
     var bit_off = Int(bit_pos % UInt64(WORD_BITS))
 
-    var result = UInt64(packed[word_idx])
+    var result = UInt64(packed[unsafe_offset=word_idx])
     if bit_off + width > WORD_BITS:
-        result |= UInt64(packed[word_idx + 1]) << UInt64(WORD_BITS)
+        result |= UInt64(packed[unsafe_offset=word_idx + 1]) << UInt64(WORD_BITS)
     result >>= UInt64(bit_off)
 
     # For 8-byte types a value can need bits from the second-next word.
     if bit_off > 0 and bit_off + width > 2 * WORD_BITS:
-        result |= UInt64(packed[word_idx + 2]) << UInt64(64 - bit_off)
+        result |= UInt64(packed[unsafe_offset=word_idx + 2]) << UInt64(64 - bit_off)
 
     var mask: UInt64
     if width >= 64:
@@ -135,18 +135,18 @@ def unpack_value(
 # (memcpy-equivalent; the segment bytes are native little-endian.)
 # ---------------------------------------------------------------------------
 @always_inline
-def _load_u64(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt64:
+def _load_u64(p: Pointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt64:
     var v = UInt64(0)
     comptime for b in range(8):
-        v |= UInt64(p[off + b]) << UInt64(8 * b)
+        v |= UInt64(p[unsafe_offset=off + b]) << UInt64(8 * b)
     return v
 
 
 @always_inline
-def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt32:
+def _load_u32(p: Pointer[Scalar[DType.uint8], MutUntrackedOrigin], off: Int) -> UInt32:
     var v = UInt32(0)
     comptime for b in range(4):
-        v |= UInt32(p[off + b]) << UInt32(8 * b)
+        v |= UInt32(p[unsafe_offset=off + b]) << UInt32(8 * b)
     return v
 
 
@@ -158,8 +158,8 @@ def _load_u32(p: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin], off: In
 def uncompressed_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
-    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    seg: Pointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    dst: Pointer[Scalar[T], MutUntrackedOrigin],
     n_rows_dp: Int64,
     data_off_dp: Int64,
     out_row_offset_dp: Int64,
@@ -178,8 +178,8 @@ def uncompressed_decode_kernel[
         var base = data_off + i * TBYTES
         var v = UInt64(0)
         comptime for b in range(TBYTES):
-            v |= UInt64(seg[base + b]) << UInt64(8 * b)
-        dst[out_row_offset + i] = bitcast[T, 1](v.cast[UT]())
+            v |= UInt64(seg[unsafe_offset=base + b]) << UInt64(8 * b)
+        dst[unsafe_offset=out_row_offset + i] = bitcast[T, 1](v.cast[UT]())
         i += stride
 
 
@@ -202,9 +202,9 @@ def uncompressed_decode_kernel[
 def bitpacking_decode_kernel[
     T: DType
 ](
-    seg: UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin],
+    seg: Pointer[Scalar[DType.uint8], MutUntrackedOrigin],
     seg_bytes_dp: Int64,
-    dst: UnsafePointer[Scalar[T], MutUntrackedOrigin],
+    dst: Pointer[Scalar[T], MutUntrackedOrigin],
     group_idx_dp: Int64,
     group_rows_dp: Int64,
     out_row_offset_dp: Int64,
@@ -243,11 +243,11 @@ def bitpacking_decode_kernel[
     var nthreads = Int(block_dim.x)
 
     if tid == 0:
-        sm_mode[0] = Int32(BPMODE_INVALID)
-        sm_width[0] = 0
-        sm_packed_off[0] = 0
-        sm_frame[0] = 0
-        sm_aux[0] = 0
+        sm_mode[unsafe_offset=0] = Int32(BPMODE_INVALID)
+        sm_width[unsafe_offset=0] = 0
+        sm_packed_off[unsafe_offset=0] = 0
+        sm_frame[unsafe_offset=0] = 0
+        sm_aux[unsafe_offset=0] = 0
 
         var metadata_end = Int(_load_u64(seg, 0))
         # Trailer entry K (=group_idx) at metadata_end - (K+1)*4, and the trailer
@@ -268,24 +268,24 @@ def bitpacking_decode_kernel[
                 # (DELTA_FOR's delta_offset) is read with an extra bound check.
                 var v0 = UInt64(0)
                 for b in range(TBYTES):
-                    v0 |= UInt64(seg[data_off + b]) << UInt64(8 * b)
+                    v0 |= UInt64(seg[unsafe_offset=data_off + b]) << UInt64(8 * b)
                 var v1 = UInt64(0)
                 for b in range(TBYTES):
-                    v1 |= UInt64(seg[data_off + TBYTES + b]) << UInt64(8 * b)
+                    v1 |= UInt64(seg[unsafe_offset=data_off + TBYTES + b]) << UInt64(8 * b)
 
                 if parsed_mode == BPMODE_CONSTANT:
                     # [T value]
-                    sm_mode[0] = Int32(BPMODE_CONSTANT)
-                    sm_aux[0] = v0.cast[UT]()
+                    sm_mode[unsafe_offset=0] = Int32(BPMODE_CONSTANT)
+                    sm_aux[unsafe_offset=0] = v0.cast[UT]()
                 elif parsed_mode == BPMODE_CONSTANT_DELTA:
                     # [T frame][T delta]   (no packed stream)
                     #   out[i] = frame + i*delta
-                    sm_mode[0] = Int32(BPMODE_CONSTANT_DELTA)
-                    sm_frame[0] = v0.cast[UT]()
-                    sm_aux[0] = v1.cast[UT]()
+                    sm_mode[unsafe_offset=0] = Int32(BPMODE_CONSTANT_DELTA)
+                    sm_frame[unsafe_offset=0] = v0.cast[UT]()
+                    sm_aux[unsafe_offset=0] = v1.cast[UT]()
                 elif parsed_mode == BPMODE_FOR:
                     # [T frame][T width][packed...]
-                    var width = Int(seg[data_off + TBYTES])  # width fits in 1 byte
+                    var width = Int(seg[unsafe_offset=data_off + TBYTES])  # width fits in 1 byte
                     var packed_off = data_off + 2 * TBYTES
                     var valid = width <= TBYTES * 8
                     if valid:
@@ -293,21 +293,21 @@ def bitpacking_decode_kernel[
                         var packed_words = ceildiv(group_rows * width, 32)
                         var packed_end = packed_off + packed_words * 4
                         if packed_end <= metadata_end:
-                            sm_mode[0] = Int32(BPMODE_FOR)
-                            sm_width[0] = Int32(width)
-                            sm_packed_off[0] = Int32(packed_off)
-                            sm_frame[0] = v0.cast[UT]()
+                            sm_mode[unsafe_offset=0] = Int32(BPMODE_FOR)
+                            sm_width[unsafe_offset=0] = Int32(width)
+                            sm_packed_off[unsafe_offset=0] = Int32(packed_off)
+                            sm_frame[unsafe_offset=0] = v0.cast[UT]()
                 elif parsed_mode == BPMODE_DELTA_FOR:
                     # [T frame][T width][T delta_offset][packed...]
                     # DELTA_FOR adds a third T (delta_offset) before the packed
                     # stream, so re-check the bound to catch tight segments where the third
                     # read would alias the metadata trailer.
                     if data_off + 3 * TBYTES <= metadata_end:
-                        var width = Int(seg[data_off + TBYTES])  # width fits in 1 byte
+                        var width = Int(seg[unsafe_offset=data_off + TBYTES])  # width fits in 1 byte
                         var delta_off_u = UInt64(0)
                         for b in range(TBYTES):
                             delta_off_u |= (
-                                UInt64(seg[data_off + 2 * TBYTES + b])
+                                UInt64(seg[unsafe_offset=data_off + 2 * TBYTES + b])
                                 << UInt64(8 * b)
                             )
                         var packed_off = data_off + 3 * TBYTES
@@ -316,22 +316,22 @@ def bitpacking_decode_kernel[
                             var packed_words = ceildiv(group_rows * width, 32)
                             var packed_end = packed_off + packed_words * 4
                             if packed_end <= metadata_end:
-                                sm_mode[0] = Int32(BPMODE_DELTA_FOR)
-                                sm_width[0] = Int32(width)
-                                sm_packed_off[0] = Int32(packed_off)
-                                sm_frame[0] = v0.cast[UT]()
-                                sm_aux[0] = delta_off_u.cast[UT]()
+                                sm_mode[unsafe_offset=0] = Int32(BPMODE_DELTA_FOR)
+                                sm_width[unsafe_offset=0] = Int32(width)
+                                sm_packed_off[unsafe_offset=0] = Int32(packed_off)
+                                sm_frame[unsafe_offset=0] = v0.cast[UT]()
+                                sm_aux[unsafe_offset=0] = delta_off_u.cast[UT]()
                 # INVALID / AUTO / unknown: leave INVALID.
     barrier()
 
-    var mode = Int(sm_mode[0])
+    var mode = Int(sm_mode[unsafe_offset=0])
     var out_base = out_row_offset
 
     if mode == BPMODE_CONSTANT:
-        var val = bitcast[T, 1](sm_aux[0])
+        var val = bitcast[T, 1](sm_aux[unsafe_offset=0])
         var i = tid
         while i < group_rows:
-            dst[out_base + i] = val
+            dst[unsafe_offset=out_base + i] = val
             i += nthreads
         return
 
@@ -341,12 +341,12 @@ def bitpacking_decode_kernel[
         #   target[i] = constant * (group_offset + i) + frame_of_reference
         # group_offset is 0 at the start of each metadata group (one CTA = one
         # group), so it reduces to frame + i*delta.
-        var frame_u = sm_frame[0]
-        var delta_u = sm_aux[0]
+        var frame_u = sm_frame[unsafe_offset=0]
+        var delta_u = sm_aux[unsafe_offset=0]
         var i = tid
         while i < group_rows:
             var summed = frame_u + UInt64(i).cast[UT]() * delta_u
-            dst[out_base + i] = bitcast[T, 1](summed)
+            dst[unsafe_offset=out_base + i] = bitcast[T, 1](summed)
             i += nthreads
         return
 
@@ -354,14 +354,14 @@ def bitpacking_decode_kernel[
         # FOR: out[i] = frame + unpack_value(width, i).
         # Do the add in the unsigned domain (two's-complement wrap matches DuckDB's
         # frame-of-reference decode) then reinterpret the bits to the signed T.
-        var width = Int(sm_width[0])
-        var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
-        var frame_u = sm_frame[0]  # frame as the unsigned bit-pattern of T
+        var width = Int(sm_width[unsafe_offset=0])
+        var packed = (seg.unsafe_offset(Int(sm_packed_off[unsafe_offset=0]))).unsafe_bitcast[Scalar[DType.uint32]]()
+        var frame_u = sm_frame[unsafe_offset=0]  # frame as the unsigned bit-pattern of T
         var i = tid
         while i < group_rows:
             var raw = unpack_value(packed, i, width)  # UInt64 offset
             var summed = frame_u + raw.cast[UT]()
-            dst[out_base + i] = bitcast[T, 1](summed)
+            dst[unsafe_offset=out_base + i] = bitcast[T, 1](summed)
             i += nthreads
         return
 
@@ -386,35 +386,35 @@ def bitpacking_decode_kernel[
         var sm_scan = stack_allocation[
             BP_META_GROUP_SIZE, Scalar[UT], address_space = AddressSpace.SHARED
         ]()
-        var width = Int(sm_width[0])
-        var packed = (seg + Int(sm_packed_off[0])).bitcast[Scalar[DType.uint32]]()
-        var frame_u = sm_frame[0]
+        var width = Int(sm_width[unsafe_offset=0])
+        var packed = (seg.unsafe_offset(Int(sm_packed_off[unsafe_offset=0]))).unsafe_bitcast[Scalar[DType.uint32]]()
+        var frame_u = sm_frame[unsafe_offset=0]
 
         # Stage 1 (parallel): each thread frame-decodes its strided rows.
         var i = tid
         while i < group_rows:
             var raw = unpack_value(packed, i, width)
-            sm_scan[i] = frame_u + raw.cast[UT]()
+            sm_scan[unsafe_offset=i] = frame_u + raw.cast[UT]()
             i += nthreads
         barrier()
 
         # Stage 2 (serial, thread 0): inclusive prefix-sum seeded with delta_offset.
         if tid == 0:
-            var running = sm_aux[0]  # delta_offset bias
+            var running = sm_aux[unsafe_offset=0]  # delta_offset bias
             for k in range(group_rows):
-                running = running + sm_scan[k]
-                sm_scan[k] = running
+                running = running + sm_scan[unsafe_offset=k]
+                sm_scan[unsafe_offset=k] = running
         barrier()
 
         # Stage 3 (parallel): write the scanned values out.
         var j = tid
         while j < group_rows:
-            dst[out_base + j] = bitcast[T, 1](sm_scan[j])
+            dst[unsafe_offset=out_base + j] = bitcast[T, 1](sm_scan[unsafe_offset=j])
             j += nthreads
         return
 
     # INVALID / AUTO / unknown: deterministic zero-fill.
     var i = tid
     while i < group_rows:
-        dst[out_base + i] = Scalar[T](0)
+        dst[unsafe_offset=out_base + i] = Scalar[T](0)
         i += nthreads

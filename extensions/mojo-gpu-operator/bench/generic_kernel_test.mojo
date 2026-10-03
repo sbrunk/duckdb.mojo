@@ -12,7 +12,7 @@ Run:
 """
 
 from max.gpu.host import DeviceContext
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from raw_plan_tags import (
     OP_LOAD_COL,
@@ -51,11 +51,11 @@ def build_prog(ops: List[Int64], aa: List[Int64]) -> List[Int64]:
     return p^
 
 
-def to_buf(src: List[Int64]) -> UnsafePointer[Scalar[DType.int64], MutAnyOrigin]:
+def to_buf(src: List[Int64]) -> Pointer[Scalar[DType.int64], MutUntrackedOrigin]:
     var n = len(src) if len(src) > 0 else 1
-    var p = alloc[Int64](n)
+    var p = unsafe_alloc[Int64](n)
     for i in range(len(src)):
-        p[i] = src[i]
+        p[unsafe_offset=i] = src[i]
     return p
 
 
@@ -64,16 +64,16 @@ def main() raises:
     var ctx = DeviceContext()
 
     # ---- synthesize columns ----
-    var ship = alloc[Int64](N)
-    var disc = alloc[Int64](N)
-    var ext = alloc[Int64](N)
-    var qty = alloc[Int64](N)
-    var tax = alloc[Int64](N)
-    var gid = alloc[Int64](N)
-    var passc = alloc[Int64](N)
+    var ship = unsafe_alloc[Int64](N)
+    var disc = unsafe_alloc[Int64](N)
+    var ext = unsafe_alloc[Int64](N)
+    var qty = unsafe_alloc[Int64](N)
+    var tax = unsafe_alloc[Int64](N)
+    var gid = unsafe_alloc[Int64](N)
+    var passc = unsafe_alloc[Int64](N)
 
     comptime N_GROUPS = 4
-    # Q6 filter constants (same shape as q6_kernel_test).
+    # Q6 filter constants (the same as in q6_shuttle_test).
     var ship_lo = Int64(8766)
     var ship_hi = Int64(9131)
     var disc_lo = Int64(5)
@@ -86,29 +86,29 @@ def main() raises:
         var e = Int64(100 + (i * 16807) % 9_999_900)
         var q = Int64(1 + (i * 22695477) % 50)
         var t = Int64((i * 30269) % 9)             # 0..8 tax scale 2
-        ship[i] = sd
-        disc[i] = d
-        ext[i] = e
-        qty[i] = q
-        tax[i] = t
-        gid[i] = Int64(i % N_GROUPS)
+        ship[unsafe_offset=i] = sd
+        disc[unsafe_offset=i] = d
+        ext[unsafe_offset=i] = e
+        qty[unsafe_offset=i] = q
+        tax[unsafe_offset=i] = t
+        gid[unsafe_offset=i] = Int64(i % N_GROUPS)
         # precomputed Q6 pass: shipdate/discount/quantity windows
         var ok = (
             sd >= ship_lo and sd < ship_hi
             and d >= disc_lo and d <= disc_hi and q < qty_hi
         )
-        passc[i] = Int64(1) if ok else Int64(0)
+        passc[unsafe_offset=i] = Int64(1) if ok else Int64(0)
 
     # ---- pack columns into one int64 buffer cols[slot*N + row] ----
-    var cols = alloc[Int64](N_COLS * N)
+    var cols = unsafe_alloc[Int64](N_COLS * N)
     for i in range(N):
-        cols[SLOT_SHIP * N + i] = ship[i]
-        cols[SLOT_DISC * N + i] = disc[i]
-        cols[SLOT_EXT * N + i] = ext[i]
-        cols[SLOT_QTY * N + i] = qty[i]
-        cols[SLOT_TAX * N + i] = tax[i]
-        cols[SLOT_GID * N + i] = gid[i]
-        cols[SLOT_PASS * N + i] = passc[i]
+        cols[unsafe_offset=SLOT_SHIP * N + i] = ship[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_DISC * N + i] = disc[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_EXT * N + i] = ext[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_QTY * N + i] = qty[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_TAX * N + i] = tax[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_GID * N + i] = gid[unsafe_offset=i]
+        cols[unsafe_offset=SLOT_PASS * N + i] = passc[unsafe_offset=i]
 
     var all_pass = to_buf(List[Int64]())  # placeholder, pass_len=0
     # No-dim placeholders for the FK-join gather params (n_dims=0 path).
@@ -141,8 +141,8 @@ def main() raises:
     # CPU int128 reference (== q6_kernel math: ext*disc over passing rows)
     var q6_cpu = Int128(0)
     for i in range(N):
-        if passc[i] != 0:
-            q6_cpu += Int128(ext[i]) * Int128(disc[i])
+        if passc[unsafe_offset=i] != 0:
+            q6_cpu += Int128(ext[unsafe_offset=i]) * Int128(disc[unsafe_offset=i])
     var q6_ok = q6_res[0] == q6_cpu
     print("[Q6 UNGROUPED M=1] gpu=", q6_res[0], " cpu=", q6_cpu, " match=", q6_ok)
 
@@ -191,10 +191,10 @@ def main() raises:
         var c_ext = Int128(0)
         var c_chg = Int128(0)
         for i in range(N):
-            if Int(gid[i]) == g:
+            if Int(gid[unsafe_offset=i]) == g:
                 c_cnt += 1
-                c_ext += Int128(ext[i])
-                c_chg += Int128(ext[i]) * (Int128(100) - Int128(disc[i])) * (Int128(100) + Int128(tax[i]))
+                c_ext += Int128(ext[unsafe_offset=i])
+                c_chg += Int128(ext[unsafe_offset=i]) * (Int128(100) - Int128(disc[unsafe_offset=i])) * (Int128(100) + Int128(tax[unsafe_offset=i]))
         var g_cnt = q1_res[g * 3 + 0]
         var g_ext = q1_res[g * 3 + 1]
         var g_chg = q1_res[g * 3 + 2]
@@ -213,10 +213,10 @@ def main() raises:
     # =====================================================================
     comptime N_SEG = 500
     comptime SEG_SIZE = N // N_SEG       # 200000/500 = 400
-    var seg_off = alloc[Int64](N_SEG + 1)
+    var seg_off = unsafe_alloc[Int64](N_SEG + 1)
     for s in range(N_SEG + 1):
-        seg_off[s] = Int64(s * SEG_SIZE)
-    seg_off[N_SEG] = Int64(N)            # ensure last covers all rows
+        seg_off[unsafe_offset=s] = Int64(s * SEG_SIZE)
+    seg_off[unsafe_offset=N_SEG] = Int64(N)            # ensure last covers all rows
 
     var seg_metric = build_prog(
         [OP_LOAD_COL, OP_PUSH_CONST, OP_LOAD_COL, OP_SUB, OP_MUL],
@@ -239,11 +239,11 @@ def main() raises:
     var seg_ok = True
     var first_bad = -1
     for s in range(N_SEG):
-        var lo = Int(seg_off[s])
-        var hi = Int(seg_off[s + 1])
+        var lo = Int(seg_off[unsafe_offset=s])
+        var hi = Int(seg_off[unsafe_offset=s + 1])
         var c = Int128(0)
         for i in range(lo, hi):
-            c += Int128(ext[i]) * (Int128(100) - Int128(disc[i]))
+            c += Int128(ext[unsafe_offset=i]) * (Int128(100) - Int128(disc[unsafe_offset=i]))
         if seg_res[s] != c:
             seg_ok = False
             if first_bad < 0:
@@ -252,8 +252,8 @@ def main() raises:
           " cpu(seg0 recomputed below) match_all=", seg_ok)
     # sample value for seg 0
     var c0 = Int128(0)
-    for i in range(Int(seg_off[0]), Int(seg_off[1])):
-        c0 += Int128(ext[i]) * (Int128(100) - Int128(disc[i]))
+    for i in range(Int(seg_off[unsafe_offset=0]), Int(seg_off[unsafe_offset=1])):
+        c0 += Int128(ext[unsafe_offset=i]) * (Int128(100) - Int128(disc[unsafe_offset=i]))
     print("[SORT_SEGREDUCE M=1] seg0 cpu=", c0)
 
     # =====================================================================
@@ -276,36 +276,36 @@ def main() raises:
     # filter-side gather.
     # =====================================================================
     comptime P = 1000  # distinct partkeys (dense dim index space)
-    var partkey = alloc[Int64](N)
-    var promo_dim = alloc[Int64](P)
-    var revenue_dim = alloc[Int64](P)
+    var partkey = unsafe_alloc[Int64](N)
+    var promo_dim = unsafe_alloc[Int64](P)
+    var revenue_dim = unsafe_alloc[Int64](P)
     for pk in range(P):
         # promo flag: ~1/3 of parts are promo
-        promo_dim[pk] = Int64(1) if (pk % 3 == 0) else Int64(0)
-        revenue_dim[pk] = Int64(7 + (pk * 2654435761) % 500)  # small carried val
+        promo_dim[unsafe_offset=pk] = Int64(1) if (pk % 3 == 0) else Int64(0)
+        revenue_dim[unsafe_offset=pk] = Int64(7 + (pk * 2654435761) % 500)  # small carried val
     for i in range(N):
-        partkey[i] = Int64((i * 2246822519) % P)
+        partkey[unsafe_offset=i] = Int64((i * 2246822519) % P)
 
     # extended packed columns: reuse 7 slots + partkey in a new slot 7.
     comptime SLOT_PK = N_COLS          # 7
     comptime N_COLS2 = N_COLS + 1      # 8
-    var cols2 = alloc[Int64](N_COLS2 * N)
+    var cols2 = unsafe_alloc[Int64](N_COLS2 * N)
     for i in range(N):
-        cols2[SLOT_SHIP * N + i] = ship[i]
-        cols2[SLOT_DISC * N + i] = disc[i]
-        cols2[SLOT_EXT * N + i] = ext[i]
-        cols2[SLOT_QTY * N + i] = qty[i]
-        cols2[SLOT_TAX * N + i] = tax[i]
-        cols2[SLOT_GID * N + i] = gid[i]
-        cols2[SLOT_PASS * N + i] = passc[i]
-        cols2[SLOT_PK * N + i] = partkey[i]
+        cols2[unsafe_offset=SLOT_SHIP * N + i] = ship[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_DISC * N + i] = disc[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_EXT * N + i] = ext[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_QTY * N + i] = qty[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_TAX * N + i] = tax[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_GID * N + i] = gid[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_PASS * N + i] = passc[unsafe_offset=i]
+        cols2[unsafe_offset=SLOT_PK * N + i] = partkey[unsafe_offset=i]
 
     # pack the two dim arrays back-to-back: dim 0 = promo, dim 1 = revenue.
     comptime DIM_PROMO = 0
     comptime DIM_REV = 1
     var dims_list = List[Int64]()
-    for pk in range(P): dims_list.append(promo_dim[pk])
-    for pk in range(P): dims_list.append(revenue_dim[pk])
+    for pk in range(P): dims_list.append(promo_dim[unsafe_offset=pk])
+    for pk in range(P): dims_list.append(revenue_dim[unsafe_offset=pk])
     var dims_buf = to_buf(dims_list)
     var dim_off = to_buf([Int64(0), Int64(P), Int64(2 * P)])  # len n_dims+1=3
 
@@ -345,10 +345,10 @@ def main() raises:
     # CPU int128 reference: same gather, bit-exact.
     var join_cpu_ung = Int128(0)
     for i in range(N):
-        var pk = Int(partkey[i])
-        if promo_dim[pk] != 0:                       # filter gather
-            var carried = revenue_dim[pk] if promo_dim[pk] != 0 else Int64(0)
-            join_cpu_ung += Int128(ext[i]) * Int128(carried)
+        var pk = Int(partkey[unsafe_offset=i])
+        if promo_dim[unsafe_offset=pk] != 0:                       # filter gather
+            var carried = revenue_dim[unsafe_offset=pk] if promo_dim[unsafe_offset=pk] != 0 else Int64(0)
+            join_cpu_ung += Int128(ext[unsafe_offset=i]) * Int128(carried)
     var join_ung_ok = join_ung[0] == join_cpu_ung
     print("[JOIN UNGROUPED] gpu=", join_ung[0], " cpu=", join_cpu_ung,
           " match=", join_ung_ok)
@@ -356,10 +356,10 @@ def main() raises:
     # ---- 4b: SORT_SEGREDUCE with the same gather metric + filter ----
     comptime NJ_SEG = 500
     comptime JSEG_SIZE = N // NJ_SEG
-    var jseg_off = alloc[Int64](NJ_SEG + 1)
+    var jseg_off = unsafe_alloc[Int64](NJ_SEG + 1)
     for s in range(NJ_SEG + 1):
-        jseg_off[s] = Int64(s * JSEG_SIZE)
-    jseg_off[NJ_SEG] = Int64(N)
+        jseg_off[unsafe_offset=s] = Int64(s * JSEG_SIZE)
+    jseg_off[unsafe_offset=NJ_SEG] = Int64(N)
 
     var join_seg = run_segreduce(
         ctx, STRAT_SORT_SEGREDUCE, N,
@@ -374,22 +374,22 @@ def main() raises:
 
     var join_seg_ok = True
     for s in range(NJ_SEG):
-        var lo = Int(jseg_off[s])
-        var hi = Int(jseg_off[s + 1])
+        var lo = Int(jseg_off[unsafe_offset=s])
+        var hi = Int(jseg_off[unsafe_offset=s + 1])
         var c = Int128(0)
         for i in range(lo, hi):
-            var pk = Int(partkey[i])
-            if promo_dim[pk] != 0:
-                var carried = revenue_dim[pk] if promo_dim[pk] != 0 else Int64(0)
-                c += Int128(ext[i]) * Int128(carried)
+            var pk = Int(partkey[unsafe_offset=i])
+            if promo_dim[unsafe_offset=pk] != 0:
+                var carried = revenue_dim[unsafe_offset=pk] if promo_dim[unsafe_offset=pk] != 0 else Int64(0)
+                c += Int128(ext[unsafe_offset=i]) * Int128(carried)
         if join_seg[s] != c:
             join_seg_ok = False
     # sample value for seg 0
     var jc0 = Int128(0)
-    for i in range(Int(jseg_off[0]), Int(jseg_off[1])):
-        var pk = Int(partkey[i])
-        if promo_dim[pk] != 0:
-            jc0 += Int128(ext[i]) * Int128(revenue_dim[pk])
+    for i in range(Int(jseg_off[unsafe_offset=0]), Int(jseg_off[unsafe_offset=1])):
+        var pk = Int(partkey[unsafe_offset=i])
+        if promo_dim[unsafe_offset=pk] != 0:
+            jc0 += Int128(ext[unsafe_offset=i]) * Int128(revenue_dim[unsafe_offset=pk])
     print("[JOIN SORT_SEGREDUCE] seg0 gpu=", join_seg[0], " cpu=", jc0,
           " match_all=", join_seg_ok)
 
@@ -400,7 +400,7 @@ def main() raises:
         print("FAIL  q6=", q6_ok, " q1=", q1_ok, " seg=", seg_ok,
               " join_ung=", join_ung_ok, " join_seg=", join_seg_ok)
 
-    ship.free(); disc.free(); ext.free(); qty.free(); tax.free()
-    gid.free(); passc.free(); cols.free()
-    partkey.free(); promo_dim.free(); revenue_dim.free(); cols2.free()
-    jseg_off.free()
+    ship.unsafe_free(); disc.unsafe_free(); ext.unsafe_free(); qty.unsafe_free(); tax.unsafe_free()
+    gid.unsafe_free(); passc.unsafe_free(); cols.unsafe_free()
+    partkey.unsafe_free(); promo_dim.unsafe_free(); revenue_dim.unsafe_free(); cols2.unsafe_free()
+    jseg_off.unsafe_free()

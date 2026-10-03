@@ -1,6 +1,5 @@
 from std.ffi import c_char
 from std.utils import StaticTuple
-from std.collections import InlineArray
 from duckdb.duckdb_type import *
 from std.sys.info import CompilationTarget
 from std.os import abort
@@ -357,13 +356,13 @@ struct duckdb_query_progress_type(TrivialRegisterPassable, ImplicitlyCopyable, M
 @fieldwise_init
 struct duckdb_string_t_pointer(Copyable, Movable):
     var length: UInt32
-    var prefix: InlineArray[c_char, 4]
+    var prefix: Array[c_char, 4]
     var ptr: Pointer[c_char, MutUntrackedOrigin]
 
 @fieldwise_init
 struct duckdb_string_t_inlined(Copyable, Movable):
     var length: UInt32
-    var inlined: InlineArray[c_char, 12]
+    var inlined: Array[c_char, 12]
 
 comptime duckdb_string_t = UnsafeUnion[duckdb_string_t_pointer, duckdb_string_t_inlined]
 
@@ -422,7 +421,7 @@ struct duckdb_bignum(ImplicitlyCopyable, Movable):
     var is_negative: Bool
 
 @fieldwise_init
-struct duckdb_result(RegisterPassable, ImplicitlyCopyable):
+struct duckdb_result(ImplicitlyCopyable):
     var __deprecated_column_count: idx_t
     var __deprecated_row_count: idx_t
     var __deprecated_rows_changed: idx_t
