@@ -468,6 +468,14 @@ pixi add duckdb-mojo
 
 The `libduckdb` runtime library comes with it as a dependency.
 
+The package has no GPU code and doesn't depend on MAX. To write GPU code
+alongside it, such as [`examples/gpu_knn.mojo`](examples/gpu_knn.mojo), also
+run `pixi add max-core`. The matching version is selected automatically,
+because both packages pin the same Mojo compiler. Note that MAX has different
+license terms than Mojo: Mojo is licensed under Apache 2.0 with LLVM
+exceptions, while most of MAX is under the
+[Modular MAX Community License](https://www.modular.com/legal/community).
+
 ## Development
 
 ```shell
