@@ -522,9 +522,17 @@ def parse_ext_api_definitions(function_map: dict[str, dict], metadata: dict):
     which the function became stable, raised to the spec's ``version_floor``
     (the struct did not exist before that).
 
+    Stable functions without an ``offset`` come last, ordered by the version
+    in which they became stable. DuckDB 2.0 added two of these
+    (``create_timestamp_tz_ns``, ``get_timestamp_tz_ns``) to the v1.5.6 band
+    after v1.5.6 shipped, so a v1.5.6 engine does not have their slots. They
+    go into extra bands marked ``late`` and are never part of our struct:
+    reading them would run past the end of an older engine's struct.
+
     Returns a list of band dicts in struct order, each with keys ``version``
     (str), ``stable`` (whether stable extensions get it, see
-    ``EXT_API_STABLE_VERSION``) and ``entries`` (list[str] of function names).
+    ``EXT_API_STABLE_VERSION``), ``late`` (bool) and ``entries`` (list[str]
+    of function names).
     """
     floor = Version(metadata["version_floor"])
     slots = sorted(
@@ -547,8 +555,20 @@ def parse_ext_api_definitions(function_map: dict[str, dict], metadata: dict):
             bands.append({
                 "version": version,
                 "stable": Version(version) <= Version(EXT_API_STABLE_VERSION),
+                "late": False,
                 "entries": [],
             })
+        bands[-1]["entries"].append(entry["name"])
+
+    late = [
+        e for e in function_map.values()
+        if e["offset"] is None and _stable_since(e["lifecycle"]) is not None
+    ]
+    late.sort(key=lambda e: Version(_stable_since(e["lifecycle"])))  # stable sort keeps spec order
+    for entry in late:
+        version = "v" + str(max(Version(_stable_since(entry["lifecycle"])), floor))
+        if not bands or not bands[-1]["late"] or bands[-1]["version"] != version:
+            bands.append({"version": version, "stable": False, "late": True, "entries": []})
         bands[-1]["entries"].append(entry["name"])
     return bands
 
@@ -668,6 +688,8 @@ def generate_mojo(duckdb_dir: str, workspace_dir: str) -> str:
     # Map each function name to its version, for version tags
     ext_api_version_map: dict[str, str] = {}
     for api_ver in ext_api_definitions:
+        if api_ver["late"]:
+            continue
         for fn_name in api_ver["entries"]:
             ext_api_version_map[fn_name] = api_ver["version"]
 
@@ -1429,6 +1451,14 @@ def _generate_ext_api_structs(
     """
     fields: list[tuple[str, str, dict]] = []  # (version, name, entry)
     for api_ver in ext_api_definitions:
+        if api_ver["late"]:
+            print(
+                f"NOTE: {len(api_ver['entries'])} extension API functions were added to band "
+                f"{api_ver['version']} after it was released and are bound to stubs in "
+                f"extension mode: {', '.join(api_ver['entries'])}",
+                file=sys.stderr,
+            )
+            continue
         if not api_ver["stable"]:
             print(
                 f"NOTE: {len(api_ver['entries'])} extension API functions of band "

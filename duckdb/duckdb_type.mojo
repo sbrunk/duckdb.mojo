@@ -88,6 +88,8 @@ struct DuckDBType(
     """DuckDB type: TIMESTAMP_TZ."""
     comptime time_ns = DuckDBType(DUCKDB_TYPE_TIME_NS)
     """DuckDB type: TIME_NS, time in nanoseconds."""
+    comptime timestamp_tz_ns = DuckDBType(DUCKDB_TYPE_TIMESTAMP_TZ_NS)
+    """DuckDB type: TIMESTAMPTZ_NS (DuckDB 2.0+), timestamp with timezone in nanoseconds."""
     comptime geometry = DuckDBType(DUCKDB_TYPE_GEOMETRY)
     """DuckDB type: GEOMETRY (DuckDB 1.5+), stored as a WKB blob.
 
@@ -130,6 +132,7 @@ struct DuckDBType(
             DuckDBType.timestamp_ns,
             DuckDBType.time_tz,
             DuckDBType.timestamp_tz,
+            DuckDBType.timestamp_tz_ns,
             DuckDBType.uuid,
             DuckDBType.time_ns,
         )
@@ -234,6 +237,8 @@ struct DuckDBType(
             return writer.write("timestamp_tz")
         if self == DuckDBType.time_ns:
             return writer.write("time_ns")
+        if self == DuckDBType.timestamp_tz_ns:
+            return writer.write("timestamp_tz_ns")
         if self == DuckDBType.geometry:
             return writer.write("geometry")
         if self == DuckDBType.variant:
@@ -828,6 +833,36 @@ struct TimestampTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopya
 
 
 @fieldwise_init
+struct TimestampTZNS(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
+    """Timestamps with timezone and nanosecond precision, stored as nanoseconds since 1970-01-01 (UTC).
+
+    Maps to DuckDB's TIMESTAMPTZ_NS type (DuckDB 2.0+).
+    """
+
+    var nanos: Int64
+
+    def __str__(self) -> String:
+        return String(self)
+
+    def write_to[W: Writer](self, mut writer: W):
+        # Render as a formatted timestamp (UTC, microsecond precision); timezone offset is not shown.
+        writer.write(self.to_timestamp())
+
+    def __eq__(self, other: TimestampTZNS) -> Bool:
+        return self.nanos == other.nanos
+
+    def __ne__(self, other: TimestampTZNS) -> Bool:
+        return not self == other
+
+    def __repr__(self) -> String:
+        return "TimestampTZNS(" + String(self.nanos) + ")"
+
+    def to_timestamp(self) -> Timestamp:
+        """Convert to a plain microsecond Timestamp (discards timezone semantics, truncates sub-microsecond part)."""
+        return Timestamp(self.nanos // 1_000)
+
+
+@fieldwise_init
 struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
     """Time with timezone, stored as 40 bits for microseconds and 24 bits for UTC offset.
 
@@ -1131,7 +1166,8 @@ def mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
 
     Supports: Bool, Int8 to Int64, UInt8 to UInt64, Float32, Float64, Int, UInt,
     Int128, UInt128, String, Date, Time, TimeNS, Timestamp, TimestampS,
-    TimestampMS, TimestampNS, TimestampTZ, TimeTZ, Interval, Decimal, UUID.
+    TimestampMS, TimestampNS, TimestampTZ, TimestampTZNS, TimeTZ, Interval,
+    Decimal, UUID.
 
     Parameters:
         T: The Mojo scalar type to map.
@@ -1189,6 +1225,8 @@ def mojo_to_duckdb_type[T: AnyType]() -> DuckDBType:
         return DuckDBType.timestamp_ns
     elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
+    elif T == TimestampTZNS:
+        return DuckDBType.timestamp_tz_ns
     elif T == TimeTZ:
         return DuckDBType.time_tz
     elif T == Interval:

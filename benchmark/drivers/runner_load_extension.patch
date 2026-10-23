@@ -13,16 +13,17 @@ diff --git a/benchmark/interpreted_benchmark.cpp b/benchmark/interpreted_benchma
 index 2e4a902..0e36f72 100644
 --- a/benchmark/interpreted_benchmark.cpp
 +++ b/benchmark/interpreted_benchmark.cpp
-@@ -62,6 +62,8 @@ struct InterpretedBenchmarkState : public BenchmarkState {
- 			result->options.serialization_compatibility = SerializationCompatibility::FromString(version);
+@@ -72,7 +72,9 @@ struct InterpretedBenchmarkState : public BenchmarkState {
+ 			result->options.storage_compatibility = StorageCompatibility::FromString(version);
  		}
  		result->options.load_extensions = false;
 +		// Allow loading a local unsigned extension at init (see DUCKDB_BENCH_EXTENSION below).
 +		result->SetOptionByName("allow_unsigned_extensions", Value::BOOLEAN(true));
- 		return result;
- 	}
- };
-@@ -530,6 +532,16 @@ unique_ptr<BenchmarkState> InterpretedBenchmark::Initialize(BenchmarkConfigurati
+ 		auto extension_directory = std::getenv(BENCHMARK_EXTENSION_DIRECTORY_ENV);
+ 		if (extension_directory && extension_directory[0]) {
+ 			result->SetOptionByName("allow_unsigned_extensions", true);
+ 		}
+@@ -566,6 +568,16 @@ unique_ptr<BenchmarkState> InterpretedBenchmark::Initialize(BenchmarkConfigurati
  	AddExtension("parquet", false);
 
  	LoadExtensions(*state, false);

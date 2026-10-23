@@ -1,7 +1,7 @@
 """Tests for the Appender API."""
 
 from duckdb import *
-from duckdb.duckdb_type import Bit, Date, Decimal, Time, TimeNS, Timestamp, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimeTZ, UUID
+from duckdb.duckdb_type import Bit, Date, Decimal, Time, TimeNS, Timestamp, TimestampS, TimestampMS, TimestampNS, TimestampTZ, TimestampTZNS, TimeTZ, UUID
 from std.collections import Dict, Optional
 from std.testing import assert_almost_equal, assert_equal, assert_raises, assert_true
 from std.testing.suite import TestSuite
@@ -576,6 +576,39 @@ def test_appender_timestamp_tz_typed_api() raises:
     var result = con.execute("SELECT ts FROM t")
     var chunk = result.fetch_chunk()
     assert_equal(chunk.get[TimestampTZ](col=0, row=0), TimestampTZ(1609459200000000))
+
+
+def test_appender_timestamp_tz_ns() raises:
+    """Test round-trip of TIMESTAMPTZ_NS (DuckDB 2.0+) through appender and typed API fetch."""
+    var con = DuckDB.connect(":memory:")
+    _ = con.execute("SET TimeZone = 'UTC'")
+    _ = con.execute("CREATE TABLE t (ts TIMESTAMPTZ_NS)")
+    var appender = Appender(con, "t")
+    appender.append_value(TimestampTZNS(1609459200000000001))  # 2021-01-01 plus 1 ns
+    appender.end_row()
+    appender.close()
+
+    var result = con.execute("SELECT ts FROM t")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[TimestampTZNS](col=0, row=0), TimestampTZNS(1609459200000000001))
+
+
+def test_appender_keeps_connection_alive() raises:
+    """The appender keeps its connection alive, so the final flush still works.
+
+    `con` is not used after the appender is created. Without origin tracking
+    Mojo would close it right away, and DuckDB would refuse to flush the rows.
+    """
+    var db = Database(":memory:")
+    var con = Connection(db)
+    _ = con.execute("CREATE TABLE t (i INTEGER)")
+    var appender = Appender(con, "t")
+    appender.append_value(Int32(1))
+    appender.end_row()
+    appender.flush()
+    var con2 = Connection(db)
+    var result = con2.execute("SELECT count(*) FROM t").fetchall()
+    assert_equal(result.get[Int64](col=0, row=0), 1)
 
 
 def test_appender_time_tz() raises:

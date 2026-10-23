@@ -47,6 +47,13 @@ def test_prepare_and_reuse() raises:
     assert_equal(r.get[Int32](col=0, row=0), 42)
 
 
+def test_bind_timestamp_tz_ns() raises:
+    var con = DuckDB.connect(":memory:")
+    _ = con.execute("SET TimeZone = 'UTC'")
+    var r = con.execute("SELECT ?::TIMESTAMPTZ_NS", TimestampTZNS(1609459200000000001)).fetchall()
+    assert_equal(r.get[TimestampTZNS](col=0, row=0), TimestampTZNS(1609459200000000001))
+
+
 def test_executemany_insert() raises:
     var con = DuckDB.connect(":memory:")
     _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")

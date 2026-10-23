@@ -151,6 +151,17 @@ def test_timestamp_tz_typed_api() raises:
     assert_equal(ts_tz, TimestampTZ(1609459200000000))
 
 
+def test_timestamp_tz_ns_typed_api() raises:
+    """Test TIMESTAMPTZ_NS (DuckDB 2.0+) with get[T]."""
+    var con = DuckDB.connect(":memory:")
+    _ = con.execute("SET TimeZone = 'UTC'")
+
+    var result = con.execute("SELECT '2021-01-01 00:00:00.000000001+00'::TIMESTAMPTZ_NS")
+    var chunk = result.fetch_chunk()
+    assert_equal(chunk.get[TimestampTZNS](col=0, row=0), TimestampTZNS(1609459200000000001))
+    assert_equal(String(chunk.type(0)), "timestamp_tz_ns")
+
+
 def test_time_tz_typed_api() raises:
     """Test TIMETZ with get[T]."""
     var con = DuckDB.connect(":memory:")

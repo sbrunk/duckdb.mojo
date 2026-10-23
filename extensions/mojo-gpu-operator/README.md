@@ -20,7 +20,8 @@ DuckDB ABI; the planner and execution logic live in Mojo.
 
 > **Scope and caveats.** This is a CPP-ABI extension that links DuckDB's
 > internal C++ headers, so it only works with the exact DuckDB build it was
-> compiled against (currently `v1.5.6`). It is not part of the conda package. It
+> compiled against (currently `v1.5.6`). It has not been ported to DuckDB 2.0
+> yet and does not build against the 2.0 headers. It is not part of the conda package. It
 > has been validated on Apple (Metal) and NVIDIA (RTX 4090, Linux). See
 > [DESIGN.md](DESIGN.md#hardware-portability) for the Linux/NixOS build notes.
 > You need to load the extension with `-unsigned` / `allow_unsigned_extensions`.

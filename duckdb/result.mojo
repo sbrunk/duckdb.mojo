@@ -12,6 +12,7 @@ from duckdb.duckdb_type import (
     TimestampMS,
     TimestampNS,
     TimestampTZ,
+    TimestampTZNS,
     UUID,
     Interval,
     Bit,
@@ -283,6 +284,16 @@ struct ErrorType(
     comptime INVALID_CONFIGURATION = Self(DUCKDB_INVALID_CONFIGURATION)
     """Invalid configuration error."""
 
+    comptime DATA_CORRUPTION = Self(DUCKDB_ERROR_DATA_CORRUPTION)
+    """Data corruption error (DuckDB 2.0+)."""
+
+    comptime RESOURCE_IN_USE = Self(DUCKDB_ERROR_RESOURCE_IN_USE)
+    """Resource in use error (DuckDB 2.0+).
+
+    Raised when a statement runs on a connection that still has an unfinished
+    streaming or pending result. Fetch the result to the end or destroy it first.
+    """
+
     # ── Coarse error classification ───────────────────────────────
     # Group the fine-grained DuckDB error ids into a few broad categories so
     # callers can branch on the kind of failure (e.g. retry on an operational
@@ -345,6 +356,8 @@ struct ErrorType(
             or self == Self.SCHEDULER
             or self == Self.STAT
             or self == Self.NULL_POINTER
+            or self == Self.DATA_CORRUPTION
+            or self == Self.RESOURCE_IN_USE
         )
 
     @always_inline
@@ -466,6 +479,10 @@ struct ErrorType(
             writer.write("SEQUENCE")
         elif self == Self.INVALID_CONFIGURATION:
             writer.write("INVALID_CONFIGURATION")
+        elif self == Self.DATA_CORRUPTION:
+            writer.write("DATA_CORRUPTION")
+        elif self == Self.RESOURCE_IN_USE:
+            writer.write("RESOURCE_IN_USE")
         else:
             # An error type added by a newer DuckDB than these bindings were
             # generated against: keep the value visible instead of writing nothing.
@@ -1791,6 +1808,8 @@ def _render_value(vector: Vector, row: Int) raises -> String:
         return String(_deserialize_scalar[TimestampNS](vector, row))
     elif tid == DuckDBType.timestamp_tz:
         return String(_deserialize_scalar[TimestampTZ](vector, row))
+    elif tid == DuckDBType.timestamp_tz_ns:
+        return String(_deserialize_scalar[TimestampTZNS](vector, row))
     elif tid == DuckDBType.uuid:
         return String(_deserialize_scalar[UUID](vector, row))
     elif tid == DuckDBType.interval:
