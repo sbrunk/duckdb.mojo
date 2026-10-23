@@ -128,9 +128,11 @@ warns when they drift. To bump (for example from `2.0.0` to `2.0.1`):
    (`mojo-kernel-overrides`, `mojo-gpu-operator`) are version-locked to the exact
    DuckDB and need a rebuild (`pixi run overrides-build` / `gpu-op-build`).
    Major releases usually change DuckDB's internal C++ API, so expect porting
-   work, not only a rebuild. Status after the 2.0 bump: `mojo-kernel-overrides`
-   is ported; `mojo-gpu-operator` and `operator-replacement` are not yet and do
-   not compile against the 2.0 headers.
+   work, not only a rebuild (all three C++ extensions needed one for 2.0).
+   Since 2.0, DuckDB's CMake no longer takes the version from `git describe`:
+   a source build without `OVERRIDE_GIT_DESCRIBE=vX.Y.Z` reports its commit
+   hash and rejects extensions whose footer says `vX.Y.Z`. `build_runner.sh`
+   and the `duckdb-from-source` recipe pass it.
 
 ## Packaging / publishing
 
@@ -149,4 +151,4 @@ The sub-packages in `extensions/` use a third mechanism (the `pixi-build-rattler
   `pixi run -e gpu gpu-op-build`. On macOS the GPU kernels compile to Metal, which
   needs Xcode's separately-downloaded Metal Toolchain component
   (`xcodebuild -downloadComponent MetalToolchain`).
-- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now only a reference implementation. It has been replaced by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload), but it is still set up here. See `extensions/operator-replacement/README.md`.
+- **full** - Extended environment with the operator-replacement feature. Builds DuckDB from the `third_party/duckdb` submodule via the `duckdb-from-source` package (initialize the submodule first). `operator-replacement` is now only a reference implementation. It has been replaced by `mojo-kernel-overrides` (Mojo kernels for built-ins) and `mojo-gpu-operator` (the same OptimizerExtension interception, for GPU offload), but it is still set up here. See `extensions/operator-replacement/README.md`. On macOS 27, conda's linker can't read the system SDK (`libSystem.tbd: unknown architecture arm64e.x1-macos`), so the DuckDB source build fails. A local workaround is a temporary `[workspace.build-variants]` entry `CONDA_BUILD_SYSROOT = ["/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"]` in `pixi.toml` (don't commit it).

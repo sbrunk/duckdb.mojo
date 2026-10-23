@@ -39,9 +39,18 @@ for g in "$ROOT"/benchmark/sql/*/; do
 	n="$(basename "$g")"; mkdir -p "$DUCKDB_SRC/benchmark/micro/$n"; cp "$g"*.benchmark "$DUCKDB_SRC/benchmark/micro/$n/"
 done
 
+# Since DuckDB 2.0, CMake no longer derives the version from `git describe`. Without
+# an explicit version the build reports its commit hash, and DuckDB then rejects
+# extensions whose footer says e.g. v2.0.0. Pass the release tag when the source is on one.
+VERSION_FLAGS=()
+if TAG="$(git -C "$DUCKDB_SRC" describe --tags --exact-match 2>/dev/null)"; then
+	VERSION_FLAGS=(-DOVERRIDE_GIT_DESCRIBE="$TAG")
+fi
+
 echo "==> configuring + building benchmark_runner ($JOBS jobs)"
 cmake -S "$DUCKDB_SRC" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
-	-DBUILD_BENCHMARKS=1 -DBUILD_EXTENSIONS=tpch -DCMAKE_EXE_LINKER_FLAGS=-rdynamic >/dev/null
+	-DBUILD_BENCHMARKS=1 -DBUILD_EXTENSIONS=tpch -DCMAKE_EXE_LINKER_FLAGS=-rdynamic \
+	"${VERSION_FLAGS[@]}" >/dev/null
 cmake --build "$BUILD_DIR" --target benchmark_runner -j "$JOBS"
 
 echo "==> done: $BUILD_DIR/benchmark/benchmark_runner"
