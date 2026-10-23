@@ -9,7 +9,7 @@ This module is wired into `_run_topk_batch` in `gpu_kernels.mojo` behind the
 uses two different comptime queries depending on context (see memory
 `mojo-gpu-target-introspection`):
   * Host functions (`run_tc_knn_batch`, `_run_tc_knn_for_kd`, and the routing
-    branch in gpu_kernels) gate on `has_nvidia_gpu_accelerator()`, the
+    branch in gpu_kernels) gate on `default_accelerator().is_nvidia_gpu()`, the
     host-context query. The in-kernel `is_nvidia_gpu()` triple check is always
     False in host context, so it cannot gate a host branch.
   * Kernel bodies (`tc_fused_knn_kernel`, `tc_merge_kernel`, `_tc_enorm_kernel`)
@@ -29,7 +29,7 @@ supported embedding dims KD (768/384/1024/1536) via comptime instantiation;
 unsupported K falls back to the scalar path (the caller keeps the scalar driver).
 """
 
-from std.sys.info import is_nvidia_gpu, has_nvidia_gpu_accelerator
+from std.sys.info import is_nvidia_gpu, default_accelerator
 from max.gpu import (
     WARP_SIZE,
     thread_idx,
@@ -405,11 +405,11 @@ def _run_tc_knn_for_kd[
     out_ids: Pointer[Int64, MutUntrackedOrigin],
     out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
-    # Host gate: `has_nvidia_gpu_accelerator()` (the in-kernel `is_nvidia_gpu()`
+    # Host gate: `default_accelerator().is_nvidia_gpu()` (the in-kernel `is_nvidia_gpu()`
     # is False in host context). On Apple this is comptime-False, so the body
     # (which instantiates the tensor-core kernels via enqueue_function) never
     # compiles.
-    comptime if has_nvidia_gpu_accelerator():
+    comptime if default_accelerator().is_nvidia_gpu():
         comptime e_layout = Layout.row_major(UNKNOWN_VALUE, KD)
         comptime q_layout = Layout.row_major(TC_BM, KD)
 
@@ -555,7 +555,7 @@ def run_tc_knn_batch(
     #           epilogue forms |q|^2 + |e|^2 - 2*dot.
     #   IP    : norms unused (epilogue is only -dot); we still fill them with a
     #           harmless value so the kernel's reads are defined.
-    comptime if has_nvidia_gpu_accelerator():
+    comptime if default_accelerator().is_nvidia_gpu():
         # Host: fp16 query tile (padded to a multiple of BM rows so the kernel's
         # full-BM q tile is always in bounds), fp32 query norms, fp32 emb norms.
         var ntile = ((M + TC_BM - 1) // TC_BM) * TC_BM

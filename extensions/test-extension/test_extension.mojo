@@ -29,7 +29,7 @@ def _connect() raises -> Connection:
     """Create a connection with unsigned extensions enabled and the test
     extension loaded."""
     var db = _open_unsigned()
-    var conn = Connection(db^)
+    var conn = Connection(db)
     _ = conn.execute("LOAD '" + EXT_PATH + "'")
     return conn^
 
@@ -51,7 +51,7 @@ def test_extension_loads() raises:
 def test_extension_load_idempotent() raises:
     """Loading the same extension twice doesn't error (DuckDB deduplicates)."""
     var db = _open_unsigned()
-    var conn = Connection(db^)
+    var conn = Connection(db)
     _ = conn.execute("LOAD '" + EXT_PATH + "'")
     # Second load should be fine (DuckDB skips already-loaded extensions)
     _ = conn.execute("LOAD '" + EXT_PATH + "'")
@@ -68,7 +68,7 @@ def test_extension_load_idempotent() raises:
 def test_get_api_invalid_version_returns_null() raises:
     """Calling get_api with an unsupported version prevents extension from loading."""
     var db = _open_unsigned()
-    var conn = Connection(db^)
+    var conn = Connection(db)
     try:
         _ = conn.execute("LOAD '" + BAD_API_EXT_PATH + "'")
         raise Error("Expected LOAD to fail for invalid API version")

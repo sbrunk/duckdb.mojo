@@ -2,7 +2,7 @@ from duckdb.vector import Vector
 from std.collections import Dict, Optional
 from std.collections.string import StringSlice, StaticString
 from std.memory import unsafe_memcpy
-from std.hashlib.hasher import Hasher
+from std.hash.hasher import Hasher
 from duckdb._libduckdb import (
     duckdb_list_entry,
     duckdb_string_t_inlined,

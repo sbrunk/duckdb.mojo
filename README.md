@@ -18,7 +18,7 @@ You can use duckdb.mojo to:
    built-in functions, and GPU execution of aggregations and vector search,
    without changing the SQL.
 
-Requirements: Mojo 1.1.0 and DuckDB 2.0, on Linux (x86_64, aarch64) and macOS
+Requirements: Mojo 1.2.0 and DuckDB 2.0, on Linux (x86_64, aarch64) and macOS
 (Apple silicon). Writing extensions and the acceleration extensions are
 experimental.
 

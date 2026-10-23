@@ -108,107 +108,108 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
     # type without requiring ImplicitlyCopyable.
     var vp = Pointer(to=value)
 
-    comptime if T == Bool:
-        return libduckdb.duckdb_create_bool(vp.unsafe_bitcast[Bool]()[])
-    elif T == Int8:
-        return libduckdb.duckdb_create_int8(vp.unsafe_bitcast[Int8]()[])
-    elif T == Int16:
-        return libduckdb.duckdb_create_int16(vp.unsafe_bitcast[Int16]()[])
-    elif T == Int32:
-        return libduckdb.duckdb_create_int32(vp.unsafe_bitcast[Int32]()[])
-    elif T == Int64:
-        return libduckdb.duckdb_create_int64(vp.unsafe_bitcast[Int64]()[])
-    elif T == Int:
-        # Int is platform-dependent: cast to the appropriate fixed-width type
-        comptime if size_of[Int]() == 4:
-            return libduckdb.duckdb_create_int32(
-                Int32(vp.unsafe_bitcast[Int]()[])
+    comptime match T:
+        case == Bool:
+            return libduckdb.duckdb_create_bool(vp.unsafe_bitcast[Bool]()[])
+        case == Int8:
+            return libduckdb.duckdb_create_int8(vp.unsafe_bitcast[Int8]()[])
+        case == Int16:
+            return libduckdb.duckdb_create_int16(vp.unsafe_bitcast[Int16]()[])
+        case == Int32:
+            return libduckdb.duckdb_create_int32(vp.unsafe_bitcast[Int32]()[])
+        case == Int64:
+            return libduckdb.duckdb_create_int64(vp.unsafe_bitcast[Int64]()[])
+        case == Int:
+            # Int is platform-dependent: cast to the appropriate fixed-width type
+            comptime if size_of[Int]() == 4:
+                return libduckdb.duckdb_create_int32(
+                    Int32(vp.unsafe_bitcast[Int]()[])
+                )
+            else:
+                return libduckdb.duckdb_create_int64(
+                    Int64(vp.unsafe_bitcast[Int]()[])
+                )
+        case == UInt8:
+            return libduckdb.duckdb_create_uint8(vp.unsafe_bitcast[UInt8]()[])
+        case == UInt16:
+            return libduckdb.duckdb_create_uint16(vp.unsafe_bitcast[UInt16]()[])
+        case == UInt32:
+            return libduckdb.duckdb_create_uint32(vp.unsafe_bitcast[UInt32]()[])
+        case == UInt64:
+            return libduckdb.duckdb_create_uint64(vp.unsafe_bitcast[UInt64]()[])
+        case == UInt:
+            comptime if size_of[UInt]() == 4:
+                return libduckdb.duckdb_create_uint32(
+                    UInt32(vp.unsafe_bitcast[UInt]()[])
+                )
+            else:
+                return libduckdb.duckdb_create_uint64(
+                    UInt64(vp.unsafe_bitcast[UInt]()[])
+                )
+        case == Float32:
+            return libduckdb.duckdb_create_float(vp.unsafe_bitcast[Float32]()[])
+        case == Float64:
+            return libduckdb.duckdb_create_double(vp.unsafe_bitcast[Float64]()[])
+        case == Int128:
+            return libduckdb.duckdb_create_hugeint(vp.unsafe_bitcast[Int128]()[])
+        case == UInt128:
+            return libduckdb.duckdb_create_uhugeint(vp.unsafe_bitcast[UInt128]()[])
+        case == String:
+            var s = String(vp.unsafe_bitcast[String]()[])
+            return libduckdb.duckdb_create_varchar_length(
+                s.as_c_string_span().ptr(), idx_t(s.byte_length())
             )
-        else:
-            return libduckdb.duckdb_create_int64(
-                Int64(vp.unsafe_bitcast[Int]()[])
+        case == Date:
+            return libduckdb.duckdb_create_date(vp.unsafe_bitcast[Date]()[])
+        case == Time:
+            return libduckdb.duckdb_create_time(vp.unsafe_bitcast[Time]()[])
+        case == Timestamp:
+            return libduckdb.duckdb_create_timestamp(vp.unsafe_bitcast[Timestamp]()[])
+        case == Interval:
+            return libduckdb.duckdb_create_interval(
+                vp.unsafe_bitcast[duckdb_interval]()[]
             )
-    elif T == UInt8:
-        return libduckdb.duckdb_create_uint8(vp.unsafe_bitcast[UInt8]()[])
-    elif T == UInt16:
-        return libduckdb.duckdb_create_uint16(vp.unsafe_bitcast[UInt16]()[])
-    elif T == UInt32:
-        return libduckdb.duckdb_create_uint32(vp.unsafe_bitcast[UInt32]()[])
-    elif T == UInt64:
-        return libduckdb.duckdb_create_uint64(vp.unsafe_bitcast[UInt64]()[])
-    elif T == UInt:
-        comptime if size_of[UInt]() == 4:
-            return libduckdb.duckdb_create_uint32(
-                UInt32(vp.unsafe_bitcast[UInt]()[])
+        case == Decimal:
+            return libduckdb.duckdb_create_decimal(vp.unsafe_bitcast[Decimal]()[])
+        case == TimestampS:
+            var raw = duckdb_timestamp_s(vp.unsafe_bitcast[TimestampS]()[].seconds)
+            return libduckdb.duckdb_create_timestamp_s(raw)
+        case == TimestampMS:
+            var raw = duckdb_timestamp_ms(vp.unsafe_bitcast[TimestampMS]()[].millis)
+            return libduckdb.duckdb_create_timestamp_ms(raw)
+        case == TimestampNS:
+            var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampNS]()[].nanos)
+            return libduckdb.duckdb_create_timestamp_ns(raw)
+        case == TimestampTZ:
+            var ts = Timestamp(vp.unsafe_bitcast[TimestampTZ]()[].micros)
+            return libduckdb.duckdb_create_timestamp_tz(ts)
+        case == TimestampTZNS:
+            var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampTZNS]()[].nanos)
+            return libduckdb.duckdb_create_timestamp_tz_ns(raw)
+        case == TimeTZ:
+            var raw = duckdb_time_tz(vp.unsafe_bitcast[TimeTZ]()[].bits)
+            return libduckdb.duckdb_create_time_tz_value(raw)
+        case == UUID:
+            return libduckdb.duckdb_create_uuid(vp.unsafe_bitcast[UUID]()[].value)
+        case == TimeNS:
+            var raw = duckdb_time_ns(vp.unsafe_bitcast[TimeNS]()[].nanos)
+            return libduckdb.duckdb_create_time_ns(raw)
+        case == Bit:
+            var bit_ref = vp.unsafe_bitcast[Bit]()[].copy()
+            # Allocate temp buffer for duckdb_bit.data (padding byte plus bit bytes)
+            var buf_mem = alloc(Layout[UInt8](count=len(bit_ref._data))).into_managed()
+            var buf = buf_mem.unsafe_ptr()
+            for i in range(len(bit_ref._data)):
+                buf[unsafe_offset=i] = bit_ref._data[i]
+            var raw = duckdb_bit(buf.unsafe_origin_cast[MutUntrackedOrigin](), idx_t(len(bit_ref._data)))
+            var val = libduckdb.duckdb_create_bit(raw)
+            deinit(buf_mem^)
+            return val
+        case _:
+            raise Error(
+                "Unsupported type for value creation: "
+                + String(Reflected[T].name())
             )
-        else:
-            return libduckdb.duckdb_create_uint64(
-                UInt64(vp.unsafe_bitcast[UInt]()[])
-            )
-    elif T == Float32:
-        return libduckdb.duckdb_create_float(vp.unsafe_bitcast[Float32]()[])
-    elif T == Float64:
-        return libduckdb.duckdb_create_double(vp.unsafe_bitcast[Float64]()[])
-    elif T == Int128:
-        return libduckdb.duckdb_create_hugeint(vp.unsafe_bitcast[Int128]()[])
-    elif T == UInt128:
-        return libduckdb.duckdb_create_uhugeint(vp.unsafe_bitcast[UInt128]()[])
-    elif T == String:
-        var s = String(vp.unsafe_bitcast[String]()[])
-        return libduckdb.duckdb_create_varchar_length(
-            s.as_c_string_span().ptr(), idx_t(s.byte_length())
-        )
-    elif T == Date:
-        return libduckdb.duckdb_create_date(vp.unsafe_bitcast[Date]()[])
-    elif T == Time:
-        return libduckdb.duckdb_create_time(vp.unsafe_bitcast[Time]()[])
-    elif T == Timestamp:
-        return libduckdb.duckdb_create_timestamp(vp.unsafe_bitcast[Timestamp]()[])
-    elif T == Interval:
-        return libduckdb.duckdb_create_interval(
-            vp.unsafe_bitcast[duckdb_interval]()[]
-        )
-    elif T == Decimal:
-        return libduckdb.duckdb_create_decimal(vp.unsafe_bitcast[Decimal]()[])
-    elif T == TimestampS:
-        var raw = duckdb_timestamp_s(vp.unsafe_bitcast[TimestampS]()[].seconds)
-        return libduckdb.duckdb_create_timestamp_s(raw)
-    elif T == TimestampMS:
-        var raw = duckdb_timestamp_ms(vp.unsafe_bitcast[TimestampMS]()[].millis)
-        return libduckdb.duckdb_create_timestamp_ms(raw)
-    elif T == TimestampNS:
-        var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampNS]()[].nanos)
-        return libduckdb.duckdb_create_timestamp_ns(raw)
-    elif T == TimestampTZ:
-        var ts = Timestamp(vp.unsafe_bitcast[TimestampTZ]()[].micros)
-        return libduckdb.duckdb_create_timestamp_tz(ts)
-    elif T == TimestampTZNS:
-        var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampTZNS]()[].nanos)
-        return libduckdb.duckdb_create_timestamp_tz_ns(raw)
-    elif T == TimeTZ:
-        var raw = duckdb_time_tz(vp.unsafe_bitcast[TimeTZ]()[].bits)
-        return libduckdb.duckdb_create_time_tz_value(raw)
-    elif T == UUID:
-        return libduckdb.duckdb_create_uuid(vp.unsafe_bitcast[UUID]()[].value)
-    elif T == TimeNS:
-        var raw = duckdb_time_ns(vp.unsafe_bitcast[TimeNS]()[].nanos)
-        return libduckdb.duckdb_create_time_ns(raw)
-    elif T == Bit:
-        var bit_ref = vp.unsafe_bitcast[Bit]()[].copy()
-        # Allocate temp buffer for duckdb_bit.data (padding byte plus bit bytes)
-        var buf_mem = alloc(Layout[UInt8](count=len(bit_ref._data))).into_managed()
-        var buf = buf_mem.unsafe_ptr()
-        for i in range(len(bit_ref._data)):
-            buf[unsafe_offset=i] = bit_ref._data[i]
-        var raw = duckdb_bit(buf.unsafe_origin_cast[MutUntrackedOrigin](), idx_t(len(bit_ref._data)))
-        var val = libduckdb.duckdb_create_bit(raw)
-        deinit(buf_mem^)
-        return val
-    else:
-        raise Error(
-            "Unsupported type for value creation: "
-            + String(Reflected[T].name())
-        )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -386,43 +387,98 @@ def _is_list_compatible_type(actual: DuckDBType) -> Bool:
     )
 
 
+def _scalar_duckdb_type[T: AnyType]() -> DuckDBType:
+    """Map a scalar Mojo type to its DuckDB type at compile time.
+
+    This is the one list of supported scalar types. Containers and structs
+    are handled by the callers.
+
+    Parameters:
+        T: The Mojo type to map.
+
+    Returns:
+        The DuckDBType for T, or `DuckDBType.invalid` if T is not a known
+        scalar type.
+    """
+    comptime match T:
+        case == Bool:
+            return DuckDBType.boolean
+        case == Int8:
+            return DuckDBType.tinyint
+        case == Int16:
+            return DuckDBType.smallint
+        case == Int32:
+            return DuckDBType.integer
+        case == Int64:
+            return DuckDBType.bigint
+        case == Int:
+            # Int is platform-dependent: 32-bit or 64-bit
+            comptime if size_of[Int]() == 4:
+                return DuckDBType.integer
+            else:
+                return DuckDBType.bigint
+        case == UInt8:
+            return DuckDBType.utinyint
+        case == UInt16:
+            return DuckDBType.usmallint
+        case == UInt32:
+            return DuckDBType.uinteger
+        case == UInt64:
+            return DuckDBType.ubigint
+        case == UInt:
+            # UInt is platform-dependent: 32-bit or 64-bit
+            comptime if size_of[UInt]() == 4:
+                return DuckDBType.uinteger
+            else:
+                return DuckDBType.ubigint
+        case == Float32:
+            return DuckDBType.float
+        case == Float64:
+            return DuckDBType.double
+        case == String:
+            return DuckDBType.varchar
+        case == Date:
+            return DuckDBType.date
+        case == Time:
+            return DuckDBType.time
+        case == Timestamp:
+            return DuckDBType.timestamp
+        case == Interval:
+            return DuckDBType.interval
+        case == Int128:
+            return DuckDBType.hugeint
+        case == UInt128:
+            return DuckDBType.uhugeint
+        case == Decimal:
+            return DuckDBType.decimal
+        case == TimestampS:
+            return DuckDBType.timestamp_s
+        case == TimestampMS:
+            return DuckDBType.timestamp_ms
+        case == TimestampNS:
+            return DuckDBType.timestamp_ns
+        case == TimestampTZ:
+            return DuckDBType.timestamp_tz
+        case == TimestampTZNS:
+            return DuckDBType.timestamp_tz_ns
+        case == TimeTZ:
+            return DuckDBType.time_tz
+        case == UUID:
+            return DuckDBType.uuid
+        case == TimeNS:
+            return DuckDBType.time_ns
+        case == Bit:
+            return DuckDBType.bit
+        case _:
+            return DuckDBType.invalid
+
+
 def _is_known_scalar_type[T: AnyType]() -> Bool:
     """Returns True if T is one of the known DuckDB-mappable scalar types."""
-    comptime if (
-        T == Bool
-        or T == Int8
-        or T == Int16
-        or T == Int32
-        or T == Int64
-        or T == Int
-        or T == UInt8
-        or T == UInt16
-        or T == UInt32
-        or T == UInt64
-        or T == UInt
-        or T == Float32
-        or T == Float64
-        or T == String
-        or T == Date
-        or T == Time
-        or T == Timestamp
-        or T == Interval
-        or T == Int128
-        or T == UInt128
-        or T == Decimal
-        or T == TimestampS
-        or T == TimestampMS
-        or T == TimestampNS
-        or T == TimestampTZ
-        or T == TimestampTZNS
-        or T == TimeTZ
-        or T == UUID
-        or T == TimeNS
-        or T == Bit
-    ):
-        return True
-    else:
-        return False
+    # Don't write this as one long `or` chain or a single `case` with all the
+    # types: either made anything using `List(Appendable)` take minutes to
+    # compile (Mojo 1.1) or appear to hang (Mojo 1.2).
+    return _scalar_duckdb_type[T]() != DuckDBType.invalid
 
 
 def mojo_type_to_duckdb_type[T: Copyable & Deinitable]() -> DuckDBType:
@@ -437,87 +493,9 @@ def mojo_type_to_duckdb_type[T: Copyable & Deinitable]() -> DuckDBType:
     Returns:
         The corresponding DuckDBType.
     """
-    comptime if T == Bool:
-        return DuckDBType.boolean
-    elif T == Int8:
-        return DuckDBType.tinyint
-    elif T == Int16:
-        return DuckDBType.smallint
-    elif T == Int32:
-        return DuckDBType.integer
-    elif T == Int64:
-        return DuckDBType.bigint
-    elif T == Int:
-        # Int is platform-dependent: 32-bit or 64-bit
-        comptime if size_of[Int]() == 4:
-            return DuckDBType.integer
-        else:
-            return DuckDBType.bigint
-    elif T == UInt8:
-        return DuckDBType.utinyint
-    elif T == UInt16:
-        return DuckDBType.usmallint
-    elif T == UInt32:
-        return DuckDBType.uinteger
-    elif T == UInt64:
-        return DuckDBType.ubigint
-    elif T == UInt:
-        # UInt is platform-dependent: 32-bit or 64-bit
-        comptime if size_of[UInt]() == 4:
-            return DuckDBType.uinteger
-        else:
-            return DuckDBType.ubigint
-    elif T == Float32:
-        return DuckDBType.float
-    elif T == Float64:
-        return DuckDBType.double
-    elif T == String:
-        return DuckDBType.varchar
-    elif T == Date:
-        return DuckDBType.date
-    elif T == Time:
-        return DuckDBType.time
-    elif T == Timestamp:
-        return DuckDBType.timestamp
-    elif T == Interval:
-        return DuckDBType.interval
-    elif T == Int128:
-        return DuckDBType.hugeint
-    elif T == UInt128:
-        return DuckDBType.uhugeint
-    elif T == Decimal:
-        return DuckDBType.decimal
-    elif T == TimestampS:
-        return DuckDBType.timestamp_s
-    elif T == TimestampMS:
-        return DuckDBType.timestamp_ms
-    elif T == TimestampNS:
-        return DuckDBType.timestamp_ns
-    elif T == TimestampTZ:
-        return DuckDBType.timestamp_tz
-    elif T == TimestampTZNS:
-        return DuckDBType.timestamp_tz_ns
-    elif T == TimeTZ:
-        return DuckDBType.time_tz
-    elif T == UUID:
-        return DuckDBType.uuid
-    elif T == TimeNS:
-        return DuckDBType.time_ns
-    elif T == Bit:
-        return DuckDBType.bit
-    else:
-        comptime base_name = Reflected[T].base_name()
-        comptime if base_name == "List":
-            return DuckDBType.list
-        elif base_name == "Dict":
-            return DuckDBType.map
-        elif base_name == "Variant":
-            return DuckDBType.union
-        elif base_name == "Optional":
-            comptime assert False, "Optional types should be unwrapped before mapping. Use the element type directly."
-        else:
-            # Treat any remaining struct type as DuckDB STRUCT
-            return DuckDBType.struct_t
+    comptime if Reflected[T].base_name() == "Optional":
+        comptime assert False, "Optional types should be unwrapped before mapping. Use the element type directly."
+    return _scalar_type_to_duckdb[T]()
 
 
 def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
@@ -532,81 +510,18 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
     Returns:
         The DuckDBType for this field.
     """
-    comptime if T == Bool:
-        return DuckDBType.boolean
-    elif T == Int8:
-        return DuckDBType.tinyint
-    elif T == Int16:
-        return DuckDBType.smallint
-    elif T == Int32:
-        return DuckDBType.integer
-    elif T == Int64:
-        return DuckDBType.bigint
-    elif T == Int:
-        comptime if size_of[Int]() == 4:
-            return DuckDBType.integer
-        else:
-            return DuckDBType.bigint
-    elif T == UInt8:
-        return DuckDBType.utinyint
-    elif T == UInt16:
-        return DuckDBType.usmallint
-    elif T == UInt32:
-        return DuckDBType.uinteger
-    elif T == UInt64:
-        return DuckDBType.ubigint
-    elif T == UInt:
-        comptime if size_of[UInt]() == 4:
-            return DuckDBType.uinteger
-        else:
-            return DuckDBType.ubigint
-    elif T == Float32:
-        return DuckDBType.float
-    elif T == Float64:
-        return DuckDBType.double
-    elif T == String:
-        return DuckDBType.varchar
-    elif T == Date:
-        return DuckDBType.date
-    elif T == Time:
-        return DuckDBType.time
-    elif T == Timestamp:
-        return DuckDBType.timestamp
-    elif T == Interval:
-        return DuckDBType.interval
-    elif T == Int128:
-        return DuckDBType.hugeint
-    elif T == UInt128:
-        return DuckDBType.uhugeint
-    elif T == Decimal:
-        return DuckDBType.decimal
-    elif T == TimestampS:
-        return DuckDBType.timestamp_s
-    elif T == TimestampMS:
-        return DuckDBType.timestamp_ms
-    elif T == TimestampNS:
-        return DuckDBType.timestamp_ns
-    elif T == TimestampTZ:
-        return DuckDBType.timestamp_tz
-    elif T == TimestampTZNS:
-        return DuckDBType.timestamp_tz_ns
-    elif T == TimeTZ:
-        return DuckDBType.time_tz
-    elif T == UUID:
-        return DuckDBType.uuid
-    elif T == TimeNS:
-        return DuckDBType.time_ns
-    elif T == Bit:
-        return DuckDBType.bit
-    else:
-        comptime base_name = Reflected[T].base_name()
-        comptime if base_name == "List":
+    comptime scalar = _scalar_duckdb_type[T]()
+    comptime if scalar != DuckDBType.invalid:
+        return scalar
+    comptime match Reflected[T].base_name():
+        case "List":
             return DuckDBType.list
-        elif base_name == "Dict":
+        case "Dict":
             return DuckDBType.map
-        elif base_name == "Variant":
+        case "Variant":
             return DuckDBType.union
-        else:
+        case _:
+            # Treat any remaining struct type as DuckDB STRUCT
             return DuckDBType.struct_t
 
 
@@ -626,18 +541,17 @@ def mojo_logical_type[T: Copyable & Deinitable]() -> MojoType:
     """
     comptime if _is_known_scalar_type[T]():
         return MojoType(mojo_type_to_duckdb_type[T]())
-    else:
-        comptime base_name = Reflected[T].base_name()
-        comptime if base_name == "List":
+    comptime match Reflected[T].base_name():
+        case "List":
             # We know it's a list but can't yet extract T from List[T]
             # automatically. Return a bare list descriptor.
             # Users can call MojoType.list_of() directly for full precision.
             return MojoType(DuckDBType.list)
-        elif base_name == "Dict":
+        case "Dict":
             return MojoType(DuckDBType.map)
-        elif base_name == "Variant":
+        case "Variant":
             return MojoType(DuckDBType.union)
-        else:
+        case _:
             # User-defined struct: reflect over fields
             comptime field_count = Reflected[T].field_count()
             comptime field_type_arr = Reflected[T].field_types()
