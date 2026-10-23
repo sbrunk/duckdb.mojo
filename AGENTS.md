@@ -17,6 +17,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 
 - `duckdb/` - Main library source (the `duckdb` Mojo package)
   - `_libduckdb.mojo` - Auto-generated low-level C API bindings (do not edit manually)
+  - `_libduckdb_v2.mojo` - Auto-generated low-level bindings for DuckDB's V2 C API (do not edit manually, not used by the high-level API yet)
   - `connection.mojo`, `database.mojo`, `result.mojo` - Core client API
   - `scalar_function.mojo`, `aggregate_function.mojo`, `table_function.mojo` - UDF registration
   - `extension.mojo` - Extension development support
@@ -41,7 +42,7 @@ pixi run test                 # Run all tests (library + extensions)
 pixi run test-library         # Run library tests only
 pixi run mojo run examples/example.mojo  # Run example
 pixi run generate-api         # Regenerate C API bindings from DuckDB source
-pixi run check-generated-api  # Fail if _libduckdb.mojo is out of sync with DuckDB
+pixi run check-generated-api  # Fail if the generated bindings are out of sync with DuckDB
 pixi build                    # Build conda package
 pixi run overrides-build      # Build the mojo-kernel-overrides extension
 pixi run overrides-bench      # Build + benchmark the override extension vs stock DuckDB
@@ -63,7 +64,8 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 ## Key Patterns
 
 - `_libduckdb.mojo` is auto-generated from DuckDB's YAML API spec in the `third_party/duckdb` submodule (`api_spec/v1/`, which replaced the JSON files under `header_generation/` in DuckDB 1.5.6). The generator also checks its extension API struct layout against the submodule's `duckdb_extension.h`. Regenerate with `pixi run generate-api` after bumping the DuckDB version. Move the submodule pin first (see "Updating DuckDB" below). CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main. `pixi run clone-duckdb` initializes the submodule and warns if its tag doesn't match the installed `duckdb`.
-- Extensions use the DuckDB Extension C API (V1) and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`. DuckDB 2.0 added two functions (`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6 band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6 engine lacks their slots. The generator keeps them out of our struct and binds them to stubs in extension mode, so extensions still load on 1.5.6 (they work normally in client mode). DuckDB 2.0's new V2 C API (`api_spec/v2`, `duckdb_v2_*`) is not used: every V2 function is still marked unstable, so a V2 extension would only load on the exact DuckDB version it was built for.
+- Extensions use the DuckDB Extension C API (V1) and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`. DuckDB 2.0 added two functions (`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6 band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6 engine lacks their slots. The generator keeps them out of our struct and binds them to stubs in extension mode, so extensions still load on 1.5.6 (they work normally in client mode). DuckDB 2.0's new V2 C API (`api_spec/v2`, `duckdb_v2_*`) is not used by the high-level API or extensions yet: every V2 function is still marked unstable, so a V2 extension would only load on the exact DuckDB version it was built for.
+- `_libduckdb_v2.mojo` is generated from `api_spec/v2/` by `scripts/generate_mojo_api_v2.py` (also part of `generate-api` and `check-generated-api`). Unlike the V1 generator it writes every type from the spec (handles, enums, structs including the `bytes` union, aliases, callbacks, constants) and wraps all functions in `LibDuckDBV2`. It checks the extension struct layout against `duckdb_extension_v2.h` (V2 functions have no `offset` while unstable; DuckDB orders the unstable tail by lifecycle date, then name), the parameter count of every function and every enum value against `duckdb_v2.h`. It emits `duckdb_ext_api_v2` (the stable part, empty in 2.0.0) and `duckdb_ext_api_v2_unstable` (everything). `LibDuckDBV2()` loads the functions with dlsym and raises if one is missing; the two other constructors take the extension structs, and with the stable one the unstable functions are bound to aborting stubs. `test/test_libduckdb_v2.mojo` checks struct sizes and runs a query through the raw V2 functions.
 
 ## SIMD kernels and the override extension
 
@@ -122,8 +124,10 @@ warns when they drift. To bump (for example from `2.0.0` to `2.0.1`):
    `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +
    the `duckdb-from-source ==…` pins in `extensions/operator-replacement/recipe.yaml`.
 3. `pixi install` to refresh the lockfile.
-4. `pixi run generate-api` to regenerate `duckdb/_libduckdb.mojo` from the new
-   source, then commit it (CI `check-generated-api` fails otherwise).
+4. `pixi run generate-api` to regenerate `duckdb/_libduckdb.mojo` and
+   `duckdb/_libduckdb_v2.mojo` from the new source, then commit them (CI
+   `check-generated-api` fails otherwise). The unstable V2 API can change in
+   any release, so expect V2 generator or test fixes.
 5. `pixi run test` to verify. The CPP-ABI extensions
    (`mojo-kernel-overrides`, `mojo-gpu-operator`) are version-locked to the exact
    DuckDB and need a rebuild (`pixi run overrides-build` / `gpu-op-build`).
