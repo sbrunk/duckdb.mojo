@@ -6607,11 +6607,30 @@ def _pin_finalize_generic(
                 )
         elif agg.kind == AGG_COUNT_STAR:
             agg_scale.append(Int64(0))
-            var mi = _emit_count(
-                metric_ops, metric_offsets, metric_lens, n_ops_total
-            )
-            if is_float64:
-                const_div.append(Float64(1))
+            # count(x) of a nullable column arrives as COUNT_STAR carrying x's
+            # program: count only the rows where x's nullable inputs are valid
+            # (the same validity product AVG uses as its denominator). An empty
+            # program, or one with no nullable input, is a plain row count.
+            var cnt_vp = (List[Int64](), List[Float64]())
+            if len(agg.program) > 0:
+                cnt_vp = _valid_product_tape(
+                    _resolve_program(d, agg, col_slot).ops, valid_col_slot_of
+                )
+            var mi: Int
+            if len(cnt_vp[0]) > 0:
+                mi = _emit_prog(
+                    MetricPlan(cnt_vp[0].copy(), len(cnt_vp[0]) // 3),
+                    metric_ops, metric_offsets, metric_lens, n_ops_total,
+                )
+                if is_float64:
+                    for x in range(len(cnt_vp[1])):
+                        const_div.append(cnt_vp[1][x])
+            else:
+                mi = _emit_count(
+                    metric_ops, metric_offsets, metric_lens, n_ops_total
+                )
+                if is_float64:
+                    const_div.append(Float64(1))
             agg_m0.append(mi)
             agg_m1.append(-1)
             # A1: count(*) counts all filter-passing rows (incl. NULL-agg-input rows);
@@ -6714,7 +6733,8 @@ def _pin_finalize_generic(
     var ungrouped_count_m = -1
     if mode == STRAT_UNGROUPED:
         for ai in range(len(d.aggregates)):
-            if agg_kind[ai] == AGG_COUNT_STAR:
+            # A COUNT_STAR with a program is a nullable count(x), not a row count.
+            if agg_kind[ai] == AGG_COUNT_STAR and len(d.aggregates[ai].program) == 0:
                 ungrouped_count_m = agg_m0[ai]
                 break
             elif agg_kind[ai] == AGG_AVG:
@@ -6746,7 +6766,7 @@ def _pin_finalize_generic(
     var grouped_count_m = -1
     if mode == STRAT_DENSE_GROUP and not is_float64:
         for ai in range(len(d.aggregates)):
-            if agg_kind[ai] == AGG_COUNT_STAR:
+            if agg_kind[ai] == AGG_COUNT_STAR and len(d.aggregates[ai].program) == 0:
                 grouped_count_m = agg_m0[ai]
                 break
             elif agg_kind[ai] == AGG_AVG:
