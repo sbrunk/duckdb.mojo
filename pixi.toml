@@ -33,8 +33,8 @@ path = "duckdb"
 build = "pixi run mojo precompile duckdb -o duckdb.mojoc"
 test-library = { cmd = "bash scripts/run_tests.sh" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
-generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
-# Fails if duckdb/_libduckdb.mojo is out of sync with the DuckDB version
+generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo && python3 scripts/generate_mojo_api_v2.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb_v2.mojo", depends-on = ["clone-duckdb"] }
+# Fails if duckdb/_libduckdb.mojo or duckdb/_libduckdb_v2.mojo is out of sync with the DuckDB version
 # (regenerates first via generate-api, then checks for an unexpected diff).
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
 
