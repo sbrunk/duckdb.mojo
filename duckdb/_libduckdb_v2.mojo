@@ -1096,7 +1096,7 @@ comptime duckdb_v2_pragma_function_exec_callback_fn = def(duckdb_v2_function_bin
 
 #! Identifies a configurable function property. Pass one of these to
 #! `duckdb_v2_scalar_function_set_property` or `duckdb_v2_aggregate_function_set_property` together with a
-#! matching `duckdb_v2_FUNCTION_PROPERTY_VALUE`. The high byte is the function-type
+#! matching `DUCKDB_V2_FUNCTION_PROPERTY_VALUE`. The high byte is the function-type
 #! group: COMMON (`0x01xxxx`) keys apply to all function types, while
 #! group-specific keys (e.g. aggregate `0x03xxxx`) are only valid for that
 #! function type and are rejected with an error otherwise.
@@ -1114,7 +1114,7 @@ comptime DUCKDB_V2_FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT: DUCKDB_V2_FUNCTION_PRO
 # Aggregate only. Whether the aggregate's result is affected by a DISTINCT modifier. Accepts the `FUNCTION_PROPERTY_AGG_DISTINCT_DEPENDENT_*` values. Defaults to `YES`.
 comptime DUCKDB_V2_FUNCTION_PROPERTY_AGG_DISTINCT_DEPENDENT: DUCKDB_V2_FUNCTION_PROPERTY_KEY = 196864
 
-#! A value for a `duckdb_v2_FUNCTION_PROPERTY_KEY`. Each key owns a 256-value block: a
+#! A value for a `DUCKDB_V2_FUNCTION_PROPERTY_KEY`. Each key owns a 256-value block: a
 #! value `V` is valid for key `K` iff `(V & 0xFFFF00) == K`, and shares the
 #! key's function-type group (`V & 0xFF0000`) in its high byte. Passing a
 #! value that does not match the key is rejected with an error. Boolean-like
@@ -8012,7 +8012,7 @@ struct LibDuckDBV2(Movable):
         flag must be applied before the options can open anything, since the flags are what say whether the file is
         being read or written. There is no way to take a flag back -- build a fresh set of options instead.
 
-        `FILE_FLAG_INVALID` names no behaviour and is rejected, as is any value that is not a `duckdb_v2_FILE_FLAG`.
+        `FILE_FLAG_INVALID` names no behaviour and is rejected, as is any value that is not a `DUCKDB_V2_FILE_FLAG`.
 
         Args:
             options: The options to apply the flag to.
@@ -8562,7 +8562,7 @@ struct LibDuckDBV2(Movable):
 
         Configures a function property that influences planning and execution, such as stability, NULL handling,
         fallibility, collation handling, or the aggregate-specific order/DISTINCT dependence. The value must be
-        one of the `duckdb_v2_FUNCTION_PROPERTY_VALUE` entries belonging to `key`; passing a value that does not belong
+        one of the `DUCKDB_V2_FUNCTION_PROPERTY_VALUE` entries belonging to `key`; passing a value that does not belong
         to the key, or a key that is not valid for aggregate functions, results in an error.
 
         Args:
@@ -12118,7 +12118,7 @@ struct LibDuckDBV2(Movable):
         Sets a property on the scalar function.
 
         Configures a function property that influences planning and execution, such as stability, NULL handling,
-        fallibility or collation handling. The value must be one of the `duckdb_v2_FUNCTION_PROPERTY_VALUE` entries
+        fallibility or collation handling. The value must be one of the `DUCKDB_V2_FUNCTION_PROPERTY_VALUE` entries
         belonging to `key`; passing a value that does not belong to the key, or a key that is not valid for
         scalar functions, results in an error.
 
@@ -12521,7 +12521,7 @@ struct LibDuckDBV2(Movable):
         """
         Adds a parameter to a signature.
 
-        The kind decides how a caller passes the argument; see `duckdb_v2_FUNCTION_PARAMETER_KIND`. The signature keeps its
+        The kind decides how a caller passes the argument; see `DUCKDB_V2_FUNCTION_PARAMETER_KIND`. The signature keeps its
         parameters ordered by kind, and parameters of the same kind in the order they were added, so parameters of
         different kinds can be added in any order. A default value makes the parameter optional; `*args` and
         `**kwargs` cannot have one.

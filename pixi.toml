@@ -46,7 +46,7 @@ build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/buil
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
 # Test extension
-build-test-extension = { cmd = "bash -c 'mkdir -p extensions/test-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o extensions/test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/bad_api.duckdb_extension'", depends-on = ["build"] }
+build-test-extension = { cmd = "bash extensions/test-extension/build.sh", depends-on = ["build"] }
 test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS extensions/test-extension/test_extension.mojo'", depends-on = ["build-test-extension"] }
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
