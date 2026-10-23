@@ -71,7 +71,7 @@ clang++ -std=c++17 -O2 -fPIC -shared -undefined dynamic_lookup \
 # 3. Append the footer (run from the repo root). CPP is version-locked, so the version field is the DuckDB
 #    version (not the C API version).
 python3 scripts/append_extension_metadata.py myext.duckdb_extension \
-    --abi-type CPP --duckdb-version v1.5.6
+    --abi-type CPP --duckdb-version v2.0.0
 ```
 
 Caveats specific to the CPP ABI:

@@ -48,34 +48,45 @@ trait Bindable:
     `Optional[T]`, which binds NULL for `None` and its inner value otherwise.
     """
 
-    def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
+    def bind_to[
+        o: ImmOrigin
+    ](ref self, mut stmt: PreparedStatement[o], index: Int) raises ResultError:
         """Bind this value to ``stmt`` at the given 1-based ``index``."""
         ...
 
 
-struct PreparedStatement(Movable):
+struct PreparedStatement[origin: ImmOrigin](Movable):
     """A prepared SQL statement with bindable parameters.
 
-    Create one via `Connection.prepare`.  The statement borrows the connection's
-    handle and must not outlive the connection (same contract as `Appender`).
+    Create one via `Connection.prepare`.  The statement borrows the connection
+    through an origin-tracked pointer, so the connection stays alive as long as
+    the statement does. DuckDB 2.0 refuses to execute a statement whose
+    connection was closed.
 
     Parameters are 1-based, matching DuckDB's C API and SQL ``$1``/``?`` indices.
+
+    Parameters:
+        origin: The origin of the borrowed connection.
     """
 
+    var _conn_ptr: Pointer[duckdb_connection, Self.origin]
     var _stmt: duckdb_prepared_statement
 
     # ── Construction / Destruction ────────────────────────────────
 
-    def __init__(out self, conn: duckdb_connection, query: String) raises ResultError:
-        """Prepare ``query`` against the given raw connection handle.
+    def __init__(
+        out self, conn_ptr: Pointer[duckdb_connection, Self.origin], query: String
+    ) raises ResultError:
+        """Prepare ``query`` against the connection at ``conn_ptr``.
 
-        Prefer `Connection.prepare`, which supplies the handle for you.
+        Prefer `Connection.prepare`, which supplies the connection for you.
         """
+        self._conn_ptr = conn_ptr
         self._stmt = duckdb_prepared_statement.unsafe_dangling()
         var _query = query.copy()
         ref libduckdb = DuckDB().libduckdb()
         var state = libduckdb.duckdb_prepare(
-            conn,
+            conn_ptr[],
             _query.as_c_string_span().ptr(),
             Pointer(to=self._stmt),
         )
@@ -86,6 +97,7 @@ struct PreparedStatement(Movable):
             raise ResultError(err^, ErrorType.INVALID)
 
     def __init__(out self, *, deinit move: Self):
+        self._conn_ptr = move._conn_ptr
         self._stmt = move._stmt
 
     def __deinit__(deinit self):
@@ -228,7 +240,9 @@ struct PreparedStatement(Movable):
 
 
 __extension Optional(Bindable):
-    def bind_to(ref self, mut stmt: PreparedStatement, index: Int) raises ResultError:
+    def bind_to[
+        o: ImmOrigin
+    ](ref self, mut stmt: PreparedStatement[o], index: Int) raises ResultError:
         if self:
             # Refine Self.T to Copyable & Deinitable so the inner value can be
             # bound. Only Copyable values can be converted to a duckdb_value.

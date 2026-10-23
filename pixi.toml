@@ -94,8 +94,8 @@ compile-check = { cmd = "bash scripts/compile_check.sh benchmark examples" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.5.6"
-duckdb-cli = "=1.5.6"
+libduckdb-devel = "=2.0.0"
+duckdb-cli = "=2.0.0"
 pyyaml = "*"
 mojo = "==1.1.0"
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }

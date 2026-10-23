@@ -35,7 +35,7 @@ requirements:
     # The bindings dlopen libduckdb at runtime (duckdb/_libduckdb.mojo), so the
     # shared library must be present. Track the DuckDB minor the FFI bindings
     # were generated against.
-    - libduckdb >=1.5.6,<1.6
+    - libduckdb >=2.0.0,<2.1
 
 tests:
   - script:
@@ -47,7 +47,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=1.5.6,<1.6
+        - libduckdb >=2.0.0,<2.1
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

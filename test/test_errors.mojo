@@ -59,6 +59,9 @@ def test_error_bucket_membership() raises:
     assert_true(ErrorType.STAT.is_operational_error())
     assert_true(ErrorType.NULL_POINTER.is_operational_error())
     assert_true(ErrorType.INVALID_CONFIGURATION.is_programming_error())
+    assert_true(ErrorType.DATA_CORRUPTION.is_operational_error())
+    assert_true(ErrorType.RESOURCE_IN_USE.is_operational_error())
+    assert_equal(String(ErrorType.RESOURCE_IN_USE), "RESOURCE_IN_USE")
 
 
 def main() raises:

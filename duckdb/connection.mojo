@@ -258,9 +258,14 @@ struct Connection(Movable):
 
     # ── Prepared statements / parameter binding ───────────────────
 
-    def prepare(self, query: String) raises ResultError -> PreparedStatement:
-        """Prepare ``query`` for repeated execution with bound parameters."""
-        return PreparedStatement(self._conn, query)
+    def prepare(
+        ref self, query: String
+    ) raises ResultError -> PreparedStatement[ImmOrigin(origin_of(self._conn))]:
+        """Prepare ``query`` for repeated execution with bound parameters.
+
+        The statement keeps the connection alive while it is in use.
+        """
+        return PreparedStatement[ImmOrigin(origin_of(self._conn))](Pointer(to=self._conn), query)
 
     def execute[
         *Ts: Copyable & Deinitable
@@ -282,7 +287,7 @@ struct Connection(Movable):
             var r = con.execute("SELECT ? + ?", Int32(40), Int32(2))
             ```
         """
-        var stmt = PreparedStatement(self._conn, query)
+        var stmt = PreparedStatement(Pointer(to=self._conn), query)
         comptime T = Tuple[*Ts]
         comptime n = T.__len__()
         comptime for idx in range(n):
@@ -293,7 +298,7 @@ struct Connection(Movable):
         self, query: String, params: List[DuckDBValue]
     ) raises ResultError -> Result:
         """Execute ``query`` binding the given pre-built positional values."""
-        var stmt = PreparedStatement(self._conn, query)
+        var stmt = PreparedStatement(Pointer(to=self._conn), query)
         for i in range(len(params)):
             stmt.bind_value(i + 1, params[i])
         return stmt.execute()
@@ -313,7 +318,7 @@ struct Connection(Movable):
             query: The SQL query with ``$name`` placeholders.
             params: Mapping of parameter name to value.
         """
-        var stmt = PreparedStatement(self._conn, query)
+        var stmt = PreparedStatement(Pointer(to=self._conn), query)
         for entry in params.items():
             var idx = stmt.parameter_index(entry.key)
             stmt.bind(idx, entry.value)
@@ -334,7 +339,7 @@ struct Connection(Movable):
             query: The SQL query with ``?``/``$N`` placeholders.
             rows: One parameter tuple per execution.
         """
-        var stmt = PreparedStatement(self._conn, query)
+        var stmt = PreparedStatement(Pointer(to=self._conn), query)
         comptime T = Tuple[*Ts]
         comptime n = T.__len__()
         for i in range(len(rows)):

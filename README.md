@@ -18,7 +18,7 @@ You can use duckdb.mojo to:
    built-in functions, and GPU execution of aggregations and vector search,
    without changing the SQL.
 
-Requirements: Mojo 1.1.0 and DuckDB 1.5.6, on Linux (x86_64, aarch64) and macOS
+Requirements: Mojo 1.1.0 and DuckDB 2.0, on Linux (x86_64, aarch64) and macOS
 (Apple silicon). Writing extensions and the acceleration extensions are
 experimental.
 
@@ -364,9 +364,10 @@ The extension uses DuckDB's
 which hands the extension a
 [struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb_extension.h)
 for a requested API version. `Extension.run` requests v1.5.6, which covers the
-whole C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
-between releases, so a compiled extension keeps working with later DuckDB 1.x
-releases without a rebuild.
+whole V1 C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
+between releases, so a compiled extension keeps working with later releases,
+including DuckDB 2.0, without a rebuild. DuckDB 2.0 also ships a new C API
+("V2"), but it is not stable yet, so the bindings stay on V1.
 
 See the [demo extension](extensions/demo-extension/) for a complete example.
 Extensions that need DuckDB internals, such as replacing built-in functions or

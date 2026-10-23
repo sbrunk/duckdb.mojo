@@ -9,7 +9,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 ## Tech Stack
 
 - **Language:** Mojo (stable releases, pinned in pixi.toml)
-- **Database:** DuckDB 1.5 (C API via auto-generated FFI bindings)
+- **Database:** DuckDB 2.0 (V1 C API via auto-generated FFI bindings)
 - **Package manager:** Pixi (conda-based, config in pixi.toml)
 - **CI:** GitHub Actions (test.yml - runs on linux-64, linux-aarch64, osx-arm64)
 
@@ -29,7 +29,7 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
 - `extensions/` - Sub-packages (duckdb-from-source, operator-replacement, mojo-kernel-overrides, mojo-gpu-operator)
-- `third_party/duckdb/` - DuckDB source as a git submodule, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v1.5.6`, shallow). It is the only DuckDB source used for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
+- `third_party/duckdb/` - DuckDB source as a git submodule, pinned in `.gitmodules` to the release tag the FFI bindings were generated against (currently `v2.0.0`, shallow). It is the only DuckDB source used for code generation (`generate-api`), the source build (`duckdb-from-source`), and DuckDB's `benchmark_runner`. The CPP-ABI C++ extensions build against conda's `libduckdb-devel` headers by default (it ships the full internal header tree), so the submodule only needs to be checked out for those three uses. Initialize with `git submodule update --init third_party/duckdb` or `pixi run clone-duckdb`.
 
 ## Development Commands
 
@@ -63,7 +63,7 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 ## Key Patterns
 
 - `_libduckdb.mojo` is auto-generated from DuckDB's YAML API spec in the `third_party/duckdb` submodule (`api_spec/v1/`, which replaced the JSON files under `header_generation/` in DuckDB 1.5.6). The generator also checks its extension API struct layout against the submodule's `duckdb_extension.h`. Regenerate with `pixi run generate-api` after bumping the DuckDB version. Move the submodule pin first (see "Updating DuckDB" below). CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main. `pixi run clone-duckdb` initializes the submodule and warns if its tag doesn't match the installed `duckdb`.
-- Extensions use the DuckDB Extension C API and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`.
+- Extensions use the DuckDB Extension C API (V1) and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`. DuckDB 2.0 added two functions (`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6 band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6 engine lacks their slots. The generator keeps them out of our struct and binds them to stubs in extension mode, so extensions still load on 1.5.6 (they work normally in client mode). DuckDB 2.0's new V2 C API (`api_spec/v2`, `duckdb_v2_*`) is not used: every V2 function is still marked unstable, so a V2 extension would only load on the exact DuckDB version it was built for.
 
 ## SIMD kernels and the override extension
 
@@ -108,15 +108,15 @@ DuckDB source lives in the `third_party/duckdb` git submodule, pinned (via the
 gitlink in the index, with `branch`/`shallow` recorded in `.gitmodules`) to the
 release tag the FFI bindings were generated against. The `libduckdb`/`duckdb-cli`
 conda pins and the submodule pin must stay in lockstep; `pixi run clone-duckdb`
-warns when they drift. To bump (for example from `1.5.6` to `1.5.7`):
+warns when they drift. To bump (for example from `2.0.0` to `2.0.1`):
 
 1. Move the submodule pin to the new tag and stage it:
    ```shell
-   git -C third_party/duckdb fetch --depth 1 origin tag v1.5.7
-   git -C third_party/duckdb checkout tags/v1.5.7
+   git -C third_party/duckdb fetch --depth 1 origin tag v2.0.1
+   git -C third_party/duckdb checkout tags/v2.0.1
    git add third_party/duckdb
    ```
-   Optionally bump `branch = v1.5.7` in `.gitmodules`.
+   Optionally bump `branch = v2.0.1` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
    the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
    `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` +
@@ -127,6 +127,10 @@ warns when they drift. To bump (for example from `1.5.6` to `1.5.7`):
 5. `pixi run test` to verify. The CPP-ABI extensions
    (`mojo-kernel-overrides`, `mojo-gpu-operator`) are version-locked to the exact
    DuckDB and need a rebuild (`pixi run overrides-build` / `gpu-op-build`).
+   Major releases usually change DuckDB's internal C++ API, so expect porting
+   work, not only a rebuild. Status after the 2.0 bump: `mojo-kernel-overrides`
+   is ported; `mojo-gpu-operator` and `operator-replacement` are not yet and do
+   not compile against the 2.0 headers.
 
 ## Packaging / publishing
 

@@ -182,6 +182,9 @@ def _to_duckdb_value[T: Copyable & Deinitable](ref value: T) raises -> duckdb_va
     elif T == TimestampTZ:
         var ts = Timestamp(vp.unsafe_bitcast[TimestampTZ]()[].micros)
         return libduckdb.duckdb_create_timestamp_tz(ts)
+    elif T == TimestampTZNS:
+        var raw = duckdb_timestamp_ns(vp.unsafe_bitcast[TimestampTZNS]()[].nanos)
+        return libduckdb.duckdb_create_timestamp_tz_ns(raw)
     elif T == TimeTZ:
         var raw = duckdb_time_tz(vp.unsafe_bitcast[TimeTZ]()[].bits)
         return libduckdb.duckdb_create_time_tz_value(raw)
@@ -411,6 +414,7 @@ def _is_known_scalar_type[T: AnyType]() -> Bool:
         or T == TimestampMS
         or T == TimestampNS
         or T == TimestampTZ
+        or T == TimestampTZNS
         or T == TimeTZ
         or T == UUID
         or T == TimeNS
@@ -491,6 +495,8 @@ def mojo_type_to_duckdb_type[T: Copyable & Deinitable]() -> DuckDBType:
         return DuckDBType.timestamp_ns
     elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
+    elif T == TimestampTZNS:
+        return DuckDBType.timestamp_tz_ns
     elif T == TimeTZ:
         return DuckDBType.time_tz
     elif T == UUID:
@@ -582,6 +588,8 @@ def _scalar_type_to_duckdb[T: AnyType]() -> DuckDBType:
         return DuckDBType.timestamp_ns
     elif T == TimestampTZ:
         return DuckDBType.timestamp_tz
+    elif T == TimestampTZNS:
+        return DuckDBType.timestamp_tz_ns
     elif T == TimeTZ:
         return DuckDBType.time_tz
     elif T == UUID:

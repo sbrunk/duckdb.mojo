@@ -296,6 +296,15 @@ __extension TimestampTZ(Appendable):
         libduckdb.duckdb_destroy_value(Pointer(to=val))
 
 
+__extension TimestampTZNS(Appendable):
+    def append(ref self, mut appender: Appender) raises:
+        ref libduckdb = DuckDB().libduckdb()
+        var raw = duckdb_timestamp_ns(self.nanos)
+        var val = libduckdb.duckdb_create_timestamp_tz_ns(raw)
+        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
+        libduckdb.duckdb_destroy_value(Pointer(to=val))
+
+
 __extension TimeTZ(Appendable):
     def append(ref self, mut appender: Appender) raises:
         ref libduckdb = DuckDB().libduckdb()
@@ -527,7 +536,7 @@ __extension Variant(Appendable):
 # ──────────────────────────────────────────────────────────────────
 
 
-struct Appender(Movable):
+struct Appender[origin: ImmOrigin](Movable):
     """Efficiently load data into a DuckDB table.
 
     Appenders are the fastest way to insert data into DuckDB from Mojo.
@@ -537,9 +546,15 @@ struct Appender(Movable):
     ``Optional`` fields/values map to SQL ``NULL``.
 
     The appender is automatically flushed and destroyed when it goes out
-    of scope.
+    of scope. It borrows its connection through an origin-tracked pointer, so
+    the connection stays alive until then. DuckDB refuses to flush to a
+    closed connection.
+
+    Parameters:
+        origin: The origin of the borrowed connection.
     """
 
+    var _conn_ptr: Pointer[Connection, Self.origin]
     var _appender: duckdb_appender
     var _current_col: Int
     """Tracks the current column index for value-level appending.
@@ -550,7 +565,9 @@ struct Appender(Movable):
 
     # ── Construction / Destruction ────────────────────────────────
 
-    def __init__(out self, ref con: Connection, table: String, schema: String = "") raises:
+    def __init__(
+        out self, ref[Self.origin] con: Connection, table: String, schema: String = ""
+    ) raises:
         """Create an appender for the given table.
 
         Args:
@@ -558,6 +575,7 @@ struct Appender(Movable):
             table: The table name to append to.
             schema: The schema name (empty string for default schema).
         """
+        self._conn_ptr = Pointer(to=con)
         # Placeholder handle. duckdb_appender_create fills it in via an out-param.
         self._appender = duckdb_appender.unsafe_dangling()
         self._current_col = 0
@@ -587,6 +605,7 @@ struct Appender(Movable):
             raise Error("Failed to create appender: " + err)
 
     def __init__(out self, *, deinit move: Self):
+        self._conn_ptr = move._conn_ptr
         self._appender = move._appender
         self._current_col = move._current_col
 
