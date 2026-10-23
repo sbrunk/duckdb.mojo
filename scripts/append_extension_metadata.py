@@ -13,27 +13,39 @@ Usage:
 Options:
     --platform PLATFORM       Platform string (default: auto-detect)
     --capi-version VERSION    C API version for the C_STRUCT ABI (default: v1.5.6)
-    --duckdb-version VERSION  DuckDB version for the CPP ABI (default: auto-detect)
+    --duckdb-version VERSION  DuckDB version for the CPP and C_STRUCT_UNSTABLE ABIs
+                              (default: see below)
     --extension-version VER   Extension version string (default: "")
-    --abi-type ABI            ABI type: C_STRUCT or CPP (default: C_STRUCT)
+    --abi-type ABI            ABI type: C_STRUCT, C_STRUCT_UNSTABLE or CPP (default: C_STRUCT)
 
 The version field in the metadata footer depends on the ABI type:
-  - C_STRUCT:  uses --capi-version (the C API version, e.g. v1.5.6). Mojo
-               extensions built on the duckdb package use this.
-  - CPP:       uses --duckdb-version. Links DuckDB's internal C++ API, so
-               the extension is locked to that exact DuckDB version. Used by
-               the mojo-kernel-overrides / mojo-gpu-operator packages.
-
-DuckDB's C_STRUCT_UNSTABLE ABI type is not supported: since DuckDB 1.5.6 the
-whole V1 C API is stable, and in DuckDB 2.0 that ABI type means the V2 C API.
+  - C_STRUCT:           uses --capi-version (the C API version). The major
+                        version picks the C API: v1.x.y for V1 extensions
+                        (`Extension.run`, default v1.5.6), v2.x.y for V2
+                        extensions on the stable target
+                        (`ExtensionV2.run[..., unstable=False]`). DuckDB loads
+                        the extension in that version and every later one.
+  - C_STRUCT_UNSTABLE:  V2 extensions on the unstable target
+                        (`ExtensionV2.run[..., unstable=True]`). Uses
+                        --duckdb-version, by default the DuckDB version the V2
+                        bindings were generated from (DUCKDB_V2_SOURCE_VERSION
+                        in duckdb/_libduckdb_v2.mojo). DuckDB loads the
+                        extension only in exactly that version.
+  - CPP:                uses --duckdb-version (default: `duckdb --version`).
+                        Links DuckDB's internal C++ API, so the extension is
+                        locked to that exact DuckDB version. Used by the
+                        mojo-kernel-overrides / mojo-gpu-operator packages.
 
 Example:
     python3 scripts/append_extension_metadata.py demo_mojo.duckdb_extension
+    python3 scripts/append_extension_metadata.py ext_v2.duckdb_extension --abi-type C_STRUCT_UNSTABLE
     python3 scripts/append_extension_metadata.py ext.duckdb_extension --abi-type CPP
 """
 
 import argparse
+import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +96,17 @@ def detect_duckdb_version() -> str | None:
     return None
 
 
+def v2_bindings_version() -> str | None:
+    """The DuckDB version the V2 bindings were generated from."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "duckdb", "_libduckdb_v2.mojo")
+    try:
+        with open(path) as f:
+            m = re.search(r'^comptime DUCKDB_V2_SOURCE_VERSION = "([^"]+)"', f.read(), re.MULTILINE)
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
 def resolve_version_field(
     abi_type: str,
     capi_version: str | None,
@@ -92,11 +115,20 @@ def resolve_version_field(
     """Resolve the version field based on ABI type.
 
     For C_STRUCT, the version field is the C API version.
-    For CPP, the version field is the DuckDB version.
+    For C_STRUCT_UNSTABLE and CPP, the version field is the DuckDB version.
     See: https://github.com/duckdb/duckdb/blob/v1.5.6/CMakeLists.txt#L975-L983
     """
     if abi_type == "C_STRUCT":
         version = capi_version or "v1.5.6"
+    elif abi_type == "C_STRUCT_UNSTABLE":
+        version = duckdb_version or v2_bindings_version()
+        if version is None:
+            print(
+                "Error: --duckdb-version is required for C_STRUCT_UNSTABLE "
+                "(duckdb/_libduckdb_v2.mojo not found)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     else:  # CPP
         version = duckdb_version
         if version is None:
@@ -133,9 +165,9 @@ def create_metadata_footer(
     Args:
         platform_str: Platform string (e.g. "osx_arm64").
         version: Version field. For C_STRUCT this is the C API version
-            (e.g. "v1.5.6"). For CPP this is the DuckDB version.
+            (e.g. "v1.5.6"). For C_STRUCT_UNSTABLE and CPP this is the DuckDB version.
         extension_version: Extension's own version string.
-        abi_type: "C_STRUCT" or "CPP".
+        abi_type: "C_STRUCT", "C_STRUCT_UNSTABLE" or "CPP".
     """
     # WebAssembly custom section header (22 bytes)
     wasm_header = (
@@ -149,7 +181,7 @@ def create_metadata_footer(
     # Build the 8 metadata fields (32 bytes each)
     meta1_magic = pad32("4")  # Magic value
     meta2_platform = pad32(platform_str)  # Platform
-    meta3_version = pad32(version)  # C API version (C_STRUCT) or DuckDB version (CPP)
+    meta3_version = pad32(version)  # C API version (C_STRUCT) or DuckDB version (C_STRUCT_UNSTABLE, CPP)
     meta4_ext_version = pad32(extension_version)  # Extension version
     meta5_abi_type = pad32(abi_type)  # ABI type
     meta6_reserved = pad32("")  # Reserved
@@ -227,7 +259,10 @@ def main():
     parser.add_argument(
         "--duckdb-version",
         default=None,
-        help="DuckDB version for the CPP ABI (default: auto-detect via `duckdb --version`)",
+        help=(
+            "DuckDB version for the C_STRUCT_UNSTABLE ABI (default: the version of the V2 bindings) "
+            "and the CPP ABI (default: auto-detect via `duckdb --version`)"
+        ),
     )
     parser.add_argument(
         "--extension-version",
@@ -237,7 +272,7 @@ def main():
     parser.add_argument(
         "--abi-type",
         default="C_STRUCT",
-        choices=["C_STRUCT", "CPP"],
+        choices=["C_STRUCT", "C_STRUCT_UNSTABLE", "CPP"],
         help="ABI type (default: C_STRUCT)",
     )
 

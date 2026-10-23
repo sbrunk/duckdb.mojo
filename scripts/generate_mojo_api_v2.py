@@ -206,8 +206,14 @@ def fn_pointer_type(spec: Spec, fn: dict, *, role: str) -> str:
 # ---------------------------------------------------------------------------
 
 def resolve_refs(spec: Spec, text: str) -> str:
-    """Turn `[[name]]` references into the full C name (`duckdb_v2_name`)."""
-    return re.sub(r"\[\[(\w+)\]\]", lambda m: spec.prefix + m.group(1), text)
+    """Turn `[[name]]` references into the full name (`duckdb_v2_name`, or
+    `DUCKDB_V2_NAME` for enums and constants)."""
+
+    def full(m: re.Match) -> str:
+        name = m.group(1)
+        return (spec.prefix.upper() if name.isupper() else spec.prefix) + name
+
+    return re.sub(r"\[\[(\w+)\]\]", full, text)
 
 
 def doc_lines(spec: Spec, text: str) -> list[str]:

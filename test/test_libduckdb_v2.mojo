@@ -8,6 +8,7 @@ string views, the `bytes` union and vector views.
 from duckdb._libduckdb_v2 import *
 from duckdb._libduckdb_v2 import _duckdb_v2_error_info
 from duckdb.database import _null_ptr
+from duckdb.api_v2 import DuckDBV2, StrArg, check, null, null_error_info, str_to_string
 from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 from std.testing.suite import TestSuite
@@ -59,6 +60,7 @@ struct _Session:
         var code = self.lib.duckdb_v2_parse_sql(
             self.conn, sql_copy.as_c_string_span().ptr(), Pointer(to=iterator), Pointer(to=err)
         )
+        _ = sql_copy^  # keep the text alive until parse_sql has returned
         if code != DUCKDB_V2_ERROR_NONE:
             return (code, result)
         var statement = duckdb_v2_sql_statement_handle.unsafe_dangling()
@@ -168,6 +170,35 @@ def test_error_info() raises:
     assert_equal(s.lib.duckdb_v2_error_info_get_text(err, Pointer(to=text)), DUCKDB_V2_ERROR_NONE)
     assert_true("table_that_does_not_exist" in _str_to_string(text))
     _ = s.lib.duckdb_v2_error_info_destroy(Pointer(to=err))
+
+
+def test_api_v2_helpers() raises:
+    """The `DuckDBV2` global loads in client mode, and `check` turns errors into `Error`s."""
+    ref lib = DuckDBV2().libduckdb()
+    var env = null[duckdb_v2_environment_handle]()
+    var err = null_error_info()
+    check(lib.duckdb_v2_environment_create(Pointer(to=env), Pointer(to=err)), err)
+
+    # Creating an instance with an invalid option fails with a message.
+    var instance = null[duckdb_v2_instance_handle]()
+    var name = StrArg("no_such_option")
+    var value = StrArg("1")
+    var raised = False
+    try:
+        check(
+            lib.duckdb_v2_instance_create_with_options(
+                env, name.ptr(), value.ptr(), 1, Pointer(to=instance), Pointer(to=err)
+            ),
+            err,
+        )
+    except e:
+        raised = True
+        assert_true("no_such_option" in String(e), String(e))
+    assert_true(raised)
+    assert_equal(Int(err), 0)  # check() destroyed the error info and reset the slot
+    _ = lib.duckdb_v2_environment_destroy(Pointer(to=env))
+    var abc = StrArg("abc")
+    assert_equal(str_to_string(abc.ptr()[]), "abc")
 
 
 def main() raises:

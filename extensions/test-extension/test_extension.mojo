@@ -351,6 +351,74 @@ def test_ext_v1_5_6_api() raises:
 
 
 # ===--------------------------------------------------------------------===#
+# V2 C API extensions (duckdb.extension_v2)
+# ===--------------------------------------------------------------------===#
+
+comptime V2_EXT_PATH = "extensions/test-extension/build/mojo_v2.duckdb_extension"
+comptime V2_FAIL_EXT_PATH = "extensions/test-extension/build/mojo_v2_fail.duckdb_extension"
+comptime V2_STABLE_EXT_PATH = "extensions/test-extension/build/mojo_v2_stable.duckdb_extension"
+
+
+def _connect_v2() raises -> Connection:
+    var conn = Connection(_open_unsigned())
+    _ = conn.execute("LOAD '" + V2_EXT_PATH + "'")
+    return conn^
+
+
+def test_v2_scalar_function() raises:
+    """A scalar function registered through the V2 API, with constant arguments and NULLs."""
+    var conn = _connect_v2()
+    var rows = conn.execute(
+        "SELECT mojo_v2_add(40, 2) AS r, mojo_v2_add(x, 10) AS s FROM (VALUES (1, 1), (2, NULL), (3, 3)) t(k, x) ORDER BY k"
+    ).fetchall()
+    assert_equal(rows.get[Int64](col=0, row=0), 42)
+    assert_equal(rows.get[Optional[Int64]](col=1, row=0), Optional[Int64](11))
+    assert_true(rows.get[Optional[Int64]](col=1, row=1) is None)
+    assert_equal(rows.get[Optional[Int64]](col=1, row=2), Optional[Int64](13))
+
+
+def test_v2_vector_kinds() raises:
+    """Sequence vectors (range) are flattened, table columns read as flat vectors."""
+    var conn = _connect_v2()
+    var seq = conn.execute("SELECT sum(mojo_v2_add(i, i))::BIGINT FROM range(100000) r(i)").fetchall()
+    assert_equal(seq.get[Int64](col=0, row=0), 9999900000)
+    _ = conn.execute("CREATE TABLE t AS SELECT (i % 3)::BIGINT AS c FROM range(5000) r(i)")
+    var tbl = conn.execute("SELECT sum(mojo_v2_add(c, 1))::BIGINT FROM t").fetchall()
+    assert_equal(tbl.get[Int64](col=0, row=0), 9999)
+
+
+def test_v2_named_arguments() raises:
+    """V2 signatures have named parameters."""
+    var conn = _connect_v2()
+    var rows = conn.execute("SELECT mojo_v2_add(b := 2, a := 40)").fetchall()
+    assert_equal(rows.get[Int64](col=0, row=0), 42)
+
+
+def test_v2_init_error_is_reported() raises:
+    """An error raised in the init function fails the load with its message."""
+    var conn = Connection(_open_unsigned())
+    try:
+        _ = conn.execute("LOAD '" + V2_FAIL_EXT_PATH + "'")
+        raise Error("Expected LOAD to fail")
+    except e:
+        assert_true("intentional failure in the init function" in String(e), String(e))
+
+
+def test_v2_stable_target_refused() raises:
+    """DuckDB 2.0.0 has no stable V2 functions, so it refuses stable V2 extensions.
+
+    Once a DuckDB release stabilizes part of the V2 API, this extension should
+    load there, and this test needs to change.
+    """
+    var conn = Connection(_open_unsigned())
+    try:
+        _ = conn.execute("LOAD '" + V2_STABLE_EXT_PATH + "'")
+        raise Error("Expected LOAD to fail")
+    except e:
+        assert_true("no stable surface" in String(e), String(e))
+
+
+# ===--------------------------------------------------------------------===#
 # Main
 # ===--------------------------------------------------------------------===#
 

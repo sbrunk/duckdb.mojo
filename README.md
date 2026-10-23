@@ -366,10 +366,45 @@ which hands the extension a
 for a requested API version. `Extension.run` requests v1.5.6, which covers the
 whole V1 C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
 between releases, so a compiled extension keeps working with later releases,
-including DuckDB 2.0, without a rebuild. DuckDB 2.0 also ships a new C API
-("V2"), but it is not stable yet, so the bindings stay on V1.
+including DuckDB 2.0, without a rebuild.
 
 See the [demo extension](extensions/demo-extension/) for a complete example.
+
+### V2 C API (experimental)
+
+DuckDB 2.0 adds a new C API, "V2". Compared to V1, it exposes more of DuckDB, for
+example named parameters, filter pushdown, non-flat vectors and grouped
+aggregates. The raw bindings are in `duckdb._libduckdb_v2` (`LibDuckDBV2`),
+generated from DuckDB's `api_spec/v2`. There is no high-level Mojo API on top
+of them yet. `duckdb.extension_v2` provides the extension entrypoint:
+
+```mojo
+from duckdb._libduckdb_v2 import duckdb_v2_extension_input
+from duckdb.extension_v2 import ExtensionV2
+
+def init(ext: ExtensionV2) raises:
+    ref lib = ext.libduckdb()
+    # Register functions with lib.duckdb_v2_* and ext.extension
+
+@export("my_ext_init_c_api_v2")
+def my_ext_init_c_api_v2(input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]) abi("C"):
+    ExtensionV2.run[init, unstable=True](input)
+```
+
+A V2 extension targets either the stable or the unstable part of the API, and
+the footer has to match:
+
+| Target | Footer | Loads in |
+| --- | --- | --- |
+| `unstable=True` | `--abi-type C_STRUCT_UNSTABLE` | exactly the DuckDB version the bindings were generated from |
+| `unstable=False` | `--capi-version v2.x.y` | that version and later 2.x releases |
+
+In DuckDB 2.0.0 every V2 function is still unstable, and DuckDB refuses stable
+V2 extensions, so only `unstable=True` works for now. Such an extension has to
+be rebuilt for every DuckDB release. See
+[`test_v2_extension.mojo`](extensions/test-extension/src/test_v2_extension.mojo)
+for a scalar function written against the raw V2 API.
+
 Extensions that need DuckDB internals, such as replacing built-in functions or
 hooking the optimizer, have to use the C++ API instead; see
 [CPP-ABI extensions](docs/cpp-abi-extensions.md).
