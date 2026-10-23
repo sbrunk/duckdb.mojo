@@ -17,9 +17,7 @@ from std.sys.info import (
     is_nvidia_gpu,
     is_amd_gpu,
     is_apple_gpu,
-    has_nvidia_gpu_accelerator,
-    has_amd_gpu_accelerator,
-    has_apple_gpu_accelerator,
+    default_accelerator,
 )
 
 
@@ -48,9 +46,9 @@ def main() raises:
     # Host-side checks: has_* reflects the machine running this code.
     print("== host (has_*) ==")
     print("has_accelerator           :", has_accelerator())
-    print("has_apple_gpu_accelerator :", has_apple_gpu_accelerator())
-    print("has_nvidia_gpu_accelerator:", has_nvidia_gpu_accelerator())
-    print("has_amd_gpu_accelerator   :", has_amd_gpu_accelerator())
+    print("default_accelerator().is_apple_gpu() :", default_accelerator().is_apple_gpu())
+    print("default_accelerator().is_nvidia_gpu():", default_accelerator().is_nvidia_gpu())
+    print("default_accelerator().is_amd_gpu()   :", default_accelerator().is_amd_gpu())
     print("WARP_SIZE (host view)     :", WARP_SIZE)
 
     comptime if not has_accelerator():

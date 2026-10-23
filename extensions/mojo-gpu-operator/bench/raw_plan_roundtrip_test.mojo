@@ -45,7 +45,7 @@ from raw_plan_tags import (
     IDX_NONE,
 )
 from std.memory.alloc import unsafe_alloc
-from std.sys.info import has_nvidia_gpu_accelerator, has_amd_gpu_accelerator
+from std.sys.info import default_accelerator
 from std.testing import assert_equal, assert_true
 
 
@@ -486,7 +486,7 @@ def main() raises:
     # Q3's high-card integer fact key maps to a platform-dependent strategy
     # (mirrors descriptor.mojo): HASH_GROUP where 64-bit atomics exist
     # (NVIDIA/AMD), SORT_SEGREDUCE on Apple (no 64-bit atomics).
-    comptime if has_nvidia_gpu_accelerator() or has_amd_gpu_accelerator():
+    comptime if default_accelerator().is_nvidia_gpu() or default_accelerator().is_amd_gpu():
         check("Q3", q3, KIND_Q3, STRAT_HASH_GROUP, 2, 1)
     else:
         check("Q3", q3, KIND_Q3, STRAT_SORT_SEGREDUCE, 2, 1)

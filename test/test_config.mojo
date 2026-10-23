@@ -65,7 +65,7 @@ def test_connection_with_config() raises:
     var config = Config()
     config.set("threads", "2")
     config.set("default_order", "DESCENDING")
-    var con = Connection(":memory:", config^)
+    var con = Connection(":memory:", config)
     # Verify the config took effect by querying current_setting
     var result = con.execute("SELECT current_setting('threads')::VARCHAR AS threads")
     var chunk = result.fetch_chunk()

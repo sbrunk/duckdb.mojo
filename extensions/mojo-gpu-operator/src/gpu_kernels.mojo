@@ -25,12 +25,11 @@ from max.gpu.memory import AddressSpace
 from gpu_platform import WARP
 from max.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
 from std.ffi import _Global
-from std.io import FileDescriptor
+from std.io import RawFileDescriptor
 from std.os import abort, getenv
 from std.sys.info import (
-    has_nvidia_gpu_accelerator,
-    has_apple_gpu_accelerator,
     num_logical_cores,
+    default_accelerator,
 )
 from max.gpu.sync import barrier
 from std.math import sqrt, ceildiv, nan
@@ -1487,16 +1486,16 @@ def _run_topk_batch[
     # fused path is rejected (the C++ caller then falls back to stock DuckDB).
     # Fused tensor-core path (NVIDIA-only, opt-in). Routed only when (a) the
     # resident matrix is fp16 (the fused MMA kernel is fp16), (b) the build
-    # targets an NVIDIA accelerator (`has_nvidia_gpu_accelerator()`, the
+    # targets an NVIDIA accelerator (`default_accelerator().is_nvidia_gpu()`, the
     # host-side comptime query; the in-kernel `is_nvidia_gpu()` triple check is
     # always False in host context, so it can't gate this host branch), (c) the
     # env flag GPU_OP_TENSORCORE is set, and (d) (K, k) is a supported fused
-    # shape. On Apple `has_nvidia_gpu_accelerator()` is comptime-False, so this
+    # shape. On Apple `default_accelerator().is_nvidia_gpu()` is comptime-False, so this
     # branch (and the tensor-core kernel instantiation inside
     # `run_tc_knn_batch`) is never compiled. On any runtime miss we fall
     # through to the existing scalar path below (no behavior change with the
     # flag unset). Default off.
-    comptime if is_f16 and has_nvidia_gpu_accelerator():
+    comptime if is_f16 and default_accelerator().is_nvidia_gpu():
         if getenv("GPU_OP_TENSORCORE", "") != "" and tc_knn_supported(K, k):
             run_tc_knn_batch(
                 ctx, emb16, n_rows, K, qs, M, k, metric, out_ids, out_dists
@@ -1506,14 +1505,14 @@ def _run_topk_batch[
     # Fused Apple-Silicon (M1-M4) path: the 8x8 `simdgroup_matrix` MMA analogue
     # of the NVIDIA tensor-core path above. Routed only when (a) the resident
     # matrix is fp16 (the fused MMA is fp16), (b) the build targets an Apple GPU
-    # (`has_apple_gpu_accelerator()`, the host comptime query; on NVIDIA this is
+    # (`default_accelerator().is_apple_gpu()`, the host comptime query; on NVIDIA this is
     # comptime-False so the Apple kernel instantiation never compiles, and the
     # NVIDIA branch above is likewise never compiled on Apple), (c) the
     # env flag GPU_OP_TENSORCORE is set, (d) the metric is cosine (the only
     # metric the Apple fused path implements, for normalized inputs), and (e)
     # (K, k) is a supported fused shape. Any runtime miss falls through to the
     # scalar path below (no behavior change with the flag unset). Default off.
-    comptime if is_f16 and has_apple_gpu_accelerator():
+    comptime if is_f16 and default_accelerator().is_apple_gpu():
         if (
             getenv("GPU_OP_TENSORCORE", "") != ""
             and metric == 0
@@ -2785,7 +2784,7 @@ def _colpool_assemble_cols_d(
                 if pin_log:
                     print(
                         "[gpu-op colpool] OMIT-MISS (fallback) col=", col_name,
-                        " n=", n, file=FileDescriptor(2),
+                        " n=", n, file=RawFileDescriptor(2),
                     )
                 # Return early; the caller checks `fail` and bails to CPU.
                 return cols_d^
@@ -2795,7 +2794,7 @@ def _colpool_assemble_cols_d(
             if pin_log:
                 print(
                     "[gpu-op colpool] SKIP-MAT col=", col_name,
-                    " n=", n, file=FileDescriptor(2),
+                    " n=", n, file=RawFileDescriptor(2),
                 )
             continue
 
@@ -2815,7 +2814,7 @@ def _colpool_assemble_cols_d(
                 var tag = "HIT" if er.was_hit else "MISS"
                 print(
                     "[gpu-op colpool] ", tag, " col=", col_name,
-                    " n=", n, file=FileDescriptor(2),
+                    " n=", n, file=RawFileDescriptor(2),
                 )
         else:
             # Not poolable / nothing evictable: upload this slot straight from
@@ -2825,7 +2824,7 @@ def _colpool_assemble_cols_d(
             if pin_log:
                 print(
                     "[gpu-op colpool] FALLBACK col=", col_name,
-                    " n=", n, file=FileDescriptor(2),
+                    " n=", n, file=RawFileDescriptor(2),
                 )
 
     # --- derived slots (gid, pass): H2D straight from the packed host buffer. ---
@@ -2839,7 +2838,7 @@ def _colpool_assemble_cols_d(
         print(
             "[gpu-op colpool] skipped_cols=", skipped_cols,
             " (fact cols sourced from pool, not scanned/fed)",
-            file=FileDescriptor(2),
+            file=RawFileDescriptor(2),
         )
     return cols_d^
 
@@ -2902,7 +2901,7 @@ def _colpool_assemble_col_ptrs(
                 if pin_log:
                     print(
                         "[gpu-op colptr] OMIT-MISS (fallback) col=", col_name,
-                        file=FileDescriptor(2),
+                        file=RawFileDescriptor(2),
                     )
                 return ctx.enqueue_create_buffer[DType.int64](1)
             addr_h[unsafe_offset=slot] = Int64(Int(er.buf.unsafe_ptr()))
@@ -2919,7 +2918,7 @@ def _colpool_assemble_col_ptrs(
             addr_h[unsafe_offset=slot] = Int64(Int(er.buf.unsafe_ptr()))  # pooled buffer ptr
             if pin_log:
                 var tag = "HIT" if er.was_hit else "MISS"
-                print("[gpu-op colptr] ", tag, " col=", col_name, file=FileDescriptor(2))
+                print("[gpu-op colptr] ", tag, " col=", col_name, file=RawFileDescriptor(2))
         else:
             # Not poolable: per-query buffer, H2D from host (kept alive).
             var buf = ctx.enqueue_create_buffer[DType.int64](n if n > 0 else 1)
@@ -2927,7 +2926,7 @@ def _colpool_assemble_col_ptrs(
             addr_h[unsafe_offset=slot] = Int64(Int(buf.unsafe_ptr()))
             out_derived_bufs.append(buf)
             if pin_log:
-                print("[gpu-op colptr] FALLBACK col=", col_name, file=FileDescriptor(2))
+                print("[gpu-op colptr] FALLBACK col=", col_name, file=RawFileDescriptor(2))
 
     # --- derived slots (gid/pass): per-query buffers, H2D from packed host. ---
     for slot in range(n_numeric, n_slots):
@@ -2949,7 +2948,7 @@ def _colpool_assemble_col_ptrs(
         print(
             "[gpu-op colptr] skipped_cols=", skipped_cols,
             " (pooled fact cols read via pointer table, no copy)",
-            file=FileDescriptor(2),
+            file=RawFileDescriptor(2),
         )
     return col_ptrs_d^
 
@@ -4314,12 +4313,12 @@ def mojo_gpu_pin_begin(
             m[key].warm = True
             if pin_log:
                 print(
-                    "[gpu-op pin] WARM sig=", sig, file=FileDescriptor(2)
+                    "[gpu-op pin] WARM sig=", sig, file=RawFileDescriptor(2)
                 )
             return 0
         m[key].warm = False
         if pin_log:
-            print("[gpu-op pin] COLD sig=", sig, file=FileDescriptor(2))
+            print("[gpu-op pin] COLD sig=", sig, file=RawFileDescriptor(2))
         return 1
     except:
         return 1
@@ -6363,7 +6362,7 @@ def _pin_finalize_generic(
             "1" if par_on else "0",
             " rows=", n, " numeric_slots=", n_numeric,
             " filters=", n_filters, " us=", dt,
-            file=FileDescriptor(2),
+            file=RawFileDescriptor(2),
         )
 
     # --- metrics: per output aggregate, lower to internal metric program(s) ---
@@ -7495,7 +7494,7 @@ def _pin_finalize_q5(
                     "[gpu-op pin] q5 pack/gather par=",
                     "1" if par_on else "0",
                     " rows=", n, " numeric_slots=", n_numeric, " us=", dt,
-                    file=FileDescriptor(2),
+                    file=RawFileDescriptor(2),
                 )
 
             # --- pass program: none (in-kernel predicate gates rows). ---
@@ -7886,7 +7885,7 @@ def _pin_finalize_q5(
             "[gpu-op pin] q5 pack/gather par=",
             "1" if par_on else "0",
             " rows=", n, " numeric_slots=", n_numeric, " us=", dt,
-            file=FileDescriptor(2),
+            file=RawFileDescriptor(2),
         )
 
     # --- pass program (single-level gathers + OP_EQ + OP_MUL) ---
@@ -8521,7 +8520,7 @@ def _pin_finalize_generic_dims(
             "1" if par_on else "0",
             " rows=", n, " numeric_slots=", n_numeric,
             " filters=", n_filters, " us=", dt,
-            file=FileDescriptor(2),
+            file=RawFileDescriptor(2),
         )
 
     # --- pass program: LOAD_COL(pass_slot), then for each dim pass-flag array

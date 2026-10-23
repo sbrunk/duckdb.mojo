@@ -2,7 +2,7 @@ from duckdb._libduckdb import *
 from duckdb.vector import Vector
 from duckdb.api import DuckDB
 from std.collections import Set
-from std.hashlib.hasher import Hasher
+from std.hash.hasher import Hasher
 from std.sys.info import size_of
 
 
