@@ -30,6 +30,8 @@ TESTS=(
     test/test_readers.mojo
     test/test_libduckdb_v2.mojo
     test/v2/test_v2_foundations.mojo
+    test/v2/test_v2_results.mojo
+    test/v2/test_v2_relation.mojo
     test/poc/test_serde_poc.mojo
     test/test_typed_access.mojo
     test/test_errors.mojo

@@ -4,9 +4,12 @@ from std.memory import ArcPointer
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
 from duckdb.v2._runtime import api_error, check, environment, lib
-from duckdb.v2.chunk import Chunk, _Schema
+from duckdb.v2.chunk import _read_schema
+from duckdb.v2.result import Result, _columns
+from duckdb.v2.relation import Relation, _reader_call
+from duckdb._sql_util import _quote_qualified
+from duckdb.v2.statement import Description, Params, PreparedStatement, _Arguments, _named, _positional
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.types import LogicalType
 
 
 struct _Instance(Movable):
@@ -155,81 +158,167 @@ struct Connection(Movable):
         var err = null_error_info()
         check(lib().duckdb_v2_connection_interrupt(self._handle, Pointer(to=err)), err)
 
-    # ── Execution (minimal; results come in the next phase) ───────
+    # ── Execution ─────────────────────────────────────────────────
 
-    def _execute_one(mut self, sql: StringSlice) raises DuckDBError -> duckdb_v2_result_handle:
-        """Parse and execute the first statement of `sql`; the caller owns the result."""
-        var err = null_error_info()
-        var it = null[duckdb_v2_statement_iterator_handle]()
-        var text = String(sql)
-        check(lib().duckdb_v2_parse_sql(self._handle, text.as_c_string_span().ptr(), Pointer(to=it), Pointer(to=err)), err)
-        _ = text^  # parse_sql copies the text
-        var stmt = null[duckdb_v2_sql_statement_handle]()
+    def execute[*Ts: Movable & Deinitable](self, sql: StringSlice, *args: *Ts) raises DuckDBError -> Result:
+        """Run SQL, binding positional parameters (`?` or `$1`, `$2`, ...).
+
+        ```mojo
+        _ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
+        _ = con.execute("INSERT INTO t VALUES (?, ?)", Int32(1), String("Mark"))
+        var rows = con.execute("SELECT * FROM t WHERE id = ?", Int32(1)).fetchall()
+        ```
+
+        `sql` may hold several statements separated by `;`. All but the last
+        run to completion; the result is the last one's. Parameters need a
+        single statement.
+        """
+        var arguments = _positional(self.factory(), *args)
+        return self._execute(sql, arguments)
+
+    def execute(self, sql: StringSlice, *, var params: Params) raises DuckDBError -> Result:
+        """Run SQL, binding named parameters (`$name`)."""
+        var arguments = _named(params^)
+        return self._execute(sql, arguments)
+
+    def _execute(self, sql: StringSlice, ref arguments: _Arguments) raises DuckDBError -> Result:
+        var statements = _Statements(self._handle, sql)
+        var current = statements.next()
+        if Int(current) == 0:
+            raise api_error("no statement to execute")
+        while True:
+            var result: Result
+            try:
+                result = Result(_owned=self._execute_statement(current, arguments))
+            finally:
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=current))
+            # Statements without rows have already run (see `Result`). A query
+            # cannot change the grammar, so the next statement can be parsed
+            # before the query's rows are read.
+            var following = statements.next()
+            if Int(following) == 0:
+                return result^
+            if arguments.count() > 0:
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=following))
+                raise api_error("parameters need a single statement, but the SQL holds several")
+            result._finish()
+            current = following
+
+    def _execute_statement(
+        self, stmt: duckdb_v2_sql_statement_handle, ref arguments: _Arguments
+    ) raises DuckDBError -> duckdb_v2_result_handle:
         var result = null[duckdb_v2_result_handle]()
-        try:
-            check(lib().duckdb_v2_statement_iterator_next(it, Pointer(to=stmt), Pointer(to=err)), err)
-            if Int(stmt) == 0:
-                raise api_error("no statement to execute")
-            check(
-                lib().duckdb_v2_statement_execute(
-                    self._handle,
-                    stmt,
-                    null[Pointer[duckdb_v2_identifier_t, ImmUntrackedOrigin]](),
-                    null[Pointer[duckdb_v2_value_handle, ImmUntrackedOrigin]](),
-                    0,
-                    Pointer(to=result),
-                    Pointer(to=err),
-                ),
-                err,
-            )
-        finally:
-            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
-            _ = lib().duckdb_v2_statement_iterator_destroy(Pointer(to=it))
+        var err = null_error_info()
+        check(
+            lib().duckdb_v2_statement_execute(
+                self._handle,
+                stmt,
+                arguments.names_ptr(),
+                arguments.values_ptr(),
+                arguments.count(),
+                Pointer(to=result),
+                Pointer(to=err),
+            ),
+            err,
+        )
         return result
 
-    def _run(mut self, sql: StringSlice) raises DuckDBError:
-        """Execute one statement to completion, discarding rows."""
-        var result = self._execute_one(sql)
+    def prepare(self, sql: StringSlice) raises DuckDBError -> PreparedStatement:
+        """Plan a single statement once, to execute it many times."""
+        var statements = _Statements(self._handle, sql)
+        var stmt = statements.next()
+        if Int(stmt) == 0:
+            raise api_error("no statement to prepare")
+        var prepared = null[duckdb_v2_prepared_statement_handle]()
         var err = null_error_info()
-        var changed: idx_t = 0
-        var code = lib().duckdb_v2_result_drain(result, Pointer(to=changed), Pointer(to=err))
-        _ = lib().duckdb_v2_result_destroy(Pointer(to=result))
+        var code = lib().duckdb_v2_prepared_statement_create(self._handle, stmt, False, Pointer(to=prepared), Pointer(to=err))
+        _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
+        check(code, err)
+        var extra = statements.next()
+        if Int(extra) != 0:
+            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
+            _ = lib().duckdb_v2_prepared_statement_destroy(Pointer(to=prepared))
+            raise api_error("prepare takes a single statement, but the SQL holds several")
+        return PreparedStatement(_owned=prepared, factory=self.factory())
+
+    def describe(self, sql: StringSlice) raises DuckDBError -> Description:
+        """The result columns and parameter types of a statement, without running it."""
+        var statements = _Statements(self._handle, sql)
+        var stmt = statements.next()
+        if Int(stmt) == 0:
+            raise api_error("no statement to describe")
+        var out_schema = null[duckdb_v2_schema_handle]()
+        var param_schema = null[duckdb_v2_schema_handle]()
+        var err = null_error_info()
+        var code = lib().duckdb_v2_statement_bind(self._handle, stmt, Pointer(to=out_schema), Pointer(to=param_schema), Pointer(to=err))
+        _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
+        check(code, err)
+        try:
+            var columns = _columns(ArcPointer(_read_schema(out_schema)))
+            var parameters = _columns(ArcPointer(_read_schema(param_schema)))
+            return Description(columns^, parameters^)
+        finally:
+            _ = lib().duckdb_v2_schema_destroy(Pointer(to=out_schema))
+            _ = lib().duckdb_v2_schema_destroy(Pointer(to=param_schema))
+
+    # ── Relations ─────────────────────────────────────────────────
+
+    def sql(self, query: String) -> Relation[ImmOrigin(origin_of(self))]:
+        """A lazy relation over `query`; nothing runs until a terminal method."""
+        return Relation[ImmOrigin(origin_of(self))](Pointer(to=self), query)
+
+    def table(self, name: String) -> Relation[ImmOrigin(origin_of(self))]:
+        """A relation over a table or view."""
+        return self.sql(String("SELECT * FROM ", _quote_qualified(name)))
+
+    def read_csv(self, path: String, options: Dict[String, String] = {}) -> Relation[ImmOrigin(origin_of(self))]:
+        """A CSV file as a relation. Option values are verbatim SQL (quote strings with `lit`)."""
+        return self.sql(String("SELECT * FROM ", _reader_call("read_csv", path, options)))
+
+    def read_parquet(self, path: String, options: Dict[String, String] = {}) -> Relation[ImmOrigin(origin_of(self))]:
+        return self.sql(String("SELECT * FROM ", _reader_call("read_parquet", path, options)))
+
+    def read_json(self, path: String, options: Dict[String, String] = {}) -> Relation[ImmOrigin(origin_of(self))]:
+        return self.sql(String("SELECT * FROM ", _reader_call("read_json", path, options)))
+
+    # ── Transactions ──────────────────────────────────────────────
+
+    def begin(self) raises DuckDBError:
+        _ = self.execute("BEGIN TRANSACTION")
+
+    def commit(self) raises DuckDBError:
+        _ = self.execute("COMMIT")
+
+    def rollback(self) raises DuckDBError:
+        _ = self.execute("ROLLBACK")
+
+
+struct _Statements(Movable):
+    """Parses SQL one statement at a time (owns the V2 statement iterator).
+
+    Parsing is lazy, so statements that change the grammar (`LOAD`) take
+    effect for the statements after them.
+    """
+
+    var _handle: duckdb_v2_statement_iterator_handle
+
+    def __init__(out self, conn: duckdb_v2_connection_handle, sql: StringSlice) raises DuckDBError:
+        self._handle = null[duckdb_v2_statement_iterator_handle]()
+        var text = String(sql)  # parse_sql needs a NUL-terminated string and copies it
+        var err = null_error_info()
+        var code = lib().duckdb_v2_parse_sql(conn, text.as_c_string_span().ptr(), Pointer(to=self._handle), Pointer(to=err))
+        _ = text^
         check(code, err)
 
-    def _query_chunks(mut self, sql: StringSlice) raises DuckDBError -> List[Chunk]:
-        """Execute one statement and collect all of its chunks.
+    def __init__(out self, *, deinit move: Self):
+        self._handle = move._handle
 
-        Chunks are owned by the caller and stay valid after the result is gone.
-        """
-        var result = self._execute_one(sql)
+    def __deinit__(deinit self):
+        _ = lib().duckdb_v2_statement_iterator_destroy(Pointer(to=self._handle))
+
+    def next(mut self) raises DuckDBError -> duckdb_v2_sql_statement_handle:
+        """The next statement (owned by the caller), or NULL at the end."""
+        var stmt = null[duckdb_v2_sql_statement_handle]()
         var err = null_error_info()
-        var chunks = List[Chunk]()
-        try:
-            var schema = null[duckdb_v2_schema_handle]()
-            check(lib().duckdb_v2_result_get_schema(result, Pointer(to=schema), Pointer(to=err)), err)
-            var types = List[LogicalType]()
-            var names = List[String]()
-            try:
-                var n: idx_t = 0
-                check(lib().duckdb_v2_schema_get_count(schema, Pointer(to=n), Pointer(to=err)), err)
-                for i in range(Int(n)):
-                    var name = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
-                    var t = null[duckdb_v2_logical_type_handle]()  # borrowed from the schema
-                    check(lib().duckdb_v2_schema_get_field(schema, idx_t(i), Pointer(to=name), Pointer(to=t), Pointer(to=err)), err)
-                    var owned = null[duckdb_v2_logical_type_handle]()
-                    check(lib().duckdb_v2_logical_type_copy(t, Pointer(to=owned), Pointer(to=err)), err)
-                    types.append(LogicalType(_owned=owned))
-                    names.append(str_to_string(name))
-            finally:
-                _ = lib().duckdb_v2_schema_destroy(Pointer(to=schema))
-            var shared = ArcPointer(_Schema(names^, types^))
-            while True:
-                var chunk = null[duckdb_v2_data_chunk_handle]()
-                check(lib().duckdb_v2_result_fetch_chunk(result, Pointer(to=chunk), Pointer(to=err)), err)
-                if Int(chunk) == 0:
-                    break
-                chunks.append(Chunk(_owned=chunk, schema=shared))
-        finally:
-            _ = lib().duckdb_v2_result_destroy(Pointer(to=result))
-        return chunks^
-
+        check(lib().duckdb_v2_statement_iterator_next(self._handle, Pointer(to=stmt), Pointer(to=err)), err)
+        return stmt

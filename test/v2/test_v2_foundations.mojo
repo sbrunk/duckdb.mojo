@@ -27,10 +27,10 @@ from duckdb.duckdb_type import (
 )
 
 
-def _one(mut con: Connection, sql: String) raises -> List[Chunk]:
-    var chunks = con._query_chunks(sql)
-    assert_equal(len(chunks), 1)
-    return chunks^
+def _one(mut con: Connection, sql: String) raises -> MaterializedResult:
+    var r = con.execute(sql).fetchall()
+    assert_equal(r.chunk_count(), 1)
+    return r^
 
 
 def _roundtrip[T: Movable & Deinitable & Equatable & Writable](x: T) raises:
@@ -46,31 +46,31 @@ def _roundtrip[T: Movable & Deinitable & Equatable & Writable](x: T) raises:
 def test_connect_and_query() raises:
     var db = Database()
     var con = db.connect()
-    var chunks = _one(con, "SELECT 42::BIGINT AS answer")
-    assert_equal(chunks[0].column_count(), 1)
-    assert_equal(chunks[0].column_name(0), "answer")
-    assert_equal(chunks[0].get[Int64](col=0, row=0), 42)
+    var r = _one(con, "SELECT 42::BIGINT AS answer")
+    assert_equal(r.column_count(), 1)
+    assert_equal(r.column_names()[0], "answer")
+    assert_equal(r.get[Int64](col=0, row=0), 42)
 
 
 def test_connections_share_the_database() raises:
     var db = Database()
     var a = db.connect()
     var b = db.connect()
-    a._run("CREATE TABLE t AS SELECT 1 AS x")
-    assert_equal(_one(b, "SELECT count(*)::BIGINT FROM t")[0].get[Int64](col=0, row=0), 1)
+    _ = a.execute("CREATE TABLE t AS SELECT 1 AS x")
+    assert_equal(_one(b, "SELECT count(*)::BIGINT FROM t").get[Int64](col=0, row=0), 1)
 
 
 def test_connection_keeps_database_alive() raises:
     var con = Database().connect()  # the Database value is gone after this line
-    con._run("CREATE TABLE t AS SELECT 7 AS x")
-    assert_equal(_one(con, "SELECT x FROM t")[0].get[Int32](col=0, row=0), 7)
+    _ = con.execute("CREATE TABLE t AS SELECT 7 AS x")
+    assert_equal(_one(con, "SELECT x FROM t").get[Int32](col=0, row=0), 7)
 
 
 def test_config_options() raises:
     var db = Database(config={"threads": "3"})
     var con = db.connect()
-    var chunks = _one(con, "SELECT current_setting('threads')::BIGINT")
-    assert_equal(chunks[0].get[Int64](col=0, row=0), 3)
+    var r = _one(con, "SELECT current_setting('threads')::BIGINT")
+    assert_equal(r.get[Int64](col=0, row=0), 3)
 
 
 def test_read_only_and_same_file_twice() raises:
@@ -83,7 +83,7 @@ def test_read_only_and_same_file_twice() raises:
             remove(p)
     var db = Database(path)
     var con = db.connect()
-    con._run("CREATE TABLE t AS SELECT 1 AS x")
+    _ = con.execute("CREATE TABLE t AS SELECT 1 AS x")
     # The process shares one instance cache, so a second open is refused.
     var raised = False
     try:
@@ -98,7 +98,7 @@ def test_read_only_and_same_file_twice() raises:
     var con2 = ro.connect()
     raised = False
     try:
-        con2._run("INSERT INTO t VALUES (2)")
+        _ = con2.execute("INSERT INTO t VALUES (2)")
     except e:
         raised = True
     assert_true(raised, "a read-only database accepted an INSERT")
@@ -108,7 +108,7 @@ def test_errors_have_codes() raises:
     var con = Database().connect()
     var error = Optional[DuckDBError]()
     try:
-        _ = con._query_chunks("SELECT * FROM no_such_table")
+        _ = con.execute("SELECT * FROM no_such_table")
     except e:
         error = e^
     assert_true(error, "expected an error")
@@ -154,7 +154,7 @@ def test_read_numbers() raises:
         " (-170141183460469231731687303715884105727)::HUGEINT, 340282366920938463463374607431768211455::UHUGEINT,"
         " 64::BIGINT",
     )
-    ref ch = c[0]
+    ref ch = c.chunk(0)
     assert_equal(ch.get[Bool](col=0, row=0), True)
     assert_equal(ch.get[Int8](col=1, row=0), -8)
     assert_equal(ch.get[Int16](col=2, row=0), -16)
@@ -178,7 +178,7 @@ def test_read_strings_and_bytes() raises:
         "SELECT 'short', 'a string longer than twelve bytes', ''::VARCHAR,"
         " '\\x00\\xFFab'::BLOB, '10110'::BIT, 'b'::ENUM('a', 'b', 'c')",
     )
-    ref ch = c[0]
+    ref ch = c.chunk(0)
     assert_equal(ch.get[String](col=0, row=0), "short")
     assert_equal(ch.get[String](col=1, row=0), "a string longer than twelve bytes")
     assert_equal(ch.get[String](col=2, row=0), "")
@@ -193,10 +193,10 @@ def test_read_strings_and_bytes() raises:
 def test_read_large_enum() raises:
     """ENUM storage width follows the dictionary size (u8 / u16)."""
     var con = Database().connect()
-    con._run("CREATE TYPE big AS ENUM (SELECT 'v' || range FROM range(300))")
+    _ = con.execute("CREATE TYPE big AS ENUM (SELECT 'v' || range FROM range(300))")
     var c = _one(con, "SELECT 'v299'::big, 'v0'::big")
-    assert_equal(c[0].get[String](col=0, row=0), "v299")
-    assert_equal(c[0].get[String](col=1, row=0), "v0")
+    assert_equal(c.chunk(0).get[String](col=0, row=0), "v299")
+    assert_equal(c.chunk(0).get[String](col=1, row=0), "v0")
 
 
 def test_read_temporal() raises:
@@ -209,7 +209,7 @@ def test_read_temporal() raises:
         " TIMESTAMPTZ '1970-01-01 00:00:05+00', '1970-01-01 00:00:00.000000006+00'::TIMESTAMPTZ_NS,"
         " INTERVAL '1 month 2 days 3 microseconds', '01:02:03+04:00'::TIMETZ",
     )
-    ref ch = c[0]
+    ref ch = c.chunk(0)
     assert_equal(ch.get[Date](col=0, row=0).days, 10)
     assert_equal(ch.get[Time](col=1, row=0).micros, 1_000_000)
     assert_equal(ch.get[TimeNS](col=2, row=0).nanos, 7)
@@ -236,7 +236,7 @@ def test_read_decimal_widths() raises:
         "SELECT 12.3::DECIMAL(4,1), -1234567.89::DECIMAL(9,2),"
         " 123456789012345.678::DECIMAL(18,3), 1234567890123456789012345678.0123456789::DECIMAL(38,10)",
     )
-    ref ch = c[0]
+    ref ch = c.chunk(0)
     var d1 = ch.get[Decimal](col=0, row=0)
     assert_equal(Int(d1.width), 4)
     assert_equal(Int(d1.scale), 1)
@@ -249,8 +249,8 @@ def test_read_decimal_widths() raises:
 def test_read_uuid() raises:
     var con = Database().connect()
     var c = _one(con, "SELECT '00000000-0000-0000-0000-000000000001'::UUID, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::UUID")
-    assert_equal(String(c[0].get[UUID](col=0, row=0)), "00000000-0000-0000-0000-000000000001")
-    assert_equal(String(c[0].get[UUID](col=1, row=0)), "ffffffff-ffff-ffff-ffff-ffffffffffff")
+    assert_equal(String(c.chunk(0).get[UUID](col=0, row=0)), "00000000-0000-0000-0000-000000000001")
+    assert_equal(String(c.chunk(0).get[UUID](col=1, row=0)), "ffffffff-ffff-ffff-ffff-ffffffffffff")
 
 
 # ── NULLs, type checks, many rows ────────────────────────────────
@@ -259,7 +259,7 @@ def test_read_uuid() raises:
 def test_nulls() raises:
     var con = Database().connect()
     var c = _one(con, "SELECT * FROM (VALUES (1), (NULL), (3)) t(x)")
-    var col = c[0].column[Int32](0)
+    var col = c.chunk(0).column[Int32](0)
     assert_equal(len(col), 3)
     assert_true(col.is_valid(0))
     assert_false(col.is_valid(1))
@@ -279,7 +279,7 @@ def test_type_mismatch() raises:
     var c = _one(con, "SELECT 'text' AS name")
     var error = Optional[DuckDBError]()
     try:
-        _ = c[0].column[Int64](0)
+        _ = c.chunk(0).column[Int64](0)
     except e:
         error = e^
     assert_true(error, "expected a type mismatch")
@@ -290,12 +290,13 @@ def test_type_mismatch() raises:
 
 def test_many_chunks() raises:
     var con = Database().connect()
-    var chunks = con._query_chunks("SELECT range AS i FROM range(10000)")
-    assert_true(len(chunks) > 1)
+    var r = con.execute("SELECT range AS i FROM range(10000)").fetchall()
+    assert_true(r.chunk_count() > 1)
+    assert_equal(len(r), 10000)
     var total = 0
     var count = 0
-    for c in range(len(chunks)):
-        var col = chunks[c].column[Int64](0)
+    for c in range(r.chunk_count()):
+        var col = r.chunk(c).column[Int64](0)
         for i in range(len(col)):
             total += Int(col[i])
             count += 1

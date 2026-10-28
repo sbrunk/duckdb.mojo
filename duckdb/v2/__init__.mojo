@@ -10,3 +10,6 @@ from duckdb.v2.mapping import Blob, DuckDBMapped
 from duckdb.v2.value import Value
 from duckdb.v2.database import Connection, Database
 from duckdb.v2.chunk import Chunk, ColumnReader
+from duckdb.v2.result import ChunkResult, Column, MaterializedResult, Result, ResultType, Row, StatementType
+from duckdb.v2.statement import Description, Params, PreparedStatement
+from duckdb.v2.relation import Relation

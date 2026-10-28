@@ -73,9 +73,11 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 
 The new high-level API on the V2 C API is built in `duckdb/v2/` next to the V1-based one and replaces it at the end (design: `docs/design/v2-high-level-api.md`). Rules learned so far:
 
-- `__extension` conformances (e.g. `Int64` or `String` to `DuckDBMapped`) are only visible to `conforms_to` checks in the module that declares them. Never use such a trait as a bound in a public generic; take `T: Movable & Deinitable` and call the dispatch functions in `duckdb/v2/mapping.mojo` (`mapped_read[T]`, `mapped_accepts[T]`, `mapped_to_value[T]`, ...).
+- `__extension` conformances (e.g. `Int64` or `String` to `DuckDBMapped`) and `__extension` methods are only visible in the module that declares them. Never use such a trait as a bound in a public generic; take `T: Movable & Deinitable` and call the dispatch functions in `duckdb/v2/mapping.mojo` (`mapped_read[T]`, `mapped_accepts[T]`, `mapped_to_value[T]`, ...).
 - Mojo frees a value right after its last use. When a raw handle or pointer from an owner (`value.handle()`, `list.unsafe_ptr()`, a chunk's data) is passed to DuckDB, keep the owner alive past the call (`_ = owner^`) or tie the borrower to the owner's origin.
 - Generic return types need `Movable & Deinitable`. Default argument values must be compile-time constants.
+- `Iterator.__next__` may only raise `StopIteration`, which `for` loops swallow. For iteration that can fail (streaming results), use the other loop protocol the compiler accepts: a raising `__has_next__()` plus a non-raising `__next__()` (see `ChunkIter`; not an `Iterator`, so no `enumerate`). Offer a standard `Iterator` of result-or-error elements next to it (see `TryChunkIter`). Loop variables are immutable references; `for var x in ...` gives an owned element.
+- Mojo does not stop a second mutable borrow from being created and kept, but it rejects two mutable borrows of one value passed to the same call. Objects shared by many borrowers (`Connection`) take `self` immutably when their Mojo fields don't change.
 - V2 query results are always flat vectors; constant, dictionary and sequence vectors only reach callbacks. `ColumnReader` still handles all of them.
 
 ## SIMD kernels and the override extension

@@ -3,7 +3,7 @@
 from std.memory import ArcPointer
 from std.reflection import reflect
 from duckdb._libduckdb_v2 import *
-from duckdb.api_v2 import null, null_error_info
+from duckdb.api_v2 import null, null_error_info, str_to_string
 from duckdb.v2._runtime import api_error, check, lib
 from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.mapping import ColumnMeta, RawData, mapped_accepts, mapped_read
@@ -19,6 +19,24 @@ struct _Schema(Movable):
     def __init__(out self, var names: List[String], var types: List[LogicalType]):
         self.names = names^
         self.types = types^
+
+
+def _read_schema(schema: duckdb_v2_schema_handle) raises DuckDBError -> _Schema:
+    """Copy a V2 schema's names and types (the schema keeps ownership of its own)."""
+    var err = null_error_info()
+    var names = List[String]()
+    var types = List[LogicalType]()
+    var n: idx_t = 0
+    check(lib().duckdb_v2_schema_get_count(schema, Pointer(to=n), Pointer(to=err)), err)
+    for i in range(Int(n)):
+        var name = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
+        var t = null[duckdb_v2_logical_type_handle]()  # borrowed from the schema
+        check(lib().duckdb_v2_schema_get_field(schema, idx_t(i), Pointer(to=name), Pointer(to=t), Pointer(to=err)), err)
+        var owned = null[duckdb_v2_logical_type_handle]()
+        check(lib().duckdb_v2_logical_type_copy(t, Pointer(to=owned), Pointer(to=err)), err)
+        types.append(LogicalType(_owned=owned))
+        names.append(str_to_string(name))
+    return _Schema(names^, types^)
 
 
 struct Chunk(Movable, Sized):
