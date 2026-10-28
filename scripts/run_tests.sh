@@ -33,25 +33,20 @@ TESTS=(
     test/test_errors.mojo
 )
 
-# Generic tests require expensive monomorphization. The lightest ones
-# (scalars, tuples) can run on Linux CI with -j 2. The heavier ones
-# (struct/list/dict/variant generics) need >21 GB peak memory during
-# compilation and must be run locally.
+# Generic tests compile more slowly (heavy monomorphization), so they run with
+# -j 2. The struct/list/dict/variant ones used to need >21 GB peak memory and
+# were run only locally; on Mojo 1.2 each compiles in under 1 GB.
 GENERIC_TESTS=(
     test/test_typed_api_scalars.mojo
     test/test_typed_api_tuples.mojo
     test/test_prepared_statement.mojo
     test/test_result_fetch.mojo
+    test/test_typed_api_mojo_type.mojo
+    test/test_typed_api_table_structs.mojo
+    test/test_typed_api_collections.mojo
+    test/test_appender_list.mojo
+    test/test_appender_map_variant.mojo
 )
-# These tests need too much memory for CI runners (>21 GB peak).
-# Run locally with: pixi run mojo run test/test_<name>.mojo
-# HEAVY_TESTS=(
-#     test/test_typed_api_mojo_type.mojo
-#     test/test_typed_api_table_structs.mojo
-#     test/test_typed_api_collections.mojo
-#     test/test_appender_list.mojo
-#     test/test_appender_map_variant.mojo
-# )
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
