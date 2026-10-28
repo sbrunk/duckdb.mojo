@@ -1,0 +1,178 @@
+"""Data chunks and typed column readers."""
+
+from std.memory import ArcPointer
+from std.reflection import reflect
+from duckdb._libduckdb_v2 import *
+from duckdb.api_v2 import null, null_error_info
+from duckdb.v2._runtime import api_error, check, lib
+from duckdb.v2.error import DuckDBError, ErrorCode
+from duckdb.v2.mapping import ColumnMeta, RawData, mapped_accepts, mapped_read
+from duckdb.v2.types import LogicalType
+
+
+struct _Schema(Movable):
+    """Column names and types of a result, shared by its chunks."""
+
+    var names: List[String]
+    var types: List[LogicalType]
+
+    def __init__(out self, var names: List[String], var types: List[LogicalType]):
+        self.names = names^
+        self.types = types^
+
+
+struct Chunk(Movable, Sized):
+    """An owned data chunk: a batch of rows, stored column by column.
+
+    V2 vectors do not carry their type, so a chunk keeps the schema of the
+    result it came from.
+    """
+
+    var _handle: duckdb_v2_data_chunk_handle
+    var _schema: ArcPointer[_Schema]
+    var _size: Int
+
+    def __init__(out self, *, _owned: duckdb_v2_data_chunk_handle, schema: ArcPointer[_Schema]) raises DuckDBError:
+        self._handle = _owned
+        self._schema = schema
+        var size: idx_t = 0
+        var err = null_error_info()
+        check(lib().duckdb_v2_data_chunk_get_size(self._handle, Pointer(to=size), Pointer(to=err)), err)
+        self._size = Int(size)
+
+    def __init__(out self, *, deinit move: Self):
+        self._handle = move._handle
+        self._schema = move._schema^
+        self._size = move._size
+
+    def __deinit__(deinit self):
+        _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=self._handle))
+
+    def __len__(self) -> Int:
+        """The number of rows."""
+        return self._size
+
+    def column_count(self) -> Int:
+        return len(self._schema[].types)
+
+    def column_name(self, col: Int) -> String:
+        return self._schema[].names[col].copy()
+
+    def column_type(self, col: Int) -> LogicalType:
+        return self._schema[].types[col].copy()
+
+    def column[T: Movable & Deinitable](ref self, col: Int) raises DuckDBError -> ColumnReader[T, origin_of(self)]:
+        """A typed reader over column `col`. Checks the type once.
+
+        Raises `ErrorCode.TYPE_MISMATCH` if the column cannot be read as `T`.
+        """
+        if col < 0 or col >= self.column_count():
+            raise api_error(String("column index ", col, " out of range (", self.column_count(), " columns)"))
+        var err = null_error_info()
+        var vec = null[duckdb_v2_vector_handle]()
+        check(lib().duckdb_v2_data_chunk_get_vector(self._handle, idx_t(col), Pointer(to=vec), Pointer(to=err)), err)
+        var meta = ColumnMeta(self._schema[].types[col])
+        if not mapped_accepts[T](meta.kind):
+            raise DuckDBError(
+                ErrorCode.TYPE_MISMATCH,
+                String(
+                    "column ",
+                    col,
+                    " (",
+                    self._schema[].names[col],
+                    ") is ",
+                    self._schema[].types[col],
+                    " and cannot be read as ",
+                    reflect_name[T](),
+                ),
+            )
+        return ColumnReader[T, origin_of(self)](vec, meta^, self._size)
+
+    def get[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> T:
+        """One value. Raises on NULL (use `get_optional` to allow it)."""
+        return self.column[T](col)[row]
+
+    def get_optional[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> Optional[T]:
+        """One value, or `None` for NULL."""
+        return self.column[T](col).get(row)
+
+
+def reflect_name[T: AnyType]() -> String:
+    return String(reflect[T].name())
+
+
+struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
+    """Reads the values of one column as `T`.
+
+    Works on every vector representation: flat, constant and dictionary
+    vectors are read through their selection, other representations
+    (sequence, compressed) are flattened first. It borrows the chunk, so it
+    cannot outlive it.
+    """
+
+    var _data: RawData
+    var _validity: Pointer[UInt64, ImmUntrackedOrigin]
+    var _sel: Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]
+    var _meta: ColumnMeta
+    var _size: Int
+
+    def __init__(out self, vec: duckdb_v2_vector_handle, var meta: ColumnMeta, size: Int) raises DuckDBError:
+        var err = null_error_info()
+        var kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
+        check(lib().duckdb_v2_vector_get_vector_type(vec, Pointer(to=kind), Pointer(to=err)), err)
+        if kind == DUCKDB_V2_VECTOR_TYPE_OTHER:
+            check(lib().duckdb_v2_vector_flatten(vec, Pointer(to=err)), err)
+        var view = duckdb_v2_vector_view(
+            null[RawData](),
+            null[Pointer[UInt64, ImmUntrackedOrigin]](),
+            null[Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]](),
+            0,
+        )
+        check(lib().duckdb_v2_vector_get_view(vec, Pointer(to=view), Pointer(to=err)), err)
+        self._data = view.data
+        self._validity = view.validity
+        self._sel = view.sel
+        self._meta = meta^
+        self._size = size
+
+    def __len__(self) -> Int:
+        return self._size
+
+    @always_inline
+    def _index(self, row: Int) -> Int:
+        return Int(self._sel[unsafe_offset=row]) if Int(self._sel) != 0 else row
+
+    @always_inline
+    def _valid_at(self, idx: Int) -> Bool:
+        if Int(self._validity) == 0:
+            return True
+        return (self._validity[unsafe_offset=idx >> 6] >> UInt64(idx & 63)) & 1 == 1
+
+    def is_valid(self, row: Int) -> Bool:
+        """Whether row `row` is not NULL."""
+        return self._valid_at(self._index(row))
+
+    def __getitem__(self, row: Int) raises DuckDBError -> Self.T:
+        """The value at `row`. Raises on NULL and for rows out of range."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var idx = self._index(row)
+        if not self._valid_at(idx):
+            raise api_error(String("row ", row, " is NULL (use get() to read NULLs as None)"))
+        return mapped_read[Self.T](self._meta, self._data, idx)
+
+    def get(self, row: Int) raises DuckDBError -> Optional[Self.T]:
+        """The value at `row`, or `None` for NULL."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var idx = self._index(row)
+        if not self._valid_at(idx):
+            return None
+        return Optional[Self.T](mapped_read[Self.T](self._meta, self._data, idx))
+
+    def to_list(self) raises DuckDBError -> List[Optional[Self.T]]:
+        """All values, NULLs as `None`."""
+        var out = List[Optional[Self.T]](capacity=self._size)
+        for i in range(self._size):
+            out.append(self.get(i))
+        return out^
