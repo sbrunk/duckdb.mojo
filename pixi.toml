@@ -98,6 +98,8 @@ libduckdb-devel = "=2.0.0"
 duckdb-cli = "=2.0.0"
 pyyaml = "*"
 mojo = "==1.2.0"
+# Serde framework under evaluation (docs/design/v2-high-level-api.md, "Substrate: emberserde").
+emberserde = { git = "https://github.com/bgreni/EmberSerde.git", rev = "cb91a0b" }
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
