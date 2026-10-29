@@ -56,7 +56,7 @@ struct ColumnMeta(Copyable, Movable):
     var enum_index_bytes: Int
     # ENUM entry -> index, for writing. Behind a pointer: a Dict field
     # here slows down reading (measured), though reads never touch it.
-    var enum_index: ArcPointer[Dict[String, Int]]
+    var enum_index: Optional[ArcPointer[Dict[String, Int]]]  # ENUM columns only
 
     def __init__(out self, type: LogicalType) raises DuckDBError:
         self.kind = type.id()
@@ -64,7 +64,7 @@ struct ColumnMeta(Copyable, Movable):
         self.decimal_scale = 0
         self.enum_values = List[String]()
         self.enum_index_bytes = 0
-        self.enum_index = ArcPointer(Dict[String, Int]())
+        self.enum_index = None
         if self.kind == TypeId.DECIMAL:
             self.decimal_width = type.decimal_width()
             self.decimal_scale = type.decimal_scale()
@@ -73,8 +73,10 @@ struct ColumnMeta(Copyable, Movable):
             # Storage width follows the dictionary size (contract in the V2 spec).
             var n = len(self.enum_values)
             self.enum_index_bytes = 1 if n <= 255 else (2 if n <= 65535 else 4)
+            var index = Dict[String, Int]()
             for i in range(n):
-                self.enum_index[][self.enum_values[i]] = i
+                index[self.enum_values[i]] = i
+            self.enum_index = ArcPointer(index^)
 
     def __init__(out self, *, kind: TypeId):
         """Metadata for a type without parameters."""
@@ -83,7 +85,7 @@ struct ColumnMeta(Copyable, Movable):
         self.decimal_scale = 0
         self.enum_values = List[String]()
         self.enum_index_bytes = 0
-        self.enum_index = ArcPointer(Dict[String, Int]())
+        self.enum_index = None
 
 
 trait DuckDBMapped(Movable):
@@ -162,6 +164,7 @@ def mapped_to_value[T: AnyType](value: T, factory: duckdb_v2_factory_handle) rai
     return rebind[downcast[T, DuckDBMapped]](value).to_value(factory)
 
 
+@always_inline
 def mapped_write[T: AnyType](
     value: T, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int
 ) raises DuckDBError:
@@ -170,6 +173,11 @@ def mapped_write[T: AnyType](
     ref v = rebind[downcast[T, DuckDBMapped]](value)
     if v.write(meta, vec, data, idx):
         return
+    _write_cast(v, vec, idx)
+
+
+@no_inline
+def _write_cast[T: DuckDBMapped](v: T, vec: duckdb_v2_vector_handle, idx: Int) raises DuckDBError:
     var h = v.to_value(builtin_factory())
     var err = null_error_info()
     var code = lib().duckdb_v2_vector_set_value(vec, idx_t(idx), h, Pointer(to=err))
@@ -537,7 +545,7 @@ __extension String(DuckDBMapped):
 
     def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
         if meta.kind == TypeId.ENUM:
-            var i = meta.enum_index[].get(self)
+            var i = meta.enum_index.value()[].get(self)
             if not i:
                 return False  # DuckDB's cast reports the unknown entry
             if meta.enum_index_bytes == 1:

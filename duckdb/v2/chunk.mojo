@@ -88,27 +88,9 @@ struct Chunk(Movable, Sized):
         and raises `ErrorCode.TYPE_MISMATCH`; nested types are checked per
         value.
         """
-        var vec = self._vector(col)
-        var meta = ColumnMeta(self._schema[].types[col])
-        comptime if not is_mapped[T]():
-            var tree = _ReadTree([vec], [self._schema[].names[col].copy()], [self._schema[].types[col].copy()])
-            return ColumnReader[T, origin_of(self)](vec, meta^, self._size, ArcPointer(tree^))
-        else:
-            if not mapped_accepts[T](meta.kind):
-                raise DuckDBError(
-                    ErrorCode.TYPE_MISMATCH,
-                    String(
-                        "column ",
-                        col,
-                        " (",
-                        self._schema[].names[col],
-                        ") is ",
-                        self._schema[].types[col],
-                        " and cannot be read as ",
-                        reflect_name[T](),
-                    ),
-                )
-            return ColumnReader[T, origin_of(self)](vec, meta^, self._size)
+        return column_reader[T, origin_of(self)](
+            self._vector(col), String("column ", col, " (", self._schema[].names[col], ")"), self._schema[].types[col], self._size
+        )
 
     def _vector(self, col: Int) raises DuckDBError -> duckdb_v2_vector_handle:
         if col < 0 or col >= self.column_count():
@@ -152,6 +134,23 @@ struct Chunk(Movable, Sized):
     def get_optional[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> Optional[T]:
         """One value, or `None` for NULL."""
         return self.column[T](col).get(row)
+
+
+def column_reader[T: Movable & Deinitable, origin: ImmOrigin](
+    vec: duckdb_v2_vector_handle, what: String, type: LogicalType, size: Int
+) raises DuckDBError -> ColumnReader[T, origin]:
+    """A reader over `vec` (of `type`, `size` rows). For scalar `T` the type
+    is checked here; `what` names the vector in the error."""
+    var meta = ColumnMeta(type)
+    comptime if not is_mapped[T]():
+        var tree = _ReadTree([vec], ["v"], [type.copy()])
+        return ColumnReader[T, origin](vec, meta^, size, ArcPointer(tree^))
+    else:
+        if not mapped_accepts[T](meta.kind):
+            raise DuckDBError(
+                ErrorCode.TYPE_MISMATCH, String(what, " is ", type, " and cannot be read as ", reflect_name[T]())
+            )
+        return ColumnReader[T, origin](vec, meta^, size)
 
 
 def reflect_name[T: AnyType]() -> String:
@@ -208,6 +207,32 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
         if Int(self._validity) == 0:
             return True
         return (self._validity[unsafe_offset=idx >> 6] >> UInt64(idx & 63)) & 1 == 1
+
+    def span(self) -> Optional[Span[Self.T, Self.origin]]:
+        """The values without copying, when the vector is flat and has no
+        NULLs; else `None`. Only for fixed-width numeric `T`."""
+        comptime assert reflect[Self.T].base_name() == "SIMD", "span() needs a fixed-width numeric type"
+        if Int(self._sel) != 0 or self.has_nulls():
+            return None
+        return Span[Self.T, Self.origin](
+            unsafe_ptr=self._data.unsafe_bitcast[Self.T]().unsafe_origin_cast[Self.origin](), length=self._size
+        )
+
+    def is_flat(self) -> Bool:
+        """Whether row i is stored at index i (no selection: not a constant or dictionary vector)."""
+        return Int(self._sel) == 0
+
+    def has_nulls(self) -> Bool:
+        if Int(self._validity) == 0:
+            return False
+        for i in range(self._size):
+            if not self._valid_at(self._index(i)):
+                return True
+        return False
+
+    def unsafe_data(self) -> RawData:
+        """The storage (indexed through the selection; see `is_flat`)."""
+        return self._data
 
     def is_valid(self, row: Int) -> Bool:
         """Whether row `row` is not NULL."""

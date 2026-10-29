@@ -342,6 +342,49 @@ def _frac_str(micros_in: Int64) -> String:
     return String(".") + _zpad(Int(micros), digits)
 
 
+
+# ===--------------------------------------------------------------------===#
+# Calendar arithmetic in pure Mojo (no DuckDB call, so it also works inside
+# V2 extensions). Proleptic Gregorian calendar, as DuckDB uses.
+# Algorithms: Howard Hinnant, "chrono-compatible low-level date algorithms".
+# ===--------------------------------------------------------------------===#
+
+comptime _MICROS_PER_DAY: Int64 = 86_400_000_000
+
+
+def _days_from_civil(year: Int64, month: Int64, day: Int64) -> Int64:
+    var y = year - 1 if month <= 2 else year
+    var era = y // 400  # floor division, also for negative years
+    var yoe = y - era * 400
+    var mp = (month + 9) % 12
+    var doy = (153 * mp + 2) // 5 + day - 1
+    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def _civil_from_days(days: Int64) -> duckdb_date_struct:
+    var z = days + 719468
+    var era = z // 146097
+    var doe = z - era * 146097
+    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    var mp = (5 * doy + 2) // 153
+    var d = doy - (153 * mp + 2) // 5 + 1
+    var m = mp + 3 if mp < 10 else mp - 9
+    var y = yoe + era * 400 + (Int64(1) if m <= 2 else Int64(0))
+    return duckdb_date_struct(Int32(y), Int8(m), Int8(d))
+
+
+def _time_parts(micros: Int64) -> duckdb_time_struct:
+    var us = micros % 1_000_000
+    var secs = micros // 1_000_000
+    return duckdb_time_struct(Int8(secs // 3600), Int8((secs // 60) % 60), Int8(secs % 60), Int32(us))
+
+
+def _time_micros(t: duckdb_time_struct) -> Int64:
+    return ((Int64(t.hour) * 60 + Int64(t.min)) * 60 + Int64(t.sec)) * 1_000_000 + Int64(t.micros)
+
+
 @fieldwise_init
 struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Writable):
     """Days are stored as days since 1970-01-01."""
@@ -350,7 +393,7 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
     def __init__(out self, year: Int32, month: Int8, day: Int8):
         """Create a Date from year, month, and day components."""
-        self = DuckDB().libduckdb().duckdb_to_date(duckdb_date_struct(year, month, day))
+        self.days = Int32(_days_from_civil(Int64(year), Int64(month), Int64(day)))
 
     def write_to[W: Writer](self, mut writer: W):
         # ISO-8601 with zero-padded components (e.g. 2024-01-05). Negative
@@ -376,7 +419,7 @@ struct Date(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         return not self == other
 
     def _parts(self) -> duckdb_date_struct:
-        return DuckDB().libduckdb().duckdb_from_date(self)
+        return _civil_from_days(Int64(self.days))
 
     def year(self) -> Int32:
         return self._parts().year
@@ -396,9 +439,7 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
 
     def __init__(out self, hour: Int8, minute: Int8, second: Int8, micros: Int32):
         """Create a Time from hour, minute, second, and microseconds."""
-        self = DuckDB().libduckdb().duckdb_to_time(
-            duckdb_time_struct(hour, minute, second, micros)
-        )
+        self.micros = _time_micros(duckdb_time_struct(hour, minute, second, micros))
 
     def __str__(self) -> String:
         return String(self)
@@ -429,7 +470,7 @@ struct Time(TrivialRegisterPassable, ImplicitlyCopyable, Movable, Equatable, Wri
         return not self == other
 
     def _parts(self) -> duckdb_time_struct:
-        return DuckDB().libduckdb().duckdb_from_time(self)
+        return _time_parts(self.micros)
 
     def hour(self) -> Int8:
         return self._parts().hour
@@ -452,12 +493,7 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
 
     def __init__(out self, date: Date, time: Time):
         """Create a Timestamp from a Date and Time."""
-        ref libduckdb = DuckDB().libduckdb()
-        self = libduckdb.duckdb_to_timestamp(
-            duckdb_timestamp_struct(
-                libduckdb.duckdb_from_date(date), libduckdb.duckdb_from_time(time)
-            )
-        )
+        self.micros = Int64(date.days) * _MICROS_PER_DAY + time.micros
 
     def __str__(self) -> String:
         return String(self)
@@ -499,13 +535,15 @@ struct Timestamp(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyabl
         return TimestampNS(self.micros * 1_000)
 
     def _parts(self) -> duckdb_timestamp_struct:
-        return DuckDB().libduckdb().duckdb_from_timestamp(self)
+        return duckdb_timestamp_struct(self.date()._parts(), self.time()._parts())
 
     def date(self) -> Date:
-        return DuckDB().libduckdb().duckdb_to_date(self._parts().date)
+        # Floor division: times before 1970 belong to the earlier day.
+        var d = self.micros // _MICROS_PER_DAY
+        return Date(Int32(d))
 
     def time(self) -> Time:
-        return DuckDB().libduckdb().duckdb_to_time(self._parts().time)
+        return Time(self.micros - (self.micros // _MICROS_PER_DAY) * _MICROS_PER_DAY)
 
 
 @fieldwise_init
@@ -878,9 +916,10 @@ struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
             micros: Microseconds since 00:00:00.
             offset: UTC offset in seconds.
         """
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = libduckdb.duckdb_create_time_tz(micros, offset)
-        self.bits = raw.bits
+        # DuckDB's dtime_tz_t layout: micros in the upper 40 bits, the offset
+        # encoded as (MAX_OFFSET - offset) in the lower 24.
+        comptime MAX_OFFSET: Int64 = 16 * 60 * 60 - 1
+        self.bits = (UInt64(micros) << 24) | UInt64(MAX_OFFSET - Int64(offset))
 
     def __str__(self) -> String:
         return String(self.bits)

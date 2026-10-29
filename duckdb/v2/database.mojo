@@ -10,6 +10,7 @@ from duckdb.v2.relation import Relation, _reader_call
 from duckdb._sql_util import _quote_qualified
 from duckdb.v2.statement import Description, Params, PreparedStatement, _Arguments, _named, _positional
 from duckdb.v2.error import DuckDBError
+from duckdb.v2.functions import Registrar
 
 
 struct _Instance(Movable):
@@ -117,7 +118,7 @@ struct Database(Copyable, Movable):
         return f
 
 
-struct Connection(Movable):
+struct Connection(Movable, Registrar):
     """A session on a `Database`, with its own settings and transaction.
 
     It keeps its database alive. Use one connection per thread.
@@ -152,6 +153,10 @@ struct Connection(Movable):
         var err = null_error_info()
         check(lib().duckdb_v2_connection_get_factory(self._handle, Pointer(to=f), Pointer(to=err)), err)
         return f
+
+    def _register_scalar_handle(self, function: duckdb_v2_scalar_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_register_scalar_function(self._handle, function, Pointer(to=err)), err)
 
     def interrupt(self) raises DuckDBError:
         """Interrupt the statement running on this connection (safe from another thread)."""

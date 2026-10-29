@@ -351,6 +351,7 @@ struct _RNode(Copyable, Movable):
     var validity: Pointer[UInt64, ImmUntrackedOrigin]
     var sel: Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]
     var array_size: Int
+    var constant: Bool  # a CONSTANT vector: every row reads index 0
     # LIST/ARRAY: [elements]; MAP: [entries]; STRUCT and the root: fields;
     # UNION: [tag, members...].
     var children: List[Int]
@@ -368,6 +369,7 @@ struct _RNode(Copyable, Movable):
         self.validity = validity
         self.sel = sel
         self.array_size = 0
+        self.constant = False
         self.children = List[Int]()
         self.names = List[String]()
         self.lower_names = List[String]()
@@ -397,6 +399,14 @@ struct _ReadTree(Movable):
             self.nodes[0].lower_names.append(names[i].lower())
             self.nodes[0].names.append(names[i].copy())
 
+    def is_valid(self, node: Int, row: Int) -> Bool:
+        """Whether `row` of `node` is not NULL (selection applied)."""
+        ref n = self.nodes[node]
+        var idx = Int(n.sel[unsafe_offset=row]) if Int(n.sel) != 0 else row
+        if Int(n.validity) == 0:
+            return True
+        return (n.validity[unsafe_offset=idx >> 6] >> UInt64(idx & 63)) & 1 == 1
+
     def _add(mut self, vec: duckdb_v2_vector_handle, type: LogicalType) raises DuckDBError -> Int:
         var err = null_error_info()
         var meta = ColumnMeta(type)
@@ -417,6 +427,7 @@ struct _ReadTree(Movable):
         check(lib().duckdb_v2_vector_get_view(vec, Pointer(to=view), Pointer(to=err)), err)
         var idx = len(self.nodes)
         self.nodes.append(_RNode(meta^, view.data, view.validity, view.sel))
+        self.nodes[idx].constant = vtype == DUCKDB_V2_VECTOR_TYPE_CONSTANT
         if not nested:
             return idx
         if kind == TypeId.MAP:
@@ -443,6 +454,18 @@ struct _ReadTree(Movable):
         return idx
 
 
+def _vector_type(vec: duckdb_v2_vector_handle) raises DuckDBError -> LogicalType:
+    var t = null[duckdb_v2_logical_type_handle]()
+    var err = null_error_info()
+    check(lib().duckdb_v2_vector_get_logical_type(vec, Pointer(to=t), Pointer(to=err)), err)
+    return LogicalType(_owned=t)
+
+
+def read_tree_of(vec: duckdb_v2_vector_handle) raises DuckDBError -> _ReadTree:
+    """A read tree over one vector (its node is 1), typed by the vector itself."""
+    return _ReadTree([vec], ["v"], [_vector_type(vec)])
+
+
 def read_value[T: AnyType](mut tree: _ReadTree, node: Int, row: Int) raises DuckDBError -> T:
     """Read `T` at `row` of a tree node (node 0: the whole row)."""
     var c = _Cursor(Pointer(to=tree).unsafe_origin_cast[MutUntrackedOrigin](), node, row)
@@ -452,13 +475,24 @@ def read_value[T: AnyType](mut tree: _ReadTree, node: Int, row: Int) raises Duck
         raise _from_der(e, String("row ", row))
 
 
+def _is_row_type[T: AnyType]() -> Bool:
+    """Whether `T` maps to a whole row (a struct or a `Tuple`) rather than to
+    one column (scalars, `Optional`, lists, maps, `Variant`)."""
+    comptime if is_mapped[T]():
+        return False
+    elif conforms_to(T, _Typed):
+        return reflect[T].base_name() == "Tuple"
+    else:
+        return True
+
+
 def read_row[T: AnyType](mut tree: _ReadTree, row: Int) raises DuckDBError -> T:
     """Read a whole row as `T`: a struct (columns by name), a `Tuple` (by
-    position), or a scalar when there is exactly one column."""
-    comptime if is_mapped[T]():
+    position), or any other type when there is exactly one column."""
+    comptime if not _is_row_type[T]():
         if len(tree.nodes[0].children) != 1:
             raise api_error(
-                String("a row with ", len(tree.nodes[0].children), " columns cannot be read as one scalar; use a struct or a Tuple")
+                String("a row with ", len(tree.nodes[0].children), " columns cannot be read as one value; use a struct or a Tuple")
             )
         return read_value[T](tree, tree.nodes[0].children[0], row)
     else:
@@ -1062,6 +1096,61 @@ struct ChunkWriter(Movable, Sized):
 
     def vector(self, col: Int) -> duckdb_v2_vector_handle:
         return self._tree.nodes[self._columns[col]].vec
+
+
+struct VectorWriter(Movable):
+    """Writes the values of one vector DuckDB hands out to be filled (the
+    result of a scalar function), `size` rows of it.
+
+    Sizes the vector first: DuckDB creates it with size 0, and NULL writes
+    check the row against the size.
+    """
+
+    var _tree: _WriteTree
+    var _size: Int
+    var _vec: duckdb_v2_vector_handle
+    var _data: MutRawData  # NULL for nested results
+    var _meta: Pointer[ColumnMeta, MutUntrackedOrigin]  # into the tree, which is not resized after init
+
+    def __init__(out self, vec: duckdb_v2_vector_handle, size: Int) raises DuckDBError:
+        self._size = size
+        self._vec = vec
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_set_size(vec, idx_t(size), Pointer(to=err)), err)
+        self._tree = _WriteTree()
+        self._tree.nodes.append(_WNode(null[duckdb_v2_vector_handle](), ColumnMeta(kind=TypeId.STRUCT)))
+        var node = self._tree._add(vec, _vector_type(vec))
+        self._tree.nodes[0].children.append(node)
+        self._data = null[MutRawData]()
+        if not _is_nested(self._tree.nodes[1].meta.kind):
+            self._data = self._tree.data(1)
+        self._meta = Pointer(to=self._tree.nodes[1].meta).unsafe_origin_cast[MutUntrackedOrigin]()
+
+    def __len__(self) -> Int:
+        return self._size
+
+    def write[T: AnyType](mut self, row: Int, value: T) raises DuckDBError:
+        """Write `value` at `row` (an `Optional` without a value writes NULL)."""
+        comptime if is_mapped[T]():
+            if Int(self._data) != 0:
+                mapped_write[T](value, self._meta[], self._vec, self._data, row)
+                return
+        var w = _Writer(Pointer(to=self._tree).unsafe_origin_cast[MutUntrackedOrigin](), 1, row)
+        try:
+            _write(w, value)
+        except e:
+            raise _from_ser(e, String("row ", row))
+
+    def write_null(mut self, row: Int) raises DuckDBError:
+        self._tree.set_null(1, row)
+
+    def data[T: TrivialRegisterPassable](mut self) raises DuckDBError -> Pointer[T, MutUntrackedOrigin]:
+        """The vector's data as an array of `T`, for writing fixed-width values directly."""
+        return self._tree.data(1).unsafe_bitcast[T]()
+
+    def finish(self) raises DuckDBError:
+        """Size the element vectors of LIST/MAP results to what was written."""
+        self._tree.finish(1)
 
 
 # ===--------------------------------------------------------------------===#

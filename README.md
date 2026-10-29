@@ -368,7 +368,10 @@ whole V1 C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
 between releases, so a compiled extension keeps working with later releases,
 including DuckDB 2.0, without a rebuild.
 
-See the [demo extension](extensions/demo-extension/) for a complete example.
+The [demo extension](extensions/demo-extension/) is a complete example. It
+already uses the V2 high-level API (`duckdb.v2.Extension`), which replaces this
+one (work in progress; it loads only into the exact DuckDB build it was compiled
+against).
 
 ### V2 C API (experimental)
 

@@ -33,6 +33,7 @@ TESTS=(
     test/v2/test_v2_results.mojo
     test/v2/test_v2_relation.mojo
     test/v2/test_v2_nested.mojo
+    test/v2/test_v2_functions.mojo
     test/test_typed_access.mojo
     test/test_errors.mojo
 )

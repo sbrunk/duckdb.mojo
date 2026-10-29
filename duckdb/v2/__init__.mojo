@@ -15,3 +15,7 @@ from duckdb.v2.statement import Description, Params, PreparedStatement
 from duckdb.v2.relation import Relation
 from duckdb.v2.serde import ChunkWriter, logical_type_of
 from duckdb.v2.appender import Appender, OnConflict
+from duckdb.v2.functions import BindArgs, BindData, Registrar, ScalarArgs, ScalarFunction, bind_callback
+from duckdb.v2.serde import VectorWriter
+from duckdb.v2.simd_math import register_simd_math
+from duckdb.v2.extension import Extension

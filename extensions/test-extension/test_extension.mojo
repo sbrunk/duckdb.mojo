@@ -394,6 +394,43 @@ def test_v2_named_arguments() raises:
     assert_equal(rows.get[Int64](col=0, row=0), 42)
 
 
+comptime V2_API_EXT_PATH = "extensions/test-extension/build/mojo_v2_api.duckdb_extension"
+
+
+def _connect_v2_api() raises -> Connection:
+    var conn = Connection(_open_unsigned())
+    _ = conn.execute("LOAD '" + V2_API_EXT_PATH + "'")
+    return conn^
+
+
+def test_v2_api_extension_functions() raises:
+    """Functions registered through the V2 high-level API from inside an extension."""
+    var conn = _connect_v2_api()
+    var r = conn.execute(
+        "SELECT v2api_add(40, 2), v2api_greet('db'), v2api_total([1, 2, 3]), v2api_next_day(DATE '2024-02-28')::VARCHAR,"
+        " v2api_year(DATE '1999-05-01'), v2api_offset(1, 41), v2api_negate(5), mojo_sqrt(16.0)"
+    ).fetchall()
+    assert_equal(r.get[Int64](col=0, row=0), 42)
+    assert_equal(r.get[String](col=1, row=0), "hello db, from a V2 extension")
+    assert_equal(r.get[Int64](col=2, row=0), 6)
+    assert_equal(r.get[String](col=3, row=0), "2024-02-29")
+    assert_equal(r.get[Int64](col=4, row=0), 1999)
+    assert_equal(r.get[Int64](col=5, row=0), 42)
+    assert_equal(r.get[Int64](col=6, row=0), -5)
+    assert_equal(r.get[Float64](col=7, row=0), 4.0)
+
+
+def test_v2_api_extension_many_rows_and_nulls() raises:
+    var conn = _connect_v2_api()
+    var r = conn.execute(
+        "SELECT sum(v2api_add(i, 1))::BIGINT, count(v2api_negate(CASE WHEN i % 2 = 0 THEN i END))::BIGINT,"
+        " sum(v2api_total(range(i % 10)))::BIGINT FROM range(100000) t(i)"
+    ).fetchall()
+    assert_equal(r.get[Int64](col=0, row=0), 5000050000)
+    assert_equal(r.get[Int64](col=1, row=0), 50000)
+    assert_equal(r.get[Int64](col=2, row=0), 1200000)
+
+
 def test_v2_init_error_is_reported() raises:
     """An error raised in the init function fails the load with its message."""
     var conn = Connection(_open_unsigned())

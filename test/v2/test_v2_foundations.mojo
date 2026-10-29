@@ -386,5 +386,24 @@ def test_value_null_and_conversion() raises:
     assert_equal(String(Value(Int64(42)).type()), "BIGINT")
 
 
+def test_date_time_components_match_duckdb() raises:
+    # The value structs compute calendar fields in Mojo (no DuckDB call).
+    var con = Database().connect()
+    var r = con.execute(
+        "SELECT d, year(d), month(d), day(d) FROM"
+        " (SELECT DATE '0001-01-01' - 800000 + (i * 37)::INTEGER AS d FROM range(40000) t(i))"
+    ).fetchall()
+    for i in range(len(r)):
+        var d = r.get[Date](col=0, row=i)
+        assert_equal(Int(d.year()), Int(r.get[Int64](col=1, row=i)))
+        assert_equal(Int(d.month()), Int(r.get[Int64](col=2, row=i)))
+        assert_equal(Int(d.day()), Int(r.get[Int64](col=3, row=i)))
+        assert_true(Date(d.year(), d.month(), d.day()) == d)
+    var ts = con.execute("SELECT TIMESTAMP '1969-12-31 23:59:58.5'").fetchall().get[Timestamp](col=0, row=0)
+    assert_equal(String(ts), "1969-12-31 23:59:58.5")
+    var tz = con.execute("SELECT TIMETZ '12:00:00+02'").fetchall().get[TimeTZ](col=0, row=0)
+    assert_true(tz == TimeTZ(micros=12 * 3600 * 1_000_000, offset=7200))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
