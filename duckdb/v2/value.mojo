@@ -4,7 +4,7 @@ from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import null, null_error_info
 from duckdb.v2._runtime import api_error, builtin_factory, check, lib
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.mapping import mapped_from_value, mapped_to_value
+from duckdb.v2.serde import from_value, to_value
 from duckdb.v2.types import LogicalType
 
 
@@ -15,7 +15,11 @@ struct Value(Movable, Writable):
     var v = Value(Int64(42))
     var n = v.get[Int64]()
     var s = String(Value("text"))
+    var l = Value([Int32(1), 2, 3]).get[List[Int32]]()
     ```
+
+    Any mapped type works, nested ones included (lists, dicts, structs,
+    `Optional`, `Variant`).
     """
 
     var _handle: duckdb_v2_value_handle
@@ -25,7 +29,7 @@ struct Value(Movable, Writable):
 
     def __init__[T: Movable & Deinitable](out self, value: T) raises DuckDBError:
         """A value from any mapped Mojo type, created with the built-in factory."""
-        self._handle = mapped_to_value(value, builtin_factory())
+        self._handle = to_value(value, builtin_factory())
 
     @staticmethod
     def null(type: LogicalType) raises DuckDBError -> Self:
@@ -61,13 +65,13 @@ struct Value(Movable, Writable):
         """The value as `T`. Raises on NULL and when DuckDB cannot convert it."""
         if self.is_null():
             raise api_error("the value is NULL")
-        return mapped_from_value[T](self._handle)
+        return from_value[T](self._handle)
 
     def get_optional[T: Movable & Deinitable](self) raises DuckDBError -> Optional[T]:
         """The value as `T`, or `None` for NULL."""
         if self.is_null():
             return None
-        return Optional[T](mapped_from_value[T](self._handle))
+        return Optional[T](from_value[T](self._handle))
 
     def to_string(self) raises DuckDBError -> String:
         """DuckDB's text form of the value (diagnostic; `NULL` for NULL)."""

@@ -181,6 +181,21 @@ struct Connection(Movable):
         var arguments = _named(params^)
         return self._execute(sql, arguments)
 
+    def execute[T: AnyType](self, sql: StringSlice, *, params: T) raises DuckDBError -> Result:
+        """Run SQL, binding named parameters (`$name`) from the fields of a struct.
+
+        ```mojo
+        @fieldwise_init
+        struct Filter(Copyable, Movable):
+            var min_age: Int32
+            var city: String
+
+        var r = con.execute("SELECT * FROM users WHERE age >= $min_age AND city = $city", params=Filter(30, "Amsterdam"))
+        ```
+        """
+        var arguments = _named(Params.of(params))
+        return self._execute(sql, arguments)
+
     def _execute(self, sql: StringSlice, ref arguments: _Arguments) raises DuckDBError -> Result:
         var statements = _Statements(self._handle, sql)
         var current = statements.next()

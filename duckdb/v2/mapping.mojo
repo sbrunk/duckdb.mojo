@@ -12,10 +12,13 @@ details are decoded here and only here: the 16-byte `bytes` layout of
 VARCHAR/BLOB/BIT, the UUID bit flip, decimal width tiers, enum index widths.
 
 Nested types (lists, structs, maps, unions, optionals) are not here: they go
-through emberserde in a later phase (see docs/design/v2-high-level-api.md).
+through emberserde (`duckdb/v2/serde.mojo`), which calls into this module for
+every scalar.
 """
 
 from std.builtin.rebind import downcast, rebind_var
+from std.memory import ArcPointer
+from std.sys import bit_width_of
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
 from duckdb.duckdb_type import (
@@ -34,12 +37,13 @@ from duckdb.duckdb_type import (
     TimestampTZNS,
     UUID,
 )
-from duckdb.v2._runtime import api_error, check, lib
+from duckdb.v2._runtime import api_error, builtin_factory, check, lib
 from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.types import LogicalType, TypeId
 
 
 comptime RawData = Pointer[NoneType, ImmUntrackedOrigin]
+comptime MutRawData = Pointer[NoneType, MutUntrackedOrigin]
 
 
 struct ColumnMeta(Copyable, Movable):
@@ -50,6 +54,9 @@ struct ColumnMeta(Copyable, Movable):
     var decimal_scale: Int
     var enum_values: List[String]
     var enum_index_bytes: Int
+    # ENUM entry -> index, for writing. Behind a pointer: a Dict field
+    # here slows down reading (measured), though reads never touch it.
+    var enum_index: ArcPointer[Dict[String, Int]]
 
     def __init__(out self, type: LogicalType) raises DuckDBError:
         self.kind = type.id()
@@ -57,6 +64,7 @@ struct ColumnMeta(Copyable, Movable):
         self.decimal_scale = 0
         self.enum_values = List[String]()
         self.enum_index_bytes = 0
+        self.enum_index = ArcPointer(Dict[String, Int]())
         if self.kind == TypeId.DECIMAL:
             self.decimal_width = type.decimal_width()
             self.decimal_scale = type.decimal_scale()
@@ -65,6 +73,17 @@ struct ColumnMeta(Copyable, Movable):
             # Storage width follows the dictionary size (contract in the V2 spec).
             var n = len(self.enum_values)
             self.enum_index_bytes = 1 if n <= 255 else (2 if n <= 65535 else 4)
+            for i in range(n):
+                self.enum_index[][self.enum_values[i]] = i
+
+    def __init__(out self, *, kind: TypeId):
+        """Metadata for a type without parameters."""
+        self.kind = kind
+        self.decimal_width = 0
+        self.decimal_scale = 0
+        self.enum_values = List[String]()
+        self.enum_index_bytes = 0
+        self.enum_index = ArcPointer(Dict[String, Int]())
 
 
 trait DuckDBMapped(Movable):
@@ -83,6 +102,14 @@ trait DuckDBMapped(Movable):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         """Read the (valid) value at storage index `idx`."""
+        ...
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        """Write into a flat vector at storage index `idx`.
+
+        Returns False when the column is not this type's own storage layout;
+        the caller then writes a value and lets DuckDB cast it.
+        """
         ...
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
@@ -109,6 +136,11 @@ trait DuckDBMapped(Movable):
 comptime _UNMAPPED = "this type has no DuckDB mapping (it must conform to DuckDBMapped)"
 
 
+def is_mapped[T: AnyType]() -> Bool:
+    """Whether `T` is a scalar type of this module (usable in `comptime if`)."""
+    return conforms_to(T, DuckDBMapped)
+
+
 def mapped_logical_type[T: AnyType]() raises DuckDBError -> LogicalType:
     comptime assert conforms_to(T, DuckDBMapped), _UNMAPPED
     return downcast[T, DuckDBMapped].logical_type()
@@ -128,6 +160,21 @@ def mapped_read[T: AnyType](meta: ColumnMeta, data: RawData, idx: Int) -> T:
 def mapped_to_value[T: AnyType](value: T, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
     comptime assert conforms_to(T, DuckDBMapped), _UNMAPPED
     return rebind[downcast[T, DuckDBMapped]](value).to_value(factory)
+
+
+def mapped_write[T: AnyType](
+    value: T, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int
+) raises DuckDBError:
+    """Write `value` into a flat vector; through a cast value when the layouts differ."""
+    comptime assert conforms_to(T, DuckDBMapped), _UNMAPPED
+    ref v = rebind[downcast[T, DuckDBMapped]](value)
+    if v.write(meta, vec, data, idx):
+        return
+    var h = v.to_value(builtin_factory())
+    var err = null_error_info()
+    var code = lib().duckdb_v2_vector_set_value(vec, idx_t(idx), h, Pointer(to=err))
+    _ = lib().duckdb_v2_value_destroy(Pointer(to=h))
+    check(code, err)
 
 
 def mapped_from_value[T: AnyType](value: duckdb_v2_value_handle) raises DuckDBError -> T:
@@ -156,6 +203,32 @@ def read_bytes(data: RawData, idx: Int) -> Span[UInt8, ImmUntrackedOrigin]:
 @always_inline
 def _load[T: TrivialRegisterPassable](data: RawData, idx: Int) -> T:
     return data.unsafe_bitcast[T]()[unsafe_offset=idx]
+
+
+@always_inline
+def _store[T: TrivialRegisterPassable](data: MutRawData, idx: Int, v: T):
+    data.unsafe_bitcast[T]()[unsafe_offset=idx] = v
+
+
+def write_bytes(vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int, bytes: Span[UInt8, _]) raises DuckDBError:
+    """Write a VARCHAR/BLOB/BIT value: inline up to 12 bytes, else into the vector's arena."""
+    var base = data.unsafe_bitcast[UInt8]().unsafe_offset(idx * 16)
+    var n = len(bytes)
+    base.unsafe_bitcast[UInt32]()[] = UInt32(n)
+    if n <= Int(DUCKDB_V2_BYTES_INLINE_LENGTH):
+        for i in range(Int(DUCKDB_V2_BYTES_INLINE_LENGTH)):
+            base.unsafe_offset(4 + i)[] = bytes[i] if i < n else 0
+        return
+    var err = null_error_info()
+    var arena = null[duckdb_v2_arena_handle]()
+    check(lib().duckdb_v2_vector_get_arena(vec, Pointer(to=arena), Pointer(to=err)), err)
+    var p = null[Pointer[UInt8, MutUntrackedOrigin]]()
+    check(lib().duckdb_v2_arena_allocate(arena, idx_t(n), Pointer(to=p), Pointer(to=err)), err)
+    for i in range(n):
+        p.unsafe_offset(i)[] = bytes[i]
+    for i in range(4):  # the prefix
+        base.unsafe_offset(4 + i)[] = bytes[i]
+    base.unsafe_offset(8).unsafe_bitcast[Pointer[UInt8, MutUntrackedOrigin]]()[] = p
 
 
 def _hugeint(v: Int128) -> duckdb_v2_hugeint_t:
@@ -209,6 +282,12 @@ __extension Bool(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return _load[UInt8](data, idx) != 0
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.BOOLEAN:
+            return False
+        _store[UInt8](data, idx, UInt8(1) if self else UInt8(0))
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -220,6 +299,36 @@ __extension Bool(DuckDBMapped):
         var err = null_error_info()
         check(lib().duckdb_v2_value_get_bool(value, Pointer(to=out), Pointer(to=err)), err)
         return out
+
+
+def _store_int(kind: TypeId, data: MutRawData, idx: Int, v: Int128) -> Bool:
+    """Store an integer into another integer (or DOUBLE) column when it fits;
+    False sends it through DuckDB's cast, which reports the overflow."""
+    if kind == TypeId.TINYINT and v >= -128 and v <= 127:
+        _store[Int8](data, idx, Int8(v))
+    elif kind == TypeId.SMALLINT and v >= -32768 and v <= 32767:
+        _store[Int16](data, idx, Int16(v))
+    elif kind == TypeId.INTEGER and v >= Int128(Int32.MIN) and v <= Int128(Int32.MAX):
+        _store[Int32](data, idx, Int32(v))
+    elif kind == TypeId.BIGINT and v >= Int128(Int64.MIN) and v <= Int128(Int64.MAX):
+        _store[Int64](data, idx, Int64(v))
+    elif kind == TypeId.HUGEINT:
+        _store[Int128](data, idx, v)
+    elif kind == TypeId.UTINYINT and v >= 0 and v <= 255:
+        _store[UInt8](data, idx, UInt8(v))
+    elif kind == TypeId.USMALLINT and v >= 0 and v <= 65535:
+        _store[UInt16](data, idx, UInt16(v))
+    elif kind == TypeId.UINTEGER and v >= 0 and v <= Int128(UInt32.MAX):
+        _store[UInt32](data, idx, UInt32(v))
+    elif kind == TypeId.UBIGINT and v >= 0 and v <= Int128(UInt64.MAX):
+        _store[UInt64](data, idx, UInt64(v))
+    elif kind == TypeId.UHUGEINT and v >= 0:
+        _store[UInt128](data, idx, UInt128(v))
+    elif kind == TypeId.DOUBLE:
+        _store[Float64](data, idx, Float64(v))
+    else:
+        return False
+    return True
 
 
 def _numeric_type_id[dt: DType]() -> TypeId:
@@ -274,6 +383,26 @@ __extension SIMD(DuckDBMapped):
             return Self(_load[UInt64](data, idx).cast[Self.dtype]())
         else:
             return rebind[Self](_load[Scalar[Self.dtype]](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        comptime assert Self.length == 1, "only scalars map to a DuckDB type"
+        if meta.kind != _numeric_type_id[Self.dtype]():
+            comptime if Self.dtype.is_integral() and bit_width_of[Self.dtype]() <= 64:
+                return _store_int(meta.kind, data, idx, Int128(rebind[Scalar[Self.dtype]](self)))
+            elif Self.dtype == DType.float32:
+                if meta.kind == TypeId.DOUBLE:
+                    _store[Float64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.float64]())
+                    return True
+            return False
+        comptime if Self.dtype == DType.bool:
+            _store[UInt8](data, idx, UInt8(1) if Bool(rebind[Scalar[DType.bool]](self)) else UInt8(0))
+        elif Self.dtype == DType.int:
+            _store[Int64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.int64]())
+        elif Self.dtype == DType.uint:
+            _store[UInt64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.uint64]())
+        else:
+            _store[Scalar[Self.dtype]](data, idx, rebind[Scalar[Self.dtype]](self))
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         comptime assert Self.length == 1, "only scalars map to a DuckDB type"
@@ -406,6 +535,23 @@ __extension String(DuckDBMapped):
             return meta.enum_values[i].copy()
         return String(from_utf8_lossy=read_bytes(data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind == TypeId.ENUM:
+            var i = meta.enum_index[].get(self)
+            if not i:
+                return False  # DuckDB's cast reports the unknown entry
+            if meta.enum_index_bytes == 1:
+                _store[UInt8](data, idx, UInt8(i.value()))
+            elif meta.enum_index_bytes == 2:
+                _store[UInt16](data, idx, UInt16(i.value()))
+            else:
+                _store[UInt32](data, idx, UInt32(i.value()))
+            return True
+        if meta.kind != TypeId.VARCHAR:
+            return False
+        write_bytes(vec, data, idx, self.as_bytes())
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var arg = StrArg(self)
         var v = null[duckdb_v2_value_handle]()
@@ -456,6 +602,12 @@ __extension Blob(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return Blob(_copy_bytes(read_bytes(data, idx)))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.BLOB:
+            return False
+        write_bytes(vec, data, idx, Span(self.data))
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var arg = _bytes_arg(Span(self.data))
         var v = null[duckdb_v2_value_handle]()
@@ -484,6 +636,12 @@ __extension Bit(DuckDBMapped):
         var bytes = _copy_bytes(read_bytes(data, idx))
         var size = (len(bytes) - 1) * 8 - Int(bytes[0])
         return Bit(bytes^, size)
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.BIT:
+            return False
+        write_bytes(vec, data, idx, Span(self._data))
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var arg = _bytes_arg(Span(self._data))
@@ -518,6 +676,12 @@ __extension Date(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return Date(_load[Int32](data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.DATE:
+            return False
+        _store[Int32](data, idx, self.days)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -543,6 +707,12 @@ __extension Time(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return Time(_load[Int64](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIME:
+            return False
+        _store[Int64](data, idx, self.micros)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
@@ -570,6 +740,12 @@ __extension TimeNS(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimeNS(_load[Int64](data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIME_NS:
+            return False
+        _store[Int64](data, idx, self.nanos)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -595,6 +771,12 @@ __extension TimeTZ(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimeTZ(_load[UInt64](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIME_TZ:
+            return False
+        _store[UInt64](data, idx, self.bits)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
@@ -622,6 +804,12 @@ __extension Timestamp(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return Timestamp(_load[Int64](data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP:
+            return False
+        _store[Int64](data, idx, self.micros)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -647,6 +835,12 @@ __extension TimestampS(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimestampS(_load[Int64](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP_SEC:
+            return False
+        _store[Int64](data, idx, self.seconds)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
@@ -674,6 +868,12 @@ __extension TimestampMS(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimestampMS(_load[Int64](data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP_MS:
+            return False
+        _store[Int64](data, idx, self.millis)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -699,6 +899,12 @@ __extension TimestampNS(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimestampNS(_load[Int64](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP_NS:
+            return False
+        _store[Int64](data, idx, self.nanos)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
@@ -726,6 +932,12 @@ __extension TimestampTZ(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimestampTZ(_load[Int64](data, idx))
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP_TZ:
+            return False
+        _store[Int64](data, idx, self.micros)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
@@ -751,6 +963,12 @@ __extension TimestampTZNS(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return TimestampTZNS(_load[Int64](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.TIMESTAMP_TZ_NS:
+            return False
+        _store[Int64](data, idx, self.nanos)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var v = null[duckdb_v2_value_handle]()
@@ -778,6 +996,12 @@ __extension Interval(DuckDBMapped):
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         ref i = data.unsafe_bitcast[duckdb_v2_interval_t]()[unsafe_offset=idx]
         return Interval(i.months, i.days, i.micros)
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.INTERVAL:
+            return False
+        data.unsafe_bitcast[duckdb_v2_interval_t]()[unsafe_offset=idx] = duckdb_v2_interval_t(self.months, self.days, self.micros)
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var i = duckdb_v2_interval_t(self.months, self.days, self.micros)
@@ -824,6 +1048,21 @@ __extension Decimal(DuckDBMapped):
             v = _load[Int128](data, idx)
         return Decimal(UInt8(w), UInt8(meta.decimal_scale), v)
 
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.DECIMAL or Int(self.width) != meta.decimal_width or Int(self.scale) != meta.decimal_scale:
+            return False
+        var w = meta.decimal_width
+        var v = self.value()
+        if w <= 4:
+            _store[Int16](data, idx, Int16(v))
+        elif w <= 9:
+            _store[Int32](data, idx, Int32(v))
+        elif w <= 18:
+            _store[Int64](data, idx, Int64(v))
+        else:
+            _store[Int128](data, idx, v)
+        return True
+
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var h = _hugeint(self.value())
         var v = null[duckdb_v2_value_handle]()
@@ -856,6 +1095,12 @@ __extension UUID(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         return UUID(internal=_load[Int128](data, idx))
+
+    def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
+        if meta.kind != TypeId.UUID:
+            return False
+        _store[Int128](data, idx, self._to_internal())
+        return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
         var h = _hugeint(self._to_internal())

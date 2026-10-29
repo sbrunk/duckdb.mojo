@@ -6,7 +6,8 @@ from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import null, null_error_info, str_to_string
 from duckdb.v2._runtime import api_error, check, lib
 from duckdb.v2.error import DuckDBError, ErrorCode
-from duckdb.v2.mapping import ColumnMeta, RawData, mapped_accepts, mapped_read
+from duckdb.v2.mapping import ColumnMeta, RawData, is_mapped, mapped_accepts, mapped_read
+from duckdb.v2.serde import _ReadTree, read_row, read_value
 from duckdb.v2.types import LogicalType
 
 
@@ -80,31 +81,69 @@ struct Chunk(Movable, Sized):
         return self._schema[].types[col].copy()
 
     def column[T: Movable & Deinitable](ref self, col: Int) raises DuckDBError -> ColumnReader[T, origin_of(self)]:
-        """A typed reader over column `col`. Checks the type once.
+        """A typed reader over column `col`.
 
-        Raises `ErrorCode.TYPE_MISMATCH` if the column cannot be read as `T`.
+        `T` is a scalar type or a nested one (`List`, `Dict`, `Optional`,
+        `Variant`, `Tuple`, a struct). For scalars the type is checked once
+        and raises `ErrorCode.TYPE_MISMATCH`; nested types are checked per
+        value.
         """
+        var vec = self._vector(col)
+        var meta = ColumnMeta(self._schema[].types[col])
+        comptime if not is_mapped[T]():
+            var tree = _ReadTree([vec], [self._schema[].names[col].copy()], [self._schema[].types[col].copy()])
+            return ColumnReader[T, origin_of(self)](vec, meta^, self._size, ArcPointer(tree^))
+        else:
+            if not mapped_accepts[T](meta.kind):
+                raise DuckDBError(
+                    ErrorCode.TYPE_MISMATCH,
+                    String(
+                        "column ",
+                        col,
+                        " (",
+                        self._schema[].names[col],
+                        ") is ",
+                        self._schema[].types[col],
+                        " and cannot be read as ",
+                        reflect_name[T](),
+                    ),
+                )
+            return ColumnReader[T, origin_of(self)](vec, meta^, self._size)
+
+    def _vector(self, col: Int) raises DuckDBError -> duckdb_v2_vector_handle:
         if col < 0 or col >= self.column_count():
             raise api_error(String("column index ", col, " out of range (", self.column_count(), " columns)"))
         var err = null_error_info()
         var vec = null[duckdb_v2_vector_handle]()
         check(lib().duckdb_v2_data_chunk_get_vector(self._handle, idx_t(col), Pointer(to=vec), Pointer(to=err)), err)
-        var meta = ColumnMeta(self._schema[].types[col])
-        if not mapped_accepts[T](meta.kind):
-            raise DuckDBError(
-                ErrorCode.TYPE_MISMATCH,
-                String(
-                    "column ",
-                    col,
-                    " (",
-                    self._schema[].names[col],
-                    ") is ",
-                    self._schema[].types[col],
-                    " and cannot be read as ",
-                    reflect_name[T](),
-                ),
-            )
-        return ColumnReader[T, origin_of(self)](vec, meta^, self._size)
+        return vec
+
+    def _read_tree(self) raises DuckDBError -> _ReadTree:
+        """Views of all columns for reading rows. Valid while the chunk lives."""
+        var vectors = List[duckdb_v2_vector_handle]()
+        for i in range(self.column_count()):
+            vectors.append(self._vector(i))
+        return _ReadTree(vectors, self._schema[].names, self._schema[].types)
+
+    def get[T: Movable & Deinitable](self, *, row: Int) raises DuckDBError -> T:
+        """Row `row` as `T`: a struct (columns matched to fields by name,
+        case-insensitively), a `Tuple` (by position), or a scalar when the
+        chunk has one column."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var tree = self._read_tree()
+        return read_row[T](tree, row)
+
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> List[T]:
+        """All rows as `T` (see `get[T](row=)`)."""
+        var out = List[T](capacity=self._size)
+        self._append_rows[T](out)
+        return out^
+
+    def _append_rows[T: Movable & Deinitable](self, mut out: List[T]) raises DuckDBError:
+        var tree = self._read_tree()
+        for r in range(self._size):
+            out.append(read_row[T](tree, r))
 
     def get[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> T:
         """One value. Raises on NULL (use `get_optional` to allow it)."""
@@ -125,7 +164,7 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
     Works on every vector representation: flat, constant and dictionary
     vectors are read through their selection, other representations
     (sequence, compressed) are flattened first. It borrows the chunk, so it
-    cannot outlive it.
+    cannot outlive it. Nested types are read through emberserde.
     """
 
     var _data: RawData
@@ -133,8 +172,11 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
     var _sel: Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]
     var _meta: ColumnMeta
     var _size: Int
+    var _tree: Optional[ArcPointer[_ReadTree]]  # nested types only
 
-    def __init__(out self, vec: duckdb_v2_vector_handle, var meta: ColumnMeta, size: Int) raises DuckDBError:
+    def __init__(
+        out self, vec: duckdb_v2_vector_handle, var meta: ColumnMeta, size: Int, tree: Optional[ArcPointer[_ReadTree]] = None
+    ) raises DuckDBError:
         var err = null_error_info()
         var kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
         check(lib().duckdb_v2_vector_get_vector_type(vec, Pointer(to=kind), Pointer(to=err)), err)
@@ -152,6 +194,7 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
         self._sel = view.sel
         self._meta = meta^
         self._size = size
+        self._tree = tree
 
     def __len__(self) -> Int:
         return self._size
@@ -174,10 +217,14 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
         """The value at `row`. Raises on NULL and for rows out of range."""
         if row < 0 or row >= self._size:
             raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
-        var idx = self._index(row)
-        if not self._valid_at(idx):
-            raise api_error(String("row ", row, " is NULL (use get() to read NULLs as None)"))
-        return mapped_read[Self.T](self._meta, self._data, idx)
+        comptime if not is_mapped[Self.T]():
+            # NULLs: an Optional reads them as None, other types raise.
+            return read_value[Self.T](self._tree.value()[], 1, row)
+        else:
+            var idx = self._index(row)
+            if not self._valid_at(idx):
+                raise api_error(String("row ", row, " is NULL (use get() to read NULLs as None)"))
+            return mapped_read[Self.T](self._meta, self._data, idx)
 
     def get(self, row: Int) raises DuckDBError -> Optional[Self.T]:
         """The value at `row`, or `None` for NULL."""
@@ -186,7 +233,10 @@ struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
         var idx = self._index(row)
         if not self._valid_at(idx):
             return None
-        return Optional[Self.T](mapped_read[Self.T](self._meta, self._data, idx))
+        comptime if not is_mapped[Self.T]():
+            return Optional[Self.T](read_value[Self.T](self._tree.value()[], 1, row))
+        else:
+            return Optional[Self.T](mapped_read[Self.T](self._meta, self._data, idx))
 
     def to_list(self) raises DuckDBError -> List[Optional[Self.T]]:
         """All values, NULLs as `None`."""

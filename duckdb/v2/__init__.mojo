@@ -13,3 +13,5 @@ from duckdb.v2.chunk import Chunk, ColumnReader
 from duckdb.v2.result import ChunkResult, Column, MaterializedResult, Result, ResultType, Row, StatementType
 from duckdb.v2.statement import Description, Params, PreparedStatement
 from duckdb.v2.relation import Relation
+from duckdb.v2.serde import ChunkWriter, logical_type_of
+from duckdb.v2.appender import Appender, OnConflict

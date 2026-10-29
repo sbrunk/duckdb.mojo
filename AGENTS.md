@@ -79,6 +79,9 @@ The new high-level API on the V2 C API is built in `duckdb/v2/` next to the V1-b
 - `Iterator.__next__` may only raise `StopIteration`, which `for` loops swallow. For iteration that can fail (streaming results), use the other loop protocol the compiler accepts: a raising `__has_next__()` plus a non-raising `__next__()` (see `ChunkIter`; not an `Iterator`, so no `enumerate`). Offer a standard `Iterator` of result-or-error elements next to it (see `TryChunkIter`). Loop variables are immutable references; `for var x in ...` gives an owned element.
 - Mojo does not stop a second mutable borrow from being created and kept, but it rejects two mutable borrows of one value passed to the same call. Objects shared by many borrowers (`Connection`) take `self` immutably when their Mojo fields don't change.
 - V2 query results are always flat vectors; constant, dictionary and sequence vectors only reach callbacks. `ColumnReader` still handles all of them.
+- Nested types go through emberserde in `duckdb/v2/serde.mojo`: `_Cursor` (reading) and `_Writer` (writing) check `is_mapped[T]()` first and handle scalars in their storage layout; everything else goes to emberserde. A struct read from DuckDB must be `Defaultable` when it has non-trivial fields (`String`, `List`, nested structs). emberserde is a git dependency (tag `0.2.0`).
+- A bare list literal passed to a generic parameter (`Value([1, 2])`) becomes an `Array[T, n]`, not a `List`, so generic APIs must map `Array` too. A `List[T]` overload next to a generic `T` one is ambiguous.
+- Adding fields to structs on the hot read path (`ColumnMeta`, tree nodes) can cost measurable speed even when reads never touch them (a `Dict` field cost 25%); keep rarely used data behind a pointer and rerun `benchmark/v2_serde_bench.mojo`.
 
 ## SIMD kernels and the override extension
 

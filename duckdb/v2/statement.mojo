@@ -3,10 +3,12 @@
 from std.memory import ArcPointer
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info
-from duckdb.v2._runtime import api_error, check, lib
+from duckdb.v2._runtime import api_error, builtin_factory, check, lib
 from duckdb.v2.chunk import _read_schema
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.mapping import mapped_to_value
+from duckdb.v2.serde import to_value
+from std.reflection import reflect
+from emberserde.field_meta import is_skipped, static_wire_name
 from duckdb.v2.result import Column, Result, _columns
 from duckdb.v2.value import Value
 
@@ -34,6 +36,18 @@ struct Params(Movable):
     def set[T: Movable & Deinitable](mut self, name: String, value: T) raises DuckDBError:
         self.names.append(name)
         self.values.append(Value(value))
+
+    @staticmethod
+    def of[T: AnyType](value: T) raises DuckDBError -> Self:
+        """Named parameters from the fields of a struct (by wire name)."""
+        var p = Self()
+        comptime r = reflect[T]
+        comptime assert r.is_struct(), "named parameters come from a struct"
+        comptime for i in range(r.field_count()):
+            comptime if not is_skipped[T, i]():
+                p.names.append(String(static_wire_name[T, i]()))
+                p.values.append(Value(_owned=to_value(r.field_ref[i](value), builtin_factory())))
+        return p^
 
     def set_value(mut self, name: String, var value: Value):
         """A parameter from a ready-made `Value` (a typed NULL, for example)."""
@@ -88,7 +102,7 @@ struct _Arguments(Movable):
 def _positional[*Ts: Movable & Deinitable](factory: duckdb_v2_factory_handle, *args: *Ts) raises DuckDBError -> _Arguments:
     var values = List[Value]()
     comptime for i in range(args.__len__()):
-        values.append(Value(_owned=mapped_to_value(args[i], factory)))
+        values.append(Value(_owned=to_value(args[i], factory)))
     return _Arguments(values^, List[String]())
 
 
@@ -132,6 +146,11 @@ struct PreparedStatement(Movable):
     def execute(mut self, *, var params: Params) raises DuckDBError -> Result:
         """Execute with named parameters (`$name`)."""
         var arguments = _named(params^)
+        return self._execute(arguments)
+
+    def execute[T: AnyType](mut self, *, params: T) raises DuckDBError -> Result:
+        """Execute with named parameters from the fields of a struct."""
+        var arguments = _named(Params.of(params))
         return self._execute(arguments)
 
     def _execute(mut self, ref arguments: _Arguments) raises DuckDBError -> Result:

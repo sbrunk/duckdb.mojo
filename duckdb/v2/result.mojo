@@ -5,6 +5,7 @@ from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
 from duckdb.v2._runtime import api_error, check, lib
 from duckdb.v2.chunk import Chunk, _Schema, _read_schema
+from duckdb.v2.serde import _ReadTree, read_row
 from duckdb.v2.error import DuckDBError
 from duckdb.v2.types import LogicalType
 
@@ -109,6 +110,10 @@ struct Result(Movable):
     var _statement_type: StatementType
     var _result_type: ResultType
     var _rows_changed: Int
+    # The chunk `fetchone`/`fetchmany` are reading, with its views.
+    var _buffer: Optional[Chunk]
+    var _buffer_tree: Optional[_ReadTree]
+    var _buffer_row: Int
 
     def __init__(out self, *, var _owned: duckdb_v2_result_handle) raises DuckDBError:
         """Wrap a fresh V2 result. Statements without rows are drained here."""
@@ -121,6 +126,9 @@ struct Result(Movable):
         self._result_type = ResultType.ROWS
         self._rows_changed = 0
         self._schema = ArcPointer(_Schema([], []))
+        self._buffer = None
+        self._buffer_tree = None
+        self._buffer_row = 0
         try:
             check(lib().duckdb_v2_result_get_statement_type(self._handle, Pointer(to=stype), Pointer(to=err)), err)
             self._statement_type = StatementType(stype)
@@ -147,6 +155,9 @@ struct Result(Movable):
         self._statement_type = move._statement_type
         self._result_type = move._result_type
         self._rows_changed = move._rows_changed
+        self._buffer = move._buffer^
+        self._buffer_tree = move._buffer_tree^
+        self._buffer_row = move._buffer_row
 
     def __deinit__(deinit self):
         _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
@@ -187,6 +198,11 @@ struct Result(Movable):
 
     def fetch_chunk(mut self) raises DuckDBError -> Optional[Chunk]:
         """The next chunk of rows, or `None` at the end."""
+        if self._buffer:
+            if self._buffer_row < len(self._buffer.value()):
+                raise api_error("fetchone/fetchmany left rows of a chunk unread; read the rest with them")
+            self._buffer_tree = None
+            self._buffer = None
         if Int(self._handle) == 0:
             return None
         var err = null_error_info()
@@ -196,6 +212,54 @@ struct Result(Movable):
             _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
             return None
         return Chunk(_owned=chunk, schema=self._schema)
+
+    def fetchone[T: Movable & Deinitable](mut self) raises DuckDBError -> Optional[T]:
+        """The next row as `T`, or `None` at the end.
+
+        `T` is a struct (columns matched to fields by name,
+        case-insensitively), a `Tuple` (by position), or a scalar type when
+        the result has one column.
+
+        ```mojo
+        var r = con.execute("SELECT name, age FROM users")
+        while True:
+            var user = r.fetchone[User]()
+            if not user:
+                break
+            print(user.value().name)
+        ```
+        """
+        while True:
+            if self._buffer and self._buffer_row < len(self._buffer.value()):
+                var row = self._buffer_row
+                self._buffer_row += 1
+                return Optional[T](read_row[T](self._buffer_tree.value(), row))
+            var chunk = self.fetch_chunk()
+            if not chunk:
+                return None
+            self._buffer_tree = chunk.value()._read_tree()
+            self._buffer = chunk^
+            self._buffer_row = 0
+
+    def fetchmany[T: Movable & Deinitable](mut self, n: Int) raises DuckDBError -> List[T]:
+        """Up to `n` next rows as `T` (see `fetchone`)."""
+        var out = List[T](capacity=n)
+        while len(out) < n:
+            var row = self.fetchone[T]()
+            if not row:
+                break
+            out.append(row.take())
+        return out^
+
+    def get[T: Movable & Deinitable](var self) raises DuckDBError -> List[T]:
+        """All remaining rows as `T` (see `fetchone`; consumes the result)."""
+        var out = List[T]()
+        while True:
+            var row = self.fetchone[T]()
+            if not row:
+                break
+            out.append(row.take())
+        return out^
 
     def chunks(var self) -> ChunkIter:
         """Iterate over the remaining chunks (consumes the result).
@@ -448,6 +512,24 @@ struct MaterializedResult(Movable, Sized):
         var at = self._locate(row)
         return self._chunks[at[0]].get_optional[T](col=col, row=at[1])
 
+    def get[T: Movable & Deinitable](self, *, row: Int) raises DuckDBError -> T:
+        """Row `row` as `T`: a struct (columns by name), a `Tuple` (by
+        position), or a scalar when the result has one column."""
+        var at = self._locate(row)
+        return self._chunks[at[0]].get[T](row=at[1])
+
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> List[T]:
+        """All rows as `T` (see `get[T](row=)`).
+
+        ```mojo
+        var users = con.execute("SELECT * FROM users").fetchall().get[User]()
+        ```
+        """
+        var out = List[T](capacity=self._size)
+        for c in range(len(self._chunks)):
+            self._chunks[c]._append_rows[T](out)
+        return out^
+
     def get[T: Movable & Deinitable](self, *, col: Int) raises DuckDBError -> List[T]:
         """A whole column. Raises if it holds a NULL (use `get_optional`)."""
         var out = List[T](capacity=self._size)
@@ -489,6 +571,10 @@ struct Row[origin: ImmOrigin](Copyable, Movable):
 
     def get[T: Movable & Deinitable](self, col: Int) raises DuckDBError -> T:
         return self._result[].get[T](col=col, row=self._row)
+
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> T:
+        """The whole row as `T` (a struct, a `Tuple`, or a scalar for one column)."""
+        return self._result[].get[T](row=self._row)
 
     def get_optional[T: Movable & Deinitable](self, col: Int) raises DuckDBError -> Optional[T]:
         return self._result[].get_optional[T](col=col, row=self._row)

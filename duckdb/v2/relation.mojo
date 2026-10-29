@@ -182,6 +182,11 @@ struct Relation[origin: ImmOrigin](Copyable, Movable):
         """Execute and read all rows into memory."""
         return self._run(self._sql).fetchall()
 
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> List[T]:
+        """Execute and read all rows as `T` (a struct, a `Tuple`, or a
+        scalar for one column)."""
+        return self._run(self._sql).get[T]()
+
     def show(self, max_rows: Int = 20, max_width: Int = 0, max_col_width: Int = 0) raises DuckDBError:
         """Execute and print a box table."""
         self._run(self._sql).show(max_rows, max_width, max_col_width)

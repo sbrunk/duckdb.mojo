@@ -54,8 +54,92 @@ struct TypeId(Equatable, ImplicitlyCopyable, Writable):
     comptime GEOMETRY = Self(DUCKDB_V2_LOGICAL_TYPE_ID_GEOMETRY)
     comptime BIGNUM = Self(DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM)
 
+    def name(self) -> StaticString:
+        """The id's name, e.g. `"INTEGER"`."""
+        if self == Self.INVALID:
+            return "INVALID"
+        if self == Self.ANY:
+            return "ANY"
+        if self == Self.BOOLEAN:
+            return "BOOLEAN"
+        if self == Self.TINYINT:
+            return "TINYINT"
+        if self == Self.SMALLINT:
+            return "SMALLINT"
+        if self == Self.INTEGER:
+            return "INTEGER"
+        if self == Self.BIGINT:
+            return "BIGINT"
+        if self == Self.HUGEINT:
+            return "HUGEINT"
+        if self == Self.UTINYINT:
+            return "UTINYINT"
+        if self == Self.USMALLINT:
+            return "USMALLINT"
+        if self == Self.UINTEGER:
+            return "UINTEGER"
+        if self == Self.UBIGINT:
+            return "UBIGINT"
+        if self == Self.UHUGEINT:
+            return "UHUGEINT"
+        if self == Self.FLOAT:
+            return "FLOAT"
+        if self == Self.DOUBLE:
+            return "DOUBLE"
+        if self == Self.DECIMAL:
+            return "DECIMAL"
+        if self == Self.VARCHAR:
+            return "VARCHAR"
+        if self == Self.BLOB:
+            return "BLOB"
+        if self == Self.BIT:
+            return "BIT"
+        if self == Self.DATE:
+            return "DATE"
+        if self == Self.TIME:
+            return "TIME"
+        if self == Self.TIME_NS:
+            return "TIME_NS"
+        if self == Self.TIME_TZ:
+            return "TIME_TZ"
+        if self == Self.TIMESTAMP:
+            return "TIMESTAMP"
+        if self == Self.TIMESTAMP_SEC:
+            return "TIMESTAMP_SEC"
+        if self == Self.TIMESTAMP_MS:
+            return "TIMESTAMP_MS"
+        if self == Self.TIMESTAMP_NS:
+            return "TIMESTAMP_NS"
+        if self == Self.TIMESTAMP_TZ:
+            return "TIMESTAMP_TZ"
+        if self == Self.TIMESTAMP_TZ_NS:
+            return "TIMESTAMP_TZ_NS"
+        if self == Self.INTERVAL:
+            return "INTERVAL"
+        if self == Self.UUID:
+            return "UUID"
+        if self == Self.ENUM:
+            return "ENUM"
+        if self == Self.LIST:
+            return "LIST"
+        if self == Self.ARRAY:
+            return "ARRAY"
+        if self == Self.STRUCT:
+            return "STRUCT"
+        if self == Self.MAP:
+            return "MAP"
+        if self == Self.UNION:
+            return "UNION"
+        if self == Self.VARIANT:
+            return "VARIANT"
+        if self == Self.GEOMETRY:
+            return "GEOMETRY"
+        if self == Self.BIGNUM:
+            return "BIGNUM"
+        return "UNKNOWN"
+
     def write_to(self, mut writer: Some[Writer]):
-        writer.write("TypeId(", self.value, ")")
+        writer.write(self.name())
 
 
 struct LogicalType(Copyable, Equatable, Movable, Writable):
@@ -74,7 +158,7 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
 
     def __init__(out self, id: TypeId) raises DuckDBError:
         """A type without parameters, e.g. `LogicalType(TypeId.INTEGER)`."""
-        self._handle = _from_id(builtin_factory(), id, List[duckdb_v2_value_handle]())
+        self._handle = _from_id(builtin_factory(), id, List[duckdb_v2_value_handle](), List[String]())
 
     @staticmethod
     def parse(text: StringSlice, factory: Optional[duckdb_v2_factory_handle] = None) raises DuckDBError -> Self:
@@ -98,7 +182,7 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
         try:
             check(lib().duckdb_v2_value_create_utinyint(builtin_factory(), UInt8(width), Pointer(to=w), Pointer(to=err)), err)
             check(lib().duckdb_v2_value_create_utinyint(builtin_factory(), UInt8(scale), Pointer(to=s), Pointer(to=err)), err)
-            var h = _from_id(builtin_factory(), TypeId.DECIMAL, [w, s])
+            var h = _from_id(builtin_factory(), TypeId.DECIMAL, [w, s], List[String]())
             return Self(_owned=h)
         finally:
             _ = lib().duckdb_v2_value_destroy(Pointer(to=w))
@@ -110,9 +194,37 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
         var t = null[duckdb_v2_value_handle]()
         try:
             check(lib().duckdb_v2_value_create_type(builtin_factory(), child._handle, Pointer(to=t), Pointer(to=err)), err)
-            return Self(_owned=_from_id(builtin_factory(), TypeId.LIST, [t]))
+            return Self(_owned=_from_id(builtin_factory(), TypeId.LIST, [t], List[String]()))
         finally:
             _ = lib().duckdb_v2_value_destroy(Pointer(to=t))
+
+    @staticmethod
+    def array(child: LogicalType, size: Int) raises DuckDBError -> Self:
+        """A fixed-size ARRAY, e.g. `INTEGER[3]`."""
+        var err = null_error_info()
+        var t = null[duckdb_v2_value_handle]()
+        var n = null[duckdb_v2_value_handle]()
+        try:
+            check(lib().duckdb_v2_value_create_type(builtin_factory(), child._handle, Pointer(to=t), Pointer(to=err)), err)
+            check(lib().duckdb_v2_value_create_bigint(builtin_factory(), Int64(size), Pointer(to=n), Pointer(to=err)), err)
+            return Self(_owned=_from_id(builtin_factory(), TypeId.ARRAY, [t, n], List[String]()))
+        finally:
+            _ = lib().duckdb_v2_value_destroy(Pointer(to=t))
+            _ = lib().duckdb_v2_value_destroy(Pointer(to=n))
+
+    @staticmethod
+    def map(key: LogicalType, value: LogicalType) raises DuckDBError -> Self:
+        return Self(_owned=_from_types(TypeId.MAP, List[String](), [key.copy(), value.copy()]))
+
+    @staticmethod
+    def struct_(names: List[String], types: List[LogicalType]) raises DuckDBError -> Self:
+        """A STRUCT with the given field names and types."""
+        return Self(_owned=_from_types(TypeId.STRUCT, names, types))
+
+    @staticmethod
+    def union_(names: List[String], types: List[LogicalType]) raises DuckDBError -> Self:
+        """A UNION with the given member names and types."""
+        return Self(_owned=_from_types(TypeId.UNION, names, types))
 
     def __init__(out self, *, copy: Self):
         var err = null_error_info()
@@ -198,6 +310,18 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
     def decimal_scale(self) raises DuckDBError -> Int:
         return Int(self._param_u8(1))
 
+    def array_size(self) raises DuckDBError -> Int:
+        """The size of an ARRAY type."""
+        var p = self._param(1)
+        var v = p[1]
+        var out: Int64 = 0
+        var err = null_error_info()
+        try:
+            check(lib().duckdb_v2_value_get_bigint(v, Pointer(to=out), Pointer(to=err)), err)
+        finally:
+            _ = lib().duckdb_v2_value_destroy(Pointer(to=v))
+        return Int(out)
+
     def _param_u8(self, i: Int) raises DuckDBError -> UInt8:
         var p = self._param(i)
         var v = p[1]
@@ -245,22 +369,48 @@ def abort_on_copy(e: DuckDBError):
     abort(String("Failed to copy a logical type: ", e))
 
 
+def _from_types(id: TypeId, names: List[String], types: List[LogicalType]) raises DuckDBError -> duckdb_v2_logical_type_handle:
+    """A nested type from child types (as TYPE parameters), named when `names` is not empty."""
+    var values = List[duckdb_v2_value_handle]()
+    var err = null_error_info()
+    try:
+        for i in range(len(types)):
+            var t = null[duckdb_v2_value_handle]()
+            check(lib().duckdb_v2_value_create_type(builtin_factory(), types[i].handle(), Pointer(to=t), Pointer(to=err)), err)
+            values.append(t)
+        return _from_id(builtin_factory(), id, values, names)
+    finally:
+        for i in range(len(values)):
+            _ = lib().duckdb_v2_value_destroy(Pointer(to=values[i]))
+        _ = types
+
+
 def _from_id(
     factory: duckdb_v2_factory_handle,
     id: TypeId,
     values: List[duckdb_v2_value_handle],
+    names: List[String],
 ) raises DuckDBError -> duckdb_v2_logical_type_handle:
-    """Create a type from its id and positional parameter values (borrowed)."""
+    """Create a type from its id and parameter values (borrowed), named when `names` is not empty."""
     var out = null[duckdb_v2_logical_type_handle]()
     var err = null_error_info()
     var values_ptr = null[Pointer[duckdb_v2_value_handle, ImmUntrackedOrigin]]()
     if len(values) > 0:
         values_ptr = values.unsafe_ptr().as_imm().unsafe_origin_cast[ImmUntrackedOrigin]()
+    var name_args = List[StrArg]()
+    var name_views = List[duckdb_v2_identifier_t]()
+    for i in range(len(names)):
+        name_args.append(StrArg(names[i]))
+    for i in range(len(name_args)):
+        name_views.append(name_args[i].ptr()[].copy())
+    var names_ptr = null[Pointer[duckdb_v2_identifier_t, ImmUntrackedOrigin]]()
+    if len(name_views) > 0:
+        names_ptr = name_views.unsafe_ptr().as_imm().unsafe_origin_cast[ImmUntrackedOrigin]()
     check(
         lib().duckdb_v2_factory_create_type_from_id(
             factory,
             id.value,
-            null[Pointer[duckdb_v2_identifier_t, ImmUntrackedOrigin]](),
+            names_ptr,
             values_ptr,
             idx_t(len(values)),
             Pointer(to=out),
@@ -268,5 +418,7 @@ def _from_id(
         ),
         err,
     )
-    _ = values  # the array is read by the call above
+    _ = values  # the arrays are read by the call above
+    _ = name_views^
+    _ = name_args^
     return out
