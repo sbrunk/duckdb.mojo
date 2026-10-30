@@ -10,6 +10,11 @@ from duckdb.v2.relation import Relation, _reader_call
 from duckdb._sql_util import _quote_qualified
 from duckdb.v2.statement import Description, Params, PreparedStatement, _Arguments, _named, _positional
 from duckdb.v2.error import DuckDBError
+from duckdb.v2.settings import Settings
+from duckdb.v2.files import FileSystem
+from duckdb.v2.observe import LogLevel, QueryMetrics, _log
+from duckdb.v2.arrow import ArrowResult, ArrowScan, OwnedArrowStream
+from duckdb.v2.table import TableFunction, param_types
 from duckdb.v2.functions import RegistrationTarget, Registrar
 
 
@@ -167,10 +172,95 @@ struct Connection(Movable, Registrar):
         check(lib().duckdb_v2_connection_register_table_function(self._handle, function, Pointer(to=err)), err)
 
     def _target(self) -> RegistrationTarget:
-        return RegistrationTarget(self._handle, null[duckdb_v2_extension_handle]())
+        return RegistrationTarget(self._handle, null[duckdb_v2_extension_handle](), self._db._instance[].handle)
 
     def _run_sql(self, sql: String) raises DuckDBError:
         _ = self.execute(sql)
+
+    def settings(ref self) raises DuckDBError -> Settings[ImmOrigin(origin_of(self))]:
+        """This connection's settings (`SET`), built-in and custom."""
+        var c = null[duckdb_v2_config_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_get_config(self._handle, Pointer(to=c), Pointer(to=err)), err)
+        return Settings[ImmOrigin(origin_of(self))](c, Pointer(to=self).unsafe_bitcast[NoneType]())
+
+    def file_system(ref self) raises DuckDBError -> FileSystem[ImmOrigin(origin_of(self))]:
+        """DuckDB's file system as this connection sees it (local, and remote
+        ones extensions register)."""
+        var fs = null[duckdb_v2_file_system_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_get_file_system(self._handle, Pointer(to=fs), Pointer(to=err)), err)
+        return FileSystem[ImmOrigin(origin_of(self))](fs, Pointer(to=self).unsafe_bitcast[NoneType]())
+
+    def enable_profiling(self, enabled: Bool = True, *, print_profile: Bool = False) raises DuckDBError:
+        """Gather metrics for the following queries (read them with
+        `query_metrics`). With `print_profile`, DuckDB also prints each
+        query's profile (to the standard output, see `profiling_output`)."""
+        if enabled and not print_profile:
+            _ = self.execute("SET enable_profiling = 'no_output'")
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_enable_profiling(self._handle, enabled, Pointer(to=err)), err)
+
+    def query_metrics(self) raises DuckDBError -> QueryMetrics:
+        """The metrics of the last finished query (needs `enable_profiling`).
+        Raises while a result is still being read."""
+        var m = null[duckdb_v2_query_metrics_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_get_query_metrics(self._handle, Pointer(to=m), Pointer(to=err)), err)
+        return QueryMetrics(_owned=m)
+
+    def log(self, level: LogLevel, type: StringSlice, message: StringSlice) raises DuckDBError:
+        """Write to DuckDB's log (`duckdb_logs`), if logging is enabled for `level`."""
+        _log(self._handle, level, type, message)
+
+    # ── Arrow ─────────────────────────────────────────────────────
+
+    def execute_arrow[*Ts: Movable & Deinitable](
+        self, sql: StringSlice, *args: *Ts, batch_size: Int = 0
+    ) raises DuckDBError -> ArrowResult:
+        """Run one SQL statement; its rows come as Arrow arrays (see `duckdb.v2.arrow`).
+
+        `batch_size` caps the rows per array (0: DuckDB's chunk size).
+        """
+        var arguments = _positional(self.factory(), *args)
+        var statements = _Statements(self._handle, sql)
+        var stmt = statements.next()
+        if Int(stmt) == 0:
+            raise api_error("no statement to execute")
+        var result = null[duckdb_v2_arrow_result_handle]()
+        var err = null_error_info()
+        var code = lib().duckdb_v2_statement_execute_arrow(
+            self._handle,
+            stmt,
+            arguments.names_ptr(),
+            arguments.values_ptr(),
+            arguments.count(),
+            idx_t(batch_size),
+            Pointer(to=result),
+            Pointer(to=err),
+        )
+        _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
+        _ = arguments^
+        check(code, err)
+        var extra = statements.next()
+        if Int(extra) != 0:
+            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
+            _ = lib().duckdb_v2_arrow_result_destroy(Pointer(to=result))
+            raise api_error("execute_arrow takes a single statement")
+        return ArrowResult(_owned=result)
+
+    def arrow_scan(self, stream: OwnedArrowStream) raises DuckDBError -> Relation[ImmOrigin(origin_of(self))]:
+        """A relation over an Arrow stream (read once; keep `stream` alive while the relation is read)."""
+        return self.arrow_scan(stream.unsafe_ptr())
+
+    def arrow_scan(self, stream: Pointer[ArrowArrayStream, MutUntrackedOrigin]) raises DuckDBError -> Relation[ImmOrigin(origin_of(self))]:
+        """A relation over the `ArrowArrayStream` at `stream` (read once; keep it alive while the relation is read)."""
+        try:
+            self.register(TableFunction.from_impl[ArrowScan]("__mojo_arrow_scan", param_types[Int64]()))
+        except e:
+            if "already" not in e.message:
+                raise e^
+        return self.sql(String("SELECT * FROM __mojo_arrow_scan(", Int(stream), ")"))
 
     def interrupt(self) raises DuckDBError:
         """Interrupt the statement running on this connection (safe from another thread)."""

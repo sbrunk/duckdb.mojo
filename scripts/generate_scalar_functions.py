@@ -50,7 +50,7 @@ def from_function(n):
         lines.append(params)
     lines += [
         "        return ScalarFunction(",
-        f"            String(name), params^, logical_type_of[R](), _exec{n}[{sig}, R, f], bind, volatile, special_nulls, fixed=True",
+        f"            String(name), params^, _type_of[R](), _exec{n}[{sig}, R, f], bind, volatile, special_nulls, fixed=True",
         "        )",
         "",
     ]
@@ -85,7 +85,7 @@ def exec_fn(n):
                 f"{p}        call.out.write_null(row)",
                 f"{p}        continue",
             ]
-        out.append(f"{p}    call.out.write(row, {call(first_sql)})")
+        out.append(f"{p}    _write_result(call.out, row, {call(first_sql)})")
         return out
 
     lines = [

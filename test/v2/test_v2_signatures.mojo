@@ -177,6 +177,34 @@ def test_any_and_result_types() raises:
     assert_equal(con.execute("SELECT wrap(7::BIGINT)").get[List[Int64]]()[0][0], 7)
 
 
+def type_and_text(v: Value) raises -> String:
+    return String(v.type(), ": ", v.to_string())
+
+
+def same_value(v: Value) -> Value:
+    return v.copy()
+
+
+def bigger(a: Value, b: Value) raises -> Value:
+    # Values of one type, compared as text length: any type works.
+    return a.copy() if a.to_string().byte_length() >= b.to_string().byte_length() else b.copy()
+
+
+def test_row_wise_any() raises:
+    var con = Database().connect()
+    con.register(ScalarFunction.from_function["type_and_text", type_and_text]())
+    con.register(ScalarFunction.from_function["same_value", same_value]().result_type_of(0))
+    con.register(ScalarFunction.from_function["bigger", bigger]().result_type_of(0))
+    assert_equal(con.execute("SELECT type_and_text(42)").get[String]()[0], "INTEGER: 42")
+    assert_equal(con.execute("SELECT type_and_text([1, 2])").get[String]()[0], "INTEGER[]: [1, 2]")
+    assert_equal(con.execute("SELECT same_value('a string longer than twelve')").get[String]()[0], "a string longer than twelve")
+    var r = con.execute("SELECT same_value(i) FROM range(3000) t(i)").get[Int64]()
+    assert_equal(r[2999], 2999)
+    assert_equal(con.execute("SELECT bigger('ab', 'abc')").get[String]()[0], "abc")
+    # NULL arguments give NULL (default handling).
+    assert_false(con.execute("SELECT same_value(NULL::INTEGER)").get[Optional[Int32]]()[0].__bool__())
+
+
 def test_aggregate_bind_data() raises:
     var con = Database().connect()
     con.register(AggregateFunction.from_state["join_with", Join.update]())

@@ -88,6 +88,43 @@ def _text_sink(
     user_data.unsafe_bitcast[String]()[] += str_to_string(text[])
 
 
+@fieldwise_init
+struct StepStatus(Equatable, ImplicitlyCopyable, Writable):
+    """What one `Result.step()` produced."""
+
+    var value: DUCKDB_V2_RESULT_STEP_STATUS
+
+    comptime WAITING = Self(DUCKDB_V2_RESULT_STEP_STATUS_WAITING)
+    """Work was done but no chunk is ready: step again (or `wait()` first)."""
+    comptime CHUNK = Self(DUCKDB_V2_RESULT_STEP_STATUS_CHUNK)
+    """A chunk is ready (`Step.chunk`)."""
+    comptime FINISHED = Self(DUCKDB_V2_RESULT_STEP_STATUS_FINISHED)
+    """All rows have been produced."""
+    comptime CANCELLED = Self(DUCKDB_V2_RESULT_STEP_STATUS_CANCELLED)
+    """The query was interrupted (`Connection.interrupt()`)."""
+
+    def write_to(self, mut writer: Some[Writer]):
+        if self == Self.WAITING:
+            writer.write("WAITING")
+        elif self == Self.CHUNK:
+            writer.write("CHUNK")
+        elif self == Self.FINISHED:
+            writer.write("FINISHED")
+        else:
+            writer.write("CANCELLED")
+
+
+struct Step(Movable):
+    """The outcome of one `Result.step()`: a status, and the chunk for `CHUNK`."""
+
+    var status: StepStatus
+    var chunk: Optional[Chunk]
+
+    def __init__(out self, status: StepStatus, var chunk: Optional[Chunk]):
+        self.status = status
+        self.chunk = chunk^
+
+
 struct Result(Movable):
     """The result of one statement.
 
@@ -260,6 +297,43 @@ struct Result(Movable):
                 break
             out.append(row.take())
         return out^
+
+    def step(mut self) raises DuckDBError -> Step:
+        """Run a bounded piece of the query without blocking (for event loops).
+
+        ```mojo
+        var r = con.execute("SELECT * FROM big_table")
+        while True:
+            var s = r.step()
+            if s.status == StepStatus.CHUNK:
+                process(s.chunk.take())
+            elif s.status == StepStatus.WAITING:
+                do_other_work()  # or r.wait() to block until a step can progress
+            else:
+                break  # FINISHED or CANCELLED
+        ```
+
+        Execution errors raise. Do not mix with `fetchone`/`fetchmany`.
+        """
+        if Int(self._handle) == 0:
+            return Step(StepStatus.FINISHED, None)
+        var err = null_error_info()
+        var chunk = null[duckdb_v2_data_chunk_handle]()
+        var status: DUCKDB_V2_RESULT_STEP_STATUS = DUCKDB_V2_RESULT_STEP_STATUS_WAITING
+        check(lib().duckdb_v2_result_step(self._handle, Pointer(to=chunk), Pointer(to=status), Pointer(to=err)), err)
+        var st = StepStatus(status)
+        if st == StepStatus.CHUNK:
+            return Step(st, Chunk(_owned=chunk, schema=self._schema))
+        if st == StepStatus.FINISHED or st == StepStatus.CANCELLED:
+            _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
+        return Step(st, None)
+
+    def wait(self) raises DuckDBError:
+        """Block until `step()` can make progress (returns at once when finished)."""
+        if Int(self._handle) == 0:
+            return
+        var err = null_error_info()
+        check(lib().duckdb_v2_result_wait(self._handle, Pointer(to=err)), err)
 
     def chunks(var self) -> ChunkIter:
         """Iterate over the remaining chunks (consumes the result).

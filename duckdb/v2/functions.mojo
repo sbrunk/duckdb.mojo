@@ -49,13 +49,17 @@ from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
 from duckdb.v2._runtime import check, lib
 from duckdb.v2.aggregate import AggregateFunction
 from duckdb.v2.table import TableFunction
-from duckdb.v2.extend import CastFunction, CustomOption, MacroFunction, PragmaFunction, ReplacementScan
+from duckdb.v2.observe import LogSink
+from duckdb.v2.copy import CopyFunction
+from duckdb.v2.extend import CastFunction, CustomOption, CustomType, MacroFunction, PragmaFunction, ReplacementScan
 from duckdb.v2.chunk import ColumnReader, column_reader
 from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.mapping import is_mapped, mapped_read
 from duckdb.v2.serde import VectorWriter, _ReadTree, _RNode, from_value, logical_type_of, read_tree_of, read_value
+from duckdb.v2.settings import Settings, context_settings
+from duckdb.v2.files import FileSystem, context_file_system
 from duckdb.v2.signature import ParamKind, Signature
-from duckdb.v2.types import LogicalType
+from duckdb.v2.types import LogicalType, TypeId
 from duckdb.v2.value import Value
 
 
@@ -149,6 +153,45 @@ trait Registrar:
         _ = lib().duckdb_v2_pragma_function_destroy(Pointer(to=p))
         check(code, err)
 
+    def register(self, type: CustomType) raises DuckDBError:
+        """Register a custom type (transactional on a connection)."""
+        var t = self._target()
+        var h = type._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_custom_type(t.connection, h, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_custom_type(t.extension, h, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_custom_type_destroy(Pointer(to=h))
+        check(code, err)
+
+    def register(self, copy: CopyFunction) raises DuckDBError:
+        """Register a `COPY` format."""
+        var t = self._target()
+        var h = copy._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_copy_function(t.connection, h, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_copy_function(t.extension, h, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_copy_function_destroy(Pointer(to=h))
+        check(code, err)
+
+    def register(self, sink: LogSink) raises DuckDBError:
+        """Register a log sink on the database (not transactional; lives as long as the database)."""
+        var t = self._target()
+        var k = sink._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_instance_register_log_sink(t.instance, k, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_log_sink(t.extension, k, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_log_sink_destroy(Pointer(to=k))
+        check(code, err)
+
     def register(self, option: CustomOption) raises DuckDBError:
         """Register a custom option. It is not transactional and cannot be removed."""
         var t = self._target()
@@ -169,6 +212,7 @@ struct RegistrationTarget(ImplicitlyCopyable):
 
     var connection: duckdb_v2_connection_handle
     var extension: duckdb_v2_extension_handle
+    var instance: duckdb_v2_instance_handle  # with a connection
 
     def is_connection(self) -> Bool:
         return Int(self.connection) != 0
@@ -438,7 +482,7 @@ struct ScalarFunction(Movable):
         else:
             _param[A1](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec1[A1, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec1[A1, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -457,7 +501,7 @@ struct ScalarFunction(Movable):
             _param[A1](params, special_nulls)
         _param[A2](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec2[A1, A2, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec2[A1, A2, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -477,7 +521,7 @@ struct ScalarFunction(Movable):
         _param[A2](params, special_nulls)
         _param[A3](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec3[A1, A2, A3, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec3[A1, A2, A3, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -498,7 +542,7 @@ struct ScalarFunction(Movable):
         _param[A3](params, special_nulls)
         _param[A4](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec4[A1, A2, A3, A4, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec4[A1, A2, A3, A4, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -520,7 +564,7 @@ struct ScalarFunction(Movable):
         _param[A4](params, special_nulls)
         _param[A5](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec5[A1, A2, A3, A4, A5, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec5[A1, A2, A3, A4, A5, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -543,7 +587,7 @@ struct ScalarFunction(Movable):
         _param[A5](params, special_nulls)
         _param[A6](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec6[A1, A2, A3, A4, A5, A6, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec6[A1, A2, A3, A4, A5, A6, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -567,7 +611,7 @@ struct ScalarFunction(Movable):
         _param[A6](params, special_nulls)
         _param[A7](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec7[A1, A2, A3, A4, A5, A6, A7, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec7[A1, A2, A3, A4, A5, A6, A7, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -592,7 +636,7 @@ struct ScalarFunction(Movable):
         _param[A7](params, special_nulls)
         _param[A8](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec8[A1, A2, A3, A4, A5, A6, A7, A8, R, f], bind, volatile, special_nulls, fixed=True
+            String(name), params^, _type_of[R](), _exec8[A1, A2, A3, A4, A5, A6, A7, A8, R, f], bind, volatile, special_nulls, fixed=True
         )
     # END GENERATED from_function
 
@@ -617,9 +661,19 @@ struct BindArgs:
     parameter is not one)."""
 
     var _info: duckdb_v2_function_bind_info_handle
+    var _context: duckdb_v2_context_handle
 
-    def __init__(out self, info: duckdb_v2_function_bind_info_handle):
+    def __init__(out self, info: duckdb_v2_function_bind_info_handle, context: duckdb_v2_context_handle):
         self._info = info
+        self._context = context
+
+    def settings(self) raises DuckDBError -> Settings[ImmUntrackedOrigin]:
+        """The settings of the query being planned (built-in and custom)."""
+        return context_settings(self._context)
+
+    def file_system(self) raises DuckDBError -> FileSystem[ImmUntrackedOrigin]:
+        """DuckDB's file system, as the query being planned sees it."""
+        return context_file_system(self._context)
 
     def count(self) raises DuckDBError -> Int:
         var fixed: idx_t = 0
@@ -712,7 +766,7 @@ def _bind_callback[T: AnyType](
 ) abi("C"):
     comptime B = downcast[T, BindData]
     try:
-        var data = B.bind(BindArgs(info))
+        var data = B.bind(BindArgs(info, context))
         var ptr = unsafe_alloc[B](1)
         ptr.unsafe_write(data^)
         var opaque = duckdb_v2_opaque(ptr.unsafe_bitcast[NoneType](), _destroy_bind[B], _equal_bind[B])
@@ -781,7 +835,7 @@ def _resolve_cb[f: def(args: BindArgs) raises thin -> LogicalType](
     err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
 ) abi("C"):
     try:
-        var t = f(BindArgs(info))
+        var t = f(BindArgs(info, context))
         var e = null_error_info()
         var code = lib().duckdb_v2_scalar_function_resolve_types_set_return_type(result, t.handle(), Pointer(to=e))
         _ = t^  # keep the type alive until DuckDB has copied it
@@ -842,9 +896,11 @@ struct _Args(Movable):
 
     var size: Int
     var args: List[_ReadTree]
+    var vectors: List[duckdb_v2_vector_handle]
 
     def __init__(out self, vectors: List[duckdb_v2_vector_handle], size: Int) raises DuckDBError:
         self.size = size
+        self.vectors = vectors.copy()
         self.args = List[_ReadTree]()
         for i in range(len(vectors)):
             self.args.append(read_tree_of(vectors[i]))
@@ -877,7 +933,13 @@ struct _Args(Movable):
 
     @always_inline
     def get[T: AnyType](mut self, arg: Int, node: _NodePtr, row: Int) raises DuckDBError -> T:
-        comptime if is_mapped[T]():
+        comptime if _is_value[T]():
+            # An ANY parameter: the cell as a Value, of whatever type it has.
+            var v = null[duckdb_v2_value_handle]()
+            var err = null_error_info()
+            check(lib().duckdb_v2_vector_get_value(self.vectors[arg], idx_t(row), Pointer(to=v), Pointer(to=err)), err)
+            return rebind_var[downcast[T, Movable]](Value(_owned=v))
+        elif is_mapped[T]():
             # The signature fixes the type and NULL rows were skipped: read
             # the storage directly.
             var idx = Int(node[].sel[unsafe_offset=row]) if Int(node[].sel) != 0 else row
@@ -947,11 +1009,13 @@ struct ScalarArgs(Movable, Sized):
     """The arguments of one chunk-level call: `size()` rows, one column per argument."""
 
     var _info: duckdb_v2_scalar_function_exec_info_handle
+    var _context: duckdb_v2_context_handle
     var _size: Int
     var _vectors: List[duckdb_v2_vector_handle]
 
-    def __init__(out self, info: duckdb_v2_scalar_function_exec_info_handle) raises DuckDBError:
+    def __init__(out self, info: duckdb_v2_scalar_function_exec_info_handle, context: duckdb_v2_context_handle) raises DuckDBError:
         self._info = info
+        self._context = context
         var err = null_error_info()
         var count: idx_t = 0
         check(lib().duckdb_v2_scalar_function_exec_get_row_count(info, Pointer(to=count), Pointer(to=err)), err)
@@ -975,6 +1039,14 @@ struct ScalarArgs(Movable, Sized):
     def size(self) -> Int:
         """The number of rows."""
         return self._size
+
+    def settings(self) raises DuckDBError -> Settings[ImmUntrackedOrigin]:
+        """The settings of the running query (built-in and custom)."""
+        return context_settings(self._context)
+
+    def file_system(self) raises DuckDBError -> FileSystem[ImmUntrackedOrigin]:
+        """DuckDB's file system, as the running query sees it."""
+        return context_file_system(self._context)
 
     def __len__(self) -> Int:
         """The number of arguments."""
@@ -1027,15 +1099,15 @@ def _chunk_exec[f: def(mut args: ScalarArgs, mut out: VectorWriter) raises thin 
     err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
 ) abi("C"):
     try:
-        _run_chunk[f](info)
+        _run_chunk[f](info, context)
     except e:
         _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
 
 
 def _run_chunk[f: def(mut args: ScalarArgs, mut out: VectorWriter) raises thin -> None](
-    info: duckdb_v2_scalar_function_exec_info_handle,
+    info: duckdb_v2_scalar_function_exec_info_handle, context: duckdb_v2_context_handle
 ) raises:
-    var args = ScalarArgs(info)
+    var args = ScalarArgs(info, context)
     var out = args.result()
     f(args, out)
     out.finish()
@@ -1055,7 +1127,7 @@ def _simd1[In: DType, Out: DType, func: def[width: SIMDLength](SIMD[In, width]) 
 def _run_simd1[In: DType, Out: DType, func: def[width: SIMDLength](SIMD[In, width]) thin -> SIMD[Out, width]](
     info: duckdb_v2_scalar_function_exec_info_handle,
 ) raises:
-    var args = ScalarArgs(info)
+    var args = ScalarArgs(info, null[duckdb_v2_context_handle]())  # SIMD kernels read no settings
     var out = args.result()
     var x = args.column[Scalar[In]](0)
     var dst = out.data[Scalar[Out]]()
@@ -1106,7 +1178,7 @@ def _run_simd2[
     Out: DType,
     func: def[width: SIMDLength](SIMD[In1, width], SIMD[In2, width]) thin -> SIMD[Out, width],
 ](info: duckdb_v2_scalar_function_exec_info_handle) raises:
-    var args = ScalarArgs(info)
+    var args = ScalarArgs(info, null[duckdb_v2_context_handle]())  # SIMD kernels read no settings
     var out = args.result()
     var x = args.column[Scalar[In1]](0)
     var y = args.column[Scalar[In2]](1)
@@ -1153,7 +1225,7 @@ def _simd1g[D: DType, func: def[dtype: DType, width: SIMDLength, //](SIMD[dtype,
 def _run_simd1g[D: DType, func: def[dtype: DType, width: SIMDLength, //](SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point()](
     info: duckdb_v2_scalar_function_exec_info_handle,
 ) raises where D.is_floating_point():
-    var args = ScalarArgs(info)
+    var args = ScalarArgs(info, null[duckdb_v2_context_handle]())  # SIMD kernels read no settings
     var out = args.result()
     var x = args.column[Scalar[D]](0)
     var dst = out.data[Scalar[D]]()
@@ -1200,7 +1272,7 @@ def _run_simd2g[
     D: DType,
     func: def[dtype: DType, width: SIMDLength, //](SIMD[dtype, width], SIMD[dtype, width]) thin -> SIMD[dtype, width] where dtype.is_floating_point(),
 ](info: duckdb_v2_scalar_function_exec_info_handle) raises where D.is_floating_point():
-    var args = ScalarArgs(info)
+    var args = ScalarArgs(info, null[duckdb_v2_context_handle]())  # SIMD kernels read no settings
     var out = args.result()
     var x = args.column[Scalar[D]](0)
     var y = args.column[Scalar[D]](1)
@@ -1261,8 +1333,30 @@ def _required[T: AnyType]() -> Bool:
     return not __is_optional[T]()
 
 
+def _is_value[T: AnyType]() -> Bool:
+    return reflect[T].name() == reflect[Value].name()
+
+
+def _type_of[T: AnyType]() raises DuckDBError -> LogicalType:
+    """The DuckDB type of a parameter or result; `Value` stands for ANY."""
+    comptime if _is_value[T]():
+        return LogicalType(TypeId.ANY)
+    else:
+        return logical_type_of[T]()
+
+
+@always_inline
+def _write_result[T: AnyType](mut out: VectorWriter, row: Int, value: T) raises DuckDBError:
+    comptime if _is_value[T]():
+        ref v = rebind[Value](value)
+        out.write_value(row, v.handle())
+        _ = v
+    else:
+        out.write(row, value)
+
+
 def _param[T: AnyType](mut params: List[LogicalType], mut special_nulls: Bool) raises DuckDBError:
-    params.append(logical_type_of[T]())
+    params.append(_type_of[T]())
     special_nulls = special_nulls or __is_optional[T]()
 
 
@@ -1287,7 +1381,7 @@ def _run1[A1: Movable & Deinitable, R: Movable & Deinitable, f: def(A1) raises t
     comptime if is_bind_data[A1]():
         var b = call.bind_data[A1]()
         for row in range(call.size):
-            call.out.write(row, f(b[]))
+            _write_result(call.out, row, f(b[]))
     else:
         comptime if _all_numbers[A1, R]():
             if call.all_flat():
@@ -1304,7 +1398,7 @@ def _run1[A1: Movable & Deinitable, R: Movable & Deinitable, f: def(A1) raises t
             if (r0 and not _valid(v0, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row)))
     call.out.finish()
 
 def _exec2[A1: Movable & Deinitable, A2: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2) raises thin -> R](
@@ -1330,7 +1424,7 @@ def _run2[A1: Movable & Deinitable, A2: Movable & Deinitable, R: Movable & Deini
             if (r0 and not _valid(v0, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row)))
     else:
         comptime if _all_numbers[A1, A2, R]():
             if call.all_flat():
@@ -1351,7 +1445,7 @@ def _run2[A1: Movable & Deinitable, A2: Movable & Deinitable, R: Movable & Deini
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row)))
     call.out.finish()
 
 def _exec3[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3) raises thin -> R](
@@ -1379,7 +1473,7 @@ def _run3[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, R]():
             if call.all_flat():
@@ -1404,7 +1498,7 @@ def _run3[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row)))
     call.out.finish()
 
 def _exec4[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, A4: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3, A4) raises thin -> R](
@@ -1434,7 +1528,7 @@ def _run4[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, A4, R]():
             if call.all_flat():
@@ -1463,7 +1557,7 @@ def _run4[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row)))
     call.out.finish()
 
 def _exec5[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, A4: Movable & Deinitable, A5: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3, A4, A5) raises thin -> R](
@@ -1495,7 +1589,7 @@ def _run5[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, A4, A5, R]():
             if call.all_flat():
@@ -1528,7 +1622,7 @@ def _run5[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row)))
     call.out.finish()
 
 def _exec6[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, A4: Movable & Deinitable, A5: Movable & Deinitable, A6: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3, A4, A5, A6) raises thin -> R](
@@ -1562,7 +1656,7 @@ def _run6[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, A4, A5, A6, R]():
             if call.all_flat():
@@ -1599,7 +1693,7 @@ def _run6[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)) or (r5 and not _valid(v5, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row)))
     call.out.finish()
 
 def _exec7[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, A4: Movable & Deinitable, A5: Movable & Deinitable, A6: Movable & Deinitable, A7: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3, A4, A5, A6, A7) raises thin -> R](
@@ -1635,7 +1729,7 @@ def _run7[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)) or (r5 and not _valid(v5, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row), call.get[A7](5, v5, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row), call.get[A7](5, v5, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, A4, A5, A6, A7, R]():
             if call.all_flat():
@@ -1676,7 +1770,7 @@ def _run7[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)) or (r5 and not _valid(v5, row)) or (r6 and not _valid(v6, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row), call.get[A7](6, v6, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row), call.get[A7](6, v6, row)))
     call.out.finish()
 
 def _exec8[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Deinitable, A4: Movable & Deinitable, A5: Movable & Deinitable, A6: Movable & Deinitable, A7: Movable & Deinitable, A8: Movable & Deinitable, R: Movable & Deinitable, f: def(A1, A2, A3, A4, A5, A6, A7, A8) raises thin -> R](
@@ -1714,7 +1808,7 @@ def _run8[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)) or (r5 and not _valid(v5, row)) or (r6 and not _valid(v6, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row), call.get[A7](5, v5, row), call.get[A8](6, v6, row)))
+            _write_result(call.out, row, f(b[], call.get[A2](0, v0, row), call.get[A3](1, v1, row), call.get[A4](2, v2, row), call.get[A5](3, v3, row), call.get[A6](4, v4, row), call.get[A7](5, v5, row), call.get[A8](6, v6, row)))
     else:
         comptime if _all_numbers[A1, A2, A3, A4, A5, A6, A7, A8, R]():
             if call.all_flat():
@@ -1759,7 +1853,7 @@ def _run8[A1: Movable & Deinitable, A2: Movable & Deinitable, A3: Movable & Dein
             if (r0 and not _valid(v0, row)) or (r1 and not _valid(v1, row)) or (r2 and not _valid(v2, row)) or (r3 and not _valid(v3, row)) or (r4 and not _valid(v4, row)) or (r5 and not _valid(v5, row)) or (r6 and not _valid(v6, row)) or (r7 and not _valid(v7, row)):
                 call.out.write_null(row)
                 continue
-            call.out.write(row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row), call.get[A7](6, v6, row), call.get[A8](7, v7, row)))
+            _write_result(call.out, row, f(call.get[A1](0, v0, row), call.get[A2](1, v1, row), call.get[A3](2, v2, row), call.get[A4](3, v3, row), call.get[A5](4, v4, row), call.get[A6](5, v5, row), call.get[A7](6, v6, row), call.get[A8](7, v7, row)))
     call.out.finish()
 
 

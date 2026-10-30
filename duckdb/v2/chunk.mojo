@@ -9,6 +9,7 @@ from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.mapping import ColumnMeta, RawData, is_mapped, mapped_accepts, mapped_read
 from duckdb.v2.serde import _ReadTree, read_row, read_value
 from duckdb.v2.types import LogicalType
+from duckdb.v2.value import Value
 
 
 struct _Schema(Movable):
@@ -130,6 +131,16 @@ struct Chunk(Movable, Sized):
     def get[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> T:
         """One value. Raises on NULL (use `get_optional` to allow it)."""
         return self.column[T](col)[row]
+
+    def value(self, *, col: Int, row: Int) raises DuckDBError -> Value:
+        """One cell as a `Value`, of any type (NULL included). Slower than a
+        typed read; for code that does not know the column types."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var v = null[duckdb_v2_value_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_get_value(self._vector(col), idx_t(row), Pointer(to=v), Pointer(to=err)), err)
+        return Value(_owned=v)
 
     def get_optional[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> Optional[T]:
         """One value, or `None` for NULL."""

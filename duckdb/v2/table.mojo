@@ -41,7 +41,11 @@ which those are.
 
 Parallel scans: `max_threads` (default 1) lets DuckDB run several scans at
 once, each with its own state. `ScanShared.claim()` hands out work units
-(0, 1, 2, ...) across threads, so the scans can split the work.
+(0, 1, 2, ...) across threads, so the scans can split the work. By default
+DuckDB keeps the rows in scan order, which limits parallelism; declare the
+rows unordered (`columns.set_unordered()`) or number the batches
+(`OrderedBatches`). Optional traits: `FilterPushdown`, `ScanProgress`,
+`OrderedBatches`.
 """
 
 from std.atomic import Atomic
@@ -124,6 +128,33 @@ trait FilterPushdown:
         ...
 
 
+trait ScanProgress:
+    """A table function that reports how far its scan is (DuckDB's progress bar).
+
+    `progress` returns a fraction from 0.0 to 1.0. It may run on another
+    thread while scans are running, so read only what is safe to read
+    concurrently (`shared.claimed()` is).
+    """
+
+    def progress(self, shared: ScanShared) -> Float64:
+        ...
+
+
+trait OrderedBatches:
+    """A parallel table function whose rows have an order across threads.
+
+    Each `scan` calls `out.set_batch(i)` with the position of the batch it
+    produced: batch numbers grow on each thread and differ between threads
+    (a work unit from `ScanShared.claim()` works). DuckDB then puts the
+    batches back in order, so results, `INSERT` and `COPY` keep the order
+    while scanning in parallel. Without it a parallel scan either runs in
+    insertion order on one thread or, after `columns.set_unordered()`, in
+    parallel without order.
+    """
+
+    pass
+
+
 struct TableColumns:
     """The output columns of a table function, declared in `bind`."""
 
@@ -152,6 +183,17 @@ struct TableColumns:
                 comptime FT = r.field_types()[i]
                 self.add(static_wire_name[T, i](), logical_type_of[FT]())
 
+    def set_unordered(self) raises DuckDBError:
+        """The rows have no order, so DuckDB may scan in parallel into results,
+        `INSERT` and `COPY` (see `max_threads`)."""
+        var err = null_error_info()
+        check(
+            lib().duckdb_v2_table_function_bind_set_order_preservation(
+                self._info, DUCKDB_V2_ORDER_PRESERVATION_NO_ORDER, Pointer(to=err)
+            ),
+            err,
+        )
+
     def set_cardinality(self, rows: Int, exact: Bool = False) raises DuckDBError:
         """How many rows the scan will produce (a hint for the optimizer)."""
         var err = null_error_info()
@@ -167,6 +209,18 @@ struct _Bound[T: TableFunctionImpl](Movable):
     def __init__(out self, var impl: Self.T, var names: List[String]):
         self.impl = impl^
         self.names = names^
+
+
+struct _Local[S: Movable & Deinitable](Movable):
+    """What DuckDB keeps per scan thread: the user's state and the batch the
+    last scan reported (`OrderedBatches`)."""
+
+    var state: Self.S
+    var batch: Int
+
+    def __init__(out self, var state: Self.S):
+        self.state = state^
+        self.batch = 0
 
 
 struct _Shared(Movable):
@@ -187,6 +241,11 @@ struct ScanShared(ImplicitlyCopyable):
         var p = Pointer(to=self._ptr[].next).unsafe_origin_cast[MutUntrackedOrigin]()
         return Int(Atomic.fetch_add(p, Int64(1)))
 
+    def claimed(self) -> Int:
+        """How many work units have been claimed so far (safe from any thread)."""
+        var p = Pointer(to=self._ptr[].next).unsafe_origin_cast[MutUntrackedOrigin]()
+        return Int(Atomic.fetch_add(p, Int64(0)))
+
 
 struct TableOutput(Movable):
     """The batch a scan writes into. Columns are addressed by their declared index."""
@@ -196,25 +255,37 @@ struct TableOutput(Movable):
     var _position: List[Int]  # declared column -> tree node (0: not requested)
     var _vectors: List[duckdb_v2_vector_handle]
     var _nodes: List[Int]  # tree node of each vector
+    var _vector_of: List[Int]  # declared column -> output vector (-1: not requested)
+    var _batch: Pointer[Int, MutUntrackedOrigin]  # this thread's batch number
 
     def __init__(out self, info: duckdb_v2_table_function_exec_info_handle, names: List[String]) raises DuckDBError:
         var err = null_error_info()
         var chunk = null[duckdb_v2_data_chunk_handle]()
         check(lib().duckdb_v2_table_function_exec_get_output_chunk(info, Pointer(to=chunk), Pointer(to=err)), err)
+        var count: idx_t = 0
+        check(lib().duckdb_v2_table_function_exec_get_column_count(info, Pointer(to=count), Pointer(to=err)), err)
+        var declared = List[Int]()
+        for i in range(Int(count)):
+            var d: idx_t = 0
+            check(lib().duckdb_v2_table_function_exec_get_column_index(info, idx_t(i), Pointer(to=d), Pointer(to=err)), err)
+            declared.append(Int(d))
+        self = Self(chunk, names, declared)
+
+    def __init__(out self, chunk: duckdb_v2_data_chunk_handle, names: List[String], declared: List[Int]) raises DuckDBError:
+        """Over an output chunk whose vector i holds declared column `declared[i]`."""
+        var err = null_error_info()
         var cap: idx_t = 0
         check(lib().duckdb_v2_data_chunk_get_capacity(chunk, Pointer(to=cap), Pointer(to=err)), err)
         self._capacity = Int(cap)
-        var count: idx_t = 0
-        check(lib().duckdb_v2_table_function_exec_get_column_count(info, Pointer(to=count), Pointer(to=err)), err)
         self._tree = _WriteTree()
         self._tree.nodes.append(_WNode(null[duckdb_v2_vector_handle](), ColumnMeta(kind=TypeId.STRUCT)))
         self._tree.nodes[0].lenient = True
         self._position = List[Int]()
         self._vectors = List[duckdb_v2_vector_handle]()
         self._nodes = List[Int]()
-        for i in range(Int(count)):
-            var declared: idx_t = 0
-            check(lib().duckdb_v2_table_function_exec_get_column_index(info, idx_t(i), Pointer(to=declared), Pointer(to=err)), err)
+        self._vector_of = List[Int]()
+        self._batch = null[Pointer[Int, MutUntrackedOrigin]]()
+        for i in range(len(declared)):
             var vec = null[duckdb_v2_vector_handle]()
             check(lib().duckdb_v2_data_chunk_get_vector(chunk, idx_t(i), Pointer(to=vec), Pointer(to=err)), err)
             # Sized to the capacity so NULL writes pass the bounds check; the
@@ -224,14 +295,20 @@ struct TableOutput(Movable):
             self._vectors.append(vec)
             self._nodes.append(node)
             self._tree.nodes[0].children.append(node)
-            self._tree.nodes[0].lower_names.append(names[Int(declared)].lower())
-            while len(self._position) <= Int(declared):
+            self._tree.nodes[0].lower_names.append(names[declared[i]].lower())
+            while len(self._position) <= declared[i]:
                 self._position.append(0)
-            self._position[Int(declared)] = node
+                self._vector_of.append(-1)
+            self._position[declared[i]] = node
+            self._vector_of[declared[i]] = i
 
     def capacity(self) -> Int:
         """The most rows one batch can hold."""
         return self._capacity
+
+    def set_batch(mut self, index: Int):
+        """The position of this batch in the output order (see `OrderedBatches`)."""
+        self._batch[] = index
 
     def wants(self, col: Int) -> Bool:
         """Whether the query uses declared column `col` (else writes to it are skipped)."""
@@ -256,6 +333,15 @@ struct TableOutput(Movable):
         if not self.wants(col):
             return None
         return self._tree.data(self._position[col]).unsafe_bitcast[T]()
+
+    def reference(mut self, col: Int, source: duckdb_v2_vector_handle) raises DuckDBError:
+        """Make declared column `col` show `source`'s data without copying.
+        `source` must have the column's type and stay alive until the next
+        scan of this thread."""
+        if not self.wants(col):
+            return
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_reference(self._vectors[self._vector_of[col]], source, Pointer(to=err)), err)
 
     def write_row[T: AnyType](mut self, row: Int, value: T) raises DuckDBError:
         """Write struct `value` to the columns named like its fields (needs columns
@@ -283,6 +369,8 @@ struct TableFunction(Movable):
     var _init_local: duckdb_v2_table_function_init_local_callback_fn
     var _exec: duckdb_v2_table_function_exec_callback_fn
     var _pushdown: Optional[duckdb_v2_table_function_filter_pushdown_callback_fn]
+    var _progress: Optional[duckdb_v2_table_function_progress_callback_fn]
+    var _partition: Optional[duckdb_v2_table_function_partition_data_callback_fn]
 
     @staticmethod
     def from_impl[T: TableFunctionImpl](var name: String, var params: List[LogicalType]) -> TableFunction:
@@ -291,6 +379,12 @@ struct TableFunction(Movable):
         comptime if conforms_to(T, FilterPushdown):
             var callback: duckdb_v2_table_function_filter_pushdown_callback_fn = _pushdown_cb[T]
             f._pushdown = callback
+        comptime if conforms_to(T, ScanProgress):
+            var callback: duckdb_v2_table_function_progress_callback_fn = _progress_cb[T]
+            f._progress = callback
+        comptime if conforms_to(T, OrderedBatches):
+            var callback: duckdb_v2_table_function_partition_data_callback_fn = _partition_cb[T]
+            f._partition = callback
         return f^
 
     def __init__(
@@ -309,6 +403,8 @@ struct TableFunction(Movable):
         self._init_local = init_local
         self._exec = exec
         self._pushdown = None
+        self._progress = None
+        self._partition = None
 
 
     # ── Signature ─────────────────────────────────────────────────
@@ -366,6 +462,12 @@ struct TableFunction(Movable):
             check(lib().duckdb_v2_table_function_set_init_local_callback(function, self._init_local, Pointer(to=err)), err)
             check(lib().duckdb_v2_table_function_set_exec_callback(function, self._exec, Pointer(to=err)), err)
             check(lib().duckdb_v2_table_function_set_projection_pushdown(function, True, Pointer(to=err)), err)
+            if self._progress:
+                check(lib().duckdb_v2_table_function_set_progress_callback(function, self._progress.value(), Pointer(to=err)), err)
+            if self._partition:
+                check(
+                    lib().duckdb_v2_table_function_set_partition_data_callback(function, self._partition.value(), Pointer(to=err)), err
+                )
             if self._pushdown:
                 check(
                     lib().duckdb_v2_table_function_set_filter_pushdown_callback(function, self._pushdown.value(), Pointer(to=err)),
@@ -399,7 +501,7 @@ def _bind_cb[T: TableFunctionImpl](
 ) abi("C"):
     try:
         var columns = TableColumns(result)
-        var impl = T.bind(BindArgs(info), columns)
+        var impl = T.bind(BindArgs(info, context), columns)
         var data = _opaque(_Bound[T](impl^, columns._names.copy()))
         var e = null_error_info()
         var code = lib().duckdb_v2_function_bind_set_bind_data(info, Pointer(to=data), Pointer(to=e))
@@ -447,11 +549,47 @@ def _run_init_local[T: TableFunctionImpl](info: duckdb_v2_table_function_init_lo
     check(lib().duckdb_v2_table_function_init_local_get_bind_data(info, Pointer(to=bind), Pointer(to=e)), e)
     var shared = null[Pointer[NoneType, MutUntrackedOrigin]]()
     check(lib().duckdb_v2_table_function_init_local_get_global_state(info, Pointer(to=shared), Pointer(to=e)), e)
-    var state = _opaque(bind.unsafe_bitcast[_Bound[T]]()[].impl.init(ScanShared(shared.unsafe_bitcast[_Shared]())))
+    var state = _opaque(_Local[T.State](bind.unsafe_bitcast[_Bound[T]]()[].impl.init(ScanShared(shared.unsafe_bitcast[_Shared]()))))
     var code = lib().duckdb_v2_table_function_init_local_set_local_state(info, Pointer(to=state), Pointer(to=e))
     if code != DUCKDB_V2_ERROR_NONE:
         state.destroy(state.ptr)
         check(code, e)
+
+
+def _progress_cb[T: TableFunctionImpl](
+    info: duckdb_v2_table_function_progress_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        comptime P = downcast[T, ScanProgress]
+        var e = null_error_info()
+        var bind = null[Pointer[NoneType, MutUntrackedOrigin]]()
+        check(lib().duckdb_v2_table_function_progress_get_bind_data(info, Pointer(to=bind), Pointer(to=e)), e)
+        var shared = null[Pointer[NoneType, MutUntrackedOrigin]]()
+        check(lib().duckdb_v2_table_function_progress_get_global_state(info, Pointer(to=shared), Pointer(to=e)), e)
+        if Int(shared) == 0:
+            return  # no scan started yet
+        ref impl = bind.unsafe_bitcast[_Bound[T]]()[].impl
+        var p = Pointer(to=impl).unsafe_bitcast[P]()[].progress(ScanShared(shared.unsafe_bitcast[_Shared]()))
+        check(lib().duckdb_v2_table_function_progress_set_progress(info, p, Pointer(to=e)), e)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
+
+
+def _partition_cb[T: TableFunctionImpl](
+    info: duckdb_v2_table_function_partition_data_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        var e = null_error_info()
+        var local = null[Pointer[NoneType, MutUntrackedOrigin]]()
+        check(lib().duckdb_v2_table_function_partition_data_get_local_state(info, Pointer(to=local), Pointer(to=e)), e)
+        var batch = local.unsafe_bitcast[_Local[T.State]]()[].batch
+        check(lib().duckdb_v2_table_function_partition_data_set_batch_index(info, idx_t(batch), Pointer(to=e)), e)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
 
 
 def _resolve_filter_column(info: Pointer[NoneType, MutUntrackedOrigin], index: Int) raises -> Int:
@@ -512,8 +650,10 @@ def _run_exec[T: TableFunctionImpl](info: duckdb_v2_table_function_exec_info_han
     var local = null[Pointer[NoneType, MutUntrackedOrigin]]()
     check(lib().duckdb_v2_table_function_exec_get_local_state(info, Pointer(to=local), Pointer(to=e)), e)
     ref bound = bind.unsafe_bitcast[_Bound[T]]()[]
+    ref l = local.unsafe_bitcast[_Local[T.State]]()[]
     var out = TableOutput(info, bound.names)
-    var rows = bound.impl.scan(local.unsafe_bitcast[T.State]()[], out)
+    out._batch = Pointer(to=l.batch).unsafe_origin_cast[MutUntrackedOrigin]()
+    var rows = bound.impl.scan(l.state, out)
     if rows < 0 or rows > out.capacity():
         raise DuckDBError(ErrorCode.API, String("scan returned ", rows, " rows; it must be between 0 and ", out.capacity()))
     out._finish(rows)

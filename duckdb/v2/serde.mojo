@@ -1152,6 +1152,11 @@ struct VectorWriter(Movable):
     def write_null(mut self, row: Int) raises DuckDBError:
         self._tree.set_null(1, row)
 
+    def write_value(mut self, row: Int, value: duckdb_v2_value_handle) raises DuckDBError:
+        """Write a DuckDB value (cast to the vector's type; NULL clears the row)."""
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_set_value(self._vec, idx_t(row), value, Pointer(to=err)), err)
+
     def data[T: TrivialRegisterPassable](mut self) raises DuckDBError -> Pointer[T, MutUntrackedOrigin]:
         """The vector's data as an array of `T`, for writing fixed-width values directly."""
         return self._tree.data(1).unsafe_bitcast[T]()

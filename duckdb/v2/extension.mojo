@@ -34,6 +34,8 @@ from duckdb.v2._runtime import check, lib
 from duckdb.v2.error import DuckDBError
 from duckdb.v2.functions import RegistrationTarget, Registrar
 from duckdb.v2._runtime import api_error
+from duckdb.v2.files import FileSystem, context_file_system
+from duckdb.v2.settings import Settings, context_settings
 
 
 struct Extension(Movable, Registrar):
@@ -66,10 +68,18 @@ struct Extension(Movable, Registrar):
         check(lib().duckdb_v2_extension_register_table_function(self._ext, function, Pointer(to=err)), err)
 
     def _target(self) -> RegistrationTarget:
-        return RegistrationTarget(null[duckdb_v2_connection_handle](), self._ext)
+        return RegistrationTarget(null[duckdb_v2_connection_handle](), self._ext, null[duckdb_v2_instance_handle]())
 
     def _run_sql(self, sql: String) raises DuckDBError:
         raise api_error("an extension cannot run SQL")
+
+    def settings(self) raises DuckDBError -> Settings[ImmUntrackedOrigin]:
+        """The settings of the load context (valid while the init function runs)."""
+        return context_settings(self._context)
+
+    def file_system(self) raises DuckDBError -> FileSystem[ImmUntrackedOrigin]:
+        """The file system of the load context (valid while the init function runs)."""
+        return context_file_system(self._context)
 
     @staticmethod
     def run[init: def(ext: Extension) raises thin -> None](

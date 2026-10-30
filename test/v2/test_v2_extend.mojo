@@ -82,6 +82,77 @@ def test_pragmas() raises:
     assert_equal(names[1], "apricots")
 
 
+def check_level(value: Value) raises -> Optional[Value]:
+    var v = value.get[Int64]()
+    if v < 0:
+        raise Error("my_level must not be negative")
+    if v > 10:
+        return Value(Int64(10))  # clamp
+    return None
+
+
+def level_times(mut args: ScalarArgs, mut out: VectorWriter) raises:
+    var level = args.settings().get[Int64]("my_level").value()
+    var x = args.column[Int64](0)
+    for row in range(args.size()):
+        out.write(row, x[row] * level)
+
+
+def test_option_validation_and_reading() raises:
+    var con = Database().connect()
+    con.register(CustomOption.of("my_level", Int64(3), "how verbose").validate[check_level]())
+    con.register(
+        ScalarFunction.from_chunk_function[level_times]("level_times", [LogicalType(TypeId.BIGINT)], LogicalType(TypeId.BIGINT))
+    )
+    assert_equal(con.execute("SELECT level_times(2)").get[Int64]()[0], 6)
+    _ = con.execute("SET my_level = 50")  # clamped to 10
+    assert_equal(con.settings().get[Int64]("my_level").value(), 10)
+    _ = con.execute("SET GLOBAL my_level = 70")  # clamped too
+    var other = con.database().connect()
+    assert_equal(other.settings().get[Int64]("my_level").value(), 10)
+    assert_equal(con.execute("SELECT level_times(2)").get[Int64]()[0], 20)
+    var message = String()
+    try:
+        _ = con.execute("SET my_level = -1")
+    except e:
+        message = e.message
+    assert_true("must not be negative" in message, message)
+    _ = con.execute("RESET my_level")
+    assert_equal(con.settings().get[Int64]("my_level").value(), 3)
+
+
+
+def test_settings() raises:
+    var con = Database().connect()
+    assert_true(con.settings().get[Int64]("threads").value() > 0)
+    con.settings().set("threads", Int64(2))
+    assert_equal(con.settings().get[Int64]("threads").value(), 2)
+    con.settings().set("default_order", String("desc"))
+    assert_equal(con.settings().get[String]("default_order").value(), "DESC")
+    assert_equal(con.execute("SELECT i FROM range(3) t(i) ORDER BY i").get[Int64]()[0], 2)
+
+
+def celsius_label(c: Float64) -> String:
+    return String(c, " C")
+
+
+def double_celsius(x: Float64) -> Float64:
+    return x * 2
+
+
+def test_custom_types() raises:
+    var con = Database().connect()
+    con.register(CustomType.of[Float64]("celsius"))
+    var celsius = LogicalType.parse("celsius", con.factory())
+    con.register(CastFunction.from_function[celsius_label](source=celsius.copy(), target=LogicalType(TypeId.VARCHAR)))
+    _ = con.execute("CREATE TABLE temps (t celsius)")
+    _ = con.execute("INSERT INTO temps VALUES (21.5), (30.0)")
+    assert_equal(String(con.execute("SELECT t FROM temps").columns()[0].type), "celsius")
+    # Stored as the base type, so Mojo reads it as Float64.
+    assert_equal(con.execute("SELECT t FROM temps ORDER BY t").get[Float64]()[0], 21.5)
+    assert_equal(con.execute("SELECT t::VARCHAR FROM temps ORDER BY t").get[String]()[0], "21.5 C")
+
+
 def test_custom_options() raises:
     var con = Database().connect()
     con.register(CustomOption.of("my_level", Int64(3), "how verbose"))

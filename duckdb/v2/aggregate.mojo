@@ -454,17 +454,17 @@ def _agg_bind_cb[S: AggregateState](
     err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
 ) abi("C"):
     try:
-        _run_agg_bind[S](info)
+        _run_agg_bind[S](info, context)
     except e:
         _report(err, String(e), DUCKDB_V2_ERROR_QUERY_BINDER)
 
 
-def _run_agg_bind[S: AggregateState](info: duckdb_v2_function_bind_info_handle) raises:
+def _run_agg_bind[S: AggregateState](info: duckdb_v2_function_bind_info_handle, context: duckdb_v2_context_handle) raises:
     comptime B = downcast[S, AggregateBind].Bind
     var e = null_error_info()
     var user = null[Pointer[NoneType, MutUntrackedOrigin]]()
     check(lib().duckdb_v2_function_bind_get_user_data(info, Pointer(to=user), Pointer(to=e)), e)
-    var bound = B.bind(BindArgs(info))
+    var bound = B.bind(BindArgs(info, context))
     var ptr = unsafe_alloc[_AggBind[B]](1)
     ptr.unsafe_write(_AggBind[B](user.unsafe_bitcast[String]()[].copy(), bound^))
     var data = duckdb_v2_opaque(ptr.unsafe_bitcast[NoneType](), _destroy_agg_bind[B], _equal_agg_bind[B])

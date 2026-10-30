@@ -126,6 +126,65 @@ struct ParallelRange(TableFunctionImpl):
 
 
 @fieldwise_init
+struct OrderedRange(OrderedBatches, ScanProgress, TableFunctionImpl):
+    """Like ParallelRange, but numbers its batches, so rows keep their order."""
+
+    comptime State = ParallelState
+    var n: Int
+
+    @staticmethod
+    def bind(args: BindArgs, mut columns: TableColumns) raises -> Self:
+        columns.add[Int64]("i")
+        return Self(Int(args.constant[Int64](0).value()))
+
+    def max_threads(self) -> Int:
+        return 4
+
+    def progress(self, shared: ScanShared) -> Float64:
+        return min(1.0, Float64(shared.claimed() * BLOCK) / Float64(max(self.n, 1)))
+
+    def init(self, shared: ScanShared) raises -> ParallelState:
+        return ParallelState(shared, -1, 0)
+
+    def scan(self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
+        # One block per batch, so the block number orders the batches.
+        if state.block < 0 or state.pos >= min((state.block + 1) * BLOCK, self.n):
+            state.block = state.shared.claim()
+            state.pos = state.block * BLOCK
+            if state.pos >= self.n:
+                return 0
+        out.set_batch(state.block)
+        var rows = 0
+        var end = min((state.block + 1) * BLOCK, self.n)
+        while rows < out.capacity() and state.pos < end:
+            out.write(rows, 0, Int64(state.pos))
+            state.pos += 1
+            rows += 1
+        return rows
+
+
+@fieldwise_init
+struct UnorderedRange(TableFunctionImpl):
+    comptime State = ParallelState
+    var n: Int
+
+    @staticmethod
+    def bind(args: BindArgs, mut columns: TableColumns) raises -> Self:
+        columns.add[Int64]("i")
+        columns.set_unordered()
+        return Self(Int(args.constant[Int64](0).value()))
+
+    def max_threads(self) -> Int:
+        return 4
+
+    def init(self, shared: ScanShared) raises -> ParallelState:
+        return ParallelState(shared, -1, 0)
+
+    def scan(self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
+        return ParallelRange(self.n).scan(state, out)
+
+
+@fieldwise_init
 struct Failing(TableFunctionImpl):
     comptime State = Counter
     var x: Int64
@@ -298,6 +357,47 @@ def test_parallel_scan() raises:
     assert_equal(r.get[Int64](col=0, row=0), 1000000)
     assert_equal(r.get[Int128](col=1, row=0), 499999500000)
     assert_equal(r.get[Int64](col=2, row=0), 1000000)
+
+
+def test_order_and_progress() raises:
+    var con = Database().connect()
+    _ = con.execute("SET threads = 4")
+    con.register(TableFunction.from_impl[OrderedRange]("ordered_range", param_types[Int64]()))
+    con.register(TableFunction.from_impl[UnorderedRange]("unordered_range", param_types[Int64]()))
+    # Numbered batches come back in order, even from 4 threads.
+    var rows = con.execute("SELECT i FROM ordered_range(200000)").get[Int64]()
+    assert_equal(len(rows), 200000)
+    var in_order = True
+    for k in range(len(rows)):
+        if rows[k] != Int64(k):
+            in_order = False
+    assert_true(in_order)
+    _ = con.execute("CREATE TABLE copy AS SELECT * FROM ordered_range(50000)")
+    assert_equal(con.execute("SELECT count(*) FROM copy").get[Int64]()[0], 50000)
+    var u = con.execute("SELECT count(*), sum(i) FROM unordered_range(200000)").fetchall()
+    assert_equal(u.get[Int64](col=0, row=0), 200000)
+    assert_equal(u.get[Int128](col=1, row=0), 19999900000)
+
+
+def test_streaming_steps() raises:
+    var con = Database().connect()
+    var r = con.execute("SELECT * FROM range(10000) t(i)")
+    var rows = 0
+    var steps = 0
+    while True:
+        var st = r.step()
+        steps += 1
+        if st.status == StepStatus.CHUNK:
+            rows += len(st.chunk.value())
+        elif st.status == StepStatus.WAITING:
+            r.wait()
+        else:
+            assert_true(st.status == StepStatus.FINISHED)
+            break
+    assert_equal(rows, 10000)
+    assert_true(steps > 1)
+    # A finished result keeps reporting FINISHED.
+    assert_true(r.step().status == StepStatus.FINISHED)
 
 
 def main() raises:

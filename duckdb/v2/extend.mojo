@@ -29,6 +29,7 @@ from duckdb.v2.serde import VectorWriter, logical_type_of
 from duckdb.v2.signature import ParamKind, Signature
 from duckdb.v2.types import LogicalType, TypeId
 from duckdb.v2.value import Value
+from duckdb.v2.settings import SettingScope
 
 
 # ===--------------------------------------------------------------------===#
@@ -465,7 +466,7 @@ def _pragma_query_cb[f: def(args: BindArgs) raises thin -> String](
     err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
 ) abi("C"):
     try:
-        var sql = StrArg(f(BindArgs(info)))
+        var sql = StrArg(f(BindArgs(info, context)))
         var e = null_error_info()
         check(lib().duckdb_v2_pragma_function_query_set_query(result, sql.ptr(), Pointer(to=e)), e)
     except e:
@@ -478,7 +479,7 @@ def _pragma_exec_cb[f: def(args: BindArgs) raises thin -> None](
     err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
 ) abi("C"):
     try:
-        f(BindArgs(info))
+        f(BindArgs(info, context))
     except e:
         _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
 
@@ -486,16 +487,6 @@ def _pragma_exec_cb[f: def(args: BindArgs) raises thin -> None](
 # ===--------------------------------------------------------------------===#
 # Custom options
 # ===--------------------------------------------------------------------===#
-
-
-@fieldwise_init
-struct SettingScope(Equatable, ImplicitlyCopyable):
-    var value: DUCKDB_V2_SETTING_SCOPE
-
-    comptime GLOBAL = Self(DUCKDB_V2_SETTING_SCOPE_GLOBAL)
-    """One value for the whole database (`SET GLOBAL`)."""
-    comptime SESSION = Self(DUCKDB_V2_SETTING_SCOPE_SESSION)
-    """One value per connection (`SET SESSION`, the default)."""
 
 
 struct CustomOption(Movable):
@@ -507,6 +498,8 @@ struct CustomOption(Movable):
     var default: Value
     var description: String
     var scope: Optional[SettingScope]
+    var session: Bool
+    var _update: Optional[duckdb_v2_custom_option_update_callback_fn]
 
     @staticmethod
     def of[T: Movable & Deinitable](name: String, default: T, description: String = "") raises DuckDBError -> CustomOption:
@@ -519,10 +512,25 @@ struct CustomOption(Movable):
         self.default = default^
         self.description = description
         self.scope = None
+        self.session = True
+        self._update = None
 
     def global_by_default(var self) -> Self:
         """`SET name = value` changes the value for every connection (not only this session)."""
         self.scope = SettingScope.GLOBAL
+        return self^
+
+    def global_only(var self) -> Self:
+        """The option has one value for the whole database; `SET SESSION` fails."""
+        self.session = False
+        return self^
+
+    def validate[f: def(value: Value) raises thin -> Optional[Value]](var self) -> Self:
+        """Check every new value: `f` raises to reject it (the `SET` fails
+        with the message), returns a replacement to normalize it, or `None`
+        to keep it. Not called for `RESET`."""
+        var cb: duckdb_v2_custom_option_update_callback_fn = _option_update_cb[f]
+        self._update = cb
         return self^
 
     def _create(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_custom_option_handle:
@@ -537,9 +545,82 @@ struct CustomOption(Movable):
             if self.description:
                 var d = StrArg(self.description)
                 check(lib().duckdb_v2_custom_option_set_description(option, d.ptr(), Pointer(to=err)), err)
+            if not self.session:
+                check(
+                    lib().duckdb_v2_custom_option_set_supports_scope(option, DUCKDB_V2_SETTING_SCOPE_SESSION, False, Pointer(to=err)),
+                    err,
+                )
             if self.scope:
                 check(lib().duckdb_v2_custom_option_set_default_scope(option, self.scope.value().value, Pointer(to=err)), err)
+            if self._update:
+                check(lib().duckdb_v2_custom_option_set_update_callback(option, self._update.value(), Pointer(to=err)), err)
         except e:
             _ = lib().duckdb_v2_custom_option_destroy(Pointer(to=option))
             raise e^
         return option
+
+
+def _option_update_cb[f: def(value: Value) raises thin -> Optional[Value]](
+    info: duckdb_v2_custom_option_update_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        _run_option_update[f](info)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_INPUT_INVALID)
+
+
+def _run_option_update[f: def(value: Value) raises thin -> Optional[Value]](info: duckdb_v2_custom_option_update_info_handle) raises:
+    var e = null_error_info()
+    var reset = False
+    check(lib().duckdb_v2_custom_option_update_is_reset(info, Pointer(to=reset), Pointer(to=e)), e)
+    if reset:
+        return
+    var v = null[duckdb_v2_value_handle]()
+    check(lib().duckdb_v2_custom_option_update_get_value(info, Pointer(to=v), Pointer(to=e)), e)
+    var replacement = f(Value(_owned=v))
+    if replacement:
+        var code = lib().duckdb_v2_custom_option_update_set_value(info, replacement.value().handle(), Pointer(to=e))
+        _ = replacement^  # keep the value alive until DuckDB has copied it
+        check(code, e)
+
+
+# ===--------------------------------------------------------------------===#
+# Custom types
+# ===--------------------------------------------------------------------===#
+
+
+struct CustomType(Movable):
+    """A named type stored as a base type (`CREATE TYPE name AS base`).
+
+    Values keep the base type's storage, so Mojo reads and writes them as the
+    base type, but DuckDB treats the type as distinct: give it its own
+    functions and casts (`CastFunction` with `source=`/`target=` set to
+    `LogicalType.parse("name", con.factory())`).
+    """
+
+    var name: String
+    var base: LogicalType
+
+    def __init__(out self, name: String, var base: LogicalType):
+        self.name = name
+        self.base = base^
+
+    @staticmethod
+    def of[T: Movable & Deinitable](name: String) raises DuckDBError -> CustomType:
+        """A custom type stored as the DuckDB type of `T`."""
+        return CustomType(name, logical_type_of[T]())
+
+    def _create(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_custom_type_handle:
+        var err = null_error_info()
+        var t = null[duckdb_v2_custom_type_handle]()
+        check(lib().duckdb_v2_custom_type_create(factory, Pointer(to=t), Pointer(to=err)), err)
+        try:
+            var n = StrArg(self.name)
+            check(lib().duckdb_v2_custom_type_set_name(t, n.ptr(), Pointer(to=err)), err)
+            check(lib().duckdb_v2_custom_type_set_base_type(t, self.base.handle(), Pointer(to=err)), err)
+        except e:
+            _ = lib().duckdb_v2_custom_type_destroy(Pointer(to=t))
+            raise e^
+        return t
