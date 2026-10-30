@@ -10,7 +10,7 @@ from duckdb.v2.relation import Relation, _reader_call
 from duckdb._sql_util import _quote_qualified
 from duckdb.v2.statement import Description, Params, PreparedStatement, _Arguments, _named, _positional
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.functions import Registrar
+from duckdb.v2.functions import RegistrationTarget, Registrar
 
 
 struct _Instance(Movable):
@@ -165,6 +165,12 @@ struct Connection(Movable, Registrar):
     def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
         var err = null_error_info()
         check(lib().duckdb_v2_connection_register_table_function(self._handle, function, Pointer(to=err)), err)
+
+    def _target(self) -> RegistrationTarget:
+        return RegistrationTarget(self._handle, null[duckdb_v2_extension_handle]())
+
+    def _run_sql(self, sql: String) raises DuckDBError:
+        _ = self.execute(sql)
 
     def interrupt(self) raises DuckDBError:
         """Interrupt the statement running on this connection (safe from another thread)."""

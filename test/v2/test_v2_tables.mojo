@@ -2,6 +2,7 @@
 columns, rows as structs, errors."""
 
 from std.testing import assert_equal, assert_false, assert_true
+from std.os import abort
 from std.testing.suite import TestSuite
 from duckdb.v2 import *
 
@@ -139,6 +140,110 @@ struct Failing(TableFunctionImpl):
 
     def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
         raise Error("scan failed on purpose")
+
+
+from std.ffi import _Global
+
+
+@fieldwise_init
+struct Produced(Defaultable, Movable):
+    var rows: Int
+
+    def __init__(out self):
+        self.rows = 0
+
+
+comptime PRODUCED = _Global["test_v2_tables_produced", _new_produced]
+
+
+def _new_produced() -> Produced:
+    return Produced()
+
+
+def produced() -> ref[MutUntrackedOrigin] Int:
+    try:
+        return PRODUCED.get_or_create_ptr()[].rows
+    except:
+        abort()
+
+
+@fieldwise_init
+struct Filtered(FilterPushdown, TableFunctionImpl):
+    """0..n, applying `i < x`, `i <= x`, `i > x`, `i >= x` itself."""
+
+    comptime State = Counter
+    var low: Int64
+    var high: Int64  # exclusive
+
+    @staticmethod
+    def bind(args: BindArgs, mut columns: TableColumns) raises -> Self:
+        columns.add[Int64]("i")
+        columns.add[String]("label")
+        return Self(0, args.constant[Int64](0).value())
+
+    def pushdown(mut self, filter: Expression) raises -> Bool:
+        var b = filter.between()
+        if b and b.value().column == 0:
+            # Bounds may be exclusive: narrow (inclusively), leave the exact filter to DuckDB.
+            self.low = max(self.low, b.value().low.get[Int64]())
+            self.high = min(self.high, b.value().high.get[Int64]() + 1)
+            return False
+        var c = filter.comparison()
+        if not c or c.value().column != 0:
+            return False
+        ref cmp = c.value()
+        var v = cmp.value.get_optional[Int64]()
+        if not v:
+            return False
+        var x = v.value()
+        if cmp.op == ExprKind.LESS:
+            self.high = min(self.high, x)
+        elif cmp.op == ExprKind.LESS_EQUAL:
+            self.high = min(self.high, x + 1)
+        elif cmp.op == ExprKind.GREATER:
+            self.low = max(self.low, x + 1)
+        elif cmp.op == ExprKind.GREATER_EQUAL:
+            self.low = max(self.low, x)
+        else:
+            return False
+        return True
+
+    def init(self, shared: ScanShared) raises -> Counter:
+        return Counter(self.low)
+
+    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+        var rows = 0
+        while rows < out.capacity() and state.next < self.high:
+            out.write(rows, 0, state.next)
+            out.write(rows, 1, String("row ", state.next))
+            state.next += 1
+            rows += 1
+        produced() += rows
+        return rows
+
+
+def test_filter_pushdown() raises:
+    var con = Database().connect()
+    _ = con.execute("SET threads = 1")
+    con.register(TableFunction.from_impl[Filtered]("filtered", param_types[Int64]()))
+    produced() = 0
+    var r = con.execute("SELECT count(*), min(i), max(i) FROM filtered(100000) WHERE i >= 500 AND i < 600").fetchall()
+    assert_equal(r.get[Int64](col=0, row=0), 100)
+    assert_equal(r.get[Int64](col=1, row=0), 500)
+    assert_equal(r.get[Int64](col=2, row=0), 599)
+    # A range arrives as BETWEEN, which only narrows: 500..600 inclusive.
+    assert_equal(produced(), 101)
+    # Single comparisons are taken over: exactly the matching rows are scanned.
+    produced() = 0
+    assert_equal(con.execute("SELECT count(*) FROM filtered(100000) WHERE i < 50").get[Int64]()[0], 50)
+    assert_equal(produced(), 50)
+    # The constant on the left, and a filter it does not take (left to DuckDB).
+    produced() = 0
+    var l = con.execute("SELECT count(*) FROM filtered(1000) WHERE 10 > i AND label <> 'row 3'").get[Int64]()
+    assert_equal(l[0], 9)
+    assert_equal(produced(), 10)
+    # No filter: everything.
+    assert_equal(con.execute("SELECT count(*) FROM filtered(5000)").get[Int64]()[0], 5000)
 
 
 def test_basic_and_projection() raises:

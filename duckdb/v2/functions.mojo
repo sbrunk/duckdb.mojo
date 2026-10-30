@@ -39,20 +39,24 @@ def scale(s: Scale, x: Float64, factor: Float64) -> Float64:
 """
 
 from std.builtin.rebind import downcast, rebind_var
+from std.os import abort
 from std.reflection import reflect
 from std.memory.alloc import unsafe_alloc
 from std.sys import simd_width_of
 from emberserde.field_meta import __is_optional
 from duckdb._libduckdb_v2 import *
-from duckdb.api_v2 import StrArg, null, null_error_info
+from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
 from duckdb.v2._runtime import check, lib
 from duckdb.v2.aggregate import AggregateFunction
 from duckdb.v2.table import TableFunction
+from duckdb.v2.extend import CastFunction, CustomOption, MacroFunction, PragmaFunction, ReplacementScan
 from duckdb.v2.chunk import ColumnReader, column_reader
 from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.mapping import is_mapped, mapped_read
 from duckdb.v2.serde import VectorWriter, _ReadTree, _RNode, from_value, logical_type_of, read_tree_of, read_value
+from duckdb.v2.signature import ParamKind, Signature
 from duckdb.v2.types import LogicalType
+from duckdb.v2.value import Value
 
 
 # ===--------------------------------------------------------------------===#
@@ -89,10 +93,91 @@ trait Registrar:
         """Register a table function."""
         function._register(self)
 
+    def _target(self) -> RegistrationTarget:
+        ...
+
+    def _run_sql(self, sql: String) raises DuckDBError:
+        ...
+
+    def register(self, cast: CastFunction) raises DuckDBError:
+        """Register a cast. It is not transactional and cannot be removed."""
+        var t = self._target()
+        var f = cast._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_cast_function(t.connection, f, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_cast_function(t.extension, f, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_cast_function_destroy(Pointer(to=f))
+        check(code, err)
+
+    def register(self, scan: ReplacementScan) raises DuckDBError:
+        """Register a replacement scan. It is not transactional and cannot be removed."""
+        var t = self._target()
+        var s = scan._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_replacement_scan(t.connection, s, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_replacement_scan(t.extension, s, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_replacement_scan_destroy(Pointer(to=s))
+        check(code, err)
+
+    def register(self, macro: MacroFunction) raises DuckDBError:
+        """Register a macro (on a connection: as a temporary macro of the connection)."""
+        var t = self._target()
+        if t.is_connection():
+            self._run_sql(macro._create_sql())
+            return
+        var m = macro._create(self.factory())
+        var err = null_error_info()
+        var code = lib().duckdb_v2_extension_register_macro_function(t.extension, m, Pointer(to=err))
+        _ = lib().duckdb_v2_macro_function_destroy(Pointer(to=m))
+        check(code, err)
+
+    def register(self, pragma: PragmaFunction) raises DuckDBError:
+        var t = self._target()
+        var p = pragma._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_pragma_function(t.connection, p, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_pragma_function(t.extension, p, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_pragma_function_destroy(Pointer(to=p))
+        check(code, err)
+
+    def register(self, option: CustomOption) raises DuckDBError:
+        """Register a custom option. It is not transactional and cannot be removed."""
+        var t = self._target()
+        var o = option._create(self.factory())
+        var err = null_error_info()
+        var code = (
+            lib().duckdb_v2_connection_register_custom_option(t.connection, o, Pointer(to=err))
+            if t.is_connection()
+            else lib().duckdb_v2_extension_register_custom_option(t.extension, o, Pointer(to=err))
+        )
+        _ = lib().duckdb_v2_custom_option_destroy(Pointer(to=o))
+        check(code, err)
+
+
+@fieldwise_init
+struct RegistrationTarget(ImplicitlyCopyable):
+    """Where a `Registrar` registers: a connection or an extension (the other handle is NULL)."""
+
+    var connection: duckdb_v2_connection_handle
+    var extension: duckdb_v2_extension_handle
+
+    def is_connection(self) -> Bool:
+        return Int(self.connection) != 0
+
 
 comptime _ExecFn = duckdb_v2_scalar_function_exec_callback_fn
 comptime _BindFn = duckdb_v2_scalar_function_bind_callback_fn
 comptime _InitFn = duckdb_v2_scalar_function_init_callback_fn
+comptime _ResolveFn = duckdb_v2_scalar_function_resolve_types_callback_fn
 
 
 struct ScalarFunction(Movable):
@@ -104,9 +189,10 @@ struct ScalarFunction(Movable):
     """
 
     var name: String
-    var params: List[LogicalType]
+    var signature: Signature
     var result: LogicalType
     var _exec: _ExecFn
+    var _resolve: Optional[_ResolveFn]
     var _bind: Optional[_BindFn]
     var _init: Optional[_InitFn]
     var volatile: Bool
@@ -127,12 +213,15 @@ struct ScalarFunction(Movable):
         volatile: Bool = False,
         special_nulls: Bool = False,
         init: Optional[_InitFn] = None,
+        *,
+        fixed: Bool = False,
     ):
         """A function from its parts, for hand-written exec callbacks."""
         self.name = name^
-        self.params = params^
+        self.signature = Signature(params, fixed=fixed)
         self.result = result^
         self._exec = exec
+        self._resolve = None
         self._bind = bind
         self._init = init
         self.volatile = volatile
@@ -147,19 +236,7 @@ struct ScalarFunction(Movable):
             check(lib().duckdb_v2_scalar_function_set_name(function, name.ptr(), Pointer(to=err)), err)
             var signature = null[duckdb_v2_function_signature_handle]()
             check(lib().duckdb_v2_scalar_function_get_signature(function, Pointer(to=signature), Pointer(to=err)), err)
-            for i in range(len(self.params)):
-                var param = StrArg(String("arg", i + 1))
-                check(
-                    lib().duckdb_v2_function_signature_add_parameter(
-                        signature,
-                        param.ptr(),
-                        self.params[i].handle(),
-                        null[duckdb_v2_value_handle](),
-                        DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY,
-                        Pointer(to=err),
-                    ),
-                    err,
-                )
+            self.signature._add_to(signature)
             check(lib().duckdb_v2_function_signature_set_return_type(signature, self.result.handle(), Pointer(to=err)), err)
             if self.volatile:
                 check(
@@ -188,9 +265,60 @@ struct ScalarFunction(Movable):
                 check(lib().duckdb_v2_scalar_function_set_bind_callback(function, self._bind.value(), Pointer(to=err)), err)
             if self._init:
                 check(lib().duckdb_v2_scalar_function_set_init_callback(function, self._init.value(), Pointer(to=err)), err)
+            if self._resolve:
+                check(
+                    lib().duckdb_v2_scalar_function_set_resolve_types_callback(function, self._resolve.value(), Pointer(to=err)), err
+                )
             registrar._register_scalar_handle(function)
         finally:
             _ = lib().duckdb_v2_scalar_function_destroy(Pointer(to=function))
+
+
+    # ── Signature ─────────────────────────────────────────────────
+
+    def named(var self, *names: String) raises DuckDBError -> Self:
+        """Name the parameters in order, so callers can pass them by name."""
+        var list = List[String]()
+        for n in names:
+            list.append(n)
+        self.signature.name(list^)
+        return self^
+
+    def default[T: Movable & Deinitable](var self, name: StringSlice, value: T) raises DuckDBError -> Self:
+        """Make parameter `name` optional, with `value` when the call omits it."""
+        self.signature.set_default(name, Value(value))
+        return self^
+
+    def named_only(var self, *names: String) raises DuckDBError -> Self:
+        """Parameters that can only be passed by name (`f(1, scale := 2)`)."""
+        for n in names:
+            self.signature.set_named_only(n)
+        return self^
+
+    def varargs(var self, name: String, type: LogicalType) raises DuckDBError -> Self:
+        """`*args`: any number of further positional arguments of `type`
+        (`TypeId.ANY` leaves their types as they are)."""
+        self.signature.add(name, type.copy(), ParamKind.VARARGS)
+        return self^
+
+    def kwargs(var self, name: String, type: LogicalType) raises DuckDBError -> Self:
+        """`**kwargs`: named arguments that match no parameter, of `type`."""
+        self.signature.add(name, type.copy(), ParamKind.KWARGS)
+        return self^
+
+    def result_type_of(var self, arg: Int) -> Self:
+        """The result has the type of argument `arg` (for `TypeId.ANY` parameters)."""
+        self._resolve = _resolve_like_arg_callback(arg)
+        return self^
+
+    def resolve_type[f: def(args: BindArgs) raises thin -> LogicalType](var self) -> Self:
+        """The result type is computed per call from the argument types (for
+        `TypeId.ANY` parameters or results). `f` sees the types of the
+        arguments as the call passes them, before DuckDB casts them to the
+        declared parameter types."""
+        var callback: _ResolveFn = _resolve_cb[f]
+        self._resolve = callback
+        return self^
 
     @staticmethod
     def from_chunk_function[
@@ -241,7 +369,7 @@ struct ScalarFunction(Movable):
         inputs one row at a time. NULL in gives NULL out.
         """
         return ScalarFunction(
-            String(name), [logical_type_of[Scalar[In]]()], logical_type_of[Scalar[Out]](), _simd1[In, Out, func], None, volatile
+            String(name), [logical_type_of[Scalar[In]]()], logical_type_of[Scalar[Out]](), _simd1[In, Out, func], None, volatile, fixed=True
         )
 
     @staticmethod
@@ -260,6 +388,7 @@ struct ScalarFunction(Movable):
             _simd2[In1, In2, Out, func],
             None,
             volatile,
+            fixed=True,
         )
 
     @staticmethod
@@ -271,7 +400,7 @@ struct ScalarFunction(Movable):
         """A scalar function from a standard-library style SIMD function such
         as `math.sqrt`, for one `D` argument and a `D` result."""
         return ScalarFunction(
-            String(name), [logical_type_of[Scalar[D]]()], logical_type_of[Scalar[D]](), _simd1g[D, func], None, volatile
+            String(name), [logical_type_of[Scalar[D]]()], logical_type_of[Scalar[D]](), _simd1g[D, func], None, volatile, fixed=True
         )
 
     @staticmethod
@@ -289,6 +418,7 @@ struct ScalarFunction(Movable):
             _simd2g[D, func],
             None,
             volatile,
+            fixed=True,
         )
 
     # BEGIN GENERATED from_function (scripts/generate_scalar_functions.py)
@@ -308,7 +438,7 @@ struct ScalarFunction(Movable):
         else:
             _param[A1](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec1[A1, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec1[A1, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -327,7 +457,7 @@ struct ScalarFunction(Movable):
             _param[A1](params, special_nulls)
         _param[A2](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec2[A1, A2, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec2[A1, A2, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -347,7 +477,7 @@ struct ScalarFunction(Movable):
         _param[A2](params, special_nulls)
         _param[A3](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec3[A1, A2, A3, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec3[A1, A2, A3, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -368,7 +498,7 @@ struct ScalarFunction(Movable):
         _param[A3](params, special_nulls)
         _param[A4](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec4[A1, A2, A3, A4, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec4[A1, A2, A3, A4, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -390,7 +520,7 @@ struct ScalarFunction(Movable):
         _param[A4](params, special_nulls)
         _param[A5](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec5[A1, A2, A3, A4, A5, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec5[A1, A2, A3, A4, A5, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -413,7 +543,7 @@ struct ScalarFunction(Movable):
         _param[A5](params, special_nulls)
         _param[A6](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec6[A1, A2, A3, A4, A5, A6, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec6[A1, A2, A3, A4, A5, A6, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -437,7 +567,7 @@ struct ScalarFunction(Movable):
         _param[A6](params, special_nulls)
         _param[A7](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec7[A1, A2, A3, A4, A5, A6, A7, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec7[A1, A2, A3, A4, A5, A6, A7, R, f], bind, volatile, special_nulls, fixed=True
         )
 
     @staticmethod
@@ -462,7 +592,7 @@ struct ScalarFunction(Movable):
         _param[A7](params, special_nulls)
         _param[A8](params, special_nulls)
         return ScalarFunction(
-            String(name), params^, logical_type_of[R](), _exec8[A1, A2, A3, A4, A5, A6, A7, A8, R, f], bind, volatile, special_nulls
+            String(name), params^, logical_type_of[R](), _exec8[A1, A2, A3, A4, A5, A6, A7, A8, R, f], bind, volatile, special_nulls, fixed=True
         )
     # END GENERATED from_function
 
@@ -520,6 +650,32 @@ struct BindArgs:
             _ = lib().duckdb_v2_error_info_destroy(Pointer(to=err))
             return None
         return v
+
+    def index(self, name: StringSlice) raises DuckDBError -> Optional[Int]:
+        """The index of the argument named `name` (case-insensitive; a named
+        parameter is always found, with its default when omitted)."""
+        var n = StrArg(name)
+        var idx: idx_t = 0
+        var found = False
+        var err = null_error_info()
+        check(lib().duckdb_v2_function_bind_get_arg_index(self._info, n.ptr(), Pointer(to=idx), Pointer(to=found), Pointer(to=err)), err)
+        if not found:
+            return None
+        return Int(idx)
+
+    def name(self, i: Int) raises DuckDBError -> String:
+        """The parameter name of argument `i` (empty for `*args` values)."""
+        var n = duckdb_v2_identifier_t(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
+        var err = null_error_info()
+        check(lib().duckdb_v2_function_bind_get_arg_name(self._info, idx_t(i), Pointer(to=n), Pointer(to=err)), err)
+        return str_to_string(n)
+
+    def constant[T: Movable & Deinitable](self, name: StringSlice) raises DuckDBError -> Optional[T]:
+        """The value of the constant argument named `name`, `None` for NULL or when not passed."""
+        var i = self.index(name)
+        if not i:
+            return None
+        return self.constant[T](i.value())
 
     def is_constant(self, i: Int) -> Bool:
         """Whether argument `i` is a constant (folds to a value at planning time)."""
@@ -616,6 +772,35 @@ def _init_callback[T: LocalState](
             check(code, e)
     except e:
         _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
+
+
+def _resolve_cb[f: def(args: BindArgs) raises thin -> LogicalType](
+    info: duckdb_v2_function_bind_info_handle,
+    result: duckdb_v2_scalar_function_resolve_types_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        var t = f(BindArgs(info))
+        var e = null_error_info()
+        var code = lib().duckdb_v2_scalar_function_resolve_types_set_return_type(result, t.handle(), Pointer(to=e))
+        _ = t^  # keep the type alive until DuckDB has copied it
+        check(code, e)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_BINDER)
+
+
+def _type_of_arg[i: Int](args: BindArgs) raises -> LogicalType:
+    return args.type(i)
+
+
+def _resolve_like_arg_callback(arg: Int) -> _ResolveFn:
+    # One callback per argument index: the callback gets no user data here.
+    comptime for i in range(16):
+        if arg == i:
+            var callback: _ResolveFn = _resolve_cb[_type_of_arg[i]]
+            return callback
+    abort("result_type_of supports arguments 0 to 15")
 
 
 def bind_callback[T: BindData]() -> _BindFn:
@@ -758,7 +943,7 @@ struct _Call(Movable):
         return p.unsafe_bitcast[T]()
 
 
-struct ScalarArgs(Movable):
+struct ScalarArgs(Movable, Sized):
     """The arguments of one chunk-level call: `size()` rows, one column per argument."""
 
     var _info: duckdb_v2_scalar_function_exec_info_handle
@@ -794,6 +979,13 @@ struct ScalarArgs(Movable):
     def __len__(self) -> Int:
         """The number of arguments."""
         return len(self._vectors)
+
+    def type(self, i: Int) raises DuckDBError -> LogicalType:
+        """The type of argument `i` (useful for `TypeId.ANY` parameters)."""
+        var t = null[duckdb_v2_logical_type_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_get_logical_type(self._vectors[i], Pointer(to=t), Pointer(to=err)), err)
+        return LogicalType(_owned=t)
 
     def column[T: Movable & Deinitable](ref self, i: Int) raises DuckDBError -> ColumnReader[T, origin_of(self)]:
         """A reader over argument `i`. It may be a constant or dictionary

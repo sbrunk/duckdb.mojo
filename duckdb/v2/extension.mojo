@@ -32,7 +32,8 @@ from duckdb.api_v2 import null, null_error_info
 from duckdb.extension_v2 import ExtensionV2
 from duckdb.v2._runtime import check, lib
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.functions import Registrar
+from duckdb.v2.functions import RegistrationTarget, Registrar
+from duckdb.v2._runtime import api_error
 
 
 struct Extension(Movable, Registrar):
@@ -63,6 +64,12 @@ struct Extension(Movable, Registrar):
     def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
         var err = null_error_info()
         check(lib().duckdb_v2_extension_register_table_function(self._ext, function, Pointer(to=err)), err)
+
+    def _target(self) -> RegistrationTarget:
+        return RegistrationTarget(null[duckdb_v2_connection_handle](), self._ext)
+
+    def _run_sql(self, sql: String) raises DuckDBError:
+        raise api_error("an extension cannot run SQL")
 
     @staticmethod
     def run[init: def(ext: Extension) raises thin -> None](

@@ -444,6 +444,21 @@ def test_v2_api_extension_aggregates_and_tables() raises:
     assert_equal(t.get[Int64](col=2, row=0), 5000)
 
 
+def test_v2_api_extension_signatures_and_extras() raises:
+    var conn = _connect_v2_api()
+    var r = conn.execute(
+        "SELECT v2api_scale(3.0), v2api_scale(factor := 4.0, x := 3.0), v2api_plus(1)::BIGINT,"
+        " CAST(7::UBIGINT AS VARCHAR), current_setting('v2api_level')"
+    ).fetchall()
+    assert_equal(r.get[Float64](col=0, row=0), 6.0)
+    assert_equal(r.get[Float64](col=1, row=0), 12.0)
+    assert_equal(r.get[Int64](col=2, row=0), 11)
+    assert_equal(r.get[String](col=3, row=0), "#7")
+    assert_equal(r.get[Int64](col=4, row=0), 5)
+    var t = conn.execute("SELECT count(*) FROM v2api_numbers_123").fetchall()
+    assert_equal(t.get[Int64](col=0, row=0), 123)
+
+
 def test_v2_init_error_is_reported() raises:
     """An error raised in the init function fails the load with its message."""
     var conn = Connection(_open_unsigned())

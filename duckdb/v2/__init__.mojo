@@ -19,5 +19,9 @@ from duckdb.v2.functions import BindArgs, BindData, LocalState, Registrar, Scala
 from duckdb.v2.serde import VectorWriter
 from duckdb.v2.simd_math import register_simd_math
 from duckdb.v2.extension import Extension
-from duckdb.v2.aggregate import AggregateFunction, AggregateState, BatchUpdate
-from duckdb.v2.table import ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
+from duckdb.v2.aggregate import AggregateBind, AggregateFunction, AggregateState, BatchUpdate
+from duckdb.v2.table import FilterPushdown, ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
+from duckdb.expr import col, fn_, lit, sql_null, star
+from duckdb.v2.signature import ParamKind
+from duckdb.v2.expression import Between, Comparison, ExprKind, Expression
+from duckdb.v2.extend import CastFunction, CustomOption, MacroFunction, PragmaFunction, Replacement, ReplacementScan, SettingScope

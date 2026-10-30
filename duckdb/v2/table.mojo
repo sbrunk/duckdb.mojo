@@ -50,13 +50,17 @@ from std.memory.alloc import unsafe_alloc
 from std.reflection import reflect
 from emberserde.field_meta import is_skipped, static_wire_name
 from duckdb._libduckdb_v2 import *
+from duckdb._libduckdb_v2 import _duckdb_v2_table_function_filter_pushdown_info
 from duckdb.api_v2 import StrArg, null, null_error_info
 from duckdb.v2._runtime import check, lib
 from duckdb.v2.error import DuckDBError, ErrorCode
+from duckdb.v2.expression import Expression
 from duckdb.v2.functions import BindArgs, Registrar, _destroy_bind, _identity_user_data, _report
 from duckdb.v2.mapping import ColumnMeta, MutRawData
 from duckdb.v2.serde import _WNode, _WriteTree, _Writer, _from_ser, _vector_type, _write, logical_type_of
+from duckdb.v2.signature import ParamKind, Signature
 from duckdb.v2.types import LogicalType, TypeId
+from duckdb.v2.value import Value
 
 
 def param_types[*Ts: AnyType]() raises DuckDBError -> List[LogicalType]:
@@ -89,6 +93,35 @@ trait TableFunctionImpl(Deinitable, Movable):
     def max_threads(self) -> Int:
         """How many threads may scan at once (default 1)."""
         return 1
+
+
+trait FilterPushdown:
+    """A table function that can apply some of a query's filters itself.
+
+    `pushdown` is called while the query is planned, after `bind` and before
+    any scan, once per filter the query applies to the function's rows. Return
+    True to take the filter over: record what it selects in `self` (the
+    scans read it) and scan only matching rows. DuckDB then stops applying
+    it. Return False to leave it to DuckDB. A filter may be offered again in
+    a later optimizer pass if it was not taken.
+
+    A function may also use a filter only to narrow its scan to a superset
+    of the matching rows and return False: DuckDB then still applies the
+    exact filter. That is the safe way to use `BETWEEN` filters (see
+    `Between`).
+
+    ```mojo
+    def pushdown(mut self, filter: Expression) raises -> Bool:
+        var c = filter.comparison()
+        if c and c.value().column == 0 and c.value().op == ExprKind.LESS:
+            self.limit = c.value().value.get[Int64]()
+            return True
+        return False
+    ```
+    """
+
+    def pushdown(mut self, filter: Expression) raises -> Bool:
+        ...
 
 
 struct TableColumns:
@@ -244,16 +277,21 @@ struct TableFunction(Movable):
     """A table function: name, parameters and callbacks."""
 
     var name: String
-    var params: List[LogicalType]
+    var signature: Signature
     var _bind: duckdb_v2_table_function_bind_callback_fn
     var _init_global: duckdb_v2_table_function_init_global_callback_fn
     var _init_local: duckdb_v2_table_function_init_local_callback_fn
     var _exec: duckdb_v2_table_function_exec_callback_fn
+    var _pushdown: Optional[duckdb_v2_table_function_filter_pushdown_callback_fn]
 
     @staticmethod
     def from_impl[T: TableFunctionImpl](var name: String, var params: List[LogicalType]) -> TableFunction:
         """A table function from its implementation struct and parameter types (`param_types[...]()`)."""
-        return TableFunction(name^, params^, _bind_cb[T], _init_global_cb[T], _init_local_cb[T], _exec_cb[T])
+        var f = TableFunction(name^, params^, _bind_cb[T], _init_global_cb[T], _init_local_cb[T], _exec_cb[T])
+        comptime if conforms_to(T, FilterPushdown):
+            var callback: duckdb_v2_table_function_filter_pushdown_callback_fn = _pushdown_cb[T]
+            f._pushdown = callback
+        return f^
 
     def __init__(
         out self,
@@ -265,11 +303,51 @@ struct TableFunction(Movable):
         exec: duckdb_v2_table_function_exec_callback_fn,
     ):
         self.name = name^
-        self.params = params^
+        self.signature = Signature(params, fixed=False)
         self._bind = bind
         self._init_global = init_global
         self._init_local = init_local
         self._exec = exec
+        self._pushdown = None
+
+
+    # ── Signature ─────────────────────────────────────────────────
+
+    def named(var self, *names: String) raises DuckDBError -> Self:
+        """Name the parameters in order, so callers can pass them by name."""
+        var list = List[String]()
+        for n in names:
+            list.append(n)
+        self.signature.name(list^)
+        return self^
+
+    def default[T: Movable & Deinitable](var self, name: StringSlice, value: T) raises DuckDBError -> Self:
+        """Make parameter `name` optional, with `value` when the call omits it."""
+        self.signature.set_default(name, Value(value))
+        return self^
+
+    def named_only(var self, *names: String) raises DuckDBError -> Self:
+        """Parameters that can only be passed by name (`f(1, scale := 2)`)."""
+        for n in names:
+            self.signature.set_named_only(n)
+        return self^
+
+    def add_named[T: Movable & Deinitable](var self, name: String, default: T) raises DuckDBError -> Self:
+        """A named-only parameter with a default value (`repeat('a', times := 5)`)."""
+        self.signature.add(name, logical_type_of[T](), ParamKind.NAMED_ONLY)
+        self.signature.set_default(name, Value(default))
+        return self^
+
+    def varargs(var self, name: String, type: LogicalType) raises DuckDBError -> Self:
+        """`*args`: any number of further positional arguments of `type`
+        (`TypeId.ANY` leaves their types as they are)."""
+        self.signature.add(name, type.copy(), ParamKind.VARARGS)
+        return self^
+
+    def kwargs(var self, name: String, type: LogicalType) raises DuckDBError -> Self:
+        """`**kwargs`: named arguments that match no parameter, of `type`."""
+        self.signature.add(name, type.copy(), ParamKind.KWARGS)
+        return self^
 
     def _register[R: Registrar](self, registrar: R) raises DuckDBError:
         var err = null_error_info()
@@ -280,19 +358,7 @@ struct TableFunction(Movable):
             check(lib().duckdb_v2_table_function_set_name(function, name.ptr(), Pointer(to=err)), err)
             var signature = null[duckdb_v2_function_signature_handle]()
             check(lib().duckdb_v2_table_function_get_signature(function, Pointer(to=signature), Pointer(to=err)), err)
-            for i in range(len(self.params)):
-                var param = StrArg(String("arg", i + 1))
-                check(
-                    lib().duckdb_v2_function_signature_add_parameter(
-                        signature,
-                        param.ptr(),
-                        self.params[i].handle(),
-                        null[duckdb_v2_value_handle](),
-                        DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY,
-                        Pointer(to=err),
-                    ),
-                    err,
-                )
+            self.signature._add_to(signature)
             var identity = _identity_user_data(self.name)
             check(lib().duckdb_v2_table_function_set_user_data(function, Pointer(to=identity), Pointer(to=err)), err)
             check(lib().duckdb_v2_table_function_set_bind_callback(function, self._bind, Pointer(to=err)), err)
@@ -300,6 +366,11 @@ struct TableFunction(Movable):
             check(lib().duckdb_v2_table_function_set_init_local_callback(function, self._init_local, Pointer(to=err)), err)
             check(lib().duckdb_v2_table_function_set_exec_callback(function, self._exec, Pointer(to=err)), err)
             check(lib().duckdb_v2_table_function_set_projection_pushdown(function, True, Pointer(to=err)), err)
+            if self._pushdown:
+                check(
+                    lib().duckdb_v2_table_function_set_filter_pushdown_callback(function, self._pushdown.value(), Pointer(to=err)),
+                    err,
+                )
             registrar._register_table_handle(function)
         finally:
             _ = lib().duckdb_v2_table_function_destroy(Pointer(to=function))
@@ -381,6 +452,46 @@ def _run_init_local[T: TableFunctionImpl](info: duckdb_v2_table_function_init_lo
     if code != DUCKDB_V2_ERROR_NONE:
         state.destroy(state.ptr)
         check(code, e)
+
+
+def _resolve_filter_column(info: Pointer[NoneType, MutUntrackedOrigin], index: Int) raises -> Int:
+    var declared: idx_t = 0
+    var err = null_error_info()
+    check(
+        lib().duckdb_v2_table_function_filter_pushdown_get_column_index(
+            info.unsafe_bitcast[_duckdb_v2_table_function_filter_pushdown_info](), idx_t(index), Pointer(to=declared), Pointer(to=err)
+        ),
+        err,
+    )
+    return Int(declared)
+
+
+def _pushdown_cb[T: TableFunctionImpl](
+    info: duckdb_v2_table_function_filter_pushdown_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        _run_pushdown[T](info)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_OPTIMIZER)
+
+
+def _run_pushdown[T: TableFunctionImpl](info: duckdb_v2_table_function_filter_pushdown_info_handle) raises:
+    comptime P = downcast[T, FilterPushdown]
+    var e = null_error_info()
+    var bind = null[Pointer[NoneType, MutUntrackedOrigin]]()
+    check(lib().duckdb_v2_table_function_filter_pushdown_get_bind_data(info, Pointer(to=bind), Pointer(to=e)), e)
+    ref impl = bind.unsafe_bitcast[_Bound[T]]()[].impl
+    var count: idx_t = 0
+    check(lib().duckdb_v2_table_function_filter_pushdown_get_filter_count(info, Pointer(to=count), Pointer(to=e)), e)
+    for i in range(Int(count)):
+        var handle = null[duckdb_v2_expression_handle]()
+        check(lib().duckdb_v2_table_function_filter_pushdown_get_filter(info, idx_t(i), Pointer(to=handle), Pointer(to=e)), e)
+        var filter = Expression(handle, info.unsafe_bitcast[NoneType](), _resolve_filter_column)
+        # Bind data is only shared once scans start; planning runs on one thread.
+        if Pointer(to=impl).unsafe_bitcast[P]()[].pushdown(filter):
+            check(lib().duckdb_v2_table_function_filter_pushdown_accept(info, idx_t(i), Pointer(to=e)), e)
 
 
 def _exec_cb[T: TableFunctionImpl](

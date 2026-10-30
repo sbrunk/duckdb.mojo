@@ -46,14 +46,17 @@ DuckDB 2.0 cannot overload aggregates: register each name once.
 
 from std.builtin.rebind import downcast, rebind_var
 from std.reflection import reflect
+from std.memory.alloc import unsafe_alloc
 from std.sys import align_of, simd_width_of, size_of
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info
 from duckdb.v2._runtime import check, lib
 from duckdb.v2.error import DuckDBError
-from duckdb.v2.functions import Registrar, _Args, _NodePtr, _identity_user_data, _param, _report, _required, _valid
+from duckdb.v2.functions import BindArgs, BindData, Registrar, _Args, _NodePtr, _identity_user_data, _param, _report, _required, _valid
 from duckdb.v2.serde import VectorWriter, logical_type_of
+from duckdb.v2.signature import Signature
 from duckdb.v2.types import LogicalType
+from duckdb.v2.value import Value
 
 
 trait AggregateState(Defaultable, Deinitable, Movable):
@@ -68,6 +71,34 @@ trait AggregateState(Defaultable, Deinitable, Movable):
 
     def finalize(self) raises -> Self.Result:
         """The aggregate's value for this group."""
+        ...
+
+
+trait AggregateBind:
+    """An aggregate state that uses bind data: values computed once per call
+    when the query is planned, e.g. from constant arguments.
+
+    ```mojo
+    @fieldwise_init
+    struct Sep(BindData, Copyable):
+        var text: String
+
+        @staticmethod
+        def bind(args: BindArgs) raises -> Self:
+            return Self(args.constant[String](1).or_else(","))
+
+    struct Join(AggregateBind, AggregateState):
+        comptime Bind = Sep
+        ...
+        def init_from(mut self, bind: Sep):
+            self.sep = bind.text
+    ```
+    """
+
+    comptime Bind: BindData
+
+    def init_from(mut self, bind: Self.Bind):
+        """Called on every new state, right after `__init__`."""
         ...
 
 
@@ -96,11 +127,12 @@ struct AggregateFunction(Movable):
     """An aggregate function: name, signature, properties and callbacks."""
 
     var name: String
-    var params: List[LogicalType]
+    var signature: Signature
     var result: LogicalType
     var special_nulls: Bool
     var order_dependent: Bool
     """Whether the result depends on the order of the rows (`string_agg`, ...)."""
+    var _bind: duckdb_v2_aggregate_function_bind_callback_fn
     var _size: duckdb_v2_aggregate_function_size_callback_fn
     var _init: duckdb_v2_aggregate_function_init_callback_fn
     var _update: duckdb_v2_aggregate_function_update_callback_fn
@@ -117,10 +149,14 @@ struct AggregateFunction(Movable):
         order_dependent: Bool,
     ) raises DuckDBError:
         self.name = name^
-        self.params = params^
+        self.signature = Signature(params, fixed=True)
         self.result = logical_type_of[S.Result]()
         self.special_nulls = special_nulls
         self.order_dependent = order_dependent
+        comptime if conforms_to(S, AggregateBind):
+            self._bind = _agg_bind_cb[S]
+        else:
+            self._bind = _identity_bind
         self._size = _size_cb[S]
         self._init = _init_cb[S]
         self._update = update
@@ -137,19 +173,7 @@ struct AggregateFunction(Movable):
             check(lib().duckdb_v2_aggregate_function_set_name(function, name.ptr(), Pointer(to=err)), err)
             var signature = null[duckdb_v2_function_signature_handle]()
             check(lib().duckdb_v2_aggregate_function_get_signature(function, Pointer(to=signature), Pointer(to=err)), err)
-            for i in range(len(self.params)):
-                var param = StrArg(String("arg", i + 1))
-                check(
-                    lib().duckdb_v2_function_signature_add_parameter(
-                        signature,
-                        param.ptr(),
-                        self.params[i].handle(),
-                        null[duckdb_v2_value_handle](),
-                        DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY,
-                        Pointer(to=err),
-                    ),
-                    err,
-                )
+            self.signature._add_to(signature)
             check(lib().duckdb_v2_function_signature_set_return_type(signature, self.result.handle(), Pointer(to=err)), err)
             if self.special_nulls:
                 check(
@@ -173,7 +197,7 @@ struct AggregateFunction(Movable):
                 )
             var identity = _identity_user_data(self.name)
             check(lib().duckdb_v2_aggregate_function_set_user_data(function, Pointer(to=identity), Pointer(to=err)), err)
-            check(lib().duckdb_v2_aggregate_function_set_bind_callback(function, _identity_bind, Pointer(to=err)), err)
+            check(lib().duckdb_v2_aggregate_function_set_bind_callback(function, self._bind, Pointer(to=err)), err)
             check(lib().duckdb_v2_aggregate_function_set_size_callback(function, self._size, Pointer(to=err)), err)
             check(lib().duckdb_v2_aggregate_function_set_init_callback(function, self._init, Pointer(to=err)), err)
             check(lib().duckdb_v2_aggregate_function_set_update_callback(function, self._update, Pointer(to=err)), err)
@@ -183,6 +207,28 @@ struct AggregateFunction(Movable):
             registrar._register_aggregate_handle(function)
         finally:
             _ = lib().duckdb_v2_aggregate_function_destroy(Pointer(to=function))
+
+
+    # ── Signature ─────────────────────────────────────────────────
+
+    def named(var self, *names: String) raises DuckDBError -> Self:
+        """Name the parameters in order, so callers can pass them by name."""
+        var list = List[String]()
+        for n in names:
+            list.append(n)
+        self.signature.name(list^)
+        return self^
+
+    def default[T: Movable & Deinitable](var self, name: StringSlice, value: T) raises DuckDBError -> Self:
+        """Make parameter `name` optional, with `value` when the call omits it."""
+        self.signature.set_default(name, Value(value))
+        return self^
+
+    def named_only(var self, *names: String) raises DuckDBError -> Self:
+        """Parameters that can only be passed by name (`f(1, scale := 2)`)."""
+        for n in names:
+            self.signature.set_named_only(n)
+        return self^
 
     # ── Ready-made SIMD reductions ────────────────────────────────
 
@@ -371,6 +417,63 @@ def _identity_bind(
         _report(err, "could not set the aggregate's bind data", DUCKDB_V2_ERROR_QUERY_BINDER)
 
 
+struct _AggBind[B: BindData](Movable):
+    """Bind data of an aggregate with `AggregateBind`: its name (see
+    `_identity_bind`) and the user's bind data."""
+
+    var name: String
+    var data: Self.B
+
+    def __init__(out self, var name: String, var data: Self.B):
+        self.name = name^
+        self.data = data^
+
+
+def _destroy_agg_bind[B: BindData](ptr: Pointer[NoneType, MutUntrackedOrigin]) abi("C"):
+    var p = ptr.unsafe_bitcast[_AggBind[B]]()
+    p.unsafe_deinit_pointee()
+    p.unsafe_free()
+
+
+def _equal_agg_bind[B: BindData](a: Pointer[NoneType, MutUntrackedOrigin], b: Pointer[NoneType, MutUntrackedOrigin]) abi("C") -> Bool:
+    ref x = a.unsafe_bitcast[_AggBind[B]]()[]
+    ref y = b.unsafe_bitcast[_AggBind[B]]()[]
+    if x.name != y.name:
+        return False
+    comptime if conforms_to(B, Equatable):
+        comptime E = downcast[B, Equatable]
+        return Pointer(to=x.data).unsafe_bitcast[E]()[] == Pointer(to=y.data).unsafe_bitcast[E]()[]
+    else:
+        return Int(a) == Int(b)
+
+
+def _agg_bind_cb[S: AggregateState](
+    info: duckdb_v2_function_bind_info_handle,
+    result: duckdb_v2_aggregate_function_bind_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        _run_agg_bind[S](info)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_BINDER)
+
+
+def _run_agg_bind[S: AggregateState](info: duckdb_v2_function_bind_info_handle) raises:
+    comptime B = downcast[S, AggregateBind].Bind
+    var e = null_error_info()
+    var user = null[Pointer[NoneType, MutUntrackedOrigin]]()
+    check(lib().duckdb_v2_function_bind_get_user_data(info, Pointer(to=user), Pointer(to=e)), e)
+    var bound = B.bind(BindArgs(info))
+    var ptr = unsafe_alloc[_AggBind[B]](1)
+    ptr.unsafe_write(_AggBind[B](user.unsafe_bitcast[String]()[].copy(), bound^))
+    var data = duckdb_v2_opaque(ptr.unsafe_bitcast[NoneType](), _destroy_agg_bind[B], _equal_agg_bind[B])
+    var code = lib().duckdb_v2_function_bind_set_bind_data(info, Pointer(to=data), Pointer(to=e))
+    if code != DUCKDB_V2_ERROR_NONE:
+        _destroy_agg_bind[B](data.ptr)
+        check(code, e)
+
+
 @always_inline
 def _slot[S: AggregateState](p: Pointer[NoneType, MutUntrackedOrigin]) -> ref[MutUntrackedOrigin] _Slot[S]:
     return p.unsafe_bitcast[_Slot[S]]()[]
@@ -398,6 +501,14 @@ def _init_cb[S: AggregateState](
         check(lib().duckdb_v2_aggregate_function_init_get_states(info, Pointer(to=states), Pointer(to=e)), e)
         for i in range(Int(count)):
             states[unsafe_offset=i].unsafe_bitcast[_Slot[S]]().unsafe_write(_Slot[S]())
+        comptime if conforms_to(S, AggregateBind):
+            comptime A = downcast[S, AggregateBind]
+            var bind = null[Pointer[NoneType, MutUntrackedOrigin]]()
+            check(lib().duckdb_v2_aggregate_function_init_get_bind_data(info, Pointer(to=bind), Pointer(to=e)), e)
+            ref data = bind.unsafe_bitcast[_AggBind[A.Bind]]()[].data
+            for i in range(Int(count)):
+                ref slot = _slot[S](states[unsafe_offset=i])
+                Pointer(to=slot.state).unsafe_bitcast[A]()[].init_from(data)
     except e:
         _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
 

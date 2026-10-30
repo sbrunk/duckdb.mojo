@@ -50,7 +50,7 @@ def from_function(n):
         lines.append(params)
     lines += [
         "        return ScalarFunction(",
-        f"            String(name), params^, logical_type_of[R](), _exec{n}[{sig}, R, f], bind, volatile, special_nulls",
+        f"            String(name), params^, logical_type_of[R](), _exec{n}[{sig}, R, f], bind, volatile, special_nulls, fixed=True",
         "        )",
         "",
     ]

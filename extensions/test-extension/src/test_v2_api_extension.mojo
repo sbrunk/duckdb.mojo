@@ -7,6 +7,7 @@ check them in a DuckDB process that only loads this library.
 from duckdb._libduckdb_v2 import duckdb_v2_extension_input
 from duckdb.v2 import BindArgs, BindData, Extension, ScalarArgs, ScalarFunction, VectorWriter, register_simd_math
 from duckdb.v2 import LogicalType, TypeId, bind_callback
+from duckdb.v2 import CastFunction, CustomOption, MacroFunction, Replacement, ReplacementScan, Value
 from duckdb.v2 import AggregateFunction, AggregateState, ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
 from duckdb.duckdb_type import Date
 
@@ -103,6 +104,20 @@ struct Countdown(TableFunctionImpl):
         return rows
 
 
+def scale(x: Float64, factor: Float64) -> Float64:
+    return x * factor
+
+
+def to_label(x: Int64) -> String:
+    return String("#", x)
+
+
+def v2api_tables(name: String) raises -> Optional[Replacement]:
+    if name.startswith("v2api_numbers_"):
+        return Replacement.function("range", [Value(Int64(atol(name[byte=14:])))])
+    return None
+
+
 def init(ext: Extension) raises:
     ext.register(ScalarFunction.from_function["v2api_add", add]())
     ext.register(ScalarFunction.from_function["v2api_greet", greet]())
@@ -117,6 +132,11 @@ def init(ext: Extension) raises:
     ext.register(AggregateFunction.from_state["v2api_longest", Longest.update]())
     ext.register(AggregateFunction.from_sum["v2api_sum", DType.float64]())
     ext.register(TableFunction.from_impl[Countdown]("v2api_countdown", param_types[Int64]()))
+    ext.register(ScalarFunction.from_function["v2api_scale", scale]().named("x", "factor").default("factor", Float64(2.0)))
+    ext.register(MacroFunction.scalar("v2api_plus", ["a", "b"], "a + b").default("b", Int64(10)))
+    ext.register(CastFunction.from_function[to_label](source=LogicalType(TypeId.UBIGINT), target=LogicalType(TypeId.VARCHAR)))
+    ext.register(ReplacementScan.from_function[v2api_tables]())
+    ext.register(CustomOption.of("v2api_level", Int64(5), "test option"))
 
 
 @export("mojo_v2_api_init_c_api_v2")
