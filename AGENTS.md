@@ -71,7 +71,7 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 
 ## V2 high-level API (`duckdb/v2/`, in progress)
 
-The new high-level API on the V2 C API is built in `duckdb/v2/` next to the V1-based one and replaces it at the end (design: `docs/design/v2-high-level-api.md`). Rules learned so far:
+The new high-level API on the V2 C API is built in `duckdb/v2/` next to the V1-based one and replaces it at the end (design: `docs/design/v2-high-level-api.md`). Its "Open points" section is the one list of open work; keep it current. Rules learned so far:
 
 - `__extension` conformances (e.g. `Int64` or `String` to `DuckDBMapped`) and `__extension` methods are only visible in the module that declares them. Never use such a trait as a bound in a public generic; take `T: Movable & Deinitable` and call the dispatch functions in `duckdb/v2/mapping.mojo` (`mapped_read[T]`, `mapped_accepts[T]`, `mapped_to_value[T]`, ...).
 - Mojo frees a value right after its last use. When a raw handle or pointer from an owner (`value.handle()`, `list.unsafe_ptr()`, a chunk's data) is passed to DuckDB, keep the owner alive past the call (`_ = owner^`) or tie the borrower to the owner's origin.
