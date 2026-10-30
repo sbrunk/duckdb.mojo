@@ -158,6 +158,14 @@ struct Connection(Movable, Registrar):
         var err = null_error_info()
         check(lib().duckdb_v2_connection_register_scalar_function(self._handle, function, Pointer(to=err)), err)
 
+    def _register_aggregate_handle(self, function: duckdb_v2_aggregate_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_register_aggregate_function(self._handle, function, Pointer(to=err)), err)
+
+    def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_connection_register_table_function(self._handle, function, Pointer(to=err)), err)
+
     def interrupt(self) raises DuckDBError:
         """Interrupt the statement running on this connection (safe from another thread)."""
         var err = null_error_info()

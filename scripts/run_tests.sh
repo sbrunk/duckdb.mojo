@@ -34,6 +34,8 @@ TESTS=(
     test/v2/test_v2_relation.mojo
     test/v2/test_v2_nested.mojo
     test/v2/test_v2_functions.mojo
+    test/v2/test_v2_aggregates.mojo
+    test/v2/test_v2_tables.mojo
     test/test_typed_access.mojo
     test/test_errors.mojo
 )

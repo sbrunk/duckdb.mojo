@@ -56,6 +56,14 @@ struct Extension(Movable, Registrar):
         var err = null_error_info()
         check(lib().duckdb_v2_extension_register_scalar_function(self._ext, function, Pointer(to=err)), err)
 
+    def _register_aggregate_handle(self, function: duckdb_v2_aggregate_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_extension_register_aggregate_function(self._ext, function, Pointer(to=err)), err)
+
+    def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_extension_register_table_function(self._ext, function, Pointer(to=err)), err)
+
     @staticmethod
     def run[init: def(ext: Extension) raises thin -> None](
         input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]

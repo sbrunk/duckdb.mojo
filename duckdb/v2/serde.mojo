@@ -818,6 +818,7 @@ struct _WNode(Copyable, Movable):
     # LIST and MAP nodes, which grow as values are written).
     var used: Int
     var reserved: Int
+    var lenient: Bool  # struct fields without a child are skipped (projected table output)
     # Field index -> child position (-1: no such child) for the struct type
     # last written to this node.
     var map_key: String
@@ -832,6 +833,7 @@ struct _WNode(Copyable, Movable):
         self.lower_names = List[String]()
         self.used = 0
         self.reserved = 0
+        self.lenient = False
         self.map_key = String()
         self.field_map = List[Int]()
 
@@ -1112,11 +1114,17 @@ struct VectorWriter(Movable):
     var _data: MutRawData  # NULL for nested results
     var _meta: Pointer[ColumnMeta, MutUntrackedOrigin]  # into the tree, which is not resized after init
 
-    def __init__(out self, vec: duckdb_v2_vector_handle, size: Int) raises DuckDBError:
+    def __init__(out self, vec: duckdb_v2_vector_handle, size: Int, *, grow_only: Bool = False) raises DuckDBError:
+        """With `grow_only`, a vector that already holds `size` rows keeps its
+        size (an aggregate's result vector, written from an offset)."""
         self._size = size
         self._vec = vec
         var err = null_error_info()
-        check(lib().duckdb_v2_vector_set_size(vec, idx_t(size), Pointer(to=err)), err)
+        var current: idx_t = 0
+        if grow_only:
+            check(lib().duckdb_v2_vector_get_size(vec, Pointer(to=current), Pointer(to=err)), err)
+        if not grow_only or Int(current) < size:
+            check(lib().duckdb_v2_vector_set_size(vec, idx_t(size), Pointer(to=err)), err)
         self._tree = _WriteTree()
         self._tree.nodes.append(_WNode(null[duckdb_v2_vector_handle](), ColumnMeta(kind=TypeId.STRUCT)))
         var node = self._tree._add(vec, _vector_type(vec))
@@ -1377,6 +1385,8 @@ struct _StructSer(StructSerState):
     def serialize_field[T: AnyType, idx: Int](mut self, field_name: StringSlice, v: Some[AnyType]) raises SerializationError:
         var k = self.tree[].nodes[self.node].field_map[idx]
         if k == -1:
+            if self.tree[].nodes[self.node].lenient:
+                return
             raise _ser_invalid(String("no column or STRUCT field named ", field_name))
         self.written[k] = True
         var w = _Writer(self.tree, self.tree[].nodes[self.node].children[k], self.row)

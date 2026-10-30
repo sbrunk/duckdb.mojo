@@ -14,6 +14,7 @@ from pathlib import Path
 
 MAX_ARITY = 8
 PATH = Path(__file__).resolve().parent.parent / "duckdb" / "v2" / "functions.mojo"
+AGG_PATH = PATH.parent / "aggregate.mojo"
 
 
 def types(n):
@@ -126,6 +127,75 @@ def exec_fn(n):
     return "\n".join(lines)
 
 
+def from_state(n):
+    ts = types(n)
+    infer = ", ".join(f"{t}: Movable & Deinitable" for t in ts)
+    sig = ", ".join(ts)
+    lines = [
+        "    @staticmethod",
+        "    def from_state[",
+        f"        S: AggregateState, {infer}, //,",
+        "        name: StringLiteral,",
+        f"        update: def(mut S, {sig}) raises thin -> None,",
+        "    ](*, order_dependent: Bool = False) raises DuckDBError -> AggregateFunction:",
+    ]
+    if n == 1:
+        lines.append('        """An aggregate from a state type and its `update` method (see the module docs)."""')
+    lines += ["        var params = List[LogicalType]()", "        var special_nulls = False"]
+    lines += [f"        _param[{t}](params, special_nulls)" for t in ts]
+    lines += [
+        f"        return AggregateFunction.__init__[S](String(name), params^, _update{n}[S, {sig}, update], special_nulls, order_dependent)",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def update_fn(n):
+    ts = types(n)
+    infer = ", ".join(f"{t}: Movable & Deinitable" for t in ts)
+    sig = ", ".join(ts)
+    head = f"S: AggregateState, {infer}, update: def(mut S, {sig}) raises thin -> None"
+    lines = [
+        f"def _update{n}[{head}](",
+        "    info: duckdb_v2_aggregate_function_update_info_handle,",
+        "    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],",
+        ') abi("C"):',
+        "    try:",
+        f"        _run_update{n}[S, {sig}, update](info)",
+        "    except e:",
+        "        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)",
+        "",
+        "",
+        f"def _run_update{n}[{head}](",
+        "    info: duckdb_v2_aggregate_function_update_info_handle,",
+        ") raises:",
+        "    var call = _UpdateCall(info)",
+    ]
+    if n == 1:
+        lines += [
+            "    comptime if _batchable[S, A1]():",
+            "        if call.one_state() and call.flat_without_nulls(0):",
+            "            _batch[S](call)",
+            "            return",
+        ]
+    lines += [f"    var v{k} = call.a.view({k})" for k in range(n)]
+    lines += [f"    comptime r{k} = _required[{t}]()" for k, t in enumerate(ts)]
+    cond = " or ".join(f"(r{k} and not _valid(v{k}, row))" for k in range(n))
+    args = ", ".join(f"call.a.get[{t}]({k}, v{k}, row)" for k, t in enumerate(ts))
+    lines += [
+        "    for row in range(call.size):",
+        f"        if {cond}:",
+        "            continue",
+        "        ref slot = _slot[S](call.states[unsafe_offset=row])",
+        f"        update(slot.state, {args})",
+        "        slot.seen = True",
+        "",
+        "",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def replace(text, marker, body):
     pattern = re.compile(
         rf"(?P<indent>[ ]*)# BEGIN GENERATED {marker}[^\n]*\n.*?(?P=indent)# END GENERATED {marker}\n", re.S
@@ -146,6 +216,10 @@ def main():
     text = replace(text, "from_function", "\n".join(from_function(n) for n in range(1, MAX_ARITY + 1)))
     text = replace(text, "exec", "\n\n" + "".join(exec_fn(n) for n in range(1, MAX_ARITY + 1)).rstrip("\n") + "\n\n\n")
     PATH.write_text(text)
+    agg = AGG_PATH.read_text()
+    agg = replace(agg, "from_state", "\n".join(from_state(n) for n in range(1, MAX_ARITY + 1)))
+    agg = replace(agg, "update", "\n\n" + "".join(update_fn(n) for n in range(1, MAX_ARITY + 1)).rstrip("\n") + "\n\n\n")
+    AGG_PATH.write_text(agg)
 
 
 if __name__ == "__main__":

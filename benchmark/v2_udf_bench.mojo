@@ -11,7 +11,8 @@ from duckdb import DuckDB
 from duckdb.connection import Connection as DuckDBConnection
 from duckdb.kernels import register_simd_math as register_simd_math_v1
 from duckdb.scalar_function import ScalarFunction as ScalarFunctionV1
-from duckdb.v2 import Connection, Database, ScalarFunction, register_simd_math
+from duckdb.aggregate_function import AggregateFunction as AggregateFunctionV1
+from duckdb.v2 import AggregateFunction, AggregateState, Connection, Database, ScalarFunction, register_simd_math
 
 comptime N = "10000000"
 
@@ -22,6 +23,27 @@ def add(a: Int64, b: Int64) -> Int64:
 
 def greet(name: String) -> Int64:
     return Int64(name.byte_length())
+
+
+struct Avg(AggregateState):
+    comptime Result = Float64
+    var sum: Float64
+    var n: Int
+
+    def __init__(out self):
+        self.sum = 0
+        self.n = 0
+
+    def update(mut self, x: Float64):
+        self.sum += x
+        self.n += 1
+
+    def combine(mut self, other: Self):
+        self.sum += other.sum
+        self.n += other.n
+
+    def finalize(self) -> Float64:
+        return self.sum / Float64(self.n)
 
 
 def _ms(ns: Int) -> String:
@@ -53,6 +75,9 @@ def main() raises:
     _ = v1.execute("SET threads = 1")
     register_simd_math_v1(v1)
     ScalarFunctionV1.from_function["mojo_add", DType.int64, DType.int64, DType.int64, add](v1)
+    AggregateFunctionV1.from_sum["mojo_sum", DType.float64](v1)
+    v2.register(AggregateFunction.from_sum["mojo_sum", DType.float64]())
+    v2.register(AggregateFunction.from_state["mojo_avg", Avg.update]())
 
     var sqrt_sql = String("SELECT sum(mojo_sqrt(i::DOUBLE)) FROM range(", N, ") t(i)")
     var add_sql = String("SELECT sum(mojo_add(i, 1)) FROM range(", N, ") t(i)")
@@ -69,4 +94,17 @@ def main() raises:
     print(
         "strlen | builtin:", _ms(_time_v2(v2, String("SELECT sum(strlen('name ' || i)) FROM range(", N, ") t(i)"))),
         "| V2 row-wise (String):", _ms(_time_v2(v2, String("SELECT sum(mojo_len('name ' || i)) FROM range(", N, ") t(i)"))),
+    )
+    var sum_sql = String("SELECT mojo_sum(i::DOUBLE) FROM range(", N, ") t(i)")
+    print(
+        "sum    | builtin:", _ms(_time_v2(v2, String("SELECT sum(i::DOUBLE) FROM range(", N, ") t(i)"))),
+        "| V1 SIMD:", _ms(_time_v1(v1, sum_sql)),
+        "| V2 SIMD:", _ms(_time_v2(v2, sum_sql)),
+    )
+    var group_sql = String("SELECT i % 100, mojo_sum(i::DOUBLE) FROM range(", N, ") t(i) GROUP BY 1")
+    print(
+        "sum by 100 groups | builtin:", _ms(_time_v2(v2, String("SELECT i % 100, sum(i::DOUBLE) FROM range(", N, ") t(i) GROUP BY 1"))),
+        "| V2:", _ms(_time_v2(v2, group_sql)),
+        "| V2 avg state:", _ms(_time_v2(v2, String("SELECT i % 100, mojo_avg(i::DOUBLE) FROM range(", N, ") t(i) GROUP BY 1"))),
+        "| builtin avg:", _ms(_time_v2(v2, String("SELECT i % 100, avg(i::DOUBLE) FROM range(", N, ") t(i) GROUP BY 1"))),
     )

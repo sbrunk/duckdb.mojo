@@ -431,6 +431,19 @@ def test_v2_api_extension_many_rows_and_nulls() raises:
     assert_equal(r.get[Int64](col=2, row=0), 1200000)
 
 
+def test_v2_api_extension_aggregates_and_tables() raises:
+    var conn = _connect_v2_api()
+    var r = conn.execute(
+        "SELECT v2api_longest(s), v2api_sum(x) FROM (VALUES ('a', 1.5), ('a longer string, over twelve', 2.5), ('ab', 3.0)) t(s, x)"
+    ).fetchall()
+    assert_equal(r.get[String](col=0, row=0), "a longer string, over twelve")
+    assert_equal(r.get[Float64](col=1, row=0), 7.0)
+    var t = conn.execute("SELECT count(*), sum(value)::BIGINT, max(value) FROM v2api_countdown(5000)").fetchall()
+    assert_equal(t.get[Int64](col=0, row=0), 5000)
+    assert_equal(t.get[Int64](col=1, row=0), 12502500)
+    assert_equal(t.get[Int64](col=2, row=0), 5000)
+
+
 def test_v2_init_error_is_reported() raises:
     """An error raised in the init function fails the load with its message."""
     var conn = Connection(_open_unsigned())

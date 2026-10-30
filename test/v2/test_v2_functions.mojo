@@ -109,6 +109,28 @@ def scaled_chunk(mut args: ScalarArgs, mut out: VectorWriter) raises:
                 out.write_null(row)
 
 
+struct Scratch(LocalState):
+    var buffer: List[Int64]
+    var calls: Int
+
+    def __init__(out self):
+        self.buffer = []
+        self.calls = 0
+
+    @staticmethod
+    def init() raises -> Self:
+        return Self()
+
+
+def running_calls(mut args: ScalarArgs, mut out: VectorWriter) raises:
+    """Writes how many chunks this thread has processed so far (per-thread state)."""
+    ref s = args.local_state[Scratch]()
+    s.calls += 1
+    s.buffer.resize(args.size(), 0)
+    for row in range(args.size()):
+        out.write(row, Int64(s.calls))
+
+
 def test_row_wise_numbers() raises:
     var con = Database().connect()
     con.register(ScalarFunction.from_function["mojo_add", add]())
@@ -238,6 +260,25 @@ def test_chunk_functions() raises:
         )
     )
     assert_equal(con.execute("SELECT scaled(i::DOUBLE, 3.0) FROM range(10) t(i)").get[Float64]()[3], 9.0)
+
+
+def test_thread_state() raises:
+    var con = Database().connect()
+    _ = con.execute("SET threads = 1")
+    con.register(
+        ScalarFunction.from_chunk_function[running_calls](
+            "running_calls",
+            [LogicalType(TypeId.BIGINT)],
+            LogicalType(TypeId.BIGINT),
+            init=init_callback[Scratch](),
+            volatile=True,
+        )
+    )
+    # One thread, 3 chunks: the state survives across chunks of one query.
+    var r = con.execute("SELECT max(running_calls(i)) FROM range(3 * 2048) t(i)").get[Int64]()
+    assert_equal(r[0], 3)
+    # A new query starts with a new state.
+    assert_equal(con.execute("SELECT max(running_calls(i)) FROM range(10) t(i)").get[Int64]()[0], 1)
 
 
 def test_register_simd_math() raises:

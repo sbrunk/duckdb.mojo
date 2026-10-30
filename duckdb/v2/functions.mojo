@@ -46,6 +46,8 @@ from emberserde.field_meta import __is_optional
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info
 from duckdb.v2._runtime import check, lib
+from duckdb.v2.aggregate import AggregateFunction
+from duckdb.v2.table import TableFunction
 from duckdb.v2.chunk import ColumnReader, column_reader
 from duckdb.v2.error import DuckDBError, ErrorCode
 from duckdb.v2.mapping import is_mapped, mapped_read
@@ -73,9 +75,24 @@ trait Registrar:
         same name with other argument types adds an overload."""
         function._register(self)
 
+    def _register_aggregate_handle(self, function: duckdb_v2_aggregate_function_handle) raises DuckDBError:
+        ...
+
+    def register(self, function: AggregateFunction) raises DuckDBError:
+        """Register an aggregate function (each name once: DuckDB 2.0 cannot overload aggregates)."""
+        function._register(self)
+
+    def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
+        ...
+
+    def register(self, function: TableFunction) raises DuckDBError:
+        """Register a table function."""
+        function._register(self)
+
 
 comptime _ExecFn = duckdb_v2_scalar_function_exec_callback_fn
 comptime _BindFn = duckdb_v2_scalar_function_bind_callback_fn
+comptime _InitFn = duckdb_v2_scalar_function_init_callback_fn
 
 
 struct ScalarFunction(Movable):
@@ -91,6 +108,7 @@ struct ScalarFunction(Movable):
     var result: LogicalType
     var _exec: _ExecFn
     var _bind: Optional[_BindFn]
+    var _init: Optional[_InitFn]
     var volatile: Bool
     """Whether the function can return different results for the same
     arguments (a random number, the current time). DuckDB then calls it for
@@ -108,6 +126,7 @@ struct ScalarFunction(Movable):
         bind: Optional[_BindFn] = None,
         volatile: Bool = False,
         special_nulls: Bool = False,
+        init: Optional[_InitFn] = None,
     ):
         """A function from its parts, for hand-written exec callbacks."""
         self.name = name^
@@ -115,6 +134,7 @@ struct ScalarFunction(Movable):
         self.result = result^
         self._exec = exec
         self._bind = bind
+        self._init = init
         self.volatile = volatile
         self.special_nulls = special_nulls
 
@@ -161,9 +181,13 @@ struct ScalarFunction(Movable):
                     ),
                     err,
                 )
+            var identity = _identity_user_data(self.name)
+            check(lib().duckdb_v2_scalar_function_set_user_data(function, Pointer(to=identity), Pointer(to=err)), err)
             check(lib().duckdb_v2_scalar_function_set_exec_callback(function, self._exec, Pointer(to=err)), err)
             if self._bind:
                 check(lib().duckdb_v2_scalar_function_set_bind_callback(function, self._bind.value(), Pointer(to=err)), err)
+            if self._init:
+                check(lib().duckdb_v2_scalar_function_set_init_callback(function, self._init.value(), Pointer(to=err)), err)
             registrar._register_scalar_handle(function)
         finally:
             _ = lib().duckdb_v2_scalar_function_destroy(Pointer(to=function))
@@ -177,6 +201,7 @@ struct ScalarFunction(Movable):
         var result: LogicalType,
         *,
         bind: Optional[_BindFn] = None,
+        init: Optional[_InitFn] = None,
         volatile: Bool = False,
         special_nulls: Bool = False,
     ) -> ScalarFunction:
@@ -186,7 +211,9 @@ struct ScalarFunction(Movable):
         row of `out` (`args.size()` rows). DuckDB passes NULL rows to it, so
         it writes NULLs itself (`out.write_null(row)`). For bind data, pass
         `bind=bind_callback[MyBindData]()` and read it with
-        `args.bind_data[MyBindData]()`.
+        `args.bind_data[MyBindData]()`. For state per thread (scratch
+        buffers, ...), pass `init=init_callback[MyState]()` and use
+        `args.local_state[MyState]()`.
 
         ```mojo
         def double_it(mut args: ScalarArgs, mut out: VectorWriter) raises:
@@ -199,7 +226,7 @@ struct ScalarFunction(Movable):
                     out.write_null(row)
         ```
         """
-        return ScalarFunction(name^, params^, result^, _chunk_exec[f], bind, volatile, special_nulls)
+        return ScalarFunction(name^, params^, result^, _chunk_exec[f], bind, volatile, special_nulls, init)
 
     @staticmethod
     def from_simd_function[
@@ -559,9 +586,54 @@ def _equal_bind[T: Movable & Deinitable](
         return Int(a) == Int(b)
 
 
+trait LocalState(Deinitable, Movable):
+    """State of one thread running a chunk-level scalar function, created
+    once per thread per query (see `from_chunk_function`)."""
+
+    @staticmethod
+    def init() raises -> Self:
+        ...
+
+
+def init_callback[T: LocalState]() -> _InitFn:
+    """The init callback for thread state `T`, for `from_chunk_function(..., init=...)`."""
+    return _init_callback[T]
+
+
+def _init_callback[T: LocalState](
+    info: duckdb_v2_scalar_function_init_info_handle,
+    context: duckdb_v2_context_handle,
+    err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin],
+) abi("C"):
+    try:
+        var ptr = unsafe_alloc[T](1)
+        ptr.unsafe_write(T.init())
+        var opaque = duckdb_v2_opaque(ptr.unsafe_bitcast[NoneType](), _destroy_bind[T], _equal_bind[T])
+        var e = null_error_info()
+        var code = lib().duckdb_v2_scalar_function_init_set_init_data(info, Pointer(to=opaque), Pointer(to=e))
+        if code != DUCKDB_V2_ERROR_NONE:
+            _destroy_bind[T](ptr.unsafe_bitcast[NoneType]())
+            check(code, e)
+    except e:
+        _report(err, String(e), DUCKDB_V2_ERROR_QUERY_EXECUTOR)
+
+
 def bind_callback[T: BindData]() -> _BindFn:
     """The bind callback for bind data `T`, for `from_chunk_function(..., bind=...)`."""
     return _bind_callback[T]
+
+
+def _identity_user_data(name: String) -> duckdb_v2_opaque:
+    """User data that tells functions apart by name.
+
+    DuckDB compares functions when it merges identical expressions, and every
+    C API function shares the same C++ wrapper: without user data, two
+    different aggregates over the same column (`SELECT f(x), g(x)`) are
+    computed as one.
+    """
+    var p = unsafe_alloc[String](1)
+    p.unsafe_write(name.copy())
+    return duckdb_v2_opaque(p.unsafe_bitcast[NoneType](), _destroy_bind[String], _equal_bind[String])
 
 
 def is_bind_data[T: AnyType]() -> Bool:
@@ -580,38 +652,17 @@ def _report(err: Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin], messa
     _ = lib().duckdb_v2_error_info_set_text(err[], text.ptr())
 
 
-struct _Call(Movable):
-    """One exec callback: the argument trees and the result writer."""
+struct _Args(Movable):
+    """The argument vectors of a callback as read trees (each vector is node 1 of its tree)."""
 
-    var info: duckdb_v2_scalar_function_exec_info_handle
     var size: Int
     var args: List[_ReadTree]
-    var out: VectorWriter
 
-    def __init__(out self, info: duckdb_v2_scalar_function_exec_info_handle) raises DuckDBError:
-        self.info = info
-        var err = null_error_info()
-        var count: idx_t = 0
-        check(lib().duckdb_v2_scalar_function_exec_get_row_count(info, Pointer(to=count), Pointer(to=err)), err)
-        self.size = Int(count)
-        var fixed: idx_t = 0
-        var variadic: idx_t = 0
-        var named: idx_t = 0
-        var named_variadic: idx_t = 0
-        check(
-            lib().duckdb_v2_scalar_function_exec_get_arg_count(
-                info, Pointer(to=fixed), Pointer(to=variadic), Pointer(to=named), Pointer(to=named_variadic), Pointer(to=err)
-            ),
-            err,
-        )
+    def __init__(out self, vectors: List[duckdb_v2_vector_handle], size: Int) raises DuckDBError:
+        self.size = size
         self.args = List[_ReadTree]()
-        for i in range(Int(fixed + variadic + named + named_variadic)):
-            var vec = null[duckdb_v2_vector_handle]()
-            check(lib().duckdb_v2_scalar_function_exec_get_arg(info, idx_t(i), Pointer(to=vec), Pointer(to=err)), err)
-            self.args.append(read_tree_of(vec))
-        var result = null[duckdb_v2_vector_handle]()
-        check(lib().duckdb_v2_scalar_function_exec_get_result(info, Pointer(to=result), Pointer(to=err)), err)
-        self.out = VectorWriter(result, self.size)
+        for i in range(len(vectors)):
+            self.args.append(read_tree_of(vectors[i]))
 
     def all_flat(self) -> Bool:
         """Whether every argument is flat or constant (no dictionary) and
@@ -648,6 +699,57 @@ struct _Call(Movable):
             return mapped_read[T](node[].meta, node[].data, idx)
         else:
             return read_value[T](self.args[arg], 1, row)
+
+
+struct _Call(Movable):
+    """One exec callback: the argument trees and the result writer."""
+
+    var info: duckdb_v2_scalar_function_exec_info_handle
+    var size: Int
+    var a: _Args
+    var out: VectorWriter
+
+    def __init__(out self, info: duckdb_v2_scalar_function_exec_info_handle) raises DuckDBError:
+        self.info = info
+        var err = null_error_info()
+        var count: idx_t = 0
+        check(lib().duckdb_v2_scalar_function_exec_get_row_count(info, Pointer(to=count), Pointer(to=err)), err)
+        self.size = Int(count)
+        var fixed: idx_t = 0
+        var variadic: idx_t = 0
+        var named: idx_t = 0
+        var named_variadic: idx_t = 0
+        check(
+            lib().duckdb_v2_scalar_function_exec_get_arg_count(
+                info, Pointer(to=fixed), Pointer(to=variadic), Pointer(to=named), Pointer(to=named_variadic), Pointer(to=err)
+            ),
+            err,
+        )
+        var vectors = List[duckdb_v2_vector_handle]()
+        for i in range(Int(fixed + variadic + named + named_variadic)):
+            var vec = null[duckdb_v2_vector_handle]()
+            check(lib().duckdb_v2_scalar_function_exec_get_arg(info, idx_t(i), Pointer(to=vec), Pointer(to=err)), err)
+            vectors.append(vec)
+        self.a = _Args(vectors, self.size)
+        var result = null[duckdb_v2_vector_handle]()
+        check(lib().duckdb_v2_scalar_function_exec_get_result(info, Pointer(to=result), Pointer(to=err)), err)
+        self.out = VectorWriter(result, self.size)
+
+    def all_flat(self) -> Bool:
+        return self.a.all_flat()
+
+    def step(self, arg: Int) -> Int:
+        return self.a.step(arg)
+
+    def numbers[T: AnyType](self, arg: Int) -> Pointer[downcast[T, TrivialRegisterPassable], MutUntrackedOrigin]:
+        return self.a.numbers[T](arg)
+
+    def view(mut self, arg: Int) -> _NodePtr:
+        return self.a.view(arg)
+
+    @always_inline
+    def get[T: AnyType](mut self, arg: Int, node: _NodePtr, row: Int) raises DuckDBError -> T:
+        return self.a.get[T](arg, node, row)
 
     def bind_data[T: AnyType](self) raises DuckDBError -> Pointer[T, MutUntrackedOrigin]:
         var p = null[Pointer[NoneType, MutUntrackedOrigin]]()
@@ -709,6 +811,15 @@ struct ScalarArgs(Movable):
         var p = null[Pointer[NoneType, MutUntrackedOrigin]]()
         var err = null_error_info()
         check(lib().duckdb_v2_scalar_function_exec_get_bind_data(self._info, Pointer(to=p), Pointer(to=err)), err)
+        return p.unsafe_bitcast[T]()[]
+
+    def local_state[T: LocalState](self) raises DuckDBError -> ref[MutUntrackedOrigin] T:
+        """This thread's state (needs `init=init_callback[T]()`)."""
+        var p = null[Pointer[NoneType, MutUntrackedOrigin]]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_scalar_function_exec_get_init_data(self._info, Pointer(to=p), Pointer(to=err)), err)
+        if Int(p) == 0:
+            raise DuckDBError(ErrorCode.API, "the function has no thread state: register it with init=init_callback[...]()")
         return p.unsafe_bitcast[T]()[]
 
     def result(self) raises DuckDBError -> VectorWriter:
