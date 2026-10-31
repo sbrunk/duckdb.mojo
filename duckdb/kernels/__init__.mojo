@@ -6,4 +6,4 @@ from duckdb.kernels.simd import (
     kexp,
     klog10,
 )
-from duckdb.kernels.udf import register_simd_math
+from duckdb.simd_math import register_simd_math

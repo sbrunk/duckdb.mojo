@@ -1,7 +1,7 @@
 """Demo DuckDB extension written in Mojo.
 
 Registers a scalar function `mojo_add_numbers(a BIGINT, b BIGINT) -> BIGINT`
-through the V2 high-level API (`duckdb.v2.Extension`).
+through the V2 high-level API (`duckdb.Extension`).
 
 Build with pixi (from the workspace root):
     pixi run build-demo-extension
@@ -18,7 +18,7 @@ Load in DuckDB:
 """
 
 from duckdb._libduckdb_v2 import duckdb_v2_extension_input
-from duckdb.v2 import Extension, ScalarFunction
+from duckdb import Extension, ScalarFunction
 
 
 def add_numbers(a: Int64, b: Int64) -> Int64:

@@ -26,16 +26,22 @@ requirements:
     - mojo-compiler ==1.2.0
   host:
     - mojo-compiler ==1.2.0
+    - emberserde ==0.2.0
   run:
     # Exact pin, not pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would let a newer
     # release satisfy the install and fail with a version-mismatch error at
     # import time.
     - mojo-compiler ==1.2.0
-    # The bindings dlopen libduckdb at runtime (duckdb/_libduckdb.mojo), so the
-    # shared library must be present. Track the DuckDB minor the FFI bindings
-    # were generated against.
-    - libduckdb >=2.0.0,<2.1
+    # The bindings dlopen libduckdb at runtime, so the shared library must be
+    # present. Exact pin: every function of DuckDB's V2 C API is still
+    # unstable, so the bindings only work with the DuckDB version they were
+    # generated against (checked when the bindings are first used).
+    - libduckdb ==2.0.0
+    # Needed when compiling code that uses the package: the type mapping is
+    # generic code built on emberserde. Requires emberserde 0.2.0 on
+    # modular-community (not released there yet).
+    - emberserde ==0.2.0
 
 tests:
   - script:
@@ -47,7 +53,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=2.0.0,<2.1
+        - libduckdb ==2.0.0
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

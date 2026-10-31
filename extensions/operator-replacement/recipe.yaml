@@ -74,10 +74,6 @@ build:
     # Install Mojo bindings
     mkdir -p $PREFIX/lib/mojo
     cp -r ../src $PREFIX/lib/mojo/operator_replacement
-    
-    # Install examples
-    mkdir -p $PREFIX/share/operator_replacement
-    cp -r ../examples $PREFIX/share/operator_replacement/
 
 requirements:
   build:

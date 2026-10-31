@@ -15,8 +15,7 @@ Run: GPU_OP_NULLABLE=1 GPU_OP_NULLABLE_GROUPED=1 pixi run mojo run \
 (transcendental/stats are only handled on NVIDIA; on Apple they decline, so op==stock anyway.)
 """
 
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 from std.os import getenv, setenv
 from std.sys import has_accelerator
 from std.testing import assert_true
@@ -36,8 +35,7 @@ def main() raises:
     # Rely on the defaults (GPU_OP_NULLABLE / _GROUPED / TRANSCENDENTAL / STATS are all
     # on by default), which also checks the default configuration. Only GPU_OP_GENERIC
     # is toggled below for the stock comparison.
-    var config = Config({"allow_unsigned_extensions": "true"})
-    var con = DuckDB.connect(":memory:", config^)
+    var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     _ = con.execute("LOAD '" + ext + "'")
     # Varied columns:
     #  d2  DECIMAL(15,2) nullable, dense NULLs (i%3)            -- scale 2
@@ -110,9 +108,9 @@ def main() raises:
     var fails = 0
     for i in range(len(q)):
         _ = setenv("GPU_OP_GENERIC", "off", True)
-        var s = con.execute(q[i]).fetch_chunk().get[Optional[String]](col=0, row=0)
+        var s = con.execute(q[i]).get[Optional[String]]()[0]
         _ = setenv("GPU_OP_GENERIC", "", True)
-        var o = con.execute(q[i]).fetch_chunk().get[Optional[String]](col=0, row=0)
+        var o = con.execute(q[i]).get[Optional[String]]()[0]
         var sv = s.value() if Bool(s) else String("<NULL>")
         var ov = o.value() if Bool(o) else String("<NULL>")
         if sv != ov:

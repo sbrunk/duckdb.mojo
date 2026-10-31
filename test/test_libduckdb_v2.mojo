@@ -7,7 +7,6 @@ string views, the `bytes` union and vector views.
 
 from duckdb._libduckdb_v2 import *
 from duckdb._libduckdb_v2 import _duckdb_v2_error_info
-from duckdb.database import _null_ptr
 from duckdb.api_v2 import DuckDBV2, StrArg, check, null, null_error_info, str_to_string
 from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
@@ -34,7 +33,7 @@ struct _Session:
         self.env = duckdb_v2_environment_handle.unsafe_dangling()
         self.instance = duckdb_v2_instance_handle.unsafe_dangling()
         self.conn = duckdb_v2_connection_handle.unsafe_dangling()
-        var err = _null_ptr[_duckdb_v2_error_info, MutUntrackedOrigin]()
+        var err = null[Pointer[_duckdb_v2_error_info, MutUntrackedOrigin]]()
         assert_equal(self.lib.duckdb_v2_environment_create(Pointer(to=self.env), Pointer(to=err)), DUCKDB_V2_ERROR_NONE)
         assert_equal(
             self.lib.duckdb_v2_instance_create(self.env, Pointer(to=self.instance), Pointer(to=err)),
@@ -69,8 +68,8 @@ struct _Session:
             code = self.lib.duckdb_v2_statement_execute(
                 self.conn,
                 statement,
-                _null_ptr[duckdb_v2_identifier_t, ImmUntrackedOrigin](),
-                _null_ptr[duckdb_v2_value_handle, ImmUntrackedOrigin](),
+                null[Pointer[duckdb_v2_identifier_t, ImmUntrackedOrigin]](),
+                null[Pointer[duckdb_v2_value_handle, ImmUntrackedOrigin]](),
                 0,
                 Pointer(to=result),
                 Pointer(to=err),
@@ -98,15 +97,15 @@ def test_struct_sizes() raises:
 
 def test_library_version() raises:
     var lib = LibDuckDBV2()
-    var version = duckdb_v2_str(_null_ptr[c_char, ImmUntrackedOrigin](), 0)
-    var err = _null_ptr[_duckdb_v2_error_info, MutUntrackedOrigin]()
+    var version = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
+    var err = null[Pointer[_duckdb_v2_error_info, MutUntrackedOrigin]]()
     assert_equal(lib.duckdb_v2_library_version(Pointer(to=version), Pointer(to=err)), DUCKDB_V2_ERROR_NONE)
     assert_equal(_str_to_string(version), DUCKDB_V2_SOURCE_VERSION)
 
 
 def test_query_and_read_vectors() raises:
     var s = _Session()
-    var err = _null_ptr[_duckdb_v2_error_info, MutUntrackedOrigin]()
+    var err = null[Pointer[_duckdb_v2_error_info, MutUntrackedOrigin]]()
     var executed = s.execute(
         "SELECT 42::INTEGER AS i, 'a string longer than twelve bytes' AS long_s, 'short' AS short_s", err
     )
@@ -127,9 +126,9 @@ def test_query_and_read_vectors() raises:
             DUCKDB_V2_ERROR_NONE,
         )
         var view = duckdb_v2_vector_view(
-            _null_ptr[NoneType, ImmUntrackedOrigin](),
-            _null_ptr[UInt64, ImmUntrackedOrigin](),
-            _null_ptr[duckdb_v2_sel_t, ImmUntrackedOrigin](),
+            null[Pointer[NoneType, ImmUntrackedOrigin]](),
+            null[Pointer[UInt64, ImmUntrackedOrigin]](),
+            null[Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]](),
             0,
         )
         assert_equal(s.lib.duckdb_v2_vector_get_view(vector, Pointer(to=view), Pointer(to=err)), DUCKDB_V2_ERROR_NONE)
@@ -163,10 +162,10 @@ def test_query_and_read_vectors() raises:
 
 def test_error_info() raises:
     var s = _Session()
-    var err = _null_ptr[_duckdb_v2_error_info, MutUntrackedOrigin]()
+    var err = null[Pointer[_duckdb_v2_error_info, MutUntrackedOrigin]]()
     var executed = s.execute("SELECT * FROM table_that_does_not_exist", err)
     assert_true(executed[0] != DUCKDB_V2_ERROR_NONE)
-    var text = duckdb_v2_str(_null_ptr[c_char, ImmUntrackedOrigin](), 0)
+    var text = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
     assert_equal(s.lib.duckdb_v2_error_info_get_text(err, Pointer(to=text)), DUCKDB_V2_ERROR_NONE)
     assert_true("table_that_does_not_exist" in _str_to_string(text))
     _ = s.lib.duckdb_v2_error_info_destroy(Pointer(to=err))

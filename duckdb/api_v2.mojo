@@ -1,7 +1,6 @@
 """Access to DuckDB's V2 C API functions (`LibDuckDBV2`).
 
-The V2 functions are loaded once per process into a global, the same way the V1
-functions are (see `duckdb.api`):
+The V2 functions are loaded once per process into a global:
 
 - In client mode they are looked up in libduckdb with dlsym. Every V2 function
   is still unstable in DuckDB 2.0, so the libduckdb version must match the one
@@ -18,11 +17,23 @@ ref lib = DuckDBV2().libduckdb()
 ```
 """
 
-from std.ffi import _Global
+from std.ffi import _Global, external_call
 from std.os import abort
 from std.sys.info import size_of
-from duckdb.api import _kgen_insert_global, _kgen_get_global
 from duckdb._libduckdb_v2 import *
+
+
+def _kgen_insert_global(name: StringSlice, ptr: Pointer):
+    external_call["KGEN_CompilerRT_InsertGlobal", NoneType](
+        name, ptr.unsafe_bitcast[NoneType](),
+    )
+
+
+def _kgen_get_global(name: StringSlice) -> Pointer[NoneType, MutUntrackedOrigin]:
+    return external_call[
+        "KGEN_CompilerRT_GetGlobalOrNull",
+        Pointer[NoneType, MutUntrackedOrigin],
+    ](name.unsafe_ptr(), name.byte_length())
 
 comptime _DUCKDB_V2_GLOBAL = _Global["DuckDBV2", _init_duckdb_v2_global]
 

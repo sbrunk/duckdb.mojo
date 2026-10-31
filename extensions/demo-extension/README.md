@@ -107,7 +107,7 @@ example, `demo_mojo.duckdb_extension` needs `demo_mojo_init_c_api_v2`):
 
 ```mojo
 from duckdb._libduckdb_v2 import duckdb_v2_extension_input
-from duckdb.v2 import Extension, ScalarFunction
+from duckdb import Extension, ScalarFunction
 
 def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b

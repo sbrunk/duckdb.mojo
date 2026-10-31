@@ -19,10 +19,6 @@ read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 # Files that can't be compiled in the default environment. Keep this list short
 # and explain every entry. Anything excluded here is not checked for drift.
 EXCLUDE=(
-    # Requires the `full` environment (duckdb-from-source + the
-    # operator_replacement package). Covered separately; see the full-env CI
-    # job rather than this default-env check.
-    "benchmark/tpch_benchmark_op_replacement.mojo"
     # Requires the `gpu` environment (max.gpu).
     "examples/gpu_knn.mojo"
 )

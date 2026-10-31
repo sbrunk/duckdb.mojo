@@ -1,15 +1,15 @@
-"""Test extension for the V2 high-level API (`duckdb.v2.Extension`).
+"""Test extension for the V2 high-level API (`duckdb.Extension`).
 
 Registers functions of every kind the API offers, so the extension tests can
 check them in a DuckDB process that only loads this library.
 """
 
 from duckdb._libduckdb_v2 import duckdb_v2_extension_input
-from duckdb.v2 import BindArgs, BindData, Extension, ScalarArgs, ScalarFunction, VectorWriter, register_simd_math
-from duckdb.v2 import LogicalType, TypeId, bind_callback
-from duckdb.v2 import CastFunction, CustomOption, MacroFunction, Replacement, ReplacementScan, Value
-from duckdb.v2 import AggregateFunction, AggregateState, ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
-from duckdb.duckdb_type import Date
+from duckdb import BindArgs, BindData, Extension, ScalarArgs, ScalarFunction, VectorWriter, register_simd_math
+from duckdb import LogicalType, TypeId, bind_callback
+from duckdb import CastFunction, CustomOption, MacroFunction, Replacement, ReplacementScan, Value
+from duckdb import AggregateFunction, AggregateState, ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
+from duckdb.scalar_types import Date
 
 
 def add(a: Int64, b: Int64) -> Int64:

@@ -1,6 +1,6 @@
 from std.ffi import c_char
 from std.utils import StaticTuple
-from duckdb.duckdb_type import *
+from duckdb.scalar_types import *
 from std.sys.info import CompilationTarget
 from std.os import abort
 from std.pathlib import Path

@@ -1,20 +1,13 @@
-"""Aggregate functions: one-line reductions and the low-level callback API.
+"""Aggregate functions: one-line reductions and custom state structs.
 
     pixi run mojo run examples/aggregate_function.mojo
 """
 
-from std.sys.info import size_of
-from duckdb import *
-from duckdb.aggregate_function import (
-    AggregateFunction,
-    AggregateFunctionInfo,
-    AggregateState,
-    AggregateStateArray,
-)
+import duckdb
+from duckdb import AggregateFunction, AggregateState
 
 
-# ---- Custom reduction: a SIMD combine function plus its identity ----
-
+# A custom reduction: a SIMD combine function plus its identity.
 def add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
     return a + b
 
@@ -23,66 +16,44 @@ def zero() -> Scalar[DType.int64]:
     return 0
 
 
-# ---- Low-level API: a sum over INTEGER that returns BIGINT ----
+# A state struct: one per group. `update` takes the arguments of one row (here
+# one DOUBLE), `combine` merges states computed in parallel, `finalize` gives
+# the result. NULL rows are skipped; a group without rows gives NULL.
+struct Avg(AggregateState):
+    comptime Result = Float64
+    var sum: Float64
+    var n: Int
 
-def state_size(info: AggregateFunctionInfo) -> idx_t:
-    return idx_t(size_of[Int64]())
+    def __init__(out self):
+        self.sum = 0
+        self.n = 0
 
+    def update(mut self, x: Float64):
+        self.sum += x
+        self.n += 1
 
-def state_init(info: AggregateFunctionInfo, state: AggregateState):
-    state.get_data().unsafe_bitcast[Int64]().unsafe_write(0)
+    def combine(mut self, other: Self):
+        self.sum += other.sum
+        self.n += other.n
 
-
-def update(info: AggregateFunctionInfo, mut input: Chunk, states: AggregateStateArray):
-    var data = input.get_vector(0).get_data().unsafe_bitcast[Int32]()
-    for i in range(len(input)):
-        var s = states.get_state(i).get_data().unsafe_bitcast[Int64]()
-        s[] += Int64(data[unsafe_offset=i])
-
-
-def combine(
-    info: AggregateFunctionInfo,
-    source: AggregateStateArray,
-    target: AggregateStateArray,
-    count: Int,
-):
-    for i in range(count):
-        var s = source.get_state(i).get_data().unsafe_bitcast[Int64]()
-        var t = target.get_state(i).get_data().unsafe_bitcast[Int64]()
-        t[] += s[]
-
-
-def finalize(
-    info: AggregateFunctionInfo,
-    source: AggregateStateArray,
-    mut result: Vector,
-    count: Int,
-    offset: Int,
-):
-    var out = result.get_data().unsafe_bitcast[Int64]()
-    for i in range(count):
-        out[unsafe_offset=offset + i] = source.get_state(i).get_data().unsafe_bitcast[Int64]()[]
+    def finalize(self) -> Float64:
+        return self.sum / Float64(self.n)
 
 
 def main() raises:
-    var conn = DuckDB.connect(":memory:")
-    _ = conn.execute("CREATE TABLE t AS SELECT i::INTEGER AS x FROM range(1000) r(i)")
+    var con = duckdb.connect()
+    _ = con.execute("CREATE TABLE t AS SELECT i::BIGINT AS x, i % 3 AS g FROM range(1000) r(i)")
 
     # Built-in reductions, one line each
-    AggregateFunction.from_sum["mojo_sum", DType.int64](conn)
-    AggregateFunction.from_max["mojo_max", DType.int64](conn)
+    con.register(AggregateFunction.from_sum["mojo_sum", DType.int64]())
+    con.register(AggregateFunction.from_max["mojo_max", DType.int64]())
 
-    # Custom reduction, accumulating INTEGER input into BIGINT
-    AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
+    # Custom reduction
+    con.register(AggregateFunction.from_reduce["my_sum", DType.int64, add, zero]())
 
-    # Low-level API
-    var func = AggregateFunction()
-    func.set_name("my_sum")
-    func.add_parameter(LogicalType(DuckDBType.integer))
-    func.set_return_type(LogicalType(DuckDBType.bigint))
-    func.set_functions[state_size, state_init, update, combine, finalize]()
-    func.register(conn)
+    # Custom state; the signature is inferred from `Avg.update`
+    con.register(AggregateFunction.from_state["my_avg", Avg.update]())
 
-    conn.execute(
-        "SELECT mojo_sum(x::BIGINT), mojo_max(x::BIGINT), wide_sum(x), my_sum(x) FROM t"
+    con.execute(
+        "SELECT g, mojo_sum(x), mojo_max(x), my_sum(x), my_avg(x::DOUBLE) FROM t GROUP BY g ORDER BY g"
     ).show()

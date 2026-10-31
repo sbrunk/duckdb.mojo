@@ -1,275 +1,93 @@
-"""DuckDB Extension support for Mojo.
+"""DuckDB extensions written in Mojo, on DuckDB's V2 C API.
 
-This module provides the types and utilities needed to create DuckDB extensions
-in Mojo using the C Extension API.
-
-A DuckDB extension is a shared library (.so/.dylib) that exports a C-compatible
-entry point function. When loaded by DuckDB, the entry point receives access to
-the DuckDB API to register new functions, types, etc.
-
-## Quick Start
-
-To create an extension, you need to:
-1. Write your functions using the existing duckdb.mojo API (ScalarFunction, etc.)
-2. Create an init function that registers them via a `Connection` to the
-   extension's `Database`
-3. Export the entry point using `@export`
-
-Example:
 ```mojo
-from duckdb.extension import Extension, duckdb_extension_access
-from duckdb._libduckdb import duckdb_extension_info
-from duckdb import Connection, ScalarFunction
+from duckdb._libduckdb_v2 import duckdb_v2_extension_input
+from duckdb import Extension, ScalarFunction
 
-def add_one(x: Int64) -> Int64:
-    return x + 1
+def add(a: Int64, b: Int64) -> Int64:
+    return a + b
 
-def init(conn: Connection) raises:
-    ScalarFunction.from_function[
-        "add_one", DType.int64, DType.int64, add_one
-    ](conn)
+def init(ext: Extension) raises:
+    ext.register(ScalarFunction.from_function["my_add", add]())
 
-@export("my_extension_init_c_api")
-def my_extension_init(
-    info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access],
-) abi("C") -> Bool:
-    return Extension.run[init](info, access)
+@export("my_ext_init_c_api_v2")
+def my_ext_init(input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]) abi("C"):
+    Extension.run[init](input)
 ```
 
-Then build with:
+Build it as a shared library and add the footer for the unstable V2 target:
+
 ```sh
-mojo build my_extension.mojo --emit shared-lib -o my_extension.duckdb_extension
+mojo build my_ext.mojo --emit shared-lib -o my_ext.duckdb_extension
+python3 scripts/append_extension_metadata.py my_ext.duckdb_extension --abi-type C_STRUCT_UNSTABLE
 ```
 
-And load in DuckDB:
-```sql
-LOAD 'my_extension.duckdb_extension';
-SELECT add_one(41);  -- Returns 42
-```
+The extension loads only into the exact DuckDB build it was compiled
+against (every V2 function is still unstable). An extension cannot run SQL:
+it has no `Connection`.
 """
 
-from duckdb._libduckdb import *
-from duckdb.database import Database
-from duckdb.connection import Connection
-from duckdb.api import DuckDB, _set_ext_api_ptr
-
-# ===--------------------------------------------------------------------===#
-# Extension API version
-# ===--------------------------------------------------------------------===#
-
-comptime EXTENSION_API_VERSION = DUCKDB_EXTENSION_API_VERSION
-"""The C Extension API version this library targets.
-
-This corresponds to `DUCKDB_EXTENSION_API_VERSION_STRING` in duckdb_extension.h.
-`get_api` requests this version by default. DuckDB loads the extension only if
-its own C API version is at least this one (DuckDB 1.5.6 or newer for v1.5.6).
-"""
-
-comptime ExtApi = duckdb_ext_api_v1
-"""The extension API struct type for `EXTENSION_API_VERSION`."""
+from duckdb._libduckdb_v2 import *
+from duckdb.api_v2 import null, null_error_info
+from duckdb.extension_v2 import ExtensionV2
+from duckdb._runtime import check, lib
+from duckdb.error import DuckDBError
+from duckdb.functions import RegistrationTarget, Registrar
+from duckdb._runtime import api_error
+from duckdb.files import FileSystem, context_file_system
+from duckdb.settings import Settings, context_settings
 
 
-# ===--------------------------------------------------------------------===#
-# Extension C API types
-# ===--------------------------------------------------------------------===#
+struct Extension(Movable, Registrar):
+    """The extension being loaded, as seen from its init function."""
 
-@fieldwise_init
-struct duckdb_extension_access(ImplicitlyCopyable, Movable):
-    """The C struct passed to extension entry points by DuckDB.
+    var _ext: duckdb_v2_extension_handle
+    var _context: duckdb_v2_context_handle
 
-    Contains function pointers for:
-    - `set_error`: Report an error during extension initialization.
-    - `get_database`: Get the database handle to register functions with.
-    - `get_api`: Get the versioned C API function pointer struct.
-    """
+    def __init__(out self, ext: ExtensionV2):
+        self._ext = ext.extension
+        self._context = ext.context
 
-    var set_error: def(
-        duckdb_extension_info, Pointer[c_char, ImmutAnyOrigin]
-    ) thin abi("C") -> NoneType
-    var get_database: def(
-        duckdb_extension_info,
-    ) thin abi("C") -> Pointer[duckdb_database, MutUntrackedOrigin]
-    var get_api: def(
-        duckdb_extension_info, Pointer[c_char, ImmutAnyOrigin]
-    ) thin abi("C") -> Pointer[NoneType, ImmUntrackedOrigin]
+    def factory(self) raises DuckDBError -> duckdb_v2_factory_handle:
+        """The factory of the load context (valid while the init function runs)."""
+        var factory = null[duckdb_v2_factory_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_context_get_factory(self._context, Pointer(to=factory), Pointer(to=err)), err)
+        return factory
 
+    def _register_scalar_handle(self, function: duckdb_v2_scalar_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_extension_register_scalar_function(self._ext, function, Pointer(to=err)), err)
 
-# ===--------------------------------------------------------------------===#
-# Extension
-# ===--------------------------------------------------------------------===#
+    def _register_aggregate_handle(self, function: duckdb_v2_aggregate_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_extension_register_aggregate_function(self._ext, function, Pointer(to=err)), err)
 
+    def _register_table_handle(self, function: duckdb_v2_table_function_handle) raises DuckDBError:
+        var err = null_error_info()
+        check(lib().duckdb_v2_extension_register_table_function(self._ext, function, Pointer(to=err)), err)
 
-struct Extension(Movable):
-    """Access to a DuckDB database from within an extension.
+    def _target(self) -> RegistrationTarget:
+        return RegistrationTarget(null[duckdb_v2_connection_handle](), self._ext, null[duckdb_v2_instance_handle]())
 
-    Provides a non-owning `Database` handle and convenience `connect()` method
-    for creating connections and registering functions, types, etc.
+    def _run_sql(self, sql: String) raises DuckDBError:
+        raise api_error("an extension cannot run SQL")
 
-    Example:
-    ```mojo
-    @export("my_ext_init_c_api")
-    def my_ext_init(
-        info: duckdb_extension_info,
-        access: UnsafePointer[duckdb_extension_access],
-    ) abi("C") -> Bool:
-        var ext = Extension(info, access)
-        try:
-            var conn = ext.connect()
-            # Register functions via conn ...
-        except:
-            return False
-        return True
-    ```
-    """
+    def settings(self) raises DuckDBError -> Settings[ImmUntrackedOrigin]:
+        """The settings of the load context (valid while the init function runs)."""
+        return context_settings(self._context)
 
-    var _info: duckdb_extension_info
-    var _access: Pointer[duckdb_extension_access, MutUntrackedOrigin]
-
-    def __init__(
-        out self,
-        info: duckdb_extension_info,
-        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
-    ):
-        """Create an Extension from the DuckDB-provided info and access.
-
-        Args:
-            info: The extension info handle from DuckDB.
-            access: Pointer to the extension access struct from DuckDB.
-        """
-        self._info = info
-        self._access = access
-
-    def database(self) -> Database:
-        """Return a non-owning Database handle for this extension's database."""
-        var db_ptr = self._access[].get_database(self._info)
-        return Database(_handle=db_ptr[])
-
-    def connect(self) raises -> Connection:
-        """Create a connection to the extension's database.
-
-        Example:
-        ```mojo
-        var conn = ext.connect()
-        ```
-        """
-        return Connection(self.database())
-
-    def set_error(self, error: String):
-        """Report an error back to DuckDB."""
-        var error_copy = error.copy()
-        self._access[].set_error(
-            self._info, error_copy.as_c_string_span().ptr().as_unsafe_any_origin()
-        )
-
-    def get_api(
-        self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[Pointer[NoneType, ImmUntrackedOrigin]]:
-        """Request the DuckDB C API function pointer struct (untyped).
-
-        Returns an opaque pointer that can be bitcast to the appropriate
-        ``duckdb_ext_api_v1`` struct.
-
-        Args:
-            version: The semver API version string to request (e.g. "v1.5.6").
-                Defaults to `EXTENSION_API_VERSION`.
-
-        Returns:
-            An opaque pointer to the API struct, or `None` if unsupported.
-        """
-        var version_copy = version.copy()
-        return self._access[].get_api(
-            self._info, version_copy.as_c_string_span().ptr().as_unsafe_any_origin()
-        )
-
-    def get_api_typed[
-        ApiStruct: AnyType = ExtApi
-    ](
-        self, version: String = EXTENSION_API_VERSION
-    ) -> Optional[Pointer[ApiStruct, ImmUntrackedOrigin]]:
-        """Request the DuckDB C API as a typed struct pointer.
-
-        Returns a pointer to the API struct with the expected struct layout.
-
-        Parameters:
-            ApiStruct: The struct type to cast to. Defaults to ``ExtApi``
-                (same as ``duckdb_ext_api_v1``).
-
-        Args:
-            version: The semver API version string to request.
-
-        Returns:
-            A typed pointer to the API struct, or `None` if unsupported.
-
-        Example:
-        ```mojo
-        var api = ext.get_api_typed[ExtApi]()
-        if api is None:
-            ext.set_error("Unsupported API version")
-            return False
-        # Access function pointers via api.value()[].duckdb_open(...)
-        ```
-        """
-        var raw = self.get_api(version)
-        if raw is None:
-            return None
-        return raw.value().unsafe_bitcast[ApiStruct]()
+    def file_system(self) raises DuckDBError -> FileSystem[ImmUntrackedOrigin]:
+        """The file system of the load context (valid while the init function runs)."""
+        return context_file_system(self._context)
 
     @staticmethod
-    def run[
-        init_fn: def(conn: Connection) raises thin -> None,
-    ](
-        info: duckdb_extension_info,
-        access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
-    ) -> Bool:
-        """Run an extension init function with automatic error handling.
+    def run[init: def(ext: Extension) raises thin -> None](
+        input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]
+    ):
+        """Load the V2 API, then run `init`. If it raises, the load fails with its message."""
+        ExtensionV2.run[_init[init], unstable=True](input)
 
-        Creates an `Extension`, requests the C API struct for
-        `EXTENSION_API_VERSION`, connects to the database, calls `init_fn`,
-        and reports any errors back to DuckDB.
 
-        Parameters:
-            init_fn: A function that receives a ``Connection``
-                and registers extension functionality.  Raise on failure.
-
-        Args:
-            info: The extension info handle from DuckDB.
-            access: Pointer to the extension access struct from DuckDB.
-
-        Returns:
-            True on success, False on failure.
-
-        Example:
-        ```mojo
-        def init(conn: Connection) raises:
-            ScalarFunction.from_function[
-                "add_one", DType.int64, DType.int64, add_one
-            ](conn)
-
-        @export("my_ext_init_c_api")
-        def my_ext_init(
-            info: duckdb_extension_info,
-            access: UnsafePointer[duckdb_extension_access],
-        ) abi("C") -> Bool:
-            return Extension.run[init](info, access)
-        ```
-        """
-        var ext = Extension(info, access)
-
-        var api_ptr = ext.get_api_typed[ExtApi]()
-        if api_ptr is None:
-            ext.set_error(
-                "Incompatible DuckDB C API version (requested "
-                + EXTENSION_API_VERSION
-                + ")"
-            )
-            return False
-        _set_ext_api_ptr(api_ptr.value())
-
-        try:
-            var conn = Connection(ext.database())
-            init_fn(conn)
-        except e:
-            ext.set_error(String(e))
-            return False
-        return True
+def _init[init: def(ext: Extension) raises thin -> None](ext: ExtensionV2) raises:
+    init(Extension(ext))

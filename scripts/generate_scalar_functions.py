@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the per-arity parts of duckdb/v2/functions.mojo.
+"""Generate the per-arity parts of duckdb/functions.mojo.
 
 Mojo infers a function's argument types from a function value, but not
 through variadic function types, so `ScalarFunction.from_function` has one
@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 MAX_ARITY = 8
-PATH = Path(__file__).resolve().parent.parent / "duckdb" / "v2" / "functions.mojo"
+PATH = Path(__file__).resolve().parent.parent / "duckdb" / "functions.mojo"
 AGG_PATH = PATH.parent / "aggregate.mojo"
 
 

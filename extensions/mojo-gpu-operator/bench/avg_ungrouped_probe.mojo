@@ -12,8 +12,7 @@ grouped, Q6 is a sum). Run without env flags:
         extensions/mojo-gpu-operator/bench/avg_ungrouped_probe.mojo
 """
 
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 from std.os import getenv
 from std.sys import has_accelerator
 
@@ -26,8 +25,7 @@ def main() raises:
         "GPU_OP_EXT",
         "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension",
     )
-    var config = Config({"allow_unsigned_extensions": "true"})
-    var con = DuckDB.connect(":memory:", config^)
+    var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     _ = con.execute("LOAD '" + ext + "'")
     # Single-column NOT NULL table; c = i % 1000, so avg = 499.5.
     _ = con.execute("CREATE TABLE one(c BIGINT NOT NULL)")
@@ -39,23 +37,15 @@ def main() raises:
     )
 
     # Repro the original failure: sum(c) first, then avg(c), same table and columns.
-    var s_first = con.execute("SELECT sum(c) FROM one").fetch_chunk().get[
-        Optional[Int128]
-    ](col=0, row=0)
-    var a_after = con.execute("SELECT avg(c) FROM one").fetch_chunk().get[
-        Optional[Float64]
-    ](col=0, row=0)
+    var s_first = con.execute("SELECT sum(c) FROM one").get[Optional[Int128]]()[0]
+    var a_after = con.execute("SELECT avg(c) FROM one").get[Optional[Float64]]()[0]
     print("sum(c) then avg(c) FROM one -> sum=",
           String(s_first.value()) if Bool(s_first) else "NULL",
           " avg=", a_after.value() if Bool(a_after) else Float64(-1),
           "  (avg CPU truth 499.5)")
 
-    var a1 = con.execute("SELECT avg(c) FROM one").fetch_chunk().get[
-        Optional[Float64]
-    ](col=0, row=0)
-    var a2 = con.execute("SELECT avg(c) FROM two").fetch_chunk().get[
-        Optional[Float64]
-    ](col=0, row=0)
+    var a1 = con.execute("SELECT avg(c) FROM one").get[Optional[Float64]]()[0]
+    var a2 = con.execute("SELECT avg(c) FROM two").get[Optional[Float64]]()[0]
     print("avg(c) FROM one(single col) =", a1.value() if Bool(a1) else Float64(-1),
           "  (CPU truth 499.5)")
     print("avg(c) FROM two(2 cols)     =", a2.value() if Bool(a2) else Float64(-1),

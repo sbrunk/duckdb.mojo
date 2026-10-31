@@ -93,8 +93,6 @@ jobs:
             mojo-cache-v3-${{ matrix.target }}-${{ steps.cpu.outputs.key }}-
 
       - name: Run test suite
-        env:
-          DUCKDB_MOJO_FULL_TESTS: "1"
         run: |
           source $HOME/.bash_profile
           pixi run test

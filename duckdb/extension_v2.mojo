@@ -1,8 +1,8 @@
-"""DuckDB extensions in Mojo on the V2 C API (experimental).
+"""The raw entrypoint for DuckDB extensions on the V2 C API.
 
-DuckDB 2.0 can load extensions written against two C APIs. `duckdb.extension`
-covers V1. This module covers V2, which exposes more of DuckDB (filter
-pushdown, non-flat vectors, grouped aggregates, custom options, log sinks, ...).
+`duckdb.Extension` builds on it and is what extensions normally use. Use this
+module directly only to write an extension against the raw V2 functions
+(`LibDuckDBV2`).
 
 An extension picks one of two targets when it is built:
 

@@ -13,8 +13,7 @@ Run from the repo root (extension built):
         extensions/mojo-gpu-operator/bench/nullable_f64_sql_test.mojo
 """
 
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 from std.math import sqrt
 from std.os import getenv, setenv
 from std.sys import has_accelerator
@@ -33,8 +32,7 @@ def main() raises:
     _ = setenv("GPU_OP_TRANSCENDENTAL", "1", True)
     _ = setenv("GPU_OP_STATS", "1", True)
 
-    var config = Config({"allow_unsigned_extensions": "true"})
-    var con = DuckDB.connect(":memory:", config^)
+    var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     _ = con.execute("LOAD '" + ext + "'")
     # x: positive (sqrt/ln safe) nullable DECIMAL; y: nullable DECIMAL; f: nullable INT.
     # f64 paths decline on raw DOUBLE, so use DECIMAL.
@@ -62,15 +60,11 @@ def main() raises:
     for k in range(len(sqls)):
         # stock (operator disabled)
         _ = setenv("GPU_OP_GENERIC", "off", True)
-        var rs = con.execute(sqls[k]).fetch_chunk().get[Optional[Float64]](
-            col=0, row=0
-        )
+        var rs = con.execute(sqls[k]).get[Optional[Float64]]()[0]
         # operator on (+ shadow to see routing)
         _ = setenv("GPU_OP_GENERIC", "", True)
         _ = setenv("GPU_OP_SHADOW", "1", True)
-        var ro = con.execute(sqls[k]).fetch_chunk().get[Optional[Float64]](
-            col=0, row=0
-        )
+        var ro = con.execute(sqls[k]).get[Optional[Float64]]()[0]
         _ = setenv("GPU_OP_SHADOW", "", True)
 
         var sv = rs.value() if Bool(rs) else Float64(0)

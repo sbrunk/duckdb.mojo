@@ -21,12 +21,17 @@ requirements:
     - mojo-compiler ==1.2.0
   host:
     - mojo-compiler ==1.2.0
+    - emberserde ==0.2.0
   run:
     # Exact pin, not pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would allow a newer
     # release at install time, which fails with a version-mismatch error.
     - mojo-compiler ==1.2.0
-    - libduckdb >=2.0.0,<2.1
+    # Exact pin: every function of DuckDB's V2 C API is still unstable.
+    - libduckdb ==2.0.0
+    # Generic code built on emberserde is compiled in user code. Requires
+    # emberserde 0.2.0 on modular-community (not released there yet).
+    - emberserde ==0.2.0
 
 tests:
   - script:
@@ -38,7 +43,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=2.0.0,<2.1
+        - libduckdb ==2.0.0
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

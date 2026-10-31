@@ -9,24 +9,21 @@ duckdb.mojo provides Mojo bindings for DuckDB with two modes:
 ## Tech Stack
 
 - **Language:** Mojo (stable releases, pinned in pixi.toml)
-- **Database:** DuckDB 2.0 (V1 C API via auto-generated FFI bindings)
+- **Database:** DuckDB 2.0.0 (V2 C API via auto-generated FFI bindings; the raw V1 bindings are generated too)
 - **Package manager:** Pixi (conda-based, config in pixi.toml)
 - **CI:** GitHub Actions (test.yml - runs on linux-64, linux-aarch64, osx-arm64)
 
 ## Project Structure
 
 - `duckdb/` - Main library source (the `duckdb` Mojo package)
-  - `_libduckdb.mojo` - Auto-generated low-level C API bindings (do not edit manually)
-  - `_libduckdb_v2.mojo` - Auto-generated low-level bindings for DuckDB's V2 C API (do not edit manually, not used by the high-level API yet)
-  - `connection.mojo`, `database.mojo`, `result.mojo` - Core client API
-  - `scalar_function.mojo`, `aggregate_function.mojo`, `table_function.mojo` - UDF registration
-  - `extension.mojo` - Extension development support (V1 C API)
-  - `api_v2.mojo`, `extension_v2.mojo` - V2 C API runtime and extension entrypoint (experimental)
-  - `chunk.mojo`, `vector.mojo`, `value.mojo`, `logical_type.mojo` - Data types
-  - `kernels/` - reusable Mojo SIMD kernels (`simd.mojo`) + `register_simd_math` scalar UDF helpers
+  - `_libduckdb_v2.mojo` - Auto-generated low-level bindings for DuckDB's V2 C API, used by the high-level API (do not edit manually)
+  - `_libduckdb.mojo` - Auto-generated low-level V1 C API bindings, kept as an escape hatch, not used by the high-level API (do not edit manually)
+  - `api_v2.mojo`, `extension_v2.mojo` - raw V2 runtime (library global, `StrArg`, `null`) and raw extension entrypoint
+  - everything else - the high-level API, see "High-level API" below
+  - `kernels/` - reusable Mojo SIMD kernels (`simd.mojo`); `register_simd_math` lives in `simd_math.mojo`
 - `test/` - Test files (one per module, named `test_*.mojo`)
 - `extensions/demo-extension/` - Working example DuckDB extension in Mojo
-- `extensions/test-extension/` - Extensions used for testing (V1 and V2 C API, built by `build.sh`)
+- `extensions/test-extension/` - Extensions used for testing (raw V2 C API and high-level API, built by `build.sh`)
 - `examples/` - Standalone example programs (`example.mojo` is run in CI as a smoke test; `gpu_knn.mojo` needs a GPU and the `gpu` environment: `pixi run -e gpu mojo run examples/gpu_knn.mojo`)
 - `benchmark/` - Performance benchmarks
 - `scripts/` - Code generation and build helpers
@@ -59,38 +56,40 @@ pixi run bench-knn            # Mojo vector-search harness: stock/cpu-simd/vss-H
 
 - Tests are individual Mojo files in `test/`, one per module
 - Run all: `pixi run test` (runs test-library + test-demo-extension + test-extension)
-- Run single: `pixi run mojo run test/test_connection.mojo`
+- Run single: `pixi run mojo run test/test_results.mojo` (a few minutes; the first test includes compile time)
 - Tests use assertions (no test framework) - a non-zero exit code indicates failure
 
 ## Key Patterns
 
 - `_libduckdb.mojo` is auto-generated from DuckDB's YAML API spec in the `third_party/duckdb` submodule (`api_spec/v1/`, which replaced the JSON files under `header_generation/` in DuckDB 1.5.6). The generator also checks its extension API struct layout against the submodule's `duckdb_extension.h`. Regenerate with `pixi run generate-api` after bumping the DuckDB version. Move the submodule pin first (see "Updating DuckDB" below). CI runs `check-generated-api` (a dedicated job in `test.yml`) to fail the build if the committed bindings are stale, so a forgotten regeneration can't slip into main. `pixi run clone-duckdb` initializes the submodule and warns if its tag doesn't match the installed `duckdb`.
-- Extensions use the DuckDB Extension C API (V1) and request API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`. DuckDB 2.0 added two functions (`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6 band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6 engine lacks their slots. The generator keeps them out of our struct and binds them to stubs in extension mode, so extensions still load on 1.5.6 (they work normally in client mode). DuckDB 2.0's new V2 C API (`api_spec/v2`, `duckdb_v2_*`) is not used by the high-level API or extensions yet: every V2 function is still marked unstable, so a V2 extension would only load on the exact DuckDB version it was built for.
+- Extensions use the V2 C API (see below). The raw V1 bindings still carry the V1 extension API struct, at API version v1.5.6 (`EXT_API_STABLE_VERSION` in `scripts/generate_mojo_api.py`, emitted as `DUCKDB_EXTENSION_API_VERSION`; keep the `--capi-version` default in `scripts/append_extension_metadata.py` in sync). DuckDB 1.5.6 stabilized all previously unstable functions, so `duckdb_ext_api_v1` holds the whole API and there is no separate unstable struct. Functions newer than that version would be left out of the struct. In extension mode they are bound to generated stubs that abort only when called. They are not looked up with dlsym, because `_find_dylib` aborts if the host has no loadable `libduckdb`. DuckDB 2.0 added two functions (`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6 band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6 engine lacks their slots. The generator keeps them out of our struct and binds them to stubs in extension mode, so extensions still load on 1.5.6 (they work normally in client mode). Every V2 function is still marked unstable, so a V2 extension loads only on the exact DuckDB version it was built for, and each package release pins `libduckdb` exactly.
 - `_libduckdb_v2.mojo` is generated from `api_spec/v2/` by `scripts/generate_mojo_api_v2.py` (also part of `generate-api` and `check-generated-api`). Unlike the V1 generator it writes every type from the spec (handles, enums, structs including the `bytes` union, aliases, callbacks, constants) and wraps all functions in `LibDuckDBV2`. It checks the extension struct layout against `duckdb_extension_v2.h` (V2 functions have no `offset` while unstable; DuckDB orders the unstable tail by lifecycle date, then name), the parameter count of every function and every enum value against `duckdb_v2.h`. It emits `duckdb_ext_api_v2` (the stable part, empty in 2.0.0) and `duckdb_ext_api_v2_unstable` (everything). `LibDuckDBV2()` loads the functions with dlsym and raises if one is missing; the two other constructors take the extension structs, and with the stable one the unstable functions are bound to aborting stubs. `test/test_libduckdb_v2.mojo` checks struct sizes and runs a query through the raw V2 functions.
 - V2 runtime and extensions: `duckdb/api_v2.mojo` holds the process-wide `LibDuckDBV2` (`DuckDBV2().libduckdb()`), plus helpers: `check(code, err)` turns a V2 error code and error info into an `Error`, `null[P]()` gives NULL for optional pointer/handle arguments (never pass `unsafe_dangling()` where DuckDB may read the value), `StrArg` owns a string argument and ties its `const duckdb_v2_str *` to itself. Do not build a `duckdb_v2_str` view of a local `String` and use it later: Mojo frees the String after its last use. In client mode the global aborts if `duckdb_v2_library_version` differs from `DUCKDB_V2_SOURCE_VERSION`. `duckdb/extension_v2.mojo` has `ExtensionV2.run[init, unstable=...]` for the `<name>_init_c_api_v2` entrypoint. `unstable=True` uses `duckdb_ext_api_v2_unstable` and needs the footer `--abi-type C_STRUCT_UNSTABLE` (version defaults to `DUCKDB_V2_SOURCE_VERSION`, read from the bindings by `append_extension_metadata.py`); `unstable=False` uses `duckdb_ext_api_v2` and needs `--capi-version v2.x.y`. DuckDB 2.0.0 refuses the stable target. The V2 test extension (`extensions/test-extension/src/test_v2_extension.mojo`, built by `extensions/test-extension/build.sh` into three copies with different footers) registers `mojo_v2_add` through the raw API. Lessons from it: view-based reads need `vector_flatten` for SEQUENCE/FSST/shredded vectors (`range()` produces SEQUENCE), and in a scalar exec callback `vector_set_null` fails on the result vector (its size is still 0), so write NULLs through `vector_flat_get_validity_mutable`.
 
-## V2 high-level API (`duckdb/v2/`, in progress)
+## High-level API (`duckdb/`)
 
-The new high-level API on the V2 C API is built in `duckdb/v2/` next to the V1-based one and replaces it at the end (design: `docs/design/v2-high-level-api.md`). Its "Open points" section is the one list of open work; keep it current. Rules learned so far:
+The high-level API is built on the V2 C API only (design: `docs/design/v2-high-level-api.md`). Its "Open points" section is the one list of open work; keep it current. Rules learned so far:
 
-- `__extension` conformances (e.g. `Int64` or `String` to `DuckDBMapped`) and `__extension` methods are only visible in the module that declares them. Never use such a trait as a bound in a public generic; take `T: Movable & Deinitable` and call the dispatch functions in `duckdb/v2/mapping.mojo` (`mapped_read[T]`, `mapped_accepts[T]`, `mapped_to_value[T]`, ...).
+- `__extension` conformances (e.g. `Int64` or `String` to `DuckDBMapped`) and `__extension` methods are only visible in the module that declares them. Never use such a trait as a bound in a public generic; take `T: Movable & Deinitable` and call the dispatch functions in `duckdb/mapping.mojo` (`mapped_read[T]`, `mapped_accepts[T]`, `mapped_to_value[T]`, ...).
 - Wrappers around handles borrowed from another object (`Settings`, `FileSystem`, `MetricsNode`) must carry the owner's origin, or `con.settings().get(...)` on the connection's last line destroys the connection before `get` runs. This showed up as confusing DuckDB errors ("mutex lock failed", internal errors), not as a crash in Mojo code.
 - Mojo frees a value right after its last use. When a raw handle or pointer from an owner (`value.handle()`, `list.unsafe_ptr()`, a chunk's data) is passed to DuckDB, keep the owner alive past the call (`_ = owner^`) or tie the borrower to the owner's origin.
 - Generic return types need `Movable & Deinitable`. Default argument values must be compile-time constants.
 - `Iterator.__next__` may only raise `StopIteration`, which `for` loops swallow. For iteration that can fail (streaming results), use the other loop protocol the compiler accepts: a raising `__has_next__()` plus a non-raising `__next__()` (see `ChunkIter`; not an `Iterator`, so no `enumerate`). Offer a standard `Iterator` of result-or-error elements next to it (see `TryChunkIter`). Loop variables are immutable references; `for var x in ...` gives an owned element.
 - Mojo does not stop a second mutable borrow from being created and kept, but it rejects two mutable borrows of one value passed to the same call. Objects shared by many borrowers (`Connection`) take `self` immutably when their Mojo fields don't change.
 - V2 query results are always flat vectors; constant, dictionary and sequence vectors only reach callbacks. `ColumnReader` still handles all of them.
-- Nested types go through emberserde in `duckdb/v2/serde.mojo`: `_Cursor` (reading) and `_Writer` (writing) check `is_mapped[T]()` first and handle scalars in their storage layout; everything else goes to emberserde. A struct read from DuckDB must be `Defaultable` when it has non-trivial fields (`String`, `List`, nested structs). emberserde is a git dependency (tag `0.2.0`).
-- Functions: scalar in `duckdb/v2/functions.mojo`, aggregate in `aggregate.mojo`, table in `table.mojo`, signatures (names, defaults, kinds) in `signature.mojo`, casts/replacement scans/macros/pragmas/options/custom types in `extend.mojo`, filter-pushdown expressions in `expression.mojo`, `COPY` formats in `copy.mojo`. Also: settings (`settings.mojo`), file system (`files.mojo`), profiling and logging (`observe.mojo`), Arrow (`arrow.mojo`). Every V2 aggregate needs bind data that tells it apart (`_identity_bind`): DuckDB merges aggregate calls whose C++ callbacks match, and all C API aggregates share them.
-- Scalar functions: `duckdb/v2/functions.mojo`. The per-arity `from_function`/`from_state` overloads and their callbacks are generated: edit `scripts/generate_scalar_functions.py`, then run it (it rewrites the BEGIN/END GENERATED regions in `functions.mojo` and `aggregate.mojo`). Speed: `benchmark/v2_udf_bench.mojo` (V2 vs V1 vs built-ins). V2 extensions use `duckdb.v2.Extension.run[init]` with the `C_STRUCT_UNSTABLE` footer (see `extensions/demo-extension`).
+- Nested types go through emberserde in `duckdb/serde.mojo`: `_Cursor` (reading) and `_Writer` (writing) check `is_mapped[T]()` first and handle scalars in their storage layout; everything else goes to emberserde. A struct read from DuckDB must be `Defaultable` when it has non-trivial fields (`String`, `List`, nested structs). emberserde is a git dependency (tag `0.2.0`).
+- Functions: scalar in `duckdb/functions.mojo`, aggregate in `aggregate.mojo`, table in `table.mojo`, signatures (names, defaults, kinds) in `signature.mojo`, casts/replacement scans/macros/pragmas/options/custom types in `extend.mojo`, filter-pushdown expressions in `expression.mojo`, `COPY` formats in `copy.mojo`. Also: settings (`settings.mojo`), file system (`files.mojo`), profiling and logging (`observe.mojo`), Arrow (`arrow.mojo`). Every V2 aggregate needs bind data that tells it apart (`_identity_bind`): DuckDB merges aggregate calls whose C++ callbacks match, and all C API aggregates share them.
+- Scalar functions: `duckdb/functions.mojo`. The per-arity `from_function`/`from_state` overloads and their callbacks are generated: edit `scripts/generate_scalar_functions.py`, then run it (it rewrites the BEGIN/END GENERATED regions in `functions.mojo` and `aggregate.mojo`). Speed: `benchmark/udf_bench.mojo` (Mojo functions vs built-ins). Extensions use `duckdb.Extension.run[init]` with the `C_STRUCT_UNSTABLE` footer (see `extensions/demo-extension`).
 - A bare list literal passed to a generic parameter (`Value([1, 2])`) becomes an `Array[T, n]`, not a `List`, so generic APIs must map `Array` too. A `List[T]` overload next to a generic `T` one is ambiguous.
-- Adding fields to structs on the hot read path (`ColumnMeta`, tree nodes) can cost measurable speed even when reads never touch them (a `Dict` field cost 25%); keep rarely used data behind a pointer and rerun `benchmark/v2_serde_bench.mojo`.
+- The package root re-exports the module-level API of `default.mojo` (`duckdb.sql`, `duckdb.execute`, `duckdb.connect`, ...) on a process-wide in-memory connection.
+- Raw chunk kernels: `ColumnReader.unsafe_data()` is indexed through the selection; `is_flat()` means row i is at index i, `is_constant()` means every row is at index 0 (literals passed to functions). `Chunk.array_span[T](col)` gives the elements of a flat ARRAY column without copying.
+- Adding fields to structs on the hot read path (`ColumnMeta`, tree nodes) can cost measurable speed even when reads never touch them (a `Dict` field cost 25%); keep rarely used data behind a pointer and rerun `benchmark/serde_bench.mojo`.
 
 ## SIMD kernels and the override extension
 
 Mojo SIMD kernels live in `duckdb/kernels/simd.mojo` and are used two ways:
 
-- **Named UDFs (part of the package):** `duckdb.kernels.register_simd_math(conn)` registers
+- **Named UDFs (part of the package):** `duckdb.register_simd_math(con)` registers
   `mojo_sqrt`/`sin`/`cos`/`ln`/`exp`/`log10` as scalar functions. The kernels ship inside the
   precompiled `duckdb-mojo` package, so there is nothing extra to build or `LOAD`.
 - **Built-in overrides (`extensions/mojo-kernel-overrides`):** a self-contained CPP-ABI DuckDB

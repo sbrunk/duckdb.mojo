@@ -1,7 +1,7 @@
 """Math Function Benchmark: Mojo SIMD scalar functions vs DuckDB builtins.
 
-Compares Mojo's SIMD-vectorized math functions (registered via from_simd_function
-/ set_simd_function) against DuckDB's built-in math operators on a large table.
+Compares Mojo's SIMD-vectorized math functions (registered with
+ScalarFunction.from_simd_function) against DuckDB's built-in math operators on a large table.
 
 Change ``F`` below to switch between Float64 (DOUBLE) and Float32 (FLOAT).
 
@@ -13,10 +13,8 @@ Usage:
     pixi run mojo run benchmark/math_benchmark.mojo
 """
 
-from duckdb import *
-from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, FunctionInfo
-from duckdb.logical_type import LogicalType
-from duckdb._libduckdb import *
+import duckdb
+from duckdb import Connection, ScalarFunction
 from std.sys import simd_width_of
 from std import math
 from std import benchmark
@@ -80,30 +78,28 @@ def register_functions(conn: Connection) raises:
     """Register all Mojo math scalar functions."""
 
     # Unary functions: pass stdlib math functions directly
-    ScalarFunction.from_simd_function["mojo_sqrt", F, math.sqrt](conn)
-    ScalarFunction.from_simd_function["mojo_sin", F, math.sin](conn)
-    ScalarFunction.from_simd_function["mojo_cos", F, math.cos](conn)
-    ScalarFunction.from_simd_function["mojo_exp", F, math.exp](conn)
-    ScalarFunction.from_simd_function["mojo_log", F, math.log](conn)
+    conn.register(ScalarFunction.from_simd_function["mojo_sqrt", F, math.sqrt]())
+    conn.register(ScalarFunction.from_simd_function["mojo_sin", F, math.sin]())
+    conn.register(ScalarFunction.from_simd_function["mojo_cos", F, math.cos]())
+    conn.register(ScalarFunction.from_simd_function["mojo_exp", F, math.exp]())
+    conn.register(ScalarFunction.from_simd_function["mojo_log", F, math.log]())
 
     # abs uses a trait-based signature, so it still needs the original overload
     def simd_abs[w: SIMDLength](x: SIMD[F, w]) -> SIMD[F, w]:
         return math.abs(x)
 
-    ScalarFunction.from_simd_function["mojo_abs", F, F, simd_abs](conn)
+    conn.register(ScalarFunction.from_simd_function["mojo_abs", F, F, simd_abs]())
 
     # Fused unary functions: custom kernels (DOUBLE) -> DOUBLE
-    ScalarFunction.from_simd_function[
-        "mojo_sin_plus_cos", F, F, simd_sin_plus_cos
-    ](conn)
-    ScalarFunction.from_simd_function["mojo_hypot1", F, F, simd_hypot1](conn)
-    ScalarFunction.from_simd_function["mojo_gauss", F, F, simd_gauss](conn)
+    conn.register(ScalarFunction.from_simd_function["mojo_sin_plus_cos", F, F, simd_sin_plus_cos]())
+    conn.register(ScalarFunction.from_simd_function["mojo_hypot1", F, F, simd_hypot1]())
+    conn.register(ScalarFunction.from_simd_function["mojo_gauss", F, F, simd_gauss]())
 
     # Binary functions:
     # atan2 matches the stdlib signature, so pass it directly
-    ScalarFunction.from_simd_function["mojo_atan2", F, math.atan2](conn)
+    conn.register(ScalarFunction.from_simd_function["mojo_atan2", F, math.atan2]())
     # hypot is a custom compound kernel
-    ScalarFunction.from_simd_function["mojo_hypot", F, F, F, simd_hypot](conn)
+    conn.register(ScalarFunction.from_simd_function["mojo_hypot", F, F, F, simd_hypot]())
 
 
 # ===--------------------------------------------------------------------===#
@@ -124,10 +120,10 @@ def run_benchmark(
 
     # Warmup
     for _ in range(warmup_iters):
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     def bench_standard() raises {imm}:
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     var std_report = benchmark.run(bench_standard, max_iters=max_iters)
     var std_ms = std_report.mean("ms")
@@ -135,10 +131,10 @@ def run_benchmark(
 
     # Warmup Mojo
     for _ in range(warmup_iters):
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     def bench_mojo() raises {imm}:
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     var mojo_report = benchmark.run(bench_mojo, max_iters=max_iters)
     var mojo_ms = mojo_report.mean("ms")
@@ -172,7 +168,7 @@ def main() raises:
 
     # ---- Setup ----
     print("Setting up database...")
-    var conn = DuckDB.connect(":memory:")
+    var conn = duckdb.connect()
 
     print("Generating test data...")
     _ = conn.execute(
@@ -182,9 +178,8 @@ def main() raises:
         + " FROM range(" + String(num_rows) + ") t(i);"
     )
 
-    var row_count = conn.execute("SELECT count(*) FROM math_data")
-    var rc = row_count.fetch_chunk()
-    print("  math_data rows: " + String(rc.get[Int64](col=0, row=0)))
+    var rc = conn.execute("SELECT count(*) FROM math_data").get[Int64]()[0]
+    print("  math_data rows: " + String(rc))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo scalar functions...")
@@ -202,7 +197,7 @@ def main() raises:
         + " sin(x)::" + T + " AS std_sin, mojo_sin(x) AS mojo_sin_val"
         + " FROM math_data LIMIT 1"
     )
-    var ck = check.fetch_chunk()
+    var ck = check^.fetchall()
 
     comptime if F == DType.float64:
         print(
@@ -245,7 +240,7 @@ def main() raises:
         + " abs(sum(cos(x)) - sum(mojo_cos(x))) < " + tol + " AS cos_ok"
         + " FROM math_data"
     )
-    var ac = agg_check.fetch_chunk()
+    var ac = agg_check^.fetchall()
     print(
         "  Aggregate check, sqrt: "
         + String(ac.get[Bool](col=0, row=0))

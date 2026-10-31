@@ -160,13 +160,10 @@ Build the extension first (`pixi run overrides-build`), then load it like any
 other extension: allow unsigned extensions when connecting and run `LOAD`:
 
 ```mojo
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 
-var config = Config()
-config.set("allow_unsigned_extensions", "true")
-var conn = DuckDB.connect(":memory:", config)
-_ = conn.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
+var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+_ = con.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
 ```
 
 `LOAD` validates the CPP metadata footer, so a `.so` built for a different DuckDB
