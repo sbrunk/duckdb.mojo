@@ -58,9 +58,11 @@ struct StationCount(Copyable, Defaultable, Movable, Writable):
 
 def main() raises:
     var con = duckdb.connect()
+    # httpfs reads files over HTTP. Installed explicitly: autoinstall fails
+    # with the conda-forge libduckdb 2.0.0 build.
     _ = con.execute("""
-    SET autoinstall_known_extensions=1;
-    SET autoload_known_extensions=1;
+    INSTALL httpfs;
+    LOAD httpfs;
 
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
