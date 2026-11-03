@@ -28,10 +28,10 @@ struct Squares(TableFunctionImpl):
         columns.set_cardinality(Int(n.value()), exact=True)
         return Self(n.value())
 
-    def init(self, shared: ScanShared) raises -> Counter:
+    def init(ref self, shared: ScanShared) raises -> Counter:
         return Counter(0)
 
-    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Counter, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < self.n:
             out.write(rows, 0, state.next)
@@ -65,10 +65,10 @@ struct Items(TableFunctionImpl):
         columns.add_row[Item]()
         return Self(args.constant[Int64](0).value())
 
-    def init(self, shared: ScanShared) raises -> Counter:
+    def init(ref self, shared: ScanShared) raises -> Counter:
         return Counter(0)
 
-    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Counter, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < self.n:
             var tags = List[String]()
@@ -103,13 +103,13 @@ struct ParallelRange(TableFunctionImpl):
         columns.add[Int64]("i")
         return Self(Int(args.constant[Int64](0).value()))
 
-    def max_threads(self) -> Int:
+    def max_threads(ref self) -> Int:
         return 4
 
-    def init(self, shared: ScanShared) raises -> ParallelState:
+    def init(ref self, shared: ScanShared) raises -> ParallelState:
         return ParallelState(shared, -1, 0)
 
-    def scan(self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
         var rows = 0
         var data = out.data[Int64](0)
         while rows < out.capacity():
@@ -137,16 +137,16 @@ struct OrderedRange(OrderedBatches, ScanProgress, TableFunctionImpl):
         columns.add[Int64]("i")
         return Self(Int(args.constant[Int64](0).value()))
 
-    def max_threads(self) -> Int:
+    def max_threads(ref self) -> Int:
         return 4
 
-    def progress(self, shared: ScanShared) -> Float64:
+    def progress(ref self, shared: ScanShared) -> Float64:
         return min(1.0, Float64(shared.claimed() * BLOCK) / Float64(max(self.n, 1)))
 
-    def init(self, shared: ScanShared) raises -> ParallelState:
+    def init(ref self, shared: ScanShared) raises -> ParallelState:
         return ParallelState(shared, -1, 0)
 
-    def scan(self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
         # One block per batch, so the block number orders the batches.
         if state.block < 0 or state.pos >= min((state.block + 1) * BLOCK, self.n):
             state.block = state.shared.claim()
@@ -174,13 +174,13 @@ struct UnorderedRange(TableFunctionImpl):
         columns.set_unordered()
         return Self(Int(args.constant[Int64](0).value()))
 
-    def max_threads(self) -> Int:
+    def max_threads(ref self) -> Int:
         return 4
 
-    def init(self, shared: ScanShared) raises -> ParallelState:
+    def init(ref self, shared: ScanShared) raises -> ParallelState:
         return ParallelState(shared, -1, 0)
 
-    def scan(self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: ParallelState, mut out: TableOutput) raises -> Int:
         return ParallelRange(self.n).scan(state, out)
 
 
@@ -194,10 +194,10 @@ struct Failing(TableFunctionImpl):
         columns.add[Int64]("x")
         return Self(0)
 
-    def init(self, shared: ScanShared) raises -> Counter:
+    def init(ref self, shared: ScanShared) raises -> Counter:
         return Counter(0)
 
-    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Counter, mut out: TableOutput) raises -> Int:
         raise Error("scan failed on purpose")
 
 
@@ -267,10 +267,10 @@ struct Filtered(FilterPushdown, TableFunctionImpl):
             return False
         return True
 
-    def init(self, shared: ScanShared) raises -> Counter:
+    def init(ref self, shared: ScanShared) raises -> Counter:
         return Counter(self.low)
 
-    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Counter, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < self.high:
             out.write(rows, 0, state.next)

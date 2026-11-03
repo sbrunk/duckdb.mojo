@@ -16,7 +16,7 @@ struct Avg(AggregateState):
         self.sum += x
         self.n += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.sum += other.sum
         self.n += other.n
 
@@ -29,7 +29,8 @@ con.register(AggregateFunction.from_state["my_avg", Avg.update]())
 `from_state` reads the SQL signature from `update` (1 to 8 arguments after
 `self`) and the return type from `Result`. Every group starts from
 `__init__`; `combine` merges another state into this one (starting from a
-fresh state, so it must treat `__init__`'s state as empty). It works with
+fresh state, so it must treat `__init__`'s state as empty). `combine` borrows
+`other`: it stays alive after the call and DuckDB destroys it. It works with
 `GROUP BY`.
 
 NULLs: rows with a NULL argument are skipped, unless the argument is an
@@ -65,8 +66,8 @@ trait AggregateState(Defaultable, Deinitable, Movable):
     comptime Result: Movable & Deinitable
     """What `finalize` returns: any mapped type."""
 
-    def combine(mut self, other: Self) raises:
-        """Merge `other` into this state."""
+    def combine(mut self, ref other: Self) raises:
+        """Merge `other` into this state (`other` is borrowed and stays alive)."""
         ...
 
     def finalize(self) raises -> Self.Result:
@@ -90,14 +91,14 @@ trait AggregateBind:
     struct Join(AggregateBind, AggregateState):
         comptime Bind = Sep
         ...
-        def init_from(mut self, bind: Sep):
+        def init_from(mut self, ref bind: Sep):
             self.sep = bind.text
     ```
     """
 
     comptime Bind: BindData
 
-    def init_from(mut self, bind: Self.Bind):
+    def init_from(mut self, ref bind: Self.Bind):
         """Called on every new state, right after `__init__`."""
         ...
 
@@ -410,7 +411,7 @@ def _identity_bind(
         _ = lib().duckdb_v2_error_info_destroy(Pointer(to=e))
         _report(err, "could not read the aggregate's user data", DUCKDB_V2_ERROR_QUERY_BINDER)
         return
-    var data = _identity_user_data(user.unsafe_bitcast[String]()[])
+    var data = _identity_user_data(user.unsafe_bitcast[String]()[].copy())
     if lib().duckdb_v2_function_bind_set_bind_data(info, Pointer(to=data), Pointer(to=e)) != DUCKDB_V2_ERROR_NONE:
         _ = lib().duckdb_v2_error_info_destroy(Pointer(to=e))
         data.destroy(data.ptr)
@@ -716,7 +717,7 @@ struct _Builtin[D: DType, op: Int](AggregateState, BatchUpdate):
             self.acc = _apply[Self.D, Self.op](self.acc, p[unsafe_offset=i])
             i += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.acc = _apply[Self.D, Self.op](self.acc, other.acc)
 
     def finalize(self) -> Scalar[Self.D]:
@@ -754,7 +755,7 @@ struct _Reduce[
             self.acc = Self.reduce_fn(self.acc, p[unsafe_offset=i])
             i += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.acc = Self.reduce_fn(self.acc, other.acc)
 
     def finalize(self) -> Scalar[Self.D]:
@@ -791,7 +792,7 @@ struct _Mean[D: DType](AggregateState, BatchUpdate):
         self.sum += total
         self.count += n
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.sum += other.sum
         self.count += other.count
 

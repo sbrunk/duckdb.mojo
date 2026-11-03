@@ -21,10 +21,10 @@ struct LinesWriter(CopyToFormat):
         var sep = info.option[String]("separator")
         return Self(sep.value() if sep else String(","), info.column_count())
 
-    def open(self, path: String) raises -> LinesFile:
+    def open(ref self, path: String) raises -> LinesFile:
         return LinesFile(path)
 
-    def write(self, mut file: LinesFile, rows: Chunk) raises:
+    def write(ref self, mut file: LinesFile, rows: Chunk) raises:
         for r in range(len(rows)):
             var parts = List[String]()
             for c in range(self.columns):
@@ -32,7 +32,7 @@ struct LinesWriter(CopyToFormat):
                 parts.append(String("") if v.is_null() else v.to_string())
             file.text += self.separator.join(parts) + "\n"
 
-    def close(self, mut file: LinesFile) raises:
+    def close(ref self, mut file: LinesFile) raises:
         with open(file.path, "w") as f:
             f.write(file.text)
 
@@ -69,10 +69,10 @@ struct LinesReader(CopyFromFormat):
                 lines.append(String(line))
         return Self(lines^, sep.value() if sep else String(","), info.column_count())
 
-    def init(self) raises -> LinesPos:
+    def init(ref self) raises -> LinesPos:
         return LinesPos(0)
 
-    def scan(self, mut state: LinesPos, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: LinesPos, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < len(self.lines):
             var parts = self.lines[state.next].split(self.separator)

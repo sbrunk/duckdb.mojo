@@ -236,10 +236,10 @@ struct ArrowScan(TableFunctionImpl):
             columns.add(s.names[i], s.types[i])
         return Self(stream, importer, len(s.names))
 
-    def init(self, shared: ScanShared) raises -> _ArrowScanState:
+    def init(ref self, shared: ScanShared) raises -> _ArrowScanState:
         return _ArrowScanState()
 
-    def scan(self, mut state: _ArrowScanState, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: _ArrowScanState, mut out: TableOutput) raises -> Int:
         var err = null_error_info()
         _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=state.chunk))
         while True:

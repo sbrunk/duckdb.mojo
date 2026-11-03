@@ -32,7 +32,7 @@ struct Avg(AggregateState):
         self.sum += x
         self.n += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.sum += other.sum
         self.n += other.n
 

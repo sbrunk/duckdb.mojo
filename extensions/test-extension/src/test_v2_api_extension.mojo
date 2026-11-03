@@ -70,7 +70,7 @@ struct Longest(AggregateState):
         if s.byte_length() > self.best.byte_length():
             self.best = s
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.update(other.best)
 
     def finalize(self) -> String:
@@ -92,10 +92,10 @@ struct Countdown(TableFunctionImpl):
         columns.add[Int64]("value")
         return Self(args.constant[Int64](0).value())
 
-    def init(self, shared: ScanShared) raises -> Pos:
+    def init(ref self, shared: ScanShared) raises -> Pos:
         return Pos(self.n)
 
-    def scan(self, mut state: Pos, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Pos, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next > 0:
             out.write(rows, 0, state.next)

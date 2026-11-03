@@ -19,7 +19,7 @@ struct Avg(AggregateState):
         self.sum += x
         self.n += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.sum += other.sum
         self.n += other.n
 
@@ -40,7 +40,7 @@ struct Collect(AggregateState):
         if s.byte_length() >= Int(min_len):
             self.items.append(s)
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.items.extend(other.items.copy())
 
     def finalize(self) -> List[String]:
@@ -60,7 +60,7 @@ struct CountNulls(AggregateState):
         if not x:
             self.nulls += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.nulls += other.nulls
 
     def finalize(self) -> Int64:
@@ -79,7 +79,7 @@ struct Failing(AggregateState):
             raise Error("unlucky value in failing_agg")
         self.n += 1
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.n += other.n
 
     def finalize(self) -> Int64:

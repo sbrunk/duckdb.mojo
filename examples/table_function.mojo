@@ -29,11 +29,11 @@ struct Squares(TableFunctionImpl):
         columns.set_cardinality(Int(n.value()), exact=True)
         return Self(n.value())
 
-    def init(self, shared: ScanShared) raises -> Position:
+    def init(ref self, shared: ScanShared) raises -> Position:
         return Position(0)
 
     # Fills one output chunk and returns its row count. 0 ends the scan.
-    def scan(self, mut state: Position, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Position, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < self.n:
             out.write(rows, 0, state.next)

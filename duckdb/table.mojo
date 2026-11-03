@@ -17,10 +17,10 @@ struct Squares(TableFunctionImpl):
         columns.add[Int64]("square")
         return Self(args.constant[Int64](0).value())
 
-    def init(self, shared: ScanShared) raises -> Counter:
+    def init(ref self, shared: ScanShared) raises -> Counter:
         return Counter(0)
 
-    def scan(self, mut state: Counter, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Counter, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.next < self.n:
             out.write(rows, 0, state.next)
@@ -86,15 +86,15 @@ trait TableFunctionImpl(Deinitable, Movable):
         """Read the arguments and declare the output columns."""
         ...
 
-    def init(self, shared: ScanShared) raises -> Self.State:
+    def init(ref self, shared: ScanShared) raises -> Self.State:
         """The state of a new scan thread."""
         ...
 
-    def scan(self, mut state: Self.State, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Self.State, mut out: TableOutput) raises -> Int:
         """Write up to `out.capacity()` rows, return how many. 0 ends this thread's scan."""
         ...
 
-    def max_threads(self) -> Int:
+    def max_threads(ref self) -> Int:
         """How many threads may scan at once (default 1)."""
         return 1
 
@@ -136,7 +136,7 @@ trait ScanProgress:
     concurrently (`shared.claimed()` is).
     """
 
-    def progress(self, shared: ScanShared) -> Float64:
+    def progress(ref self, shared: ScanShared) -> Float64:
         ...
 
 

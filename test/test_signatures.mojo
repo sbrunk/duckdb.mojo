@@ -88,13 +88,13 @@ struct Join(AggregateBind, AggregateState):
         self.sep = ""
         self.parts = []
 
-    def init_from(mut self, bind: Sep):
+    def init_from(mut self, ref bind: Sep):
         self.sep = bind.text
 
     def update(mut self, s: String, sep: String):
         self.parts.append(s)
 
-    def combine(mut self, other: Self):
+    def combine(mut self, ref other: Self):
         self.parts.extend(other.parts.copy())
 
     def finalize(self) -> String:
@@ -246,10 +246,10 @@ struct Repeat(TableFunctionImpl):
         columns.add[String]("text")
         return Self(args.constant[String](0).value(), args.constant[Int64]("times").value())
 
-    def init(self, shared: ScanShared) raises -> Left:
+    def init(ref self, shared: ScanShared) raises -> Left:
         return Left(self.times)
 
-    def scan(self, mut state: Left, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Left, mut out: TableOutput) raises -> Int:
         var rows = 0
         while rows < out.capacity() and state.n > 0:
             out.write(rows, 0, self.text)

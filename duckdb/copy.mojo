@@ -90,13 +90,13 @@ trait CopyToFormat(Deinitable, Movable):
     def bind(info: CopyInfo) raises -> Self:
         ...
 
-    def open(self, path: String) raises -> Self.File:
+    def open(ref self, path: String) raises -> Self.File:
         ...
 
-    def write(self, mut file: Self.File, rows: Chunk) raises:
+    def write(ref self, mut file: Self.File, rows: Chunk) raises:
         ...
 
-    def close(self, mut file: Self.File) raises:
+    def close(ref self, mut file: Self.File) raises:
         ...
 
 
@@ -109,10 +109,10 @@ trait CopyFromFormat(Deinitable, Movable):
     def bind(info: CopyInfo) raises -> Self:
         ...
 
-    def init(self) raises -> Self.State:
+    def init(ref self) raises -> Self.State:
         ...
 
-    def scan(self, mut state: Self.State, mut out: TableOutput) raises -> Int:
+    def scan(ref self, mut state: Self.State, mut out: TableOutput) raises -> Int:
         """Write up to `out.capacity()` rows of the expected columns. 0 ends the read."""
         ...
 
@@ -375,7 +375,7 @@ def _run_to_flush[T: CopyToFormat](info: duckdb_v2_copy_to_flush_info_handle, co
         _ = lib().duckdb_v2_column_data_collection_shared_scan_state_destroy(Pointer(to=shared))
 
 
-def _write_rows[T: CopyToFormat](impl: T, mut file: T.File, rows: Chunk) raises DuckDBError:
+def _write_rows[T: CopyToFormat](ref impl: T, mut file: T.File, rows: Chunk) raises DuckDBError:
     # Its own function: one `try` cannot mix the user's untyped errors with DuckDBError.
     try:
         impl.write(file, rows)
