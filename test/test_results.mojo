@@ -63,6 +63,29 @@ def test_rows() raises:
     assert_true(r.row(2).get_optional[Int32](1) is None)
 
 
+def test_pivot_metadata_is_deferred() raises:
+    """PIVOT learns its columns while it runs. The streaming result still reads them.
+
+    An expanding statement answers "metadata deferred" until execution has
+    bound its expansion, so `Result` asks again once a chunk is there
+    (`Result._resolve_deferred`).
+    """
+    var con = _db()
+    var r = con.execute("PIVOT users ON id USING count(*) GROUP BY name").fetchall()
+    var names = r.column_names()
+    assert_equal(len(names), 4)
+    assert_equal(names[0], "name")
+    assert_equal(names[1], "1")
+    assert_equal(names[3], "3")
+    var ada = -1
+    for i in range(len(r)):
+        if r.get[String](col=0, row=i) == "Ada":
+            ada = i
+    assert_true(ada >= 0, "Ada is missing from the pivoted rows")
+    assert_equal(r.get[Int64](col=1, row=ada), 1)  # her own id
+    assert_equal(r.get[Int64](col=2, row=ada), 0)  # Grace's id
+
+
 def test_streaming_chunks() raises:
     var con = Database().connect()
     var total = 0

@@ -146,6 +146,9 @@ struct Result(Movable):
     var _schema: ArcPointer[_Schema]
     var _statement_type: StatementType
     var _result_type: ResultType
+    # True while an expanding statement (PIVOT, ...) has not told us its
+    # columns yet; see `_resolve_deferred`.
+    var _metadata_deferred: Bool
     var _rows_changed: Int
     # The chunk `fetchone`/`fetchmany` are reading, with its views.
     var _buffer: Optional[Chunk]
@@ -161,6 +164,7 @@ struct Result(Movable):
         var schema = null[duckdb_v2_schema_handle]()
         self._statement_type = StatementType.INVALID
         self._result_type = ResultType.ROWS
+        self._metadata_deferred = False
         self._rows_changed = 0
         self._schema = ArcPointer(_Schema([], []))
         self._buffer = None
@@ -174,15 +178,19 @@ struct Result(Movable):
             # they run; they produce rows, so they stream like a query.
             if code == DUCKDB_V2_ERROR_INPUT_METADATA_DEFERRED:
                 _ = lib().duckdb_v2_error_info_destroy(Pointer(to=err))  # resets the slot
+                self._metadata_deferred = True
             else:
                 check(code, err)
                 self._result_type = ResultType(rtype)
                 check(lib().duckdb_v2_result_get_schema(self._handle, Pointer(to=schema), Pointer(to=err)), err)
                 self._schema = ArcPointer(_read_schema(schema))
                 _ = lib().duckdb_v2_schema_destroy(Pointer(to=schema))
+                schema = null[duckdb_v2_schema_handle]()  # freed, the `except` arm must not free it again
             if self._result_type != ResultType.ROWS:
                 self._finish()
         except e:
+            if Int(schema) != 0:  # `_read_schema` raised before the schema was freed
+                _ = lib().duckdb_v2_schema_destroy(Pointer(to=schema))
             _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
             raise e^
 
@@ -191,6 +199,7 @@ struct Result(Movable):
         self._schema = move._schema^
         self._statement_type = move._statement_type
         self._result_type = move._result_type
+        self._metadata_deferred = move._metadata_deferred
         self._rows_changed = move._rows_changed
         self._buffer = move._buffer^
         self._buffer_tree = move._buffer_tree^
@@ -209,6 +218,39 @@ struct Result(Movable):
         _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
         check(code, err)
         self._rows_changed = Int(changed)
+
+    def _resolve_deferred(mut self) raises DuckDBError:
+        """Ask an expanding statement (PIVOT, ...) for its metadata again.
+
+        Such a statement expands into several and only knows its columns once
+        execution has bound the expansion, so `__init__` left `_schema` empty.
+        Ask again after every step: the answer then names the columns of the
+        chunk that has been produced, so the chunk can be read. A second
+        deferred answer means the expansion is not bound yet and more chunks
+        are pending. A schema of 0 columns is how such a result looks before
+        it ran.
+        """
+        if not self._metadata_deferred or Int(self._handle) == 0 or self.column_count() != 0:
+            return
+        var err = null_error_info()
+        var rtype: DUCKDB_V2_RESULT_TYPE = DUCKDB_V2_RESULT_TYPE_QUERY_RESULT
+        var schema = null[duckdb_v2_schema_handle]()
+        var code = lib().duckdb_v2_result_get_result_type(self._handle, Pointer(to=rtype), Pointer(to=err))
+        if code == DUCKDB_V2_ERROR_INPUT_METADATA_DEFERRED:
+            _ = lib().duckdb_v2_error_info_destroy(Pointer(to=err))  # more chunks pending
+            return
+        check(code, err)
+        self._result_type = ResultType(rtype)
+        try:
+            check(lib().duckdb_v2_result_get_schema(self._handle, Pointer(to=schema), Pointer(to=err)), err)
+            self._schema = ArcPointer(_read_schema(schema))
+        except e:
+            if Int(schema) != 0:  # `_read_schema` raised before the schema was freed
+                _ = lib().duckdb_v2_schema_destroy(Pointer(to=schema))
+            raise e^
+        _ = lib().duckdb_v2_schema_destroy(Pointer(to=schema))
+        if self._result_type != ResultType.ROWS:
+            self._finish()  # the caller sees the end of the stream
 
     # ── Metadata ──────────────────────────────────────────────────
 
@@ -248,7 +290,21 @@ struct Result(Movable):
         if Int(chunk) == 0:
             _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
             return None
-        return Chunk(_owned=chunk, schema=self._schema)
+        # The chunk was produced by whatever the statement expanded into, so
+        # the columns to read it with are known only now.
+        self._resolve_deferred()
+        if Int(self._handle) == 0:  # no rows after all, so this chunk is not one
+            _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=chunk))
+            return None
+        return self._wrap(chunk)
+
+    def _wrap(self, mut chunk: duckdb_v2_data_chunk_handle) raises DuckDBError -> Chunk:
+        """Wrap a freshly fetched chunk, freeing the chunk again if that fails."""
+        try:
+            return Chunk(_owned=chunk, schema=self._schema)
+        except e:
+            _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=chunk))
+            raise e^
 
     def fetchone[T: Movable & Deinitable](mut self) raises DuckDBError -> Optional[T]:
         """The next row as `T`, or `None` at the end.
@@ -322,8 +378,15 @@ struct Result(Movable):
         var status: DUCKDB_V2_RESULT_STEP_STATUS = DUCKDB_V2_RESULT_STEP_STATUS_WAITING
         check(lib().duckdb_v2_result_step(self._handle, Pointer(to=chunk), Pointer(to=status), Pointer(to=err)), err)
         var st = StepStatus(status)
+        # This step is what binds an expanding statement, so its columns, or
+        # the fact that it returns no rows at all, are known only now.
+        self._resolve_deferred()
+        if Int(self._handle) == 0:  # drained: the statement returns no rows
+            if st == StepStatus.CHUNK:
+                _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=chunk))
+            return Step(StepStatus.FINISHED, None)
         if st == StepStatus.CHUNK:
-            return Step(st, Chunk(_owned=chunk, schema=self._schema))
+            return Step(st, self._wrap(chunk))
         if st == StepStatus.FINISHED or st == StepStatus.CANCELLED:
             _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
         return Step(st, None)

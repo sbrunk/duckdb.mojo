@@ -97,9 +97,10 @@ struct Chunk(Movable, Sized):
         """The elements of an ARRAY column (`FLOAT[256]`, ...) as one span of
         `len(self) * array_size` values in row order, without copying.
 
-        `None` when the vector is not flat or has a NULL array or element;
-        read those with `column[List[T]]`. `T` must be the element's numeric
-        type (`Float32` for FLOAT), else it raises `ErrorCode.TYPE_MISMATCH`.
+        `None` when the column vector or the element vector is not flat or
+        when either has a NULL. Read those with `column[List[T]]`. `T` must
+        be the element's numeric type (`Float32` for FLOAT), else it raises
+        `ErrorCode.TYPE_MISMATCH`.
         """
         comptime assert reflect[T].base_name() == "SIMD", "array_span() needs a fixed-width numeric type"
         ref type = self._schema[].types[col]
@@ -117,6 +118,14 @@ struct Chunk(Movable, Sized):
             return None
         var child = null[duckdb_v2_vector_handle]()
         check(lib().duckdb_v2_vector_get_child(vec, 0, Pointer(to=child), Pointer(to=err)), err)
+        # The elements are a flat span only when the child is FLAT: a
+        # DICTIONARY child is indexed through a selection, a CONSTANT child
+        # holds one element, and FSST, SEQUENCE and SHREDDED children have no
+        # view to take a span of.
+        var child_kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
+        check(lib().duckdb_v2_vector_get_vector_type(child, Pointer(to=child_kind), Pointer(to=err)), err)
+        if child_kind != DUCKDB_V2_VECTOR_TYPE_FLAT:
+            return None
         var count = self._size * type.array_size()
         var parent = _view(vec)
         var elements = _view(child)
