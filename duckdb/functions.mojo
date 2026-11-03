@@ -303,7 +303,10 @@ struct ScalarFunction(Movable):
                     err,
                 )
             var identity = _identity_user_data(self.name)
-            check(lib().duckdb_v2_scalar_function_set_user_data(function, Pointer(to=identity), Pointer(to=err)), err)
+            var code = lib().duckdb_v2_scalar_function_set_user_data(function, Pointer(to=identity), Pointer(to=err))
+            if code != DUCKDB_V2_ERROR_NONE:
+                _destroy_bind[String](identity.ptr)
+                check(code, err)
             check(lib().duckdb_v2_scalar_function_set_exec_callback(function, self._exec, Pointer(to=err)), err)
             if self._bind:
                 check(lib().duckdb_v2_scalar_function_set_bind_callback(function, self._bind.value(), Pointer(to=err)), err)
@@ -693,11 +696,11 @@ struct BindArgs:
         var t = null[duckdb_v2_logical_type_handle]()
         var err = null_error_info()
         check(lib().duckdb_v2_function_bind_get_arg_type(self._info, idx_t(i), Pointer(to=t), Pointer(to=err)), err)
-        var owned = null[duckdb_v2_logical_type_handle]()
-        check(lib().duckdb_v2_logical_type_copy(t, Pointer(to=owned), Pointer(to=err)), err)
-        return LogicalType(_owned=owned)
+        return LogicalType(_owned=t)
 
     def _value(self, i: Int) -> Optional[duckdb_v2_value_handle]:
+        """The constant's value, or `None` on any error: the argument is not a
+        constant, or `i` is out of range. DuckDB reports both the same way."""
         var v = null[duckdb_v2_value_handle]()
         var err = null_error_info()
         if lib().duckdb_v2_function_bind_get_arg_value(self._info, idx_t(i), Pointer(to=v), Pointer(to=err)) != DUCKDB_V2_ERROR_NONE:
@@ -742,7 +745,8 @@ struct BindArgs:
 
     def constant[T: Movable & Deinitable](self, i: Int) raises DuckDBError -> Optional[T]:
         """The value of constant argument `i`, or `None` for NULL. Raises if
-        the argument is not a constant (a column, ...)."""
+        the argument is not a constant (a column, ...) or `i` is out of
+        range (DuckDB reports both the same way)."""
         var v = self._value(i)
         if not v:
             raise DuckDBError(ErrorCode.INPUT_INVALID, String("argument ", i + 1, " is not a constant"))
