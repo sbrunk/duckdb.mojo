@@ -5,6 +5,7 @@ from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info
 from duckdb._runtime import api_error, builtin_factory, check, lib
 from duckdb.chunk import _read_schema
+from duckdb.database import Database
 from duckdb.error import DuckDBError
 from duckdb.serde import to_value
 from std.reflection import reflect
@@ -125,22 +126,22 @@ struct PreparedStatement(Movable):
     """
 
     var _handle: duckdb_v2_prepared_statement_handle
-    var _factory: duckdb_v2_factory_handle
+    var _db: Database
 
-    def __init__(out self, *, var _owned: duckdb_v2_prepared_statement_handle, factory: duckdb_v2_factory_handle):
+    def __init__(out self, *, var _owned: duckdb_v2_prepared_statement_handle, db: Database):
         self._handle = _owned
-        self._factory = factory
+        self._db = db.copy()
 
     def __init__(out self, *, deinit move: Self):
         self._handle = move._handle
-        self._factory = move._factory
+        self._db = move._db^
 
     def __deinit__(deinit self):
         _ = lib().duckdb_v2_prepared_statement_destroy(Pointer(to=self._handle))
 
     def execute[*Ts: Movable & Deinitable](mut self, *args: *Ts) raises DuckDBError -> Result:
         """Execute with positional parameters (`$1`, `$2`, ... or `?`)."""
-        var arguments = _positional(self._factory, *args)
+        var arguments = _positional(self._db.factory(), *args)
         return self._execute(arguments)
 
     def execute(mut self, *, var params: Params) raises DuckDBError -> Result:

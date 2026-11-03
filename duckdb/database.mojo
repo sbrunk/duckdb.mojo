@@ -363,7 +363,7 @@ struct Connection(Movable, Registrar):
             _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
             _ = lib().duckdb_v2_prepared_statement_destroy(Pointer(to=prepared))
             raise api_error("prepare takes a single statement, but the SQL holds several")
-        return PreparedStatement(_owned=prepared, factory=self.factory())
+        return PreparedStatement(_owned=prepared, db=self._db.copy())
 
     def describe(self, sql: StringSlice) raises DuckDBError -> Description:
         """The result columns and parameter types of a statement, without running it."""
