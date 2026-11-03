@@ -7,6 +7,8 @@ numeric scalar (`Int8`..`Int64`, `Int`, `UInt8`..`UInt64`, `Float32`,
 `TimestampS`, `TimestampMS`, `TimestampNS`, `TimestampTZ`, `TimestampTZNS`,
 `Interval`, `Decimal`, `UUID`, `Bit`).
 
+`Blob` is the exception. It lives here next to its mapping.
+
 Each type reads its value straight from DuckDB's storage layout. Storage
 details are decoded here and only here: the 16-byte `bytes` layout of
 VARCHAR/BLOB/BIT, the UUID bit flip, decimal width tiers, enum index widths.
@@ -86,6 +88,8 @@ struct ColumnMeta(Copyable, Movable):
         self.enum_values = List[String]()
         self.enum_index_bytes = 0
         self.enum_index = None
+        if kind == TypeId.DECIMAL or kind == TypeId.ENUM:
+            abort(String("ColumnMeta(kind=) is not valid for ", kind, ", use the LogicalType constructor"))
 
 
 trait DuckDBMapped(Movable):

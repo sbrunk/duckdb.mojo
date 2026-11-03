@@ -637,12 +637,13 @@ struct TimeTZ(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, 
 
 @fieldwise_init
 struct UUID(TrivialRegisterPassable, Equatable, Writable, ImplicitlyCopyable, Movable):
-    """UUID stored as a UInt128.
+    """UUID stored as a canonical UInt128.
 
     In DuckDB vectors, UUIDs are stored as Int128 with a special encoding
-    (upper 64 bits offset by ``INT64_MAX + 1``).  The ``UUID`` struct stores
-    the canonical unsigned representation as used by the DuckDB value API
-    (``duckdb_create_uuid`` / ``duckdb_get_uuid``).
+    (upper 64 bits offset by ``INT64_MAX + 1``).  Mojo's ``UUID`` holds the
+    canonical unsigned representation. DuckDB's V2 value and vector APIs
+    take the internal form instead (converted by ``_to_internal``, see
+    ``duckdb.mapping``).
     """
 
     var value: UInt128
