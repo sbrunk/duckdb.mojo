@@ -295,6 +295,7 @@ struct TableOutput(Movable):
             self._vectors.append(vec)
             self._nodes.append(node)
             self._tree.nodes[0].children.append(node)
+            self._tree.nodes[0].names.append(names[declared[i]].copy())
             self._tree.nodes[0].lower_names.append(names[declared[i]].lower())
             while len(self._position) <= declared[i]:
                 self._position.append(0)

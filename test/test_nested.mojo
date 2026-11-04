@@ -5,7 +5,7 @@ parameters, and the appender."""
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from std.testing.suite import TestSuite
 from std.utils import Variant
-from emberserde import Rename
+from emberserde import Alias, Rename
 from duckdb import *
 from duckdb.scalar_types import Date, Decimal
 
@@ -536,6 +536,53 @@ def test_appender_auto_flush() raises:
     assert_equal(con.execute("SELECT count(*) FROM t").get[Int64]()[0], 4096)
     a.close()
     assert_equal(con.execute("SELECT count(*) FROM t").get[Int64]()[0], 5000)
+
+
+struct Aliased(Copyable, Defaultable, Movable):
+    var id: Int32
+    @__annotation(Alias("name"))
+    var user_name: String
+    var age: Optional[Int32]
+
+    def __init__(out self):
+        self.id = 0
+        self.user_name = String()
+        self.age = None
+
+
+def test_alias_reads_and_writes() raises:
+    """A field's `Alias` binds the column of that name in both directions."""
+    var con = _users()
+    var r = con.execute("SELECT id, name, age FROM users ORDER BY id").fetchall()
+    assert_equal(r.get[Aliased](row=0).user_name, "Ada")
+    var a = Appender(con, "users")
+    var row = Aliased()
+    row.id = 4
+    row.user_name = "Alan"
+    row.age = Optional[Int32](Int32(41))
+    a.append_row(row)
+    a.close()
+    var back = con.execute("SELECT name, age FROM users WHERE id = 4").fetchall()
+    assert_equal(back.get[String](col=0, row=0), "Alan")
+    assert_equal(back.get[Optional[Int32]](col=1, row=0).value(), 41)
+
+
+def test_map_tuple_cell() raises:
+    """A `Tuple` written to a MAP column is one entry. Reading a one-entry
+    MAP as a tuple gives the entry back."""
+    var con = Database().connect()
+    _ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
+    var a = Appender(con, "t")
+    a.append_value(Tuple(String("one"), Int32(1)))
+    a.end_row()
+    a.close()
+    var r = con.execute("SELECT cardinality(m)::BIGINT, m['one'] FROM t").fetchall()
+    assert_equal(r.get[Int64](col=0, row=0), 1)
+    assert_equal(r.get[Optional[Int32]](col=1, row=0).value(), 1)
+    var m = con.execute("SELECT m FROM t").fetchall()
+    var t = m.get[Tuple[String, Int32]](col=0, row=0)
+    assert_equal(t[0], "one")
+    assert_equal(t[1], 1)
 
 
 def test_array_span() raises:

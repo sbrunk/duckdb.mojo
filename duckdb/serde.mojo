@@ -611,6 +611,16 @@ struct _Cursor(Deserializer):
     def begin_tuple[field_count: Int](mut self) raises DeserializationError -> Self.TupleType:
         ref node = self.tree[].nodes[self.node]
         var kind = node.meta.kind
+        if kind == TypeId.MAP and field_count == 2:
+            # A tuple reads one map entry: its fields are the entry's key and value.
+            var idx = self._valid_index()
+            ref entry = node.data.unsafe_bitcast[duckdb_v2_list_entry]()[unsafe_offset=idx]
+            if Int(entry.length) != 1:
+                raise DeserializationError(
+                    String("a MAP of ", entry.length, " entries cannot be read as a tuple"),
+                    DerErrorKind.TypeMismatch,
+                )
+            return _TupleDe(self.tree, Int(node.children[0]), -1, Int(entry.offset))
         if kind == TypeId.STRUCT:
             var idx = self._valid_index()
             if len(node.children) != field_count:
@@ -813,6 +823,7 @@ struct _WNode(Copyable, Movable):
     var data: MutRawData
     var array_size: Int
     var children: List[Int]
+    var names: List[String]
     var lower_names: List[String]
     # Elements in use and the vector's current size (element vectors of
     # LIST and MAP nodes, which grow as values are written).
@@ -830,6 +841,7 @@ struct _WNode(Copyable, Movable):
         self.data = null[MutRawData]()
         self.array_size = 0
         self.children = List[Int]()
+        self.names = List[String]()
         self.lower_names = List[String]()
         self.used = 0
         self.reserved = 0
@@ -870,6 +882,7 @@ struct _WriteTree(Movable):
         for i in range(len(children)):
             var child = self._add(_child_vector(vec, i + first), children[i][1])
             self.nodes[idx].children.append(child)
+            self.nodes[idx].names.append(children[i][0])
             self.nodes[idx].lower_names.append(children[i][0].lower())
         return idx
 
@@ -890,16 +903,20 @@ struct _WriteTree(Movable):
             pending.extend(self.nodes[n].children.copy())
 
     def take(mut self, node: Int, n: Int) raises DuckDBError -> Int:
-        """Take `n` more elements of an element vector; returns the first one."""
-        ref c = self.nodes[node]
-        var start = c.used
-        c.used += n
-        if c.used > c.reserved:
-            var size = max(c.used, 2 * c.reserved, 64)
-            var err = null_error_info()
-            check(lib().duckdb_v2_vector_set_size(c.vec, idx_t(size), Pointer(to=err)), err)
-            c.reserved = size
+        """Take `n` more elements of an element vector, returns the first one.
+
+        `used` advances only once the grow succeeded, so a failed grow
+        cannot leave it ahead of the vector's real contents.
+        """
+        var start = self.nodes[node].used
+        var size = max(self.nodes[node].used + n, 2 * self.nodes[node].reserved, 64)
+        var vec = self.nodes[node].vec
+        var err = null_error_info()
+        if self.nodes[node].used + n > self.nodes[node].reserved:
+            check(lib().duckdb_v2_vector_set_size(vec, idx_t(size), Pointer(to=err)), err)
+            self.nodes[node].reserved = size
             self.forget_data(node)
+        self.nodes[node].used += n
         return start
 
     def set_null(self, node: Int, row: Int) raises DuckDBError:
@@ -962,7 +979,8 @@ struct ChunkWriter(Movable, Sized):
     ) raises DuckDBError:
         """A chunk with the given column types. With `visible`, only the
         first `visible` columns make up a row for `write_row`; the rest are
-        extra columns written with `write_cell`."""
+        extra columns written with `write_cell`. An extra column gets no
+        NULL for a row that skips it, so write one for every row."""
         self._visible = visible.value() if visible else len(types)
         self._columns = List[Int]()
         self._types = types^
@@ -975,17 +993,26 @@ struct ChunkWriter(Movable, Sized):
         for i in range(len(self._types)):
             handles.append(self._types[i].handle())
         var err = null_error_info()
+        var chunk = null[duckdb_v2_data_chunk_handle]()
         check(
             lib().duckdb_v2_data_chunk_create(
-                factory, handles.unsafe_ptr().as_imm(), idx_t(len(handles)), Pointer(to=self._handle), Pointer(to=err)
+                factory, handles.unsafe_ptr().as_imm(), idx_t(len(handles)), Pointer(to=chunk), Pointer(to=err)
             ),
             err,
         )
         _ = handles^
-        var cap: idx_t = 0
-        check(lib().duckdb_v2_data_chunk_get_capacity(self._handle, Pointer(to=cap), Pointer(to=err)), err)
-        self._capacity = Int(cap)
-        self._build()
+        # A raise below leaves `out self` unconstructed, so __deinit__ would
+        # never run: destroy the chunk we just made instead.
+        try:
+            var cap: idx_t = 0
+            check(lib().duckdb_v2_data_chunk_get_capacity(chunk, Pointer(to=cap), Pointer(to=err)), err)
+            self._handle = chunk
+            self._capacity = Int(cap)
+            self._build()
+        except e:
+            self._handle = null[duckdb_v2_data_chunk_handle]()
+            _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=chunk))
+            raise e^
 
     def __init__(out self, *, deinit move: Self):
         self._handle = move._handle
@@ -1014,6 +1041,7 @@ struct ChunkWriter(Movable, Sized):
             self._columns.append(node)
             if i < self._visible:
                 self._tree.nodes[0].children.append(node)
+                self._tree.nodes[0].names.append(self._names[i].copy())
                 self._tree.nodes[0].lower_names.append(self._names[i].lower())
 
     def handle(self) -> duckdb_v2_data_chunk_handle:
@@ -1281,11 +1309,26 @@ struct _Writer(Serializer):
         return _StructSer(self.tree, self.node, self.row, List[Bool](length=len(self.tree[].nodes[self.node].children), fill=False))
 
     def begin_tuple[field_count: Int](mut self) raises SerializationError -> Self.TupleType:
-        if self._kind() == TypeId.STRUCT:
+        var kind = self._kind()
+        if kind == TypeId.STRUCT:
             var n = len(self.tree[].nodes[self.node].children)
             if n != field_count:
                 raise _ser_invalid(String("a tuple of ", field_count, " cannot be written to ", n, " fields"))
             return _TupleSer(self.tree, self.node, -1, self.row)
+        if kind == TypeId.MAP:
+            # A tuple is one map entry: the fields are the entry's key and value.
+            if field_count != 2:
+                raise _ser_invalid(String("a MAP entry has 2 fields, not ", field_count))
+            try:
+                var entries = self.tree[].nodes[self.node].children[0]
+                var start = self.tree[].take(entries, 1)
+                var data = self.tree[].data(self.node)
+                data.unsafe_bitcast[duckdb_v2_list_entry]()[unsafe_offset=self.row] = duckdb_v2_list_entry(
+                    UInt64(start), UInt64(1)
+                )
+                return _TupleSer(self.tree, entries, -1, start)
+            except e:
+                raise _ser_error(e)
         var r = self._list_range(field_count)
         return _TupleSer(self.tree, self.node, r[0], r[1])
 
@@ -1329,7 +1372,8 @@ struct _Writer(Serializer):
 
 
 def _map_write_fields[T: AnyType](mut node: _WNode):
-    """Map `T`'s fields to the node's children by wire name, case-insensitively."""
+    """Map `T`'s fields to the node's children, like the read side does:
+    exact name or `Alias` first, then case-insensitive wire name."""
     comptime key = reflect[T].name()
     if node.map_key == key:
         return
@@ -1338,9 +1382,13 @@ def _map_write_fields[T: AnyType](mut node: _WNode):
         var found = -1
         comptime if not is_skipped[T, i]():
             var name = String(static_wire_name[T, i]()).lower()
-            for k in range(len(node.lower_names)):
-                if found == -1 and node.lower_names[k] == name:
+            for k in range(len(node.names)):
+                if found == -1 and name_matches[T, i](node.names[k]):
                     found = k
+            if found == -1:
+                for k in range(len(node.names)):
+                    if found == -1 and node.lower_names[k] == name:
+                        found = k
         node.field_map.append(found)
     node.map_key = String(key)
 
