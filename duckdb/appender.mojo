@@ -164,6 +164,8 @@ struct Appender[origin: ImmOrigin](Movable):
             _ = self.flush()
         except e:
             print("Appender: flush on destruction failed:", e)
+        # The C destroy functions NULL the slots they are given, so destroying
+        # a handle an earlier path already destroyed is a no-op.
         _ = lib().duckdb_v2_column_data_collection_append_state_destroy(Pointer(to=self._append_state))
         _ = lib().duckdb_v2_column_data_collection_destroy(Pointer(to=self._collection))
 

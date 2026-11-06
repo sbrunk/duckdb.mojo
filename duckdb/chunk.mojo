@@ -66,6 +66,8 @@ struct Chunk(Movable, Sized):
         self._size = move._size
 
     def __deinit__(deinit self):
+        # The C destroy NULLs the slot it is given, so destroying a chunk that
+        # a callback already handed over (and destroyed) is a no-op.
         _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=self._handle))
 
     def __len__(self) -> Int:

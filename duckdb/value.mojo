@@ -44,7 +44,15 @@ struct Value(Copyable, Movable, Writable):
         self._handle = move._handle
 
     def __init__(out self, *, copy: Self):
-        """A copy (DuckDB has no value copy; a cast to the value's own type makes one)."""
+        """A copy (DuckDB has no value copy, so a cast to its own type makes one).
+
+        A `Copyable` copy constructor may not declare `raises` (Mojo 1.2), so
+        a copy failure cannot be raised out. It has no data-dependent failure
+        either: `Value::CastAs` short-circuits a same-type cast to a deep copy
+        before it consults any cast set, so the only error either C call can
+        report is allocation failure, the one case `abort` is for. The handle
+        is NULL here, so this aborts cleanly.
+        """
         self._handle = null[duckdb_v2_value_handle]()
         try:
             var t = copy.type()

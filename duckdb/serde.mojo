@@ -783,10 +783,10 @@ struct _TupleDe(TupleDerState):
         var i = self.next
         self.next += 1
         if self.seq_child >= 0:
-            var c = _Cursor(self.tree, self.seq_child, self.pos + i)
-            return _read[T](c)
-        var c = _Cursor(self.tree, self.tree[].nodes[self.node].children[i], self.pos)
-        return _read[T](c)
+            var cur = _Cursor(self.tree, self.seq_child, self.pos + i)
+            return _read[T](cur)
+        var fld = _Cursor(self.tree, self.tree[].nodes[self.node].children[i], self.pos)
+        return _read[T](fld)
 
     def end(mut self) raises DeserializationError:
         pass
@@ -981,7 +981,7 @@ struct ChunkWriter(Movable, Sized):
         first `visible` columns make up a row for `write_row`; the rest are
         extra columns written with `write_cell`. An extra column gets no
         NULL for a row that skips it, so write one for every row."""
-        self._visible = visible.value() if visible else len(types)
+        self._visible = visible.or_else(len(types))
         self._columns = List[Int]()
         self._types = types^
         self._names = names^
@@ -1025,6 +1025,8 @@ struct ChunkWriter(Movable, Sized):
         self._columns = move._columns^
 
     def __deinit__(deinit self):
+        # The C destroy NULLs the slot, so this is a no-op once a scan
+        # callback has handed the chunk over and DuckDB destroyed it.
         _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=self._handle))
 
     def _build(mut self) raises DuckDBError:

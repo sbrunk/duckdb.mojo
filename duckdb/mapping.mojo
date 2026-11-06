@@ -80,8 +80,12 @@ struct ColumnMeta(Copyable, Movable):
                 index[self.enum_values[i]] = i
             self.enum_index = ArcPointer(index^)
 
-    def __init__(out self, *, kind: TypeId):
-        """Metadata for a type without parameters."""
+    def __init__(out self, *, kind: TypeId) raises DuckDBError:
+        """Metadata for a type without parameters.
+
+        Raises a `DuckDBError` for `DECIMAL`/`ENUM`: their storage width comes
+        from the type's parameters, so build those from a `LogicalType`.
+        """
         self.kind = kind
         self.decimal_width = 0
         self.decimal_scale = 0
@@ -89,7 +93,9 @@ struct ColumnMeta(Copyable, Movable):
         self.enum_index_bytes = 0
         self.enum_index = None
         if kind == TypeId.DECIMAL or kind == TypeId.ENUM:
-            abort(String("ColumnMeta(kind=) is not valid for ", kind, ", use the LogicalType constructor"))
+            raise api_error(
+                String("ColumnMeta(kind=) is not valid for ", kind, ", use the LogicalType constructor")
+            )
 
 
 trait DuckDBMapped(Movable):
@@ -344,34 +350,35 @@ def _store_int(kind: TypeId, data: MutRawData, idx: Int, v: Int128) -> Bool:
 
 
 def _numeric_type_id[dt: DType]() -> TypeId:
-    comptime if dt == DType.bool:
-        return TypeId.BOOLEAN
-    elif dt == DType.int8:
-        return TypeId.TINYINT
-    elif dt == DType.int16:
-        return TypeId.SMALLINT
-    elif dt == DType.int32:
-        return TypeId.INTEGER
-    elif dt == DType.int64 or dt == DType.int:
-        return TypeId.BIGINT
-    elif dt == DType.uint8:
-        return TypeId.UTINYINT
-    elif dt == DType.uint16:
-        return TypeId.USMALLINT
-    elif dt == DType.uint32:
-        return TypeId.UINTEGER
-    elif dt == DType.uint64 or dt == DType.uint:
-        return TypeId.UBIGINT
-    elif dt == DType.int128:
-        return TypeId.HUGEINT
-    elif dt == DType.uint128:
-        return TypeId.UHUGEINT
-    elif dt == DType.float32:
-        return TypeId.FLOAT
-    elif dt == DType.float64:
-        return TypeId.DOUBLE
-    else:
-        comptime assert False, "this DType has no DuckDB type"
+    comptime match dt:
+        case .bool:
+            return TypeId.BOOLEAN
+        case .int8:
+            return TypeId.TINYINT
+        case .int16:
+            return TypeId.SMALLINT
+        case .int32:
+            return TypeId.INTEGER
+        case .int64 | .int:
+            return TypeId.BIGINT
+        case .uint8:
+            return TypeId.UTINYINT
+        case .uint16:
+            return TypeId.USMALLINT
+        case .uint32:
+            return TypeId.UINTEGER
+        case .uint64 | .uint:
+            return TypeId.UBIGINT
+        case .int128:
+            return TypeId.HUGEINT
+        case .uint128:
+            return TypeId.UHUGEINT
+        case .float32:
+            return TypeId.FLOAT
+        case .float64:
+            return TypeId.DOUBLE
+        case _:
+            comptime assert False, "this DType has no DuckDB type"
 
 
 __extension SIMD(DuckDBMapped):
@@ -387,14 +394,15 @@ __extension SIMD(DuckDBMapped):
     @staticmethod
     def read(meta: ColumnMeta, data: RawData, idx: Int) -> Self:
         comptime assert Self.length == 1, "only scalars map to a DuckDB type"
-        comptime if Self.dtype == DType.bool:
-            return Self(_load[UInt8](data, idx) != 0)
-        elif Self.dtype == DType.int:
-            return Self(_load[Int64](data, idx).cast[Self.dtype]())
-        elif Self.dtype == DType.uint:
-            return Self(_load[UInt64](data, idx).cast[Self.dtype]())
-        else:
-            return rebind[Self](_load[Scalar[Self.dtype]](data, idx))
+        comptime match Self.dtype:
+            case .bool:
+                return Self(_load[UInt8](data, idx) != 0)
+            case .int:
+                return Self(_load[Int64](data, idx).cast[Self.dtype]())
+            case .uint:
+                return Self(_load[UInt64](data, idx).cast[Self.dtype]())
+            case _:
+                return rebind[Self](_load[Scalar[Self.dtype]](data, idx))
 
     def write(self, meta: ColumnMeta, vec: duckdb_v2_vector_handle, data: MutRawData, idx: Int) raises DuckDBError -> Bool:
         comptime assert Self.length == 1, "only scalars map to a DuckDB type"
@@ -406,14 +414,15 @@ __extension SIMD(DuckDBMapped):
                     _store[Float64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.float64]())
                     return True
             return False
-        comptime if Self.dtype == DType.bool:
-            _store[UInt8](data, idx, UInt8(1) if Bool(rebind[Scalar[DType.bool]](self)) else UInt8(0))
-        elif Self.dtype == DType.int:
-            _store[Int64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.int64]())
-        elif Self.dtype == DType.uint:
-            _store[UInt64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.uint64]())
-        else:
-            _store[Scalar[Self.dtype]](data, idx, rebind[Scalar[Self.dtype]](self))
+        comptime match Self.dtype:
+            case .bool:
+                _store[UInt8](data, idx, UInt8(1) if Bool(rebind[Scalar[DType.bool]](self)) else UInt8(0))
+            case .int:
+                _store[Int64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.int64]())
+            case .uint:
+                _store[UInt64](data, idx, rebind[Scalar[Self.dtype]](self).cast[DType.uint64]())
+            case _:
+                _store[Scalar[Self.dtype]](data, idx, rebind[Scalar[Self.dtype]](self))
         return True
 
     def to_value(self, factory: duckdb_v2_factory_handle) raises DuckDBError -> duckdb_v2_value_handle:
@@ -425,37 +434,38 @@ __extension SIMD(DuckDBMapped):
         var code: DUCKDB_V2_ERROR
         comptime dt = Self.dtype
         var x = rebind[Scalar[dt]](self)
-        comptime if dt == DType.bool:
-            code = lib().duckdb_v2_value_create_bool(factory, Bool(x), p, e)
-        elif dt == DType.int8:
-            code = lib().duckdb_v2_value_create_tinyint(factory, x.cast[DType.int8](), p, e)
-        elif dt == DType.int16:
-            code = lib().duckdb_v2_value_create_smallint(factory, x.cast[DType.int16](), p, e)
-        elif dt == DType.int32:
-            code = lib().duckdb_v2_value_create_int(factory, x.cast[DType.int32](), p, e)
-        elif dt == DType.int64 or dt == DType.int:
-            code = lib().duckdb_v2_value_create_bigint(factory, x.cast[DType.int64](), p, e)
-        elif dt == DType.uint8:
-            code = lib().duckdb_v2_value_create_utinyint(factory, x.cast[DType.uint8](), p, e)
-        elif dt == DType.uint16:
-            code = lib().duckdb_v2_value_create_usmallint(factory, x.cast[DType.uint16](), p, e)
-        elif dt == DType.uint32:
-            code = lib().duckdb_v2_value_create_uint(factory, x.cast[DType.uint32](), p, e)
-        elif dt == DType.uint64 or dt == DType.uint:
-            code = lib().duckdb_v2_value_create_ubigint(factory, x.cast[DType.uint64](), p, e)
-        elif dt == DType.int128:
-            var h = _hugeint(x.cast[DType.int128]())
-            code = lib().duckdb_v2_value_create_hugeint(factory, Pointer(to=h), p, e)
-        elif dt == DType.uint128:
-            var u = x.cast[DType.uint128]()
-            var h = duckdb_v2_uhugeint_t(UInt64(u & UInt128(0xFFFFFFFFFFFFFFFF)), UInt64(u >> 64))
-            code = lib().duckdb_v2_value_create_uhugeint(factory, Pointer(to=h), p, e)
-        elif dt == DType.float32:
-            code = lib().duckdb_v2_value_create_float(factory, x.cast[DType.float32](), p, e)
-        elif dt == DType.float64:
-            code = lib().duckdb_v2_value_create_double(factory, x.cast[DType.float64](), p, e)
-        else:
-            comptime assert False, "this DType has no DuckDB type"
+        comptime match dt:
+            case .bool:
+                code = lib().duckdb_v2_value_create_bool(factory, Bool(x), p, e)
+            case .int8:
+                code = lib().duckdb_v2_value_create_tinyint(factory, x.cast[DType.int8](), p, e)
+            case .int16:
+                code = lib().duckdb_v2_value_create_smallint(factory, x.cast[DType.int16](), p, e)
+            case .int32:
+                code = lib().duckdb_v2_value_create_int(factory, x.cast[DType.int32](), p, e)
+            case .int64 | .int:
+                code = lib().duckdb_v2_value_create_bigint(factory, x.cast[DType.int64](), p, e)
+            case .uint8:
+                code = lib().duckdb_v2_value_create_utinyint(factory, x.cast[DType.uint8](), p, e)
+            case .uint16:
+                code = lib().duckdb_v2_value_create_usmallint(factory, x.cast[DType.uint16](), p, e)
+            case .uint32:
+                code = lib().duckdb_v2_value_create_uint(factory, x.cast[DType.uint32](), p, e)
+            case .uint64 | .uint:
+                code = lib().duckdb_v2_value_create_ubigint(factory, x.cast[DType.uint64](), p, e)
+            case .int128:
+                var h = _hugeint(x.cast[DType.int128]())
+                code = lib().duckdb_v2_value_create_hugeint(factory, Pointer(to=h), p, e)
+            case .uint128:
+                var u = x.cast[DType.uint128]()
+                var hu = duckdb_v2_uhugeint_t(UInt64(u & UInt128(0xFFFFFFFFFFFFFFFF)), UInt64(u >> 64))
+                code = lib().duckdb_v2_value_create_uhugeint(factory, Pointer(to=hu), p, e)
+            case .float32:
+                code = lib().duckdb_v2_value_create_float(factory, x.cast[DType.float32](), p, e)
+            case .float64:
+                code = lib().duckdb_v2_value_create_double(factory, x.cast[DType.float64](), p, e)
+            case _:
+                comptime assert False, "this DType has no DuckDB type"
         return _new_value(code, v, err)
 
     @staticmethod

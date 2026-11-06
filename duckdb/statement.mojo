@@ -89,6 +89,22 @@ struct _Arguments(Movable):
     def count(self) -> idx_t:
         return idx_t(len(self._value_handles))
 
+    def refresh(mut self):
+        """Rebuild the cached C arrays from the current `values`/`names`.
+
+        Call right before passing `values_ptr()`/`names_ptr()` to a C
+        function. The cached entries borrow the `Value` handles and the
+        `StrArg` text (a short string lives inline in its `StrArg`, so a move
+        relocates it); after any change to `values`/`names` the cached arrays
+        must be rebuilt, like `StrArg.ptr()` rebuilds its own view.
+        """
+        self._value_handles = List[duckdb_v2_value_handle]()
+        for i in range(len(self.values)):
+            self._value_handles.append(self.values[i].handle())
+        self._name_views = List[duckdb_v2_identifier_t]()
+        for i in range(len(self.names)):
+            self._name_views.append(self.names[i].ptr()[].copy())
+
     def values_ptr(ref self) -> Pointer[duckdb_v2_value_handle, ImmUntrackedOrigin]:
         if len(self._value_handles) == 0:
             return null[Pointer[duckdb_v2_value_handle, ImmUntrackedOrigin]]()
@@ -154,9 +170,10 @@ struct PreparedStatement(Movable):
         var arguments = _named(Params.of(params))
         return self._execute(arguments)
 
-    def _execute(mut self, ref arguments: _Arguments) raises DuckDBError -> Result:
+    def _execute(mut self, mut arguments: _Arguments) raises DuckDBError -> Result:
         var result = null[duckdb_v2_result_handle]()
         var err = null_error_info()
+        arguments.refresh()
         check(
             lib().duckdb_v2_prepared_statement_execute(
                 self._handle, arguments.names_ptr(), arguments.values_ptr(), arguments.count(), Pointer(to=result), Pointer(to=err)

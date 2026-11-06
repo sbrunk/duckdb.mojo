@@ -48,10 +48,10 @@ DuckDB 2.0 cannot overload aggregates: register each name once.
 from std.builtin.rebind import downcast, rebind_var
 from std.reflection import reflect
 from std.memory.alloc import unsafe_alloc
-from std.sys import align_of, simd_width_of, size_of
+from std.sys import align_of, bit_width_of, simd_width_of, size_of
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info
-from duckdb._runtime import check, lib
+from duckdb._runtime import api_error, check, lib
 from duckdb.error import DuckDBError
 from duckdb.functions import BindArgs, BindData, Registrar, _Args, _NodePtr, _identity_user_data, _param, _report, _required, _valid
 from duckdb.serde import VectorWriter, logical_type_of
@@ -247,7 +247,19 @@ struct AggregateFunction(Movable):
 
     @staticmethod
     def from_sum[name: StringLiteral, D: DType]() raises DuckDBError -> AggregateFunction:
-        return Self.from_state[name, _Builtin[D, _SUM].update]()
+        """Sum of `D` values.
+
+        Integral `D` up to 64 bits accumulates in `Int128` and raises on
+        overflow instead of wrapping: DuckDB's own `sum` promotes `BIGINT` to
+        `HUGEINT` and errors on overflow, and a silently wrapping sum would
+        return a wrong value where `sum` errors. Wider integral `D` (128-bit)
+        has no wider native accumulator. DuckDB's `sum` wraps there too.
+        Floating-point `D` sums directly.
+        """
+        comptime if D.is_integral() and bit_width_of[D]() <= 64:
+            return Self.from_state[name, _Sum[D].update]()
+        else:
+            return Self.from_state[name, _Builtin[D, _SUM].update]()
 
     @staticmethod
     def from_product[name: StringLiteral, D: DType]() raises DuckDBError -> AggregateFunction:
@@ -702,6 +714,9 @@ struct _Builtin[D: DType, op: Int](AggregateState, BatchUpdate):
         self.acc = _apply[Self.D, Self.op](self.acc, x)
 
     def update_batch(mut self, values: Span[Scalar[Self.D], ImmUntrackedOrigin]):
+        # Loads/stores keep the default (scalar) alignment: DuckDB does not
+        # guarantee a vector buffer is aligned to the SIMD width, and a
+        # misaligned wider access would fault. LLVM may still merge the lanes.
         comptime w = simd_width_of[Self.D]()
         var n = len(values)
         var p = values.unsafe_ptr()
@@ -724,6 +739,47 @@ struct _Builtin[D: DType, op: Int](AggregateState, BatchUpdate):
         return self.acc
 
 
+struct _Sum[D: DType](AggregateState):
+    """Integer sum: accumulates in `Int128`, raises on overflow (see `from_sum`).
+
+    Not a `BatchUpdate`: 64-bit integer sums are memory-bound, and an Int128
+    accumulator has no useful SIMD form here. The accumulator is stored as
+    two 64-bit halves: aggregate states must not exceed 8-byte alignment (the
+    size callback asserts it), and `Int128` is 16-byte aligned.
+    """
+
+    comptime Result = Scalar[Self.D]
+    var lo: UInt64
+    var hi: Int64
+
+    def __init__(out self):
+        self.lo = 0
+        self.hi = 0
+
+    def _acc(self) -> Int128:
+        return (Int128(self.hi) << 64) | Int128(self.lo)
+
+    def _store(mut self, var acc: Int128):
+        self.lo = acc.cast[DType.uint64]()
+        self.hi = (acc >> 64).cast[DType.int64]()
+
+    def update(mut self, x: Scalar[Self.D]):
+        # A 64-bit-or-narrower value widened to Int128 cannot come close to
+        # overflowing the accumulator for any realistic number of rows.
+        self._store(self._acc() + x.cast[DType.int128]())
+
+    def combine(mut self, ref other: Self):
+        self._store(self._acc() + other._acc())
+
+    # Matches `AggregateState.finalize` (untyped `raises`): a trait method
+    # must keep the trait's raise type.
+    def finalize(self) raises -> Scalar[Self.D]:
+        var acc = self._acc()
+        if acc < Scalar[Self.D].MIN.cast[DType.int128]() or acc > Scalar[Self.D].MAX.cast[DType.int128]():
+            raise api_error(String("sum overflow: the result does not fit in ", String(Self.D)))
+        return Scalar[Self.D](acc.cast[Self.D]())
+
+
 struct _Reduce[
     D: DType,
     reduce_fn: def[width: SIMDLength](SIMD[D, width], SIMD[D, width]) thin -> SIMD[D, width],
@@ -740,6 +796,7 @@ struct _Reduce[
         self.acc = Self.reduce_fn(self.acc, x)
 
     def update_batch(mut self, values: Span[Scalar[Self.D], ImmUntrackedOrigin]):
+        # Default (scalar) load/store alignment on purpose; see `_Builtin`.
         comptime w = simd_width_of[Self.D]()
         var n = len(values)
         var p = values.unsafe_ptr()
@@ -777,6 +834,7 @@ struct _Mean[D: DType](AggregateState, BatchUpdate):
         self.count += 1
 
     def update_batch(mut self, values: Span[Scalar[Self.D], ImmUntrackedOrigin]):
+        # Default (scalar) load/store alignment on purpose; see `_Builtin`.
         comptime w = simd_width_of[Self.D]()
         var n = len(values)
         var p = values.unsafe_ptr()

@@ -12,36 +12,13 @@
 from std.ffi import _Global
 from std.os import abort
 from duckdb._libduckdb_v2 import *
-from duckdb.api_v2 import DuckDBV2, StrArg, null, null_error_info, str_to_string
+from duckdb.api_v2 import DuckDBV2, check, null, null_error_info
 from duckdb.error import DuckDBError, ErrorCode
 
 
 @always_inline
 def lib() -> ref[ImmStaticOrigin] LibDuckDBV2:
     return DuckDBV2().libduckdb()
-
-
-def check(code: DUCKDB_V2_ERROR, mut err: duckdb_v2_error_info_handle) raises DuckDBError:
-    """Raise a `DuckDBError` if a V2 call failed.
-
-    The return code is authoritative: a slot can hold a stale info from an
-    earlier failure. Reads the message, destroys the info and resets the slot.
-    """
-    if code == DUCKDB_V2_ERROR_NONE:
-        return
-    raise _error(code, err)
-
-
-@no_inline
-def _error(code: DUCKDB_V2_ERROR, mut err: duckdb_v2_error_info_handle) -> DuckDBError:
-    var message = String("DuckDB error ", code)
-    if Int(err) != 0:
-        var text = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
-        if lib().duckdb_v2_error_info_get_text(err, Pointer(to=text)) == DUCKDB_V2_ERROR_NONE and text.len > 0:
-            message = str_to_string(text)
-        _ = lib().duckdb_v2_error_info_destroy(Pointer(to=err))
-        err = null_error_info()
-    return DuckDBError(ErrorCode(code), message^)
 
 
 def api_error(var message: String) -> DuckDBError:

@@ -25,6 +25,20 @@ TESTS=(
     test/test_copy.mojo
 )
 
+# Fail if a test file in test/ is missing from the list above, so a new
+# test is never silently skipped.
+shopt -s nullglob
+for f in test/test_*.mojo; do
+    found=0
+    for t in "${TESTS[@]}"; do
+        [[ "$f" == "$t" ]] && found=1
+    done
+    if [[ "$found" == "0" ]]; then
+        echo "ERROR: $f is not listed in scripts/run_tests.sh" >&2
+        exit 1
+    fi
+done
+
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
     mojo run "${MOJO_TARGET[@]}" "$f"

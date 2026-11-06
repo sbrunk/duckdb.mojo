@@ -25,6 +25,7 @@ var rows = top.fetchall()     # runs again, relations can be re-run
   optimizer flattens the nesting.
 """
 
+from duckdb._runtime import api_error
 from duckdb._sql_util import _quote_ident, _quote_literal, _quote_qualified
 from duckdb.database import Connection
 from duckdb.error import DuckDBError
@@ -120,9 +121,24 @@ struct Relation[origin: ImmOrigin](Copyable, Movable):
 
     # ── Joins and set operations ───────────────────────────────────
 
-    def join[o2: ImmOrigin](self, other: Relation[o2], on: String, how: String = "inner") -> Self:
-        """Join on `on`. `how` is `inner`, `left`, `right`, `outer`, `semi` or `anti`."""
-        return self._wrap(String("SELECT * FROM ", self._from(), " ", how, " JOIN ", other._from(), " ON ", on))
+    def join[o2: ImmOrigin](self, other: Relation[o2], on: String, how: String = "inner") raises DuckDBError -> Self:
+        """Join on `on`. `how` is `inner`, `left`, `right`, `outer`, `semi` or `anti`.
+
+        Raises a `DuckDBError` for any other `how` (case-insensitive): `how`
+        is spliced into the SQL, so an unknown word would build broken SQL or
+        an unintended join kind.
+        """
+        var kind = String(how).lower()
+        if (
+            kind != "inner"
+            and kind != "left"
+            and kind != "right"
+            and kind != "outer"
+            and kind != "semi"
+            and kind != "anti"
+        ):
+            raise api_error(String("unknown join kind '", how, "'; expected one of inner, left, right, outer, semi, anti"))
+        return self._wrap(String("SELECT * FROM ", self._from(), " ", kind, " JOIN ", other._from(), " ON ", on))
 
     def cross[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
         return self._wrap(String("SELECT * FROM ", self._from(), " CROSS JOIN ", other._from()))
@@ -211,11 +227,14 @@ struct Relation[origin: ImmOrigin](Copyable, Movable):
     def explain(self) raises DuckDBError -> String:
         """The physical plan as text."""
         var plan = self._run(String("EXPLAIN ", self._sql)).fetchall()
+        # The plan text is the `explain_value` column; look it up by name so a
+        # DuckDB column change fails loudly instead of reading the wrong cell.
+        var col = plan.column_index("explain_value")
         var out = String("")
         for i in range(len(plan)):
             if i > 0:
                 out += "\n"
-            out += plan.get[String](col=1, row=i)
+            out += plan.get[String](col=col, row=i)
         return out^
 
     def create(self, table: String) raises DuckDBError:

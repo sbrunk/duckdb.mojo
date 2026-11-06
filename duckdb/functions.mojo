@@ -39,14 +39,13 @@ def scale(s: Scale, x: Float64, factor: Float64) -> Float64:
 """
 
 from std.builtin.rebind import downcast, rebind_var
-from std.os import abort
 from std.reflection import reflect
 from std.memory.alloc import unsafe_alloc
 from std.sys import simd_width_of
 from emberserde.field_meta import __is_optional
 from duckdb._libduckdb_v2 import *
 from duckdb.api_v2 import StrArg, null, null_error_info, str_to_string
-from duckdb._runtime import check, lib
+from duckdb._runtime import api_error, check, lib
 from duckdb.aggregate import AggregateFunction
 from duckdb.table import TableFunction
 from duckdb.observe import LogSink
@@ -153,10 +152,10 @@ trait Registrar:
         _ = lib().duckdb_v2_pragma_function_destroy(Pointer(to=p))
         check(code, err)
 
-    def register(self, type: CustomType) raises DuckDBError:
+    def register(self, custom: CustomType) raises DuckDBError:
         """Register a custom type (transactional on a connection)."""
         var t = self._target()
-        var h = type._create(self.factory())
+        var h = custom._create(self.factory())
         var err = null_error_info()
         var code = (
             lib().duckdb_v2_connection_register_custom_type(t.connection, h, Pointer(to=err))
@@ -353,8 +352,11 @@ struct ScalarFunction(Movable):
         self.signature.add(name, type.copy(), ParamKind.KWARGS)
         return self^
 
-    def result_type_of(var self, arg: Int) -> Self:
-        """The result has the type of argument `arg` (for `TypeId.ANY` parameters)."""
+    def result_type_of(var self, arg: Int) raises DuckDBError -> Self:
+        """The result has the type of argument `arg` (for `TypeId.ANY` parameters).
+
+        `arg` must be 0 to 15. Anything else raises a `DuckDBError`.
+        """
         self._resolve = _resolve_like_arg_callback(arg)
         return self^
 
@@ -852,13 +854,13 @@ def _type_of_arg[i: Int](args: BindArgs) raises -> LogicalType:
     return args.type(i)
 
 
-def _resolve_like_arg_callback(arg: Int) -> _ResolveFn:
+def _resolve_like_arg_callback(arg: Int) raises DuckDBError -> _ResolveFn:
     # One callback per argument index: the callback gets no user data here.
     comptime for i in range(16):
         if arg == i:
             var callback: _ResolveFn = _resolve_cb[_type_of_arg[i]]
             return callback
-    abort("result_type_of supports arguments 0 to 15")
+    raise api_error(String("result_type_of supports arguments 0 to 15, got ", arg))
 
 
 def bind_callback[T: BindData]() -> _BindFn:
@@ -1138,6 +1140,7 @@ def _run_simd1[In: DType, Out: DType, func: def[width: SIMDLength](SIMD[In, widt
     var n = args.size()
     if x.is_flat():
         # Every row, NULL rows included (their values are ignored), then the NULLs.
+        # Default (scalar) load/store alignment on purpose; see `_lanes`.
         comptime w = simd_width_of[In]()
         var src = x.unsafe_data().unsafe_bitcast[Scalar[In]]()
         var i = 0
@@ -1218,7 +1221,12 @@ def _run_simd2[
 
 @always_inline
 def _lanes[D: DType, //, w: SIMDLength](p: Pointer[Scalar[D], _], i: Int, constant: Bool) -> SIMD[D, w]:
-    """`w` values from row `i` on: loaded from a flat vector, or the value of a constant one repeated."""
+    """`w` values from row `i` on: loaded from a flat vector, or the value of a constant one repeated.
+
+    The load keeps the default (scalar) alignment on purpose: DuckDB does not
+    guarantee a vector buffer is aligned to the SIMD width, and a misaligned
+    wider access would fault. LLVM may still merge the lanes.
+    """
     if constant:
         return SIMD[D, w](p[])
     return p.unsafe_offset(i).unsafe_load[width=w]()
@@ -1245,6 +1253,7 @@ def _run_simd1g[D: DType, func: def[dtype: DType, width: SIMDLength, //](SIMD[dt
     var n = args.size()
     if x.is_flat():
         # Every row, NULL rows included (their values are ignored), then the NULLs.
+        # Default (scalar) load/store alignment on purpose; see `_lanes`.
         comptime w = simd_width_of[D]()
         var src = x.unsafe_data().unsafe_bitcast[Scalar[D]]()
         var i = 0

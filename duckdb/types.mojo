@@ -56,87 +56,90 @@ struct TypeId(Equatable, ImplicitlyCopyable, Writable):
 
     def name(self) -> StaticString:
         """The id's name, e.g. `"INTEGER"`."""
-        if self == Self.INVALID:
-            return "INVALID"
-        if self == Self.ANY:
-            return "ANY"
-        if self == Self.BOOLEAN:
-            return "BOOLEAN"
-        if self == Self.TINYINT:
-            return "TINYINT"
-        if self == Self.SMALLINT:
-            return "SMALLINT"
-        if self == Self.INTEGER:
-            return "INTEGER"
-        if self == Self.BIGINT:
-            return "BIGINT"
-        if self == Self.HUGEINT:
-            return "HUGEINT"
-        if self == Self.UTINYINT:
-            return "UTINYINT"
-        if self == Self.USMALLINT:
-            return "USMALLINT"
-        if self == Self.UINTEGER:
-            return "UINTEGER"
-        if self == Self.UBIGINT:
-            return "UBIGINT"
-        if self == Self.UHUGEINT:
-            return "UHUGEINT"
-        if self == Self.FLOAT:
-            return "FLOAT"
-        if self == Self.DOUBLE:
-            return "DOUBLE"
-        if self == Self.DECIMAL:
-            return "DECIMAL"
-        if self == Self.VARCHAR:
-            return "VARCHAR"
-        if self == Self.BLOB:
-            return "BLOB"
-        if self == Self.BIT:
-            return "BIT"
-        if self == Self.DATE:
-            return "DATE"
-        if self == Self.TIME:
-            return "TIME"
-        if self == Self.TIME_NS:
-            return "TIME_NS"
-        if self == Self.TIME_TZ:
-            return "TIME_TZ"
-        if self == Self.TIMESTAMP:
-            return "TIMESTAMP"
-        if self == Self.TIMESTAMP_SEC:
-            return "TIMESTAMP_SEC"
-        if self == Self.TIMESTAMP_MS:
-            return "TIMESTAMP_MS"
-        if self == Self.TIMESTAMP_NS:
-            return "TIMESTAMP_NS"
-        if self == Self.TIMESTAMP_TZ:
-            return "TIMESTAMP_TZ"
-        if self == Self.TIMESTAMP_TZ_NS:
-            return "TIMESTAMP_TZ_NS"
-        if self == Self.INTERVAL:
-            return "INTERVAL"
-        if self == Self.UUID:
-            return "UUID"
-        if self == Self.ENUM:
-            return "ENUM"
-        if self == Self.LIST:
-            return "LIST"
-        if self == Self.ARRAY:
-            return "ARRAY"
-        if self == Self.STRUCT:
-            return "STRUCT"
-        if self == Self.MAP:
-            return "MAP"
-        if self == Self.UNION:
-            return "UNION"
-        if self == Self.VARIANT:
-            return "VARIANT"
-        if self == Self.GEOMETRY:
-            return "GEOMETRY"
-        if self == Self.BIGNUM:
-            return "BIGNUM"
-        return "UNKNOWN"
+        # `case _` keeps this valid when DuckDB adds a type id.
+        match self.value:
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_INVALID:
+                return "INVALID"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_ANY:
+                return "ANY"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN:
+                return "BOOLEAN"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT:
+                return "TINYINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT:
+                return "SMALLINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER:
+                return "INTEGER"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT:
+                return "BIGINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT:
+                return "HUGEINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT:
+                return "UTINYINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT:
+                return "USMALLINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER:
+                return "UINTEGER"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT:
+                return "UBIGINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT:
+                return "UHUGEINT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT:
+                return "FLOAT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE:
+                return "DOUBLE"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_DECIMAL:
+                return "DECIMAL"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR:
+                return "VARCHAR"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_BLOB:
+                return "BLOB"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_BIT:
+                return "BIT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_DATE:
+                return "DATE"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIME:
+                return "TIME"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS:
+                return "TIME_NS"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ:
+                return "TIME_TZ"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP:
+                return "TIMESTAMP"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC:
+                return "TIMESTAMP_SEC"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS:
+                return "TIMESTAMP_MS"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS:
+                return "TIMESTAMP_NS"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ:
+                return "TIMESTAMP_TZ"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS:
+                return "TIMESTAMP_TZ_NS"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL:
+                return "INTERVAL"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UUID:
+                return "UUID"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_ENUM:
+                return "ENUM"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_LIST:
+                return "LIST"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_ARRAY:
+                return "ARRAY"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_STRUCT:
+                return "STRUCT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_MAP:
+                return "MAP"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_UNION:
+                return "UNION"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_VARIANT:
+                return "VARIANT"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_GEOMETRY:
+                return "GEOMETRY"
+            case == DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM:
+                return "BIGNUM"
+            case _:
+                return "UNKNOWN"
 
     def write_to(self, mut writer: Some[Writer]):
         writer.write(self.name())
@@ -167,7 +170,7 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
         Without a factory only built-in types resolve. Pass a connection's
         factory for catalog types (an ENUM by name, extension types).
         """
-        var f = factory.value() if factory else builtin_factory()
+        var f = factory.or_else(builtin_factory())
         var arg = StrArg(text)
         var out = null[duckdb_v2_logical_type_handle]()
         var err = null_error_info()
@@ -227,6 +230,12 @@ struct LogicalType(Copyable, Equatable, Movable, Writable):
         return Self(_owned=_from_types(TypeId.UNION, names, types))
 
     def __init__(out self, *, copy: Self):
+        # A Copyable copy constructor may not declare `raises` (Mojo 1.2), and
+        # `copy()` is called from non-raising code, so a copy failure cannot be
+        # raised out. It also has no data-dependent failure: the C call deep-
+        # copies an internal LogicalType, so the only error it can report is
+        # allocation failure - an unrecoverable, process-level condition, the
+        # one case `abort` is for. The handle is NULL here, so it aborts cleanly.
         var err = null_error_info()
         self._handle = null[duckdb_v2_logical_type_handle]()
         try:

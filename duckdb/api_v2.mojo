@@ -21,6 +21,7 @@ from std.ffi import _Global, external_call
 from std.os import abort
 from std.sys.info import size_of
 from duckdb._libduckdb_v2 import *
+from duckdb.error import DuckDBError, ErrorCode
 
 
 def _kgen_insert_global(name: StringSlice, ptr: Pointer):
@@ -168,15 +169,16 @@ def null_error_info() -> duckdb_v2_error_info_handle:
     return null[duckdb_v2_error_info_handle]()
 
 
-def check(code: DUCKDB_V2_ERROR, mut err: duckdb_v2_error_info_handle) raises:
-    """Raise an `Error` if a V2 function failed.
+def check(code: DUCKDB_V2_ERROR, mut err: duckdb_v2_error_info_handle) raises DuckDBError:
+    """Raise a `DuckDBError` if a V2 call failed.
 
-    Reads the message from ``err`` (if the function filled it in), destroys
-    the error info and resets ``err`` to an empty slot.
+    The return code is authoritative: a slot can hold a stale info from an
+    earlier failure. Reads the message (if the function filled the slot in),
+    destroys the error info and resets ``err`` to an empty slot.
     """
     if code == DUCKDB_V2_ERROR_NONE:
         return
-    var message = String("DuckDB V2 C API error ", code)
+    var message = String("DuckDB error ", code)
     if Int(err) != 0:
         ref lib = DuckDBV2().libduckdb()
         var text = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
@@ -184,13 +186,12 @@ def check(code: DUCKDB_V2_ERROR, mut err: duckdb_v2_error_info_handle) raises:
             message = str_to_string(text)
         _ = lib.duckdb_v2_error_info_destroy(Pointer(to=err))
         err = null_error_info()
-    raise Error(message)
+    raise DuckDBError(ErrorCode(code), message^)
 
 
 def _get_duckdb_v2_interface() raises -> Pointer[LibDuckDBV2, ImmStaticOrigin]:
     var ptr = _DUCKDB_V2_GLOBAL.get_or_create_ptr()
-    var ptr2 = Pointer(to=ptr[].libduckdb).as_imm().unsafe_origin_cast[ImmStaticOrigin]()
-    return Pointer(to=ptr2[])
+    return Pointer(to=ptr[].libduckdb).as_imm().unsafe_origin_cast[ImmStaticOrigin]()
 
 
 struct DuckDBV2(ImplicitlyCopyable):

@@ -61,6 +61,4 @@ def _quote_qualified(name: String) -> String:
     return out^
 
 
-def _sql_quote(value: String) -> String:
-    """Deprecated alias for `_quote_literal` (kept for existing call sites)."""
-    return _quote_literal(value)
+

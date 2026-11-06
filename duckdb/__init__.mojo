@@ -20,10 +20,9 @@ from duckdb.chunk import Chunk, ColumnReader
 from duckdb.result import ChunkResult, Step, StepStatus, Column, MaterializedResult, Result, ResultType, Row, StatementType
 from duckdb.statement import Description, Params, PreparedStatement
 from duckdb.relation import Relation
-from duckdb.serde import ChunkWriter, logical_type_of
+from duckdb.serde import ChunkWriter, VectorWriter, logical_type_of
 from duckdb.appender import Appender, OnConflict
 from duckdb.functions import BindArgs, BindData, LocalState, Registrar, ScalarArgs, ScalarFunction, bind_callback, init_callback
-from duckdb.serde import VectorWriter
 from duckdb.simd_math import register_simd_math
 from duckdb.extension import Extension
 from duckdb.aggregate import AggregateBind, AggregateFunction, AggregateState, BatchUpdate

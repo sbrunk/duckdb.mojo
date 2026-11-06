@@ -21,6 +21,7 @@ struct ErrorCode(Equatable, ImplicitlyCopyable, Writable):
     comptime TYPE_MISMATCH = Self(DUCKDB_V2_ERROR_TYPE_MISMATCH)
     comptime TYPE_CONVERSION = Self(DUCKDB_V2_ERROR_TYPE_CONVERSION)
     comptime CATALOG = Self(DUCKDB_V2_ERROR_DATABASE_CATALOG)
+    comptime QUERY_BINDER = Self(DUCKDB_V2_ERROR_QUERY_BINDER)
     comptime INTERRUPT = Self(DUCKDB_V2_ERROR_RUNTIME_INTERRUPT)
 
     def category(self) -> Int:

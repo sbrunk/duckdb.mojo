@@ -64,6 +64,12 @@ def execute(sql: StringSlice, *, var params: Params) raises DuckDBError -> Resul
     return default_connection().execute(sql, params=params^)
 
 
+def execute[T: AnyType](sql: StringSlice, *, params: T) raises DuckDBError -> Result:
+    """Run SQL on the default connection, binding named parameters (`$name`)
+    from the fields of a struct (see `Connection.execute`)."""
+    return default_connection().execute(sql, params=params)
+
+
 def sql(query: String) -> Relation[ImmStaticOrigin]:
     """A lazy relation over `query` on the default connection."""
     return default_connection().sql(query)

@@ -48,6 +48,11 @@ def _live[T: AnyType](p: Pointer[T, MutUntrackedOrigin], release_offset: Int) ->
     return p.unsafe_bitcast[UInt8]().unsafe_offset(release_offset).unsafe_bitcast[Int]()[] != 0
 
 
+# Byte offsets of the `release` callback in the Arrow C data interface
+# structs; these match the field order of `ArrowSchema`/`ArrowArray`/
+# `ArrowArrayStream` in `duckdb._libduckdb_v2` (re-verify those layouts after
+# a bindings regeneration): ArrowSchema has 7 fields before `release`,
+# ArrowArray 8, ArrowArrayStream 3.
 comptime _SCHEMA_RELEASE = 7 * 8
 comptime _ARRAY_RELEASE = 8 * 8
 comptime _STREAM_RELEASE = 3 * 8

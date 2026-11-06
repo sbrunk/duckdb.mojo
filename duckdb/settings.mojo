@@ -19,12 +19,14 @@ struct SettingScope(Equatable, ImplicitlyCopyable, Writable):
     """One value per connection (`SET SESSION`)."""
 
     def write_to(self, mut writer: Some[Writer]):
-        if self == Self.GLOBAL:
-            writer.write("GLOBAL")
-        elif self == Self.SESSION:
-            writer.write("SESSION")
-        else:
-            writer.write("DEFAULT")
+        # `case _` keeps this valid when DuckDB adds a scope.
+        match self.value:
+            case == DUCKDB_V2_SETTING_SCOPE_GLOBAL:
+                writer.write("GLOBAL")
+            case == DUCKDB_V2_SETTING_SCOPE_SESSION:
+                writer.write("SESSION")
+            case _:
+                writer.write("DEFAULT")
 
 
 struct Settings[origin: ImmOrigin](ImplicitlyCopyable):

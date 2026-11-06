@@ -62,14 +62,16 @@ struct ResultType(Equatable, ImplicitlyCopyable, Writable):
     comptime NOTHING = Self(DUCKDB_V2_RESULT_TYPE_NOTHING)
 
     def write_to(self, mut writer: Some[Writer]):
-        if self == Self.ROWS:
-            writer.write("ROWS")
-        elif self == Self.CHANGED_ROWS:
-            writer.write("CHANGED_ROWS")
-        elif self == Self.NOTHING:
-            writer.write("NOTHING")
-        else:
-            writer.write("ResultType(", self.value, ")")
+        # `case _` keeps this valid when DuckDB adds a result type.
+        match self.value:
+            case == DUCKDB_V2_RESULT_TYPE_QUERY_RESULT:
+                writer.write("ROWS")
+            case == DUCKDB_V2_RESULT_TYPE_CHANGED_ROWS:
+                writer.write("CHANGED_ROWS")
+            case == DUCKDB_V2_RESULT_TYPE_NOTHING:
+                writer.write("NOTHING")
+            case _:
+                writer.write("ResultType(", self.value, ")")
 
 
 def _columns(schema: ArcPointer[_Schema]) -> List[Column]:
@@ -104,14 +106,16 @@ struct StepStatus(Equatable, ImplicitlyCopyable, Writable):
     """The query was interrupted (`Connection.interrupt()`)."""
 
     def write_to(self, mut writer: Some[Writer]):
-        if self == Self.WAITING:
-            writer.write("WAITING")
-        elif self == Self.CHUNK:
-            writer.write("CHUNK")
-        elif self == Self.FINISHED:
-            writer.write("FINISHED")
-        else:
-            writer.write("CANCELLED")
+        # `case _` keeps this valid when DuckDB adds a status.
+        match self.value:
+            case == DUCKDB_V2_RESULT_STEP_STATUS_WAITING:
+                writer.write("WAITING")
+            case == DUCKDB_V2_RESULT_STEP_STATUS_CHUNK:
+                writer.write("CHUNK")
+            case == DUCKDB_V2_RESULT_STEP_STATUS_FINISHED:
+                writer.write("FINISHED")
+            case _:
+                writer.write("CANCELLED")
 
 
 struct Step(Movable):
@@ -206,6 +210,9 @@ struct Result(Movable):
         self._buffer_row = move._buffer_row
 
     def __deinit__(deinit self):
+        # Safe after `_finish`/`step` already destroyed the result: the C
+        # destroy NULLs the slot it is given (`capi_v2_result.cpp`), so this
+        # destroys NULL (a no-op) then.
         _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
 
     def _finish(mut self) raises DuckDBError:
@@ -215,6 +222,7 @@ struct Result(Movable):
         var err = null_error_info()
         var changed: idx_t = 0
         var code = lib().duckdb_v2_result_drain(self._handle, Pointer(to=changed), Pointer(to=err))
+        # The C destroy NULLs the slot, so `__deinit__`'s second destroy is a no-op.
         _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
         check(code, err)
         self._rows_changed = Int(changed)
@@ -336,6 +344,8 @@ struct Result(Movable):
 
     def fetchmany[T: Movable & Deinitable](mut self, n: Int) raises DuckDBError -> List[T]:
         """Up to `n` next rows as `T` (see `fetchone`)."""
+        if n < 0:
+            raise api_error(String("fetchmany needs a non-negative row count, got ", n))
         var out = List[T](capacity=n)
         while len(out) < n:
             var row = self.fetchone[T]()
@@ -388,6 +398,7 @@ struct Result(Movable):
         if st == StepStatus.CHUNK:
             return Step(st, self._wrap(chunk))
         if st == StepStatus.FINISHED or st == StepStatus.CANCELLED:
+            # The C destroy NULLs the slot, so `__deinit__`'s destroy is a no-op.
             _ = lib().duckdb_v2_result_destroy(Pointer(to=self._handle))
         return Step(st, None)
 

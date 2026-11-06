@@ -9,7 +9,7 @@ from duckdb.result import Result, _columns
 from duckdb.relation import Relation, _reader_call
 from duckdb._sql_util import _quote_qualified
 from duckdb.statement import Description, Params, PreparedStatement, _Arguments, _named, _positional
-from duckdb.error import DuckDBError
+from duckdb.error import DuckDBError, ErrorCode
 from duckdb.settings import Settings
 from duckdb.files import FileSystem
 from duckdb.observe import LogLevel, QueryMetrics, _log
@@ -209,9 +209,9 @@ struct Connection(Movable, Registrar):
         check(lib().duckdb_v2_connection_get_query_metrics(self._handle, Pointer(to=m), Pointer(to=err)), err)
         return QueryMetrics(_owned=m)
 
-    def log(self, level: LogLevel, type: StringSlice, message: StringSlice) raises DuckDBError:
+    def log(self, level: LogLevel, kind: StringSlice, message: StringSlice) raises DuckDBError:
         """Write to DuckDB's log (`duckdb_logs`), if logging is enabled for `level`."""
-        _log(self._handle, level, type, message)
+        _log(self._handle, level, kind, message)
 
     # ── Arrow ─────────────────────────────────────────────────────
 
@@ -227,6 +227,13 @@ struct Connection(Movable, Registrar):
         var stmt = statements.next()
         if Int(stmt) == 0:
             raise api_error("no statement to execute")
+        # Reject a multi-statement string before executing anything: the
+        # arrow result of statement 1 could only be thrown away.
+        var extra = statements.next()
+        if Int(extra) != 0:
+            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
+            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
+            raise api_error("execute_arrow takes a single statement")
         var result = null[duckdb_v2_arrow_result_handle]()
         var err = null_error_info()
         var code = lib().duckdb_v2_statement_execute_arrow(
@@ -242,11 +249,6 @@ struct Connection(Movable, Registrar):
         _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
         _ = arguments^
         check(code, err)
-        var extra = statements.next()
-        if Int(extra) != 0:
-            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
-            _ = lib().duckdb_v2_arrow_result_destroy(Pointer(to=result))
-            raise api_error("execute_arrow takes a single statement")
         return ArrowResult(_owned=result)
 
     def arrow_scan(self, stream: OwnedArrowStream) raises DuckDBError -> Relation[ImmOrigin(origin_of(self))]:
@@ -258,7 +260,11 @@ struct Connection(Movable, Registrar):
         try:
             self.register(TableFunction.from_impl[ArrowScan]("__mojo_arrow_scan", param_types[Int64]()))
         except e:
-            if "already" not in e.message:
+            # Re-registering the fixed name is reported as a binder error
+            # ("function already exists"). A fresh registration of this
+            # function cannot produce any other binder error, so accepting
+            # that one code is exact - unlike matching DuckDB's wording.
+            if e.code != ErrorCode.QUERY_BINDER:
                 raise e^
         return self.sql(String("SELECT * FROM __mojo_arrow_scan(", Int(stream), ")"))
 
@@ -305,8 +311,31 @@ struct Connection(Movable, Registrar):
         var arguments = _named(Params.of(params))
         return self._execute(sql, arguments)
 
-    def _execute(self, sql: StringSlice, ref arguments: _Arguments) raises DuckDBError -> Result:
+    def _execute(self, sql: StringSlice, mut arguments: _Arguments) raises DuckDBError -> Result:
         var statements = _Statements(self._handle, sql)
+        if arguments.count() > 0:
+            # Parameters bind to one statement. Parse the whole string first,
+            # so "INSERT ...; SELECT ..." with parameters fails before the
+            # insert runs, instead of applying it and then rejecting.
+            var first = statements.next()
+            if Int(first) == 0:
+                raise api_error("no statement to execute")
+            var extra: duckdb_v2_sql_statement_handle
+            try:
+                extra = statements.next()
+            except e:
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=first))
+                raise e^
+            if Int(extra) != 0:
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=extra))
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=first))
+                raise api_error("parameters need a single statement, but the SQL holds several")
+            var with_params: Result
+            try:
+                with_params = Result(_owned=self._execute_statement(first, arguments))
+            finally:
+                _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=first))
+            return with_params^
         var current = statements.next()
         if Int(current) == 0:
             raise api_error("no statement to execute")
@@ -329,10 +358,11 @@ struct Connection(Movable, Registrar):
             current = following
 
     def _execute_statement(
-        self, stmt: duckdb_v2_sql_statement_handle, ref arguments: _Arguments
+        self, stmt: duckdb_v2_sql_statement_handle, mut arguments: _Arguments
     ) raises DuckDBError -> duckdb_v2_result_handle:
         var result = null[duckdb_v2_result_handle]()
         var err = null_error_info()
+        arguments.refresh()
         check(
             lib().duckdb_v2_statement_execute(
                 self._handle,
@@ -355,7 +385,11 @@ struct Connection(Movable, Registrar):
             raise api_error("no statement to prepare")
         var prepared = null[duckdb_v2_prepared_statement_handle]()
         var err = null_error_info()
-        var code = lib().duckdb_v2_prepared_statement_create(self._handle, stmt, False, Pointer(to=prepared), Pointer(to=err))
+        # `require_cacheable=False`: prepare anyway when the plan cannot be
+        # cached (DuckDB then replans per execution instead of failing).
+        var code = lib().duckdb_v2_prepared_statement_create(
+            self._handle, stmt, require_cacheable=False, out_prepared=Pointer(to=prepared), err=Pointer(to=err)
+        )
         _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
         check(code, err)
         var extra = statements.next()

@@ -244,7 +244,7 @@ struct ScanShared(ImplicitlyCopyable):
     def claimed(self) -> Int:
         """How many work units have been claimed so far (safe from any thread)."""
         var p = Pointer(to=self._ptr[].next).unsafe_origin_cast[MutUntrackedOrigin]()
-        return Int(Atomic.fetch_add(p, Int64(0)))
+        return Int(Atomic.load(p))
 
 
 struct TableOutput(Movable):
