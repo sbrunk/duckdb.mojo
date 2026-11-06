@@ -69,6 +69,8 @@ def reduce_sum_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
 
 
 def reduce_min_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+    if n == 0:
+        return Float64.MAX_FINITE  # identity, as in `reduce_minmax_masked`. a[0] would be out of bounds
     var acc = SIMD[DType.float64, W64](a[unsafe_offset=0])
     var i = 0
     while i + W64 <= n:
@@ -82,6 +84,8 @@ def reduce_min_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
 
 
 def reduce_max_f64(a: Pointer[Float64, ImmutAnyOrigin], n: Int) -> Float64:
+    if n == 0:
+        return -Float64.MAX_FINITE  # identity, as in `reduce_minmax_masked`. a[0] would be out of bounds
     var acc = SIMD[DType.float64, W64](a[unsafe_offset=0])
     var i = 0
     while i + W64 <= n:
@@ -483,6 +487,8 @@ def knn_topk[
 
 
 def reduce_min_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
+    if n == 0:
+        return Float32.MAX_FINITE  # identity, as in `reduce_minmax_masked`. a[0] would be out of bounds
     var acc = SIMD[DType.float32, W32](a[unsafe_offset=0])
     var i = 0
     while i + W32 <= n:
@@ -496,6 +502,8 @@ def reduce_min_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
 
 
 def reduce_max_f32(a: Pointer[Float32, ImmutAnyOrigin], n: Int) -> Float32:
+    if n == 0:
+        return -Float32.MAX_FINITE  # identity, as in `reduce_minmax_masked`. a[0] would be out of bounds
     var acc = SIMD[DType.float32, W32](a[unsafe_offset=0])
     var i = 0
     while i + W32 <= n:
