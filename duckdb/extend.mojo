@@ -381,7 +381,13 @@ struct MacroFunction(Movable):
             var d = self._default_of(self.params[i])
             if d >= 0:
                 ref v = self.defaults[d][1]
-                p += String(" := CAST(", _quote_literal(v.to_string()), " AS ", v.type().to_text(), ")")
+                if v.is_null():
+                    # `to_string` spells NULL as the word. Quoting it would cast a
+                    # string. Emit a typed NULL instead (the V2 path sends the
+                    # NULL value itself).
+                    p += String(" := CAST(NULL AS ", v.type().to_text(), ")")
+                else:
+                    p += String(" := CAST(", _quote_literal(v.to_string()), " AS ", v.type().to_text(), ")")
             params.append(p^)
         var kind = "TABLE " if self.table else ""
         return String(

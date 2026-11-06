@@ -71,6 +71,10 @@ def test_macros_on_a_connection() raises:
     assert_equal(con.execute("SELECT add_n(41)::BIGINT").get[Int64]()[0], 42)
     assert_equal(con.execute("SELECT add_n(40, n := 2)::BIGINT").get[Int64]()[0], 42)
     assert_equal(con.execute("SELECT count(*) FROM first_n(7)").get[Int64]()[0], 7)
+    # A NULL default: the SQL path must emit a typed NULL, not the string 'NULL'.
+    con.register(MacroFunction.scalar("or_seven", ["x"], "COALESCE(x, 7)").default("x", Optional[Int64](None)))
+    assert_equal(con.execute("SELECT or_seven()::BIGINT").get[Int64]()[0], 7)
+    assert_equal(con.execute("SELECT or_seven(3)::BIGINT").get[Int64]()[0], 3)
 
 
 def test_pragmas() raises:
