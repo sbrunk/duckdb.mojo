@@ -24,7 +24,7 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.74.0
+          pixi-version: v0.84.1
           cache: true
           environments: default
 
@@ -64,7 +64,7 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.74.0
+          pixi-version: v0.84.1
           cache: true
           environments: default
 
@@ -133,13 +133,45 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # emberserde 0.2.0 is not on modular-community (it has 0.1.0) until it is
+      # published there. Build it from the pinned git commit (the commit behind
+      # the 0.2.0 tag, matching pixi.lock) and hand the result to rattler-build
+      # as a local channel.
+      - name: Setup pixi
+        uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          pixi-version: v0.84.1
+          cache: false
+          run-install: false
+
+      - name: Build emberserde from git
+        run: |
+          source $HOME/.bash_profile
+          git clone --depth 1 --no-checkout --branch 0.2.0 \
+            https://github.com/bgreni/EmberSerde.git "$RUNNER_TEMP/emberserde"
+          git -C "$RUNNER_TEMP/emberserde" checkout \
+            7fe1cb953d4585ed8cd0462fd7a7147c664a4791
+          (cd "$RUNNER_TEMP/emberserde" && pixi build -o "$RUNNER_TEMP/emberserde-channel")
+
+      # pixi build writes a flat directory. rattler-build only takes channels
+      # with a repodata, so index the directory first (rattler-index fs).
+      - name: Index emberserde channel
+        run: |
+          source $HOME/.bash_profile
+          pixi exec -s rattler-index -- rattler-index fs "$RUNNER_TEMP/emberserde-channel"
+
       - name: Build and test conda recipe
         uses: prefix-dev/rattler-build-action@v0.2.38
         with:
           recipe-path: conda.recipe/recipe.local.yaml
-          # Channels rattler-build resolves dependencies from (mojo-compiler and
-          # libduckdb). Matches the local build command in the README.
+          # v0.65.0 (the action default) panics on local file:// channels
+          # (rattler_conda_types channel parsing). 0.80.0 resolves them.
+          rattler-build-version: v0.80.0
+          # Channels rattler-build resolves dependencies from (mojo-compiler,
+          # libduckdb and, until it is published, emberserde from the local
+          # channel above).
           build-args: >-
+            -c ${{ runner.temp }}/emberserde-channel
             -c conda-forge
             -c https://conda.modular.com/max
             -c https://repo.prefix.dev/modular-community

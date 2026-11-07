@@ -14,7 +14,10 @@ source:
 build:
   number: 0
   script:
-    - mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
+    # The Mojo compiler only searches the paths in MODULAR_MOJO_MAX_IMPORT_PATH
+    # (pixi sets it on activation, a conda build does not). Point it at the host
+    # prefix so precompile finds emberserde.mojoc.
+    - MODULAR_MOJO_MAX_IMPORT_PATH="${{ PREFIX }}/lib/mojo" mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
 
 requirements:
   build:
@@ -29,8 +32,9 @@ requirements:
     - mojo-compiler ==1.2.0
     # Exact pin: every function of DuckDB's V2 C API is still unstable.
     - libduckdb ==2.0.0
-    # Generic code built on emberserde is compiled in user code. Requires
-    # emberserde 0.2.0 on modular-community (not released there yet).
+    # Generic code built on emberserde is compiled in user code. emberserde
+    # 0.2.0 is not published on a channel yet: the conda-recipe CI job builds
+    # it from the pinned git commit and passes it as a local channel.
     - emberserde ==0.2.0
 
 tests:
