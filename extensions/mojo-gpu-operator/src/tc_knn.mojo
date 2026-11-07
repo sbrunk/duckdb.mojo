@@ -6,8 +6,7 @@ materialized: only Emb is read, and only M x k results are written.
 
 This module is wired into `_run_topk_batch` in `gpu_kernels.mojo` behind the
 `GPU_OP_TENSORCORE` env flag (default off) and a comptime NVIDIA gate. The gate
-uses two different comptime queries depending on context (see memory
-`mojo-gpu-target-introspection`):
+uses two different comptime queries depending on context:
   * Host functions (`run_tc_knn_batch`, `_run_tc_knn_for_kd`, and the routing
     branch in gpu_kernels) gate on `default_accelerator().is_nvidia_gpu()`, the
     host-context query. The in-kernel `is_nvidia_gpu()` triple check is always
@@ -25,8 +24,8 @@ kernel grid-strides NBLOCKS=256 one-warp-grid-tile blocks over N in BN=64 chunks
 MMAs the BM x BN S-tile into fp32 registers, and updates a persistent per-thread
 register top-k. Stage 2 (`merge_kernel`) reduces each query's NBLOCKS*k
 candidates to the final k. The host tiles over M in BM-chunks and over the
-supported embedding dims KD (768/384/1024/1536) via comptime instantiation;
-unsupported K falls back to the scalar path (the caller keeps the scalar driver).
+supported embedding dims KD (768/384/1024/1536) via comptime instantiation.
+Unsupported K falls back to the scalar path (the caller keeps the scalar driver).
 """
 
 from std.sys.info import is_nvidia_gpu, default_accelerator
@@ -525,9 +524,10 @@ def _run_tc_knn_for_kd[
 # non-normalized data with large or similar |q|^2, |e|^2 the subtraction suffers
 # catastrophic cancellation against the lower-precision fp16-product dot, and the
 # ranking degrades (genuine misses). Decision: ship L2 for normalized inputs
-# (the common case for real embeddings; array_distance over normalized vectors is
-# a monotonic transform of cosine) and document the non-normalized limitation
-# here and in the metric bench. A numerically robust non-normalized L2 would need
+# (the common case for real embeddings, and array_distance over normalized
+# vectors is a monotonic transform of cosine) and document the non-normalized
+# limitation here and in the metric bench. A numerically stable non-normalized
+# L2 would need
 # fp32/tf32 MMA inputs (about 2x the Emb-read bandwidth, which bounds the kernel)
 # or a fused stable form. This is not implemented. Cosine and IP are
 # unaffected (IP is a pure dot; cosine divides by the norm rather than

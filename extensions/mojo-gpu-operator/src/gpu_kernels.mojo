@@ -5482,7 +5482,7 @@ struct Q6PredSpec(ImplicitlyCopyable, Movable):
 
 
 # Resolve the canonical Q6 predicate from the descriptor. Matches the filter set
-# by (column, cmp) role rather than hardcoded names, so it is robust to schema
+# by (column, cmp) role rather than hardcoded names, so it survives schema
 # renaming while staying strictly the Q6 shape:
 #   * one column with both a CMP_GE (ship_lo) and a CMP_LT (ship_hi) bound
 #   * one column with both a CMP_GE (disc_lo) and a CMP_LE (disc_hi) bound

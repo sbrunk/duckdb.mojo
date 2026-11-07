@@ -37,8 +37,8 @@ gpu_decode_bitpacking.cu):
                                delta_offset bias:
                                  out[i] = delta_offset + sum_{j=0..i}(frame+unpack(j))
                                (matches DuckDB ApplyFrameOfReference + DeltaDecode
-                               in storage/compression/bitpacking.cpp; the bias is
-                               folded into data[0] before the inclusive scan.)
+                               in storage/compression/bitpacking.cpp). The bias
+                               is folded into data[0] before the inclusive scan.)
 
 `unpack_value` is the bit-twiddle (LSB-first width-bit field
 extraction from a uint32 stream), ported from Sirius
@@ -380,9 +380,9 @@ def bitpacking_decode_kernel[
         # done in the unsigned (two's-complement) domain.
         #
         # Shared scratch holds frame-decoded deltas, then the prefix sums. A
-        # single-thread serial scan over <= BP_META_GROUP_SIZE elements keeps
-        # this robust for any block_dim and for short tails. It favors
-        # correctness over speed and stays portable (no warp/scan intrinsics).
+        # single-thread serial scan over <= BP_META_GROUP_SIZE elements stays
+        # correct for any block_dim and for short tails, and stays portable
+        # (no warp/scan intrinsics).
         var sm_scan = stack_allocation[
             BP_META_GROUP_SIZE, Scalar[UT], address_space = AddressSpace.SHARED
         ]()
