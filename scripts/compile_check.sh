@@ -50,7 +50,7 @@ for dir in "$@"; do
         # spuriously fails on linux for math-using files (mojo doesn't put -lm on
         # the link line: "libm.so.6: DSO missing from command line"). Skipping
         # the link sidesteps that and is faster.
-        if mojo build --emit object "${MOJO_TARGET[@]}" "$f" -o "$OUT_DIR/$(basename "$f").o"; then
+        if mojo build --emit object ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$f" -o "$OUT_DIR/$(basename "$f").o"; then
             checked=$((checked + 1))
         else
             echo "ERROR: failed to compile $f"

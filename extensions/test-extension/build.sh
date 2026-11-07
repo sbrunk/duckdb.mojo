@@ -10,6 +10,8 @@
 #   mojo_v2_api.duckdb_extension     unstable target (C_STRUCT_UNSTABLE)
 set -euo pipefail
 
+# Guarded expansion: bash 3.2 on macOS runners treats an empty array as
+# unset, so a plain "${MOJO_TARGET[@]}" would abort here under set -u.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -17,7 +19,7 @@ BUILD="$HERE/build"
 META="python3 $ROOT/scripts/append_extension_metadata.py"
 mkdir -p "$BUILD"
 
-mojo build "${MOJO_TARGET[@]}" "$HERE/src/test_v2_extension.mojo" --emit shared-lib -o "$BUILD/mojo_v2.so"
+mojo build ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$HERE/src/test_v2_extension.mojo" --emit shared-lib -o "$BUILD/mojo_v2.so"
 cp "$BUILD/mojo_v2.so" "$BUILD/mojo_v2.duckdb_extension"
 cp "$BUILD/mojo_v2.so" "$BUILD/mojo_v2_fail.duckdb_extension"
 cp "$BUILD/mojo_v2.so" "$BUILD/mojo_v2_stable.duckdb_extension"
@@ -26,5 +28,5 @@ $META "$BUILD/mojo_v2.duckdb_extension" --abi-type C_STRUCT_UNSTABLE
 $META "$BUILD/mojo_v2_fail.duckdb_extension" --abi-type C_STRUCT_UNSTABLE
 $META "$BUILD/mojo_v2_stable.duckdb_extension" --capi-version v2.0.0
 
-mojo build "${MOJO_TARGET[@]}" "$HERE/src/test_v2_api_extension.mojo" --emit shared-lib -o "$BUILD/mojo_v2_api.duckdb_extension"
+mojo build ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$HERE/src/test_v2_api_extension.mojo" --emit shared-lib -o "$BUILD/mojo_v2_api.duckdb_extension"
 $META "$BUILD/mojo_v2_api.duckdb_extension" --abi-type C_STRUCT_UNSTABLE

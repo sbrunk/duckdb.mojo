@@ -41,5 +41,5 @@ done
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
-    mojo run "${MOJO_TARGET[@]}" "$f"
+    mojo run ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$f"
 done
