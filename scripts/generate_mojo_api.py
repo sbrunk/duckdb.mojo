@@ -8,6 +8,21 @@ Usage:
     python scripts/generate_mojo_api.py [--duckdb-dir <path>]
 
 The --duckdb-dir flag defaults to 'duckdb' (the submodule in this repo).
+
+The emitted extension API struct (`duckdb_ext_api_v1`) is pinned to extension
+API version v1.5.6 (`EXT_API_STABLE_VERSION` here, emitted as
+`DUCKDB_EXTENSION_API_VERSION`). Keep the `--capi-version` default in
+`scripts/append_extension_metadata.py` in sync. DuckDB 1.5.6 stabilized all
+previously unstable functions, so the struct holds the whole API and there is
+no separate unstable struct. Functions newer than that version are left out of
+the struct and bound to generated stubs that abort only when called. They are
+not looked up with dlsym, because `_find_dylib` aborts if the host has no
+loadable `libduckdb`. DuckDB 2.0 added two functions
+(`duckdb_create_timestamp_tz_ns`, `duckdb_get_timestamp_tz_ns`) to the v1.5.6
+band after 1.5.6 shipped. They have no `offset` in the spec, and a 1.5.6
+engine lacks their slots, so they stay out of the struct and become stubs in
+extension mode. Extensions still load on 1.5.6, and they work normally in
+client mode.
 """
 
 from __future__ import annotations
