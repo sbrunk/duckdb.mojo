@@ -2,4 +2,4 @@
 	path = third_party/duckdb
 	url = https://github.com/duckdb/duckdb.git
 	shallow = true
-	branch = v1.5.6
+	branch = v2.0.0

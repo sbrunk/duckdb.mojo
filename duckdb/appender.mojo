@@ -1,798 +1,345 @@
-"""High-level Appender API for efficiently loading data into DuckDB.
+"""`Appender`: bulk loading rows into a table."""
 
-Appenders are the most efficient way of loading data into DuckDB, and are
-recommended for fast data loading. The appender is much faster than using
-prepared statements or individual ``INSERT INTO`` statements.
+from duckdb._libduckdb_v2 import *
+from duckdb._sql_util import _quote_ident, _quote_qualified
+from duckdb.api_v2 import StrArg, null, null_error_info
+from duckdb._runtime import api_error, check, lib
+from duckdb.database import Connection, _Statements
+from duckdb.error import DuckDBError
+from duckdb.result import Result
+from duckdb.serde import ChunkWriter
+from duckdb.statement import _Arguments
+from duckdb.types import LogicalType, TypeId
+from duckdb.value import Value
 
-This module provides a type-safe, idiomatic Mojo API that uses compile-time
-reflection to map Mojo structs and tuples to DuckDB rows automatically.
+comptime _DATA = "__mojo_appender_rows"
+comptime _PATTERN = "__mojo_default_pattern"
 
-Example: appending individual values:
-```mojo
-var con = DuckDB.connect(":memory:")
-_ = con.execute("CREATE TABLE people (id INTEGER, name VARCHAR)")
-var appender = Appender(con, "people")
-appender.append_value(Int32(1))
-appender.append_value("Mark")
-appender.end_row()
-appender.append_value(Int32(2))
-appender.append_value("Hannes")
-appender.end_row()
-# appender is flushed and destroyed automatically
-```
 
-Example: appending structs:
-```mojo
 @fieldwise_init
-struct Person(Copyable, Movable):
-    var id: Int32
-    var name: String
+struct OnConflict(Equatable, ImplicitlyCopyable):
+    """What an `Appender` does with rows that violate a primary key or
+    unique constraint."""
 
-var appender = Appender(con, "people")
-appender.append_row(Person(1, "Mark"))
-appender.append_row(Person(2, "Hannes"))
-```
+    var _value: Int
 
-Example: appending tuples:
-```mojo
-var appender = Appender(con, "people")
-appender.append_tuple_row(Tuple(Int32(1), String("Mark")))
-```
-
-Example: appending from a list:
-```mojo
-var people = List[Person](Person(1, "Mark"), Person(2, "Hannes"))
-var appender = Appender(con, "people")
-appender.append_rows(people)
-```
-
-Example: nullable columns with Optional:
-```mojo
-@fieldwise_init
-struct PersonOpt(Copyable, Movable):
-    var id: Int32
-    var name: Optional[String]
-
-var appender = Appender(con, "people")
-appender.append_row(PersonOpt(1, String("Mark")))
-appender.append_row(PersonOpt(2, None))
-```
-
-Example: appending a List column:
-```mojo
-_ = con.execute("CREATE TABLE t (tags LIST(VARCHAR))")
-var appender = Appender(con, "t")
-appender.append_value(List[String]("a", "b", "c"))
-appender.end_row()
-```
-
-Example: appending a Dict as a MAP column:
-```mojo
-_ = con.execute("CREATE TABLE t (m MAP(VARCHAR, INTEGER))")
-var appender = Appender(con, "t")
-var d: Dict[String, Int32] = {'key1': 10, 'key2': 20}
-appender.append_value(d)
-appender.end_row()
-```
-
-Example: appending a Variant as a UNION column:
-```mojo
-_ = con.execute("CREATE TABLE t (u UNION(i INTEGER, s VARCHAR))")
-var appender = Appender(con, "t")
-appender.append_value(Variant[Int32, String](Int32(42)))
-appender.end_row()
-appender.append_value(Variant[Int32, String](String("hello")))
-appender.end_row()
-```
-"""
-
-from std.sys.info import size_of
-from std.reflection import Reflected
-from std.collections import Optional, List, Dict
-from std.utils import Variant
-from std.builtin.rebind import downcast, rebind, rebind_var
-from std.memory.alloc import alloc, Layout
-from duckdb._libduckdb import *
-from duckdb.duckdb_type import *
-from duckdb.api import DuckDB, _get_duckdb_interface
-from duckdb.connection import Connection
-from duckdb.database import _null_ptr
-from duckdb.logical_type import LogicalType
-from duckdb.typed_api import (
-    mojo_type_to_duckdb_type,
-    _is_known_scalar_type,
-    _scalar_type_to_duckdb,
-    _to_duckdb_value,
-)
+    comptime ERROR = Self(0)
+    """Fail the flush (the default)."""
+    comptime IGNORE = Self(1)
+    """Skip the conflicting rows (`INSERT OR IGNORE`)."""
+    comptime REPLACE = Self(2)
+    """Replace the existing rows (`INSERT OR REPLACE`)."""
 
 
-# ──────────────────────────────────────────────────────────────────
-# Appendable trait: high-level interface for appending typed values
-# ──────────────────────────────────────────────────────────────────
+struct Appender[origin: ImmOrigin](Movable):
+    """Loads rows into a table in batches.
 
+    Works like DuckDB's own appender: rows are written into data chunks in
+    DuckDB's storage layout and collected in memory (DuckDB can spill the
+    collection to disk), then inserted with one `INSERT ... SELECT` over the
+    collection. That happens every `flush_rows` rows (204,800 by default, as
+    in DuckDB), on `flush()` and `close()`, and on destruction.
 
-trait Appendable:
-    """Trait for types that can be appended to a DuckDB Appender.
+    ```mojo
+    var appender = Appender(con, "users")
+    appender.append_row(User(1, "Mark"))
+    appender.append_value(Int64(2))
+    appender.append_value(String("Hannes"))
+    appender.end_row()
+    appender.close()
+    ```
 
-    Implement this trait to make a type appendable via `Appender.append_value`.
+    Structs map to columns by name (case-insensitive) and tuples by
+    position. Columns without a field become NULL. Every mapped type works,
+    including lists, maps and nested structs. Values whose type differs
+    from the column's are cast by DuckDB (an `Int` into an INTEGER column).
+
+    Errors:
+    - A value that cannot be written raises from `append_*`, and the row
+      can be written again.
+    - Constraint violations show up when rows are inserted, at a flush. The
+      rows of a failed flush are dropped, and the error says how many.
+      `on_conflict` skips or replaces rows with duplicate keys instead.
+    - Destruction flushes too, but it cannot raise: it prints the error.
+      Call `close()` to see it.
+
+    It borrows its connection, which stays alive as long as the appender.
     """
 
-    def append(ref self, mut appender: Appender) raises:
-        """Append this value to the given appender."""
-        ...
+    var _conn: Pointer[Connection, Self.origin]
+    var _target: String
+    var _insert: String  # "INSERT [OR ...] INTO <table>"
+    var _names: List[String]  # quoted column names
+    var _types: List[LogicalType]
+    var _writer: ChunkWriter
+    var _collection: duckdb_v2_column_data_collection_handle
+    var _append_state: duckdb_v2_column_data_collection_append_state_handle
+    var _flush_rows: Int
+    var _pending: Int  # rows in the collection
+    var _col: Int  # next column of the current row for append_value
+    # append_default: which columns of the current row take their default,
+    # and each distinct set of defaulted columns in the batch (index 0: none).
+    var _defaulted: List[Bool]
+    var _patterns: List[List[Bool]]
 
+    def __init__(
+        out self,
+        ref[Self.origin] con: Connection,
+        table: String,
+        columns: Optional[List[String]] = None,
+        on_conflict: OnConflict = OnConflict.ERROR,
+        flush_rows: Int = 204800,
+    ) raises DuckDBError:
+        """An appender for `table` (optionally `schema.table`).
 
-# ──────────────────────────────────────────────────────────────────
-# Internal helpers
-# ──────────────────────────────────────────────────────────────────
-
-
-def _get_appender_error(raw: duckdb_appender) -> String:
-    """Return the current appender error message, or empty string."""
-    ref libduckdb = DuckDB().libduckdb()
-    var error_data = libduckdb.duckdb_appender_error_data(raw)
-    if not libduckdb.duckdb_error_data_has_error(error_data):
-        libduckdb.duckdb_destroy_error_data(
-            Pointer(to=error_data)
-        )
-        return ""
-    var msg_ptr: Optional[
-        Pointer[c_char, ImmutAnyOrigin]
-    ] = libduckdb.duckdb_error_data_message(error_data)
-    var msg = String("")
-    if msg_ptr is not None:
-        msg = String(unsafe_from_utf8_ptr=msg_ptr.value())
-    libduckdb.duckdb_destroy_error_data(Pointer(to=error_data))
-    return msg
-
-
-# ──────────────────────────────────────────────────────────────────
-# Appendable extension conformances
-# ──────────────────────────────────────────────────────────────────
-
-
-__extension Bool(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        appender._check(libduckdb.duckdb_append_bool(appender._appender, self))
-
-
-# Use SIMD extension to cover all numeric types at once:
-# Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64.
-# This also covers Int and UInt, which are aliases for Scalar[DType.int] and
-# Scalar[DType.uint] rather than separate index types.
-__extension SIMD(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        comptime assert length == 1, "Only scalar SIMD (length=1) can be appended"
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = appender._appender
-
-        comptime if Self == Int:
-            # Platform-sized signed index type.
-            comptime if size_of[Int]() == 4:
-                appender._check(libduckdb.duckdb_append_int32(raw, Int32(self)))
-            else:
-                appender._check(libduckdb.duckdb_append_int64(raw, Int64(self)))
-        elif Self == UInt:
-            comptime if size_of[UInt]() == 4:
-                appender._check(libduckdb.duckdb_append_uint32(raw, UInt32(self)))
-            else:
-                appender._check(libduckdb.duckdb_append_uint64(raw, UInt64(self)))
-        elif Self == Int8:
-            appender._check(libduckdb.duckdb_append_int8(raw, rebind_var[Int8](self)))
-        elif Self == Int16:
-            appender._check(libduckdb.duckdb_append_int16(raw, rebind_var[Int16](self)))
-        elif Self == Int32:
-            appender._check(libduckdb.duckdb_append_int32(raw, rebind_var[Int32](self)))
-        elif Self == Int64:
-            appender._check(libduckdb.duckdb_append_int64(raw, rebind_var[Int64](self)))
-        elif Self == UInt8:
-            appender._check(libduckdb.duckdb_append_uint8(raw, rebind_var[UInt8](self)))
-        elif Self == UInt16:
-            appender._check(libduckdb.duckdb_append_uint16(raw, rebind_var[UInt16](self)))
-        elif Self == UInt32:
-            appender._check(libduckdb.duckdb_append_uint32(raw, rebind_var[UInt32](self)))
-        elif Self == UInt64:
-            appender._check(libduckdb.duckdb_append_uint64(raw, rebind_var[UInt64](self)))
-        elif Self == Float32:
-            appender._check(libduckdb.duckdb_append_float(raw, rebind_var[Float32](self)))
-        elif Self == Float64:
-            appender._check(libduckdb.duckdb_append_double(raw, rebind_var[Float64](self)))
-        elif Self == Int128:
-            appender._check(libduckdb.duckdb_append_hugeint(raw, rebind_var[Int128](self)))
-        elif Self == UInt128:
-            appender._check(libduckdb.duckdb_append_uhugeint(raw, rebind_var[UInt128](self)))
-        else:
-            comptime assert False, "Unsupported SIMD DType for appender"
-
-
-__extension String(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var copy = String(self)
-        appender._check(
-            libduckdb.duckdb_append_varchar(
-                appender._appender, copy.as_c_string_span().ptr()
+        With `columns`, rows hold only those columns and the others take
+        their defaults.
+        """
+        self._conn = Pointer(to=con)
+        self._target = _quote_qualified(table)
+        var insert = String("INSERT")
+        if on_conflict == OnConflict.IGNORE:
+            insert += " OR IGNORE"
+        elif on_conflict == OnConflict.REPLACE:
+            insert += " OR REPLACE"
+        self._insert = String(insert, " INTO ", self._target)
+        var select_list = String("*")
+        if columns:
+            var quoted = List[String]()
+            for c in columns.value():
+                quoted.append(_quote_ident(c))
+            select_list = String(", ").join(quoted)
+        var description = con.describe(String("SELECT ", select_list, " FROM ", self._target))
+        self._types = List[LogicalType]()
+        self._names = List[String]()
+        var names = List[String]()
+        for c in description.columns:
+            self._types.append(c.type.copy())
+            self._names.append(_quote_ident(c.name))
+            names.append(c.name.copy())
+        var n = len(self._types)
+        # One extra column: the set of defaulted columns of each row.
+        var chunk_types = self._types.copy()
+        chunk_types.append(LogicalType(TypeId.INTEGER))
+        names.append(_PATTERN)
+        self._writer = ChunkWriter(chunk_types.copy(), names^, con.factory(), visible=n)
+        self._collection = null[duckdb_v2_column_data_collection_handle]()
+        self._append_state = null[duckdb_v2_column_data_collection_append_state_handle]()
+        self._flush_rows = max(flush_rows, 1)
+        self._pending = 0
+        self._col = 0
+        self._defaulted = List[Bool](length=n, fill=False)
+        self._patterns = [List[Bool](length=n, fill=False)]
+        var handles = List[duckdb_v2_logical_type_handle]()
+        for i in range(len(chunk_types)):
+            handles.append(chunk_types[i].handle())
+        var err = null_error_info()
+        check(
+            lib().duckdb_v2_column_data_collection_create(
+                con.factory(), handles.unsafe_ptr().as_imm(), idx_t(len(handles)), Pointer(to=self._collection), Pointer(to=err)
             ),
+            err,
         )
-
-
-__extension Date(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        appender._check(libduckdb.duckdb_append_date(appender._appender, self))
-
-
-__extension Time(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        appender._check(libduckdb.duckdb_append_time(appender._appender, self))
-
-
-__extension Timestamp(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        appender._check(
-            libduckdb.duckdb_append_timestamp(appender._appender, self)
-        )
-
-
-__extension Interval(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        # Interval (months: Int32, days: Int32, micros: Int64) must be
-        # reinterpreted as duckdb_interval (months_days: Int64, micros: Int64)
-        # via memory bitcast, same pattern as src/value.mojo
-        appender._check(
-            libduckdb.duckdb_append_interval(
-                appender._appender,
-                Pointer(to=self).unsafe_bitcast[duckdb_interval]()[],
-            ),
-        )
-
-
-__extension Decimal(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        # There is no duckdb_append_decimal, so use value-based appending.
-        var val = libduckdb.duckdb_create_decimal(self)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimestampS(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = duckdb_timestamp_s(self.seconds)
-        var val = libduckdb.duckdb_create_timestamp_s(raw)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimestampMS(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = duckdb_timestamp_ms(self.millis)
-        var val = libduckdb.duckdb_create_timestamp_ms(raw)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimestampNS(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = duckdb_timestamp_ns(self.nanos)
-        var val = libduckdb.duckdb_create_timestamp_ns(raw)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimestampTZ(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var ts = Timestamp(self.micros)
-        var val = libduckdb.duckdb_create_timestamp_tz(ts)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimeTZ(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = duckdb_time_tz(self.bits)
-        var val = libduckdb.duckdb_create_time_tz_value(raw)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension UUID(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var val = libduckdb.duckdb_create_uuid(self.value)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension TimeNS(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var raw = duckdb_time_ns(self.nanos)
-        var val = libduckdb.duckdb_create_time_ns(raw)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension Bit(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        var buf_mem = alloc(Layout[UInt8](count=len(self._data))).into_managed()
-        var buf = buf_mem.unsafe_ptr()
-        for i in range(len(self._data)):
-            buf[unsafe_offset=i] = self._data[i]
-        var raw = duckdb_bit(buf.unsafe_origin_cast[MutUntrackedOrigin](), idx_t(len(self._data)))
-        var val = libduckdb.duckdb_create_bit(raw)
-        deinit(buf_mem^)
-        appender._check(libduckdb.duckdb_append_value(appender._appender, val))
-        libduckdb.duckdb_destroy_value(Pointer(to=val))
-
-
-__extension List(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        comptime if Self.T == UInt8:
-            ref libduckdb = DuckDB().libduckdb()
-            # Access the underlying data pointer directly via UnsafePointer
-            # to avoid copying the list.
-            var src_ptr = Pointer(to=self).unsafe_bitcast[List[UInt8]]()
-            appender._check(
-                libduckdb.duckdb_append_blob(
-                    appender._appender,
-                    src_ptr[].unsafe_ptr().unsafe_bitcast[NoneType](),
-                    idx_t(len(src_ptr[])),
-                ),
-            )
-        elif _is_known_scalar_type[Self.T]():
-            # General list of known scalars: create a list or array value.
-            # Refine Self.T to Copyable & Deinitable so we can call _to_duckdb_value /
-            # mojo_type_to_duckdb_type. Every known scalar satisfies both traits.
-            comptime CT = downcast[Self.T, Copyable & Deinitable]
-            ref libduckdb = DuckDB().libduckdb()
-            var src_ptr = Pointer(to=self).unsafe_bitcast[List[CT]]()
-            var n = len(src_ptr[])
-
-            # Create duckdb_values for each element
-            var values_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
-            var values = values_mem.unsafe_ptr()
-            for i in range(n):
-                values[unsafe_offset=i] = _to_duckdb_value(src_ptr[][i])  # CT is the refined Self.T
-
-            # Check target column type to decide LIST vs ARRAY
-            var col_type = libduckdb.duckdb_appender_column_type(
-                appender._appender, idx_t(appender._current_col)
-            )
-            var col_type_id = DuckDBType(
-                libduckdb.duckdb_get_type_id(col_type)
-            )
-
-            var val: duckdb_value
-            if col_type_id == DuckDBType.array:
-                # ARRAY: need the element type from the column's logical type
-                var child_type = libduckdb.duckdb_array_type_child_type(col_type)
-                val = libduckdb.duckdb_create_array_value(
-                    child_type,
-                    values.as_imm().unsafe_origin_cast[ImmutAnyOrigin](),
-                    idx_t(n),
-                )
-                libduckdb.duckdb_destroy_logical_type(Pointer(to=child_type))
-            else:
-                # LIST (default)
-                var elem_type = LogicalType[True, MutUntrackedOrigin](
-                    mojo_type_to_duckdb_type[CT]()
-                )
-                val = libduckdb.duckdb_create_list_value(
-                    elem_type.internal_ptr(),
-                    values.as_imm().unsafe_origin_cast[ImmutAnyOrigin](),
-                    idx_t(n),
-                )
-
-            appender._check(
-                libduckdb.duckdb_append_value(appender._appender, val)
-            )
-
-            # Clean up
-            for i in range(n):
-                libduckdb.duckdb_destroy_value(
-                    Pointer(to=values[unsafe_offset=i])
-                )
-            deinit(values_mem^)
-            libduckdb.duckdb_destroy_value(Pointer(to=val))
-            libduckdb.duckdb_destroy_logical_type(Pointer(to=col_type))
-        else:
-            raise Error(
-                "Only List[UInt8] (BLOB) and List[scalar] can be appended."
-                " For complex nested types, use a different approach."
-            )
-
-
-__extension Optional(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        if self:
-            comptime if conforms_to(Self.T, Appendable):
-                self.value().append(appender)
-            else:
-                raise Error(
-                    "Unsupported inner type for Optional in appender"
-                )
-        else:
-            appender.append_null()
-
-
-__extension Dict(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        """Append a Dict value to a MAP column.
-
-        The MAP logical type is obtained from the target table's column
-        schema via ``duckdb_appender_column_type``.  Each Dict entry
-        becomes a key/value pair in the MAP.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-
-        # Get the MAP logical type from the target column
-        var col_type = libduckdb.duckdb_appender_column_type(
-            appender._appender, idx_t(appender._current_col)
-        )
-
-        var n = len(self)
-        var keys_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
-        var keys = keys_mem.unsafe_ptr()
-        var vals_mem = alloc(Layout[duckdb_value](count=n)).into_managed()
-        var vals = vals_mem.unsafe_ptr()
-
-        # Refine K and V so they satisfy _to_duckdb_value's bounds. Any type
-        # convertible to a duckdb_value is copyable, movable and deinitable.
-        comptime KT = downcast[Self.K, Copyable & Deinitable]
-        comptime VT = downcast[Self.V, Copyable & Deinitable]
-
-        var i = 0
-        for item in self.items():
-            keys[unsafe_offset=i] = _to_duckdb_value(rebind_var[KT](item.key.copy()))
-            vals[unsafe_offset=i] = _to_duckdb_value(rebind_var[VT](item.value.copy()))
-            i += 1
-
-        var map_val = libduckdb.duckdb_create_map_value(
-            col_type,
-            keys.as_imm().unsafe_origin_cast[ImmutAnyOrigin](),
-            vals.as_imm().unsafe_origin_cast[ImmutAnyOrigin](),
-            idx_t(n),
-        )
-        appender._check(
-            libduckdb.duckdb_append_value(appender._appender, map_val)
-        )
-
-        # Clean up
-        for j in range(n):
-            libduckdb.duckdb_destroy_value(Pointer(to=keys[unsafe_offset=j]))
-            libduckdb.duckdb_destroy_value(Pointer(to=vals[unsafe_offset=j]))
-        deinit(keys_mem^)
-        deinit(vals_mem^)
-        libduckdb.duckdb_destroy_value(Pointer(to=map_val))
-        libduckdb.duckdb_destroy_logical_type(Pointer(to=col_type))
-
-
-__extension Variant(Appendable):
-    def append(ref self, mut appender: Appender) raises:
-        """Append a Variant value to a UNION column.
-
-        The UNION logical type (including member names) is obtained from the
-        target table's column schema via ``duckdb_appender_column_type``.
-        The Variant's discriminant maps to the UNION tag index and the active
-        value is converted to a ``duckdb_value``.
-
-        Positional mapping: ``Variant`` type index ``i`` corresponds to UNION
-        member ``i``.  Member names are not required from the Mojo side.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-
-        # Get the UNION logical type from the target column's schema
-        var col_type = libduckdb.duckdb_appender_column_type(
-            appender._appender, idx_t(appender._current_col)
-        )
-
-        # Find the active member using isa[] and create the member value.
-        # Placeholder value, overwritten in the loop below.
-        var tag = 0
-        var member_val = duckdb_value.unsafe_dangling()
-        comptime for i in range(Self.Ts.length):
-            comptime MemberType = Self.Ts[i]
-            comptime MT = downcast[MemberType, Copyable & Deinitable]
-            if self.isa[MT]():
-                tag = i
-                member_val = _to_duckdb_value(self.unsafe_get[MT]())
-
-        # Create the union value and append it
-        var union_val = libduckdb.duckdb_create_union_value(
-            col_type, idx_t(tag), member_val
-        )
-        appender._check(
-            libduckdb.duckdb_append_value(appender._appender, union_val)
-        )
-
-        # Clean up
-        libduckdb.duckdb_destroy_value(Pointer(to=member_val))
-        libduckdb.duckdb_destroy_value(Pointer(to=union_val))
-        libduckdb.duckdb_destroy_logical_type(Pointer(to=col_type))
-
-
-# ──────────────────────────────────────────────────────────────────
-# Appender: high-level API
-# ──────────────────────────────────────────────────────────────────
-
-
-struct Appender(Movable):
-    """Efficiently load data into a DuckDB table.
-
-    Appenders are the fastest way to insert data into DuckDB from Mojo.
-    They support appending individual values, complete rows as structs or
-    tuples, and bulk-appending from lists.
-
-    ``Optional`` fields/values map to SQL ``NULL``.
-
-    The appender is automatically flushed and destroyed when it goes out
-    of scope.
-    """
-
-    var _appender: duckdb_appender
-    var _current_col: Int
-    """Tracks the current column index for value-level appending.
-
-    Used internally by `Variant(Appendable)` to query the target column's
-    UNION logical type from the table schema.
-    """
-
-    # ── Construction / Destruction ────────────────────────────────
-
-    def __init__(out self, ref con: Connection, table: String, schema: String = "") raises:
-        """Create an appender for the given table.
-
-        Args:
-            con: An open DuckDB connection.
-            table: The table name to append to.
-            schema: The schema name (empty string for default schema).
-        """
-        # Placeholder handle. duckdb_appender_create fills it in via an out-param.
-        self._appender = duckdb_appender.unsafe_dangling()
-        self._current_col = 0
-        var _table = table.copy()
-        ref libduckdb = DuckDB().libduckdb()
-
-        var state: duckdb_state
-        if schema == "":
-            state = libduckdb.duckdb_appender_create(
-                con._conn,
-                _null_ptr[c_char, ImmutAnyOrigin](),
-                _table.as_c_string_span().ptr(),
-                Pointer(to=self._appender),
-            )
-        else:
-            var _schema = schema.copy()
-            state = libduckdb.duckdb_appender_create(
-                con._conn,
-                _schema.as_c_string_span().ptr(),
-                _table.as_c_string_span().ptr(),
-                Pointer(to=self._appender),
-            )
-        if state == DuckDBError:
-            var err = _get_appender_error(self._appender)
-            # Still need to destroy even on error
-            _ = libduckdb.duckdb_appender_destroy(Pointer(to=self._appender))
-            raise Error("Failed to create appender: " + err)
+        _ = handles^
+        _ = chunk_types^
+        self._new_append_state()
 
     def __init__(out self, *, deinit move: Self):
-        self._appender = move._appender
-        self._current_col = move._current_col
+        self._conn = move._conn
+        self._target = move._target^
+        self._insert = move._insert^
+        self._names = move._names^
+        self._types = move._types^
+        self._writer = move._writer^
+        self._collection = move._collection
+        self._append_state = move._append_state
+        self._flush_rows = move._flush_rows
+        self._pending = move._pending
+        self._col = move._col
+        self._defaulted = move._defaulted^
+        self._patterns = move._patterns^
 
     def __deinit__(deinit self):
-        ref libduckdb = DuckDB().libduckdb()
-        # duckdb_appender_destroy flushes, closes, and frees
-        _ = libduckdb.duckdb_appender_destroy(Pointer(to=self._appender))
+        try:
+            _ = self.flush()
+        except e:
+            print("Appender: flush on destruction failed:", e)
+        # The C destroy functions NULL the slots they are given, so destroying
+        # a handle an earlier path already destroyed is a no-op.
+        _ = lib().duckdb_v2_column_data_collection_append_state_destroy(Pointer(to=self._append_state))
+        _ = lib().duckdb_v2_column_data_collection_destroy(Pointer(to=self._collection))
 
-    # ── Error handling ────────────────────────────────────────────
+    def _new_append_state(mut self) raises DuckDBError:
+        _ = lib().duckdb_v2_column_data_collection_append_state_destroy(Pointer(to=self._append_state))
+        var err = null_error_info()
+        check(
+            lib().duckdb_v2_column_data_collection_append_state_create(
+                self._collection, Pointer(to=self._append_state), Pointer(to=err)
+            ),
+            err,
+        )
 
-    def _check(self, state: duckdb_state) raises:
-        """Check a return state and raise on error."""
-        if state == DuckDBError:
-            raise Error("Appender error: " + _get_appender_error(self._appender))
+    def column_count(self) -> Int:
+        return len(self._types)
 
-    # ── Low-level value appending ─────────────────────────────────
+    # ── Appending ─────────────────────────────────────────────────
 
-    def append_null(mut self) raises:
-        """Append a NULL value for the current column."""
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_append_null(self._appender))
-        self._current_col += 1
+    def _check_room(self) raises DuckDBError:
+        if self._col >= len(self._types):
+            raise api_error(String("the row already has all ", len(self._types), " values; call end_row()"))
 
-    def append_default(mut self) raises:
-        """Append the DEFAULT value for the current column."""
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_append_default(self._appender))
-        self._current_col += 1
+    def append_value[T: AnyType](mut self, value: T) raises DuckDBError:
+        """Append a value to the current row (finish the row with `end_row`)."""
+        self._check_room()
+        self._writer.write_cell(self._col, value)
+        self._col += 1
 
-    def append_value[T: Copyable & Deinitable](mut self, value: T) raises:
-        """Append a single typed value to the current row.
+    def append_null(mut self) raises DuckDBError:
+        """Append a NULL to the current row."""
+        self._check_room()
+        self._writer.write_null(self._col)
+        self._col += 1
 
-        Supports all DuckDB-mappable scalar types, String, and Optional[T]
-        (which appends NULL for None).
+    def append_default(mut self) raises DuckDBError:
+        """Let the current column of the row take its default (NULL when it
+        has none). Defaults are evaluated per row, so `nextval(...)` works."""
+        self._check_room()
+        self._writer.write_null(self._col)
+        self._defaulted[self._col] = True
+        self._col += 1
 
-        Parameters:
-            T: The Mojo type of the value.
+    def end_row(mut self) raises DuckDBError:
+        """Finish the row started with `append_value`/`append_null`/`append_default`."""
+        if self._col != len(self._types):
+            raise api_error(String("the row has ", self._col, " values, but the table has ", len(self._types), " columns"))
+        var pattern = self._pattern_id()
+        self._writer.store_int32(len(self._types), Int32(pattern))
+        self._writer.end_row()
+        if pattern == len(self._patterns):
+            self._patterns.append(self._defaulted.copy())
+        self._col = 0
+        for i in range(len(self._defaulted)):
+            self._defaulted[i] = False
+        self._after_row()
 
-        Args:
-            value: The value to append.
-        """
-        comptime if T == UInt:
-            # UInt is a type alias, not a struct, so it can't have an
-            # __extension Appendable.  Handle it inline instead.
-            ref libduckdb = DuckDB().libduckdb()
-            var raw = self._appender
-            var vp = Pointer(to=value).unsafe_bitcast[UInt]()
+    def _pattern_id(self) raises DuckDBError -> Int:
+        for p in range(len(self._patterns)):
+            if self._patterns[p] == self._defaulted:
+                return p
+        var all_default = True
+        for d in self._defaulted:
+            all_default = all_default and d
+        if all_default:
+            raise api_error("a row needs at least one value that is not a default")
+        return len(self._patterns)  # a new one, recorded by end_row
 
-            comptime if size_of[UInt]() == 4:
-                self._check(
-                    libduckdb.duckdb_append_uint32(raw, UInt32(vp[]))
-                )
-            else:
-                self._check(
-                    libduckdb.duckdb_append_uint64(raw, UInt64(vp[]))
-                )
-            self._current_col += 1
-        elif conforms_to(T, Appendable):
-            value.append(self)
-            self._current_col += 1
-        else:
-            raise Error(
-                "Unsupported type for appender: "
-                + String(Reflected[T].name())
-            )
+    def append_row[T: AnyType](mut self, row: T) raises DuckDBError:
+        """Append a whole row: a struct (fields to columns by name) or a `Tuple`."""
+        if self._col != 0:
+            raise api_error("a row is half written with append_value; call end_row() first")
+        self._writer.store_int32(len(self._types), 0)
+        self._writer.write_row(row)
+        self._after_row()
 
-    # ── Row-level appending ───────────────────────────────────────
-
-    def end_row(mut self) raises:
-        """Finish the current row and advance to the next."""
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_appender_end_row(self._appender))
-        self._current_col = 0
-
-    def begin_row(mut self) raises:
-        """Begin a new row (optional, rows begin automatically)."""
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_appender_begin_row(self._appender))
-        self._current_col = 0
-
-    def append_row[T: Copyable & Deinitable](mut self, row: T) raises:
-        """Append a struct as a complete table row.
-
-        Each struct field is mapped to a column by position. Field types
-        must be DuckDB-mappable. ``Optional`` fields become ``NULL``.
-
-        Parameters:
-            T: A Mojo struct whose fields correspond to table columns.
-
-        Args:
-            row: The struct instance to append.
-
-        Example:
-            ```mojo
-            @fieldwise_init
-            struct Person(Copyable, Movable):
-                var id: Int32
-                var name: String
-
-            appender.append_row(Person(1, "Mark"))
-            ```
-        """
-        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "append_row[T] requires a struct type. For scalar values use append_value."
-
-        self._append_struct_fields(row)
-        self.end_row()
-
-    def _append_struct_fields[T: Copyable & Deinitable](mut self, ref row: T) raises:
-        """Append all fields of a struct as values in the current row."""
-        comptime field_count = Reflected[T].field_count()
-
-        comptime for idx in range(field_count):
-            comptime FieldType = Reflected[T].field_types()[idx]
-
-            comptime if conforms_to(FieldType, Appendable):
-                rebind[downcast[FieldType, Appendable]](
-                    __struct_field_ref(idx, row)
-                ).append(self)
-                self._current_col += 1
-            else:
-                comptime field_name = Reflected[T].field_names()[idx]
-                raise Error(
-                    "Unsupported field type for appender: field '"
-                    + String(field_name)
-                    + "'"
-                )
-
-    def append_tuple_row[*Ts: Copyable & Deinitable](mut self, row: Tuple[*Ts]) raises:
-        """Append a tuple as a complete table row.
-
-        Each tuple element maps to a column by position.
-
-        Parameters:
-            Ts: The types of the tuple elements.
-
-        Args:
-            row: The tuple to append.
-
-        Example:
-            ```mojo
-            appender.append_tuple_row(Tuple(Int32(1), String("Mark")))
-            ```
-        """
-        self._append_tuple_elements(row)
-        self.end_row()
-
-    def _append_tuple_elements[
-        *Ts: Copyable & Deinitable
-    ](mut self, ref row: Tuple[*Ts]) raises:
-        """Append all elements of a tuple as values in the current row."""
-        comptime T = Tuple[*Ts]
-        comptime n = T.__len__()
-
-        comptime for idx in range(n):
-            comptime ET = T.Ts[idx]
-
-            comptime if conforms_to(ET, Appendable):
-                row[idx].append(self)
-                self._current_col += 1
-            else:
-                raise Error(
-                    "Unsupported tuple element type at index "
-                    + String(idx)
-                )
-
-    # ── Bulk appending ────────────────────────────────────────────
-
-    def append_rows[T: Copyable & Deinitable](mut self, rows: List[T]) raises:
-        """Append multiple structs as table rows.
-
-        Parameters:
-            T: A Mojo struct whose fields correspond to table columns.
-
-        Args:
-            rows: A list of struct instances to append.
-
-        Example:
-            ```mojo
-            var people = List[Person](Person(1, "Mark"), Person(2, "Hannes"))
-            appender.append_rows(people)
-            ```
-        """
+    def append_rows[T: Copyable](mut self, rows: List[T]) raises DuckDBError:
+        """Append each element of `rows` as a row."""
         for i in range(len(rows)):
             self.append_row(rows[i])
 
-    # ── Flush / Close ─────────────────────────────────────────────
+    def _after_row(mut self) raises DuckDBError:
+        if self._writer.is_full():
+            self._spill()
+            if self._pending >= self._flush_rows:
+                _ = self.flush()
 
-    def flush(mut self) raises:
-        """Flush the appender to the table, forcing the cache of the
-        appender to be cleared. If flushing fails, the appender remains
-        valid. Subsequent rows can still be appended after flushing.
+    def _spill(mut self) raises DuckDBError:
+        """Move the chunk's rows into the collection."""
+        self._writer.finish()
+        var err = null_error_info()
+        check(
+            lib().duckdb_v2_column_data_collection_append(
+                self._collection, self._append_state, self._writer.handle(), Pointer(to=err)
+            ),
+            err,
+        )
+        self._pending += len(self._writer)
+        self._writer.reset()
+
+    # ── Flushing ──────────────────────────────────────────────────
+
+    def flush(mut self) raises DuckDBError -> Int:
+        """Insert the rows appended so far. Returns the number of rows inserted.
+
+        If the insert fails, its rows are dropped and the error says how many.
         """
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_appender_flush(self._appender))
+        if self._col != 0:
+            raise api_error("a row is half written with append_value; call end_row() first")
+        if len(self._writer) > 0:
+            self._spill()
+        if self._pending == 0:
+            return 0
+        var rows = self._pending
+        var changed = 0
+        try:
+            if len(self._patterns) == 1:
+                changed = self._insert_pattern(-1)
+            else:
+                # One INSERT per set of defaulted columns, which it leaves out.
+                for p in range(len(self._patterns)):
+                    changed += self._insert_pattern(p)
+        except e:
+            self._reset_batch()
+            raise DuckDBError(e.code, String(e.message, " (", rows, " appended rows were dropped)"))
+        self._reset_batch()
+        return changed
 
-    def close(mut self) raises:
-        """Close the appender. Unflushed data is flushed first.
+    def _insert_pattern(self, pattern: Int) raises DuckDBError -> Int:
+        """Insert the rows of one default pattern (-1: all rows, no defaults)."""
+        var columns = List[String]()
+        var selected = List[String]()
+        for i in range(len(self._names)):
+            if pattern <= 0 or not self._patterns[pattern][i]:
+                columns.append(self._names[i])
+                selected.append(String("c", i))
+        var sql = String(
+            self._insert, " (", String(", ").join(columns), ") SELECT ", String(", ").join(selected), " FROM ", _DATA
+        )
+        if pattern >= 0:
+            sql += String(" WHERE ", _PATTERN, " = ", pattern)
+        var statements = _Statements(self._conn[].handle(), sql)
+        var stmt = statements.next()
+        var err = null_error_info()
+        try:
+            var name = StrArg(_DATA)
+            var column_names = List[StrArg]()
+            for i in range(len(self._names)):
+                column_names.append(StrArg(String("c", i)))
+            column_names.append(StrArg(_PATTERN))
+            var views = List[duckdb_v2_identifier_t]()
+            for i in range(len(column_names)):
+                views.append(column_names[i].ptr()[].copy())
+            check(
+                lib().duckdb_v2_statement_add_collection(
+                    stmt, name.ptr(), self._collection, views.unsafe_ptr().as_imm(), idx_t(len(views)), Pointer(to=err)
+                ),
+                err,
+            )
+            _ = views^
+            _ = column_names^
+            var arguments = _Arguments(List[Value](), List[String]())
+            return Result(_owned=self._conn[]._execute_statement(stmt, arguments)).rows_changed()
+        finally:
+            _ = lib().duckdb_v2_sql_statement_destroy(Pointer(to=stmt))
+            _ = statements^
 
-        After closing, no more rows can be appended.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        self._check(libduckdb.duckdb_appender_close(self._appender))
+    def _reset_batch(mut self) raises DuckDBError:
+        var err = null_error_info()
+        if lib().duckdb_v2_column_data_collection_clear(self._collection, Pointer(to=err)) != DUCKDB_V2_ERROR_NONE:
+            _ = lib().duckdb_v2_error_info_destroy(Pointer(to=err))
+        self._pending = 0
+        self._patterns = [List[Bool](length=len(self._types), fill=False)]
+        self._new_append_state()
 
-    # ── Metadata ──────────────────────────────────────────────────
-
-    def column_count(self) -> Int:
-        """Return the number of columns in the appender's target table."""
-        ref libduckdb = DuckDB().libduckdb()
-        return Int(libduckdb.duckdb_appender_column_count(self._appender))
+    def close(mut self) raises DuckDBError:
+        """Flush the remaining rows (the appender stays usable)."""
+        _ = self.flush()

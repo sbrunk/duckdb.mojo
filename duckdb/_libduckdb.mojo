@@ -1,6 +1,6 @@
 from std.ffi import c_char
 from std.utils import StaticTuple
-from duckdb.duckdb_type import *
+from duckdb.scalar_types import *
 from std.sys.info import CompilationTarget
 from std.os import abort
 from std.pathlib import Path
@@ -104,6 +104,8 @@ comptime DUCKDB_TYPE_TIME_NS = 39
 comptime DUCKDB_TYPE_GEOMETRY = 40
 # VARIANT type
 comptime DUCKDB_TYPE_VARIANT = 41
+# duckdb_timestamp (nanoseconds)
+comptime DUCKDB_TYPE_TIMESTAMP_TZ_NS = 42
 
 #! An enum over the returned state of different functions.
 comptime duckdb_state = Int32
@@ -202,7 +204,9 @@ comptime DUCKDB_ERROR_HTTP = 38
 comptime DUCKDB_ERROR_MISSING_EXTENSION = 39
 comptime DUCKDB_ERROR_AUTOLOAD = 40
 comptime DUCKDB_ERROR_SEQUENCE = 41
+comptime DUCKDB_ERROR_DATA_CORRUPTION = 43
 comptime DUCKDB_INVALID_CONFIGURATION = 42
+comptime DUCKDB_ERROR_RESOURCE_IN_USE = 44
 
 #! An enum over DuckDB's different cast modes.
 comptime duckdb_cast_mode = Int32
@@ -1456,6 +1460,7 @@ struct LibDuckDB(Movable):
     var _duckdb_create_time_tz_value: _duckdb_create_time_tz_value.fn_type
     var _duckdb_create_timestamp: _duckdb_create_timestamp.fn_type
     var _duckdb_create_timestamp_tz: _duckdb_create_timestamp_tz.fn_type
+    var _duckdb_create_timestamp_tz_ns: _duckdb_create_timestamp_tz_ns.fn_type
     var _duckdb_create_timestamp_s: _duckdb_create_timestamp_s.fn_type
     var _duckdb_create_timestamp_ms: _duckdb_create_timestamp_ms.fn_type
     var _duckdb_create_timestamp_ns: _duckdb_create_timestamp_ns.fn_type
@@ -1484,6 +1489,7 @@ struct LibDuckDB(Movable):
     var _duckdb_get_time_tz: _duckdb_get_time_tz.fn_type
     var _duckdb_get_timestamp: _duckdb_get_timestamp.fn_type
     var _duckdb_get_timestamp_tz: _duckdb_get_timestamp_tz.fn_type
+    var _duckdb_get_timestamp_tz_ns: _duckdb_get_timestamp_tz_ns.fn_type
     var _duckdb_get_timestamp_s: _duckdb_get_timestamp_s.fn_type
     var _duckdb_get_timestamp_ms: _duckdb_get_timestamp_ms.fn_type
     var _duckdb_get_timestamp_ns: _duckdb_get_timestamp_ns.fn_type
@@ -1960,6 +1966,7 @@ struct LibDuckDB(Movable):
             self._duckdb_create_time_tz_value = _duckdb_create_time_tz_value.load()
             self._duckdb_create_timestamp = _duckdb_create_timestamp.load()
             self._duckdb_create_timestamp_tz = _duckdb_create_timestamp_tz.load()
+            self._duckdb_create_timestamp_tz_ns = _duckdb_create_timestamp_tz_ns.load()
             self._duckdb_create_timestamp_s = _duckdb_create_timestamp_s.load()
             self._duckdb_create_timestamp_ms = _duckdb_create_timestamp_ms.load()
             self._duckdb_create_timestamp_ns = _duckdb_create_timestamp_ns.load()
@@ -1988,6 +1995,7 @@ struct LibDuckDB(Movable):
             self._duckdb_get_time_tz = _duckdb_get_time_tz.load()
             self._duckdb_get_timestamp = _duckdb_get_timestamp.load()
             self._duckdb_get_timestamp_tz = _duckdb_get_timestamp_tz.load()
+            self._duckdb_get_timestamp_tz_ns = _duckdb_get_timestamp_tz_ns.load()
             self._duckdb_get_timestamp_s = _duckdb_get_timestamp_s.load()
             self._duckdb_get_timestamp_ms = _duckdb_get_timestamp_ms.load()
             self._duckdb_get_timestamp_ns = _duckdb_get_timestamp_ns.load()
@@ -2468,6 +2476,7 @@ struct LibDuckDB(Movable):
         self._duckdb_create_time_tz_value = api[].duckdb_create_time_tz_value
         self._duckdb_create_timestamp = api[].duckdb_create_timestamp
         self._duckdb_create_timestamp_tz = api[].duckdb_create_timestamp_tz
+        self._duckdb_create_timestamp_tz_ns = _missing_duckdb_create_timestamp_tz_ns
         self._duckdb_create_timestamp_s = api[].duckdb_create_timestamp_s
         self._duckdb_create_timestamp_ms = api[].duckdb_create_timestamp_ms
         self._duckdb_create_timestamp_ns = api[].duckdb_create_timestamp_ns
@@ -2496,6 +2505,7 @@ struct LibDuckDB(Movable):
         self._duckdb_get_time_tz = api[].duckdb_get_time_tz
         self._duckdb_get_timestamp = api[].duckdb_get_timestamp
         self._duckdb_get_timestamp_tz = api[].duckdb_get_timestamp_tz
+        self._duckdb_get_timestamp_tz_ns = _missing_duckdb_get_timestamp_tz_ns
         self._duckdb_get_timestamp_s = api[].duckdb_get_timestamp_s
         self._duckdb_get_timestamp_ms = api[].duckdb_get_timestamp_ms
         self._duckdb_get_timestamp_ns = api[].duckdb_get_timestamp_ns
@@ -2968,6 +2978,7 @@ struct LibDuckDB(Movable):
         self._duckdb_create_time_tz_value = move._duckdb_create_time_tz_value
         self._duckdb_create_timestamp = move._duckdb_create_timestamp
         self._duckdb_create_timestamp_tz = move._duckdb_create_timestamp_tz
+        self._duckdb_create_timestamp_tz_ns = move._duckdb_create_timestamp_tz_ns
         self._duckdb_create_timestamp_s = move._duckdb_create_timestamp_s
         self._duckdb_create_timestamp_ms = move._duckdb_create_timestamp_ms
         self._duckdb_create_timestamp_ns = move._duckdb_create_timestamp_ns
@@ -2996,6 +3007,7 @@ struct LibDuckDB(Movable):
         self._duckdb_get_time_tz = move._duckdb_get_time_tz
         self._duckdb_get_timestamp = move._duckdb_get_timestamp
         self._duckdb_get_timestamp_tz = move._duckdb_get_timestamp_tz
+        self._duckdb_get_timestamp_tz_ns = move._duckdb_get_timestamp_tz_ns
         self._duckdb_get_timestamp_s = move._duckdb_get_timestamp_s
         self._duckdb_get_timestamp_ms = move._duckdb_get_timestamp_ms
         self._duckdb_get_timestamp_ns = move._duckdb_get_timestamp_ns
@@ -3609,6 +3621,13 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Closes the result and de-allocates all memory allocated for that result.
+
+        Destroying a streaming result whose statement has not completed aborts the statement. On autocommit, its writes
+        are rolled back. Inside a transaction, a statement that may write invalidates the transaction, and a read-only
+        statement just stops. Until the statement has completed, preparing or running another statement on the
+        connection fails with `DUCKDB_ERROR_RESOURCE_IN_USE` and leaves it untouched. To make sure the statement takes
+        effect, complete it by fetching until `duckdb_fetch_chunk` returns NULL before destroying the result. A NULL
+        chunk is also returned on an error, so check `duckdb_result_error` afterwards.
         """
         return self._duckdb_destroy_result(result.as_unsafe_any_origin())
 
@@ -4562,6 +4581,15 @@ struct LibDuckDB(Movable):
     ) -> NoneType:
         """
         Closes the pending result and de-allocates all memory allocated for the result.
+
+        Destroying a pending result whose statement has not completed aborts the statement. On autocommit, its writes
+        are rolled back. Inside a transaction, a statement that may write invalidates the transaction, and a read-only
+        statement just stops. Until the statement has completed, preparing or running another statement on the
+        connection fails with `DUCKDB_ERROR_RESOURCE_IN_USE` and leaves it untouched.
+        `duckdb_pending_execution_is_finished` reporting true does not mean that the statement completed. To make sure
+        a statement takes effect, complete it before destroying the pending result: call `duckdb_execute_pending`, and
+        fetch a streaming result until `duckdb_fetch_chunk` returns NULL. A NULL chunk is also returned on an error, so
+        check `duckdb_result_error` afterwards.
         """
         return self._duckdb_destroy_pending(pending_result.as_unsafe_any_origin())
 
@@ -4854,6 +4882,15 @@ struct LibDuckDB(Movable):
         """
         return self._duckdb_create_timestamp_tz(input_)
 
+    def duckdb_create_timestamp_tz_ns(
+        self,
+        input_: duckdb_timestamp_ns,
+    ) -> duckdb_value:
+        """
+        Creates a TIMESTAMP_TZ_NS value from a duckdb_timestamp_ns.
+        """
+        return self._duckdb_create_timestamp_tz_ns(input_)
+
     def duckdb_create_timestamp_s(
         self,
         input_: duckdb_timestamp_s,
@@ -5107,6 +5144,15 @@ struct LibDuckDB(Movable):
         Returns the TIMESTAMP_TZ value of the given value.
         """
         return self._duckdb_get_timestamp_tz(val)
+
+    def duckdb_get_timestamp_tz_ns(
+        self,
+        val: duckdb_value,
+    ) -> duckdb_timestamp_ns:
+        """
+        Returns the TIMESTAMP_TZ_NS value of the given value.
+        """
+        return self._duckdb_get_timestamp_tz_ns(val)
 
     def duckdb_get_timestamp_s(
         self,
@@ -7125,8 +7171,9 @@ struct LibDuckDB(Movable):
         appender: duckdb_appender,
     ) -> duckdb_state:
         """
-        Flush the appender to the table, forcing the cache of the appender to be cleared. If flushing the data triggers a
-        constraint violation or any other error, then all data is invalidated, and this function returns DuckDBError.
+        Flush the appender to the table, forcing the cache of the appender to be cleared. Requires a connection with no open
+        result. If flushing the data triggers a constraint violation or any other error, then all data is invalidated, and
+        this function returns DuckDBError.
         It is not possible to append more values. Call duckdb_appender_error_data to obtain the error data followed by
         duckdb_appender_destroy to destroy the invalidated appender.
         """
@@ -9398,6 +9445,10 @@ comptime _duckdb_create_timestamp_tz = _dylib_function["duckdb_create_timestamp_
     def(duckdb_timestamp) thin abi("C") -> duckdb_value
 ]
 
+comptime _duckdb_create_timestamp_tz_ns = _dylib_function["duckdb_create_timestamp_tz_ns",
+    def(duckdb_timestamp_ns) thin abi("C") -> duckdb_value
+]
+
 # [ext_api: v1.2.0]
 comptime _duckdb_create_timestamp_s = _dylib_function["duckdb_create_timestamp_s",
     def(duckdb_timestamp_s) thin abi("C") -> duckdb_value
@@ -9536,6 +9587,10 @@ comptime _duckdb_get_timestamp = _dylib_function["duckdb_get_timestamp",
 # [ext_api: v1.2.0]
 comptime _duckdb_get_timestamp_tz = _dylib_function["duckdb_get_timestamp_tz",
     def(duckdb_value) thin abi("C") -> duckdb_timestamp
+]
+
+comptime _duckdb_get_timestamp_tz_ns = _dylib_function["duckdb_get_timestamp_tz_ns",
+    def(duckdb_value) thin abi("C") -> duckdb_timestamp_ns
 ]
 
 # [ext_api: v1.2.0]
@@ -11278,4 +11333,15 @@ comptime _duckdb_register_log_storage = _dylib_function["duckdb_register_log_sto
     def(duckdb_database, duckdb_log_storage) thin abi("C") -> duckdb_state
 ]
 
+
+# ===--------------------------------------------------------------------===#
+# Stubs for functions newer than the extension API version
+# ===--------------------------------------------------------------------===#
+
+
+def _missing_duckdb_create_timestamp_tz_ns(a0: duckdb_timestamp_ns) abi("C") -> duckdb_value:
+    abort("duckdb_create_timestamp_tz_ns is not part of extension API version v1.5.6")
+
+def _missing_duckdb_get_timestamp_tz_ns(a0: duckdb_value) abi("C") -> duckdb_timestamp_ns:
+    abort("duckdb_get_timestamp_tz_ns is not part of extension API version v1.5.6")
 

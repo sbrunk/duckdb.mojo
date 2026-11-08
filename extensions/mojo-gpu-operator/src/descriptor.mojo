@@ -16,8 +16,7 @@ shuttle test `bench/q6_shuttle_test.mojo`.
 """
 
 from std.sys.info import (
-    has_nvidia_gpu_accelerator,
-    has_amd_gpu_accelerator,
+    default_accelerator,
 )
 from std.os import getenv
 from raw_plan_tags import (
@@ -676,7 +675,7 @@ def build_descriptor_impl(
             # Apple has no 64-bit atomics, so it must keep sort+segreduce. This is
             # a host capability check (`has_*_accelerator`), not a kernel target
             # check, so it is correct to evaluate here in strategy selection.
-            if has_nvidia_gpu_accelerator() or has_amd_gpu_accelerator():
+            if default_accelerator().is_nvidia_gpu() or default_accelerator().is_amd_gpu():
                 strategy = STRAT_HASH_GROUP
             else:
                 strategy = STRAT_SORT_SEGREDUCE
@@ -791,7 +790,7 @@ def build_descriptor_impl(
         # NVIDIA only: the float64 transcendental kernels need in-kernel f64, which
         # Apple Metal lacks (abort-only there) and AMD is unvalidated. Decline on
         # non-NVIDIA so stock CPU runs it (never route into the abort kernel).
-        if not has_nvidia_gpu_accelerator():
+        if not default_accelerator().is_nvidia_gpu():
             return None
         # No FK-join dims (the transcendental arg is a fact column / const); only
         # UNGROUPED + DENSE_GROUP (the float kernels that win). HASH_GROUP declines.
@@ -824,7 +823,7 @@ def build_descriptor_impl(
     if _has_stats(desc):
         # NVIDIA only: the float64 kernels need in-kernel f64 (Apple Metal lacks it,
         # abort-only there; AMD unvalidated). Decline on non-NVIDIA to stock CPU.
-        if not has_nvidia_gpu_accelerator():
+        if not default_accelerator().is_nvidia_gpu():
             return None
         if n_dims != 0:
             return None

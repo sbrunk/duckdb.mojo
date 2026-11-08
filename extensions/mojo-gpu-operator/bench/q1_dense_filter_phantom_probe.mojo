@@ -16,8 +16,7 @@ Run: pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/q1_dense_filter_phantom_probe.mojo
 """
 
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 from std.os import getenv, setenv
 from std.sys import has_accelerator
 
@@ -74,14 +73,13 @@ def _run(label: String) raises -> List[String]:
         "GPU_OP_EXT",
         "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension",
     )
-    var config = Config({"allow_unsigned_extensions": "true"})
-    var con = DuckDB.connect(":memory:", config^)
+    var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     _ = con.execute("LOAD '" + ext + "'")
     _ = con.execute(DDL)
     _ = con.execute(DML)
     var res = con.execute(Q1)
     var out: List[String] = []
-    var chunk = res.fetch_chunk()
+    var chunk = res^.fetchall()
     var nrows = Int(chunk.__len__())
     for r in range(nrows):
         var f = chunk.get[Optional[String]](col=0, row=r)

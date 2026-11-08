@@ -12,10 +12,10 @@ version = "0.1.0"
 
 # see https://prefix-dev.github.io/pixi-build-backends/backends/pixi-build-mojo/
 [package.host-dependencies]
-mojo-compiler = "==1.1.0"
+mojo-compiler = "==1.2.0"
 
 [package.build-dependencies]
-mojo-compiler = "==1.1.0"
+mojo-compiler = "==1.2.0"
 
 [package.build.backend]
 name = "pixi-build-mojo"
@@ -33,8 +33,8 @@ path = "duckdb"
 build = "pixi run mojo precompile duckdb -o duckdb.mojoc"
 test-library = { cmd = "bash scripts/run_tests.sh" }
 clone-duckdb = "sh scripts/clone_duckdb.sh"
-generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo", depends-on = ["clone-duckdb"] }
-# Fails if duckdb/_libduckdb.mojo is out of sync with the DuckDB version
+generate-api = { cmd = "python3 scripts/generate_mojo_api.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb.mojo && python3 scripts/generate_mojo_api_v2.py --duckdb-dir third_party/duckdb --output duckdb/_libduckdb_v2.mojo", depends-on = ["clone-duckdb"] }
+# Fails if duckdb/_libduckdb.mojo or duckdb/_libduckdb_v2.mojo is out of sync with the DuckDB version
 # (regenerates first via generate-api, then checks for an unexpected diff).
 check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on = ["generate-api"] }
 
@@ -42,11 +42,11 @@ check-generated-api = { cmd = "bash scripts/check_generated_api.sh", depends-on 
 # The mojo build/run calls are wrapped in `bash -c` so the optional
 # $MOJO_TARGET_FLAGS (see scripts/run_tests.sh) is applied. When it is unset,
 # it expands to nothing and the build targets the native CPU.
-build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension'", depends-on = ["build"] }
+build-demo-extension = { cmd = "bash -c 'mkdir -p extensions/demo-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib -o extensions/demo-extension/build/demo_mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/demo-extension/build/demo_mojo.duckdb_extension --abi-type C_STRUCT_UNSTABLE'", depends-on = ["build"] }
 test-demo-extension = { cmd = "duckdb -unsigned -c \"LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension'; SELECT mojo_add_numbers(40, 2) AS result;\"", depends-on = ["build-demo-extension"] }
 
 # Test extension
-build-test-extension = { cmd = "bash -c 'mkdir -p extensions/test-extension/build && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_mojo_extension.mojo --emit shared-lib -o extensions/test-extension/build/mojo.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/mojo.duckdb_extension && mojo build $MOJO_TARGET_FLAGS extensions/test-extension/src/test_bad_api_extension.mojo --emit shared-lib -o extensions/test-extension/build/bad_api.duckdb_extension && python3 scripts/append_extension_metadata.py extensions/test-extension/build/bad_api.duckdb_extension'", depends-on = ["build"] }
+build-test-extension = { cmd = "bash extensions/test-extension/build.sh", depends-on = ["build"] }
 test-extension = { cmd = "bash -c 'mojo run $MOJO_TARGET_FLAGS extensions/test-extension/test_extension.mojo'", depends-on = ["build-test-extension"] }
 
 test = {depends-on = ["test-library", "test-demo-extension", "test-extension"]}
@@ -94,10 +94,13 @@ compile-check = { cmd = "bash scripts/compile_check.sh benchmark examples" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=1.5.6"
-duckdb-cli = "=1.5.6"
+libduckdb-devel = "=2.0.0"
+duckdb-cli = "=2.0.0"
 pyyaml = "*"
-mojo = "==1.1.0"
+mojo = "==1.2.0"
+# Serde framework behind the V2 type mapping (docs/design/v2-high-level-api.md, "Substrate: emberserde").
+# Not on modular-community at this version yet, so a git dependency.
+emberserde = { git = "https://github.com/bgreni/EmberSerde.git", tag = "0.2.0" }
 #mojodoc = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
 
 # Make mojo find the duckdb package from source without building a mojopkg.
@@ -115,7 +118,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 [feature.operator-replacement.dependencies]
 duckdb-from-source = { path = "duckdb-from-source" }
 duckdb-operator-replacement = { path = "extensions/operator-replacement" }
-mojo = "==1.1.0"
+mojo = "==1.2.0"
 
 # The `full` environment sets no-default-feature = true, so the top-level
 # [activation.env] above does not apply. Re-declare the import path here so
@@ -131,7 +134,7 @@ MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"
 # the GPU kernels import. It pins mojo-compiler exactly, so its version has to move in
 # lockstep with the `mojo` pin above.
 [feature.gpu.dependencies]
-max-core = "==26.6.0"
+max-core = "==26.7.0"
 
 [feature.gpu.activation.env]
 MODULAR_MOJO_MAX_IMPORT_PATH = "$CONDA_PREFIX/lib/mojo,$PIXI_PROJECT_ROOT"

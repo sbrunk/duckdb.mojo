@@ -14,9 +14,8 @@ Usage:
     pixi run mojo run benchmark/reduction_benchmark.mojo
 """
 
-from duckdb import *
-from duckdb.aggregate_function import AggregateFunction, AggregateFunctionInfo
-from duckdb._libduckdb import *
+import duckdb
+from duckdb import AggregateFunction, Connection
 from std.sys import simd_width_of
 from std import benchmark
 
@@ -52,14 +51,14 @@ def zero() -> Scalar[F]:
 
 def register_functions(conn: Connection) raises:
     """Register all Mojo aggregate functions."""
-    AggregateFunction.from_sum["mojo_sum", F](conn)
-    AggregateFunction.from_max["mojo_max", F](conn)
-    AggregateFunction.from_min["mojo_min", F](conn)
-    AggregateFunction.from_product["mojo_product", F](conn)
-    AggregateFunction.from_mean["mojo_mean", F](conn)
+    conn.register(AggregateFunction.from_sum["mojo_sum", F]())
+    conn.register(AggregateFunction.from_max["mojo_max", F]())
+    conn.register(AggregateFunction.from_min["mojo_min", F]())
+    conn.register(AggregateFunction.from_product["mojo_product", F]())
+    conn.register(AggregateFunction.from_mean["mojo_mean", F]())
 
     # A custom reduction: reuse the generic from_reduce
-    AggregateFunction.from_reduce["mojo_sum_custom", F, simd_add, zero](conn)
+    conn.register(AggregateFunction.from_reduce["mojo_sum_custom", F, simd_add, zero]())
 
 
 # ===--------------------------------------------------------------------===#
@@ -80,10 +79,10 @@ def run_benchmark(
 
     # Warmup
     for _ in range(warmup_iters):
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     def bench_standard() raises {imm}:
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     var std_report = benchmark.run(bench_standard, max_iters=max_iters)
     var std_ms = std_report.mean("ms")
@@ -91,10 +90,10 @@ def run_benchmark(
 
     # Warmup Mojo
     for _ in range(warmup_iters):
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     def bench_mojo() raises {imm}:
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     var mojo_report = benchmark.run(bench_mojo, max_iters=max_iters)
     var mojo_ms = mojo_report.mean("ms")
@@ -129,7 +128,7 @@ def main() raises:
 
     # ---- Setup ----
     print("Setting up database...")
-    var conn = DuckDB.connect(":memory:")
+    var conn = duckdb.connect()
 
     print("Generating test data...")
     _ = conn.execute(
@@ -139,9 +138,8 @@ def main() raises:
         + " FROM range(" + String(num_rows) + ") t(i);"
     )
 
-    var row_count = conn.execute("SELECT count(*) FROM agg_data")
-    var rc = row_count.fetch_chunk()
-    print("  agg_data rows: " + String(rc.get[Int64](col=0, row=0)))
+    var rc = conn.execute("SELECT count(*) FROM agg_data").get[Int64]()[0]
+    print("  agg_data rows: " + String(rc))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo aggregate functions...")
@@ -157,9 +155,7 @@ def main() raises:
     print("\nValidating correctness...")
 
     def check_close(label: String, conn: Connection, query: String) raises:
-        var res = conn.execute(query)
-        var ck = res.fetch_chunk()
-        var ok = ck.get[Bool](col=0, row=0)
+        var ok = conn.execute(query).get[Bool]()[0]
         print("  " + label + ": " + String(ok))
 
     # Use a tolerance that accommodates float accumulation differences

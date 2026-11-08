@@ -1,35 +1,65 @@
-from duckdb.api import DuckDB
-from duckdb.appender import Appender, Appendable
-from duckdb.config import Config
-from duckdb.duckdb_type import *
-from duckdb.typed_api import mojo_type_to_duckdb_type, mojo_logical_type, deserialize_from_vector, deserialize_list_column, MojoType
-from duckdb.connection import Connection
-from duckdb.relation import Relation
-from duckdb.prepared_statement import PreparedStatement, Bindable
-from duckdb.chunk import Chunk, Row
-from duckdb.result import Column, Result, MaterializedResult, ResultType, ErrorType, StatementType, ResultError, ChunkIter, RowIter
-from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, BindInfo, FunctionInfo
-from duckdb.table_function import TableFunction, TableFunctionInfo, TableBindInfo, TableInitInfo
-from duckdb.aggregate_function import AggregateFunction, AggregateFunctionSet, AggregateFunctionInfo, AggregateState, AggregateStateArray
-from duckdb.value import DuckDBValue
-from duckdb.extension import Extension, duckdb_extension_access, EXTENSION_API_VERSION, ExtApi
-from duckdb.database import Database
+"""Mojo bindings for DuckDB, built on DuckDB's V2 C API.
 
-from duckdb.logical_type import (
-    LogicalType,
-    decimal_type,
-    enum_type,
-    struct_type,
-    list_type,
-    map_type,
-    array_type,
+```mojo
+import duckdb
+
+duckdb.sql("SELECT 42 AS answer").show()
+var con = duckdb.connect()
+var rows = con.execute("SELECT range AS i FROM range(3)").get[Int64]()
+```
+
+See docs/design/v2-high-level-api.md for the design.
+"""
+
+from duckdb.error import DuckDBError, ErrorCode
+from duckdb.types import LogicalType, TypeId
+from duckdb.mapping import Blob, DuckDBMapped
+from duckdb.value import Value
+from duckdb.database import Connection, Database
+from duckdb.chunk import Chunk, ColumnReader
+from duckdb.result import ChunkResult, Step, StepStatus, Column, MaterializedResult, Result, ResultType, Row, StatementType
+from duckdb.statement import Description, Params, PreparedStatement
+from duckdb.relation import Relation
+from duckdb.serde import ChunkWriter, VectorWriter, logical_type_of
+from duckdb.appender import Appender, OnConflict
+from duckdb.functions import BindArgs, BindData, LocalState, Registrar, ScalarArgs, ScalarFunction, bind_callback, init_callback
+from duckdb.simd_math import register_simd_math
+from duckdb.extension import Extension
+from duckdb.aggregate import AggregateBind, AggregateFunction, AggregateState, BatchUpdate
+from duckdb.table import FilterPushdown, OrderedBatches, ScanProgress, ScanShared, TableColumns, TableFunction, TableFunctionImpl, TableOutput, param_types
+from duckdb.expr import col, fn_, lit, sql_null, star
+from duckdb.signature import ParamKind
+from duckdb.expression import Between, Comparison, ExprKind, Expression
+from duckdb.extend import CastFunction, CustomOption, CustomType, MacroFunction, PragmaFunction, Replacement, ReplacementScan
+from duckdb.settings import SettingScope, Settings
+from duckdb.files import File, FileSystem
+from duckdb.observe import LogEntry, LogLevel, LogSink, MetricsNode, QueryMetrics
+from duckdb.arrow import ArrowResult, OwnedArrowArray, OwnedArrowSchema, OwnedArrowStream
+from duckdb.copy import CopyFromFormat, CopyFunction, CopyInfo, CopyToFormat
+from duckdb.scalar_types import (
+    Bit,
+    Date,
+    Decimal,
+    Interval,
+    Time,
+    TimeNS,
+    TimeTZ,
+    Timestamp,
+    TimestampMS,
+    TimestampNS,
+    TimestampS,
+    TimestampTZ,
+    TimestampTZNS,
+    UUID,
 )
-from duckdb.functions import (
+from duckdb.default import (
     connect,
-    sql,
+    default_connection,
     execute,
     read_csv,
-    read_parquet,
     read_json,
+    read_parquet,
+    sql,
+    table,
 )
-from duckdb.expr import col, lit, fn_, star, sql_null
+from duckdb.kernels.simd import ksqrt, ksin, kcos, kln, kexp, klog10

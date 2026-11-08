@@ -19,6 +19,9 @@
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/clustered_aggregate.hpp"
+#include "duckdb/function/aggregate_state_layout.hpp"
 #include "duckdb/execution/expression_executor_state.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -105,9 +108,10 @@ static bool IsF(const LogicalType &t) {
 }
 
 // --- mirrored aggregate state layouts (verified by runtime state_size checks) ---
+// DuckDB 2.0: SumState<T> is {T value; bool is_set} (was {bool isset; T value}).
 struct SumStateM {
-	bool isset;
 	double value;
+	bool isset;
 };
 struct AvgStateM {
 	uint64_t count;
@@ -125,8 +129,8 @@ struct MinMaxF {
 // accumulator layouts (verified by runtime state_size checks). hugeint_t is
 // {uint64_t lower; int64_t upper}, so both states are 24 bytes.
 struct SumStateHugeint {
-	bool isset;
 	hugeint_t value;
+	bool isset;
 };
 struct AvgStateHugeint {
 	uint64_t count;
@@ -156,10 +160,10 @@ static inline bool CheckedAdd128(hugeint_t &state, const hugeint_t &partial) {
 		auto &in = args.data[0];                                                                                       \
 		if (g_k_##NAME && in.GetVectorType() == VectorType::FLAT_VECTOR) {                                             \
 			result.SetVectorType(VectorType::FLAT_VECTOR);                                                             \
-			g_k_##NAME(FlatVector::GetData<double>(in), FlatVector::GetData<double>(result), (int64_t)args.size());    \
+			g_k_##NAME(FlatVector::GetData<double>(in), FlatVector::GetDataMutable<double>(result), (int64_t)args.size());    \
 			/* NULL slots computed f(garbage) above are masked out by copying the input validity. */                  \
-			if (!FlatVector::Validity(in).AllValid()) {                                                                \
-				FlatVector::Validity(result).Copy(FlatVector::Validity(in), args.size());                              \
+			if (!FlatVector::Validity(in).CannotHaveNull()) {                                                          \
+				FlatVector::ValidityMutable(result).Copy(FlatVector::Validity(in), args.size());                       \
 			}                                                                                                          \
 			return;                                                                                                    \
 		}                                                                                                              \
@@ -173,14 +177,39 @@ MOJO_SCALAR(exp)
 MOJO_SCALAR(log10)
 
 // ---------------- aggregate simple_update wrappers ----------------
-static aggregate_simple_update_t g_orig_sum = nullptr, g_orig_avg = nullptr;
-static aggregate_simple_update_t g_orig_min64 = nullptr, g_orig_max64 = nullptr, g_orig_min32 = nullptr,
+static aggregate_cluster_update_t g_orig_sum = nullptr, g_orig_avg = nullptr;
+static aggregate_cluster_update_t g_orig_min64 = nullptr, g_orig_max64 = nullptr, g_orig_min32 = nullptr,
                                  g_orig_max32 = nullptr;
 static mojo_red64_t g_k_sum = nullptr, g_k_min64 = nullptr, g_k_max64 = nullptr;
 static mojo_red32_t g_k_min32 = nullptr, g_k_max32 = nullptr;
 
-static bool FlatValid(Vector &v) {
-	return v.GetVectorType() == VectorType::FLAT_VECTOR && FlatVector::Validity(v).AllValid();
+// DuckDB 2.0 replaced simple_update with cluster_update, which is also called by the
+// grouped hash aggregate with several runs. Only the ungrouped shape (one run over
+// rows 0..n-1, no selection) takes the Mojo fast path; everything else falls back.
+static inline data_ptr_t SingleRunState(const ClusteredAggr &cl, idx_t n) {
+	auto runs = cl.runs();
+	if (runs.size() != 1 || runs[0].sel != nullptr || runs[0].count != n) {
+		return nullptr;
+	}
+	return runs[0].state;
+}
+
+// State layout guards: DuckDB 2.0 describes each state via get_state_type, so check
+// field offsets, not only the size (SumState changed field order at equal size).
+static bool OptionalLayoutIs(const BoundAggregateFunction &bf, optional_ptr<FunctionData> bd, idx_t value_size) {
+	if (!bf.HasGetStateTypeCallback()) { return false; }
+	auto layout = bf.GetStateType(bd);
+	return layout.field.kind == AggregateFieldKind::OPTIONAL_VALUE && layout.field.field_offset == value_size &&
+	       layout.field.children.size() == 1 && layout.field.children[0].field_offset == 0;
+}
+static bool AvgLayoutIs(const BoundAggregateFunction &bf, optional_ptr<FunctionData> bd, idx_t value_offset) {
+	if (!bf.HasGetStateTypeCallback()) { return false; }
+	auto layout = bf.GetStateType(bd);
+	return layout.field.kind == AggregateFieldKind::STRUCT && layout.field.children.size() == 2 &&
+	       layout.field.children[0].field_offset == 0 && layout.field.children[1].field_offset == value_offset;
+}
+static idx_t StateSize(const BoundAggregateFunction &bf, optional_ptr<FunctionData> bd) {
+	return bf.HasStateSizeCallback() ? bf.GetStateSize(bd.get()) : 0;
 }
 static inline bool IsFlat(Vector &v) {
 	return v.GetVectorType() == VectorType::FLAT_VECTOR;
@@ -191,11 +220,12 @@ static inline const uint64_t *ValidWords(Vector &v) {
 	return reinterpret_cast<const uint64_t *>(FlatVector::Validity(v).GetData());
 }
 
-static void MojoSum(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_sum && IsFlat(in[0])) {
+static void MojoSum(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_sum && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<SumStateM *>(sp);
 		auto data = FlatVector::GetData<double>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			st.value += g_k_sum(data, (int64_t)n);
 			st.isset = true;
 			return;
@@ -207,13 +237,14 @@ static void MojoSum(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t s
 		if (cnt > 0) { st.isset = true; }
 		return;
 	}
-	g_orig_sum(in, aid, ic, sp, n);
+	g_orig_sum(in, aid, ic, cl, n);
 }
-static void MojoAvg(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_sum && IsFlat(in[0])) {
+static void MojoAvg(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_sum && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<AvgStateM *>(sp);
 		auto data = FlatVector::GetData<double>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			st.value += g_k_sum(data, (int64_t)n);
 			st.count += n;
 			return;
@@ -225,13 +256,14 @@ static void MojoAvg(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t s
 		st.count += (uint64_t)cnt;
 		return;
 	}
-	g_orig_avg(in, aid, ic, sp, n);
+	g_orig_avg(in, aid, ic, cl, n);
 }
-static void MojoMin64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_min64 && n > 0 && IsFlat(in[0])) {
+static void MojoMin64(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_min64 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxD *>(sp);
 		auto data = FlatVector::GetData<double>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			double c = g_k_min64(data, (int64_t)n);
 			if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
 			return;
@@ -242,13 +274,14 @@ static void MojoMin64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t
 		if (cnt > 0 && (!st.isset || c < st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
-	g_orig_min64(in, aid, ic, sp, n);
+	g_orig_min64(in, aid, ic, cl, n);
 }
-static void MojoMax64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_max64 && n > 0 && IsFlat(in[0])) {
+static void MojoMax64(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_max64 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxD *>(sp);
 		auto data = FlatVector::GetData<double>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			double c = g_k_max64(data, (int64_t)n);
 			if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
 			return;
@@ -259,13 +292,14 @@ static void MojoMax64(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t
 		if (cnt > 0 && (!st.isset || c > st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
-	g_orig_max64(in, aid, ic, sp, n);
+	g_orig_max64(in, aid, ic, cl, n);
 }
-static void MojoMin32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_min32 && n > 0 && IsFlat(in[0])) {
+static void MojoMin32(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_min32 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxF *>(sp);
 		auto data = FlatVector::GetData<float>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			float c = g_k_min32(data, (int64_t)n);
 			if (!st.isset || c < st.value) { st.value = c; st.isset = true; }
 			return;
@@ -276,13 +310,14 @@ static void MojoMin32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t
 		if (cnt > 0 && (!st.isset || c < st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
-	g_orig_min32(in, aid, ic, sp, n);
+	g_orig_min32(in, aid, ic, cl, n);
 }
-static void MojoMax32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (g_k_max32 && n > 0 && IsFlat(in[0])) {
+static void MojoMax32(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && g_k_max32 && n > 0 && IsFlat(in[0])) {
 		auto &st = *reinterpret_cast<MinMaxF *>(sp);
 		auto data = FlatVector::GetData<float>(in[0]);
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			float c = g_k_max32(data, (int64_t)n);
 			if (!st.isset || c > st.value) { st.value = c; st.isset = true; }
 			return;
@@ -293,7 +328,7 @@ static void MojoMax32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t
 		if (cnt > 0 && (!st.isset || c > st.value)) { st.value = c; st.isset = true; }
 		return;
 	}
-	g_orig_max32(in, aid, ic, sp, n);
+	g_orig_max32(in, aid, ic, cl, n);
 }
 
 // ---------------- int128 / high-precision-decimal sum & avg ----------------
@@ -301,19 +336,20 @@ static void MojoMax32(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t
 // non-inlined Hugeint::Add (a call per element). Route FLAT/all-valid input
 // through the multi-accumulator Mojo reduce; fall back to stock on any int128
 // overflow (so the exact throw semantics are preserved).
-static aggregate_simple_update_t g_orig_sum_i128 = nullptr, g_orig_avg_i128 = nullptr;
+static aggregate_cluster_update_t g_orig_sum_i128 = nullptr, g_orig_avg_i128 = nullptr;
 
 static bool IsI128(const LogicalType &t) {
 	return t.InternalType() == PhysicalType::INT128;
 }
 
-static void MojoSumHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (n > 0 && IsFlat(in[0])) {
+static void MojoSumHugeint(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && n > 0 && IsFlat(in[0])) {
 		auto data = FlatVector::GetData<hugeint_t>(in[0]);
 		hugeint_t partial;
 		int32_t of = 0;
 		int64_t cnt = (int64_t)n;
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			mojo_sum_i128(data, (int64_t)n, &partial, &of);
 		} else {
 			mojo_sum_i128_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt, &of);
@@ -328,15 +364,16 @@ static void MojoSumHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_
 			}
 		}
 	}
-	g_orig_sum_i128(in, aid, ic, sp, n);
+	g_orig_sum_i128(in, aid, ic, cl, n);
 }
-static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_ptr_t sp, idx_t n) {
-	if (n > 0 && IsFlat(in[0])) {
+static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, const ClusteredAggr &cl, idx_t n) {
+	data_ptr_t sp = SingleRunState(cl, n);
+	if (sp && n > 0 && IsFlat(in[0])) {
 		auto data = FlatVector::GetData<hugeint_t>(in[0]);
 		hugeint_t partial;
 		int32_t of = 0;
 		int64_t cnt = (int64_t)n;
-		if (FlatVector::Validity(in[0]).AllValid()) {
+		if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 			mojo_sum_i128(data, (int64_t)n, &partial, &of);
 		} else {
 			mojo_sum_i128_masked(data, ValidWords(in[0]), (int64_t)n, &partial, &cnt, &of);
@@ -351,7 +388,7 @@ static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_
 			}
 		}
 	}
-	g_orig_avg_i128(in, aid, ic, sp, n);
+	g_orig_avg_i128(in, aid, ic, cl, n);
 }
 
 // DECIMAL sum/avg are bind-dispatched (the concrete per-internal-type function is
@@ -359,73 +396,74 @@ static void MojoAvgHugeint(Vector in[], AggregateInputData &aid, idx_t ic, data_
 // simple_update only when it resolves to the INT128 state (24-byte hugeint state).
 static bind_aggregate_function_t g_orig_sum_dec_bind = nullptr, g_orig_avg_dec_bind = nullptr;
 
-static unique_ptr<FunctionData> MojoSumDecimalBind(ClientContext &ctx, AggregateFunction &fn,
-                                                   vector<unique_ptr<Expression>> &args) {
-	auto r = g_orig_sum_dec_bind(ctx, fn, args);
-	if (fn.simple_update && fn.state_size && !fn.arguments.empty() && IsI128(fn.arguments[0]) &&
-	    fn.state_size(fn) == sizeof(SumStateHugeint)) {
-		if (!g_orig_sum_i128) g_orig_sum_i128 = fn.simple_update;
-		fn.simple_update = MojoSumHugeint;
+static unique_ptr<FunctionData> MojoSumDecimalBind(BindAggregateFunctionInput &input) {
+	auto r = g_orig_sum_dec_bind(input);
+	auto &fn = input.GetBoundFunction();
+	auto &args = fn.GetArguments();
+	if (fn.HasStateClusterUpdateCallback() && !args.empty() && IsI128(args[0]) &&
+	    StateSize(fn, r.get()) == sizeof(SumStateHugeint) && OptionalLayoutIs(fn, r.get(), sizeof(hugeint_t))) {
+		if (!g_orig_sum_i128) g_orig_sum_i128 = fn.GetStateClusterUpdateCallback();
+		fn.SetStateClusterUpdateCallback(MojoSumHugeint);
 	}
 	return r;
 }
-static unique_ptr<FunctionData> MojoAvgDecimalBind(ClientContext &ctx, AggregateFunction &fn,
-                                                   vector<unique_ptr<Expression>> &args) {
-	auto r = g_orig_avg_dec_bind(ctx, fn, args);
-	if (fn.simple_update && fn.state_size && !fn.arguments.empty() && IsI128(fn.arguments[0]) &&
-	    fn.state_size(fn) == sizeof(AvgStateHugeint)) {
-		if (!g_orig_avg_i128) g_orig_avg_i128 = fn.simple_update;
-		fn.simple_update = MojoAvgHugeint;
+static unique_ptr<FunctionData> MojoAvgDecimalBind(BindAggregateFunctionInput &input) {
+	auto r = g_orig_avg_dec_bind(input);
+	auto &fn = input.GetBoundFunction();
+	auto &args = fn.GetArguments();
+	if (fn.HasStateClusterUpdateCallback() && !args.empty() && IsI128(args[0]) &&
+	    StateSize(fn, r.get()) == sizeof(AvgStateHugeint) && AvgLayoutIs(fn, r.get(), sizeof(uint64_t))) {
+		if (!g_orig_avg_i128) g_orig_avg_i128 = fn.GetStateClusterUpdateCallback();
+		fn.SetStateClusterUpdateCallback(MojoAvgHugeint);
 	}
 	return r;
 }
 
 // min/max are registered as ANY->ANY with a bind callback; the concrete per-type
-// simple_update is produced at bind time. So we wrap the bind: run the original
-// (which resolves the concrete function), then swap its double/float simple_update.
+// cluster_update is produced at bind time. So we wrap the bind: run the original
+// (which resolves the concrete function), then swap its double/float cluster_update.
 static bind_aggregate_function_t g_orig_min_bind = nullptr, g_orig_max_bind = nullptr;
 
-static unique_ptr<FunctionData> MojoMinBind(ClientContext &ctx, AggregateFunction &fn,
-                                            vector<unique_ptr<Expression>> &args) {
-	auto r = g_orig_min_bind(ctx, fn, args);
-	if (fn.simple_update && fn.state_size && !fn.arguments.empty()) {
-		auto ssz = fn.state_size(fn);
-		if (IsD(fn.arguments[0]) && ssz == sizeof(MinMaxD)) {
-			if (!g_orig_min64) g_orig_min64 = fn.simple_update;
-			fn.simple_update = MojoMin64;
-		} else if (IsF(fn.arguments[0]) && ssz == sizeof(MinMaxF)) {
-			if (!g_orig_min32) g_orig_min32 = fn.simple_update;
-			fn.simple_update = MojoMin32;
-		}
-	}
-	return r;
-}
-static unique_ptr<FunctionData> MojoMaxBind(ClientContext &ctx, AggregateFunction &fn,
-                                            vector<unique_ptr<Expression>> &args) {
-	auto r = g_orig_max_bind(ctx, fn, args);
-	if (fn.simple_update && fn.state_size && !fn.arguments.empty()) {
-		auto ssz = fn.state_size(fn);
-		if (IsD(fn.arguments[0]) && ssz == sizeof(MinMaxD)) {
-			if (!g_orig_max64) g_orig_max64 = fn.simple_update;
-			fn.simple_update = MojoMax64;
-		} else if (IsF(fn.arguments[0]) && ssz == sizeof(MinMaxF)) {
-			if (!g_orig_max32) g_orig_max32 = fn.simple_update;
-			fn.simple_update = MojoMax32;
+template <bool IS_MIN>
+static unique_ptr<FunctionData> MojoMinMaxBind(BindAggregateFunctionInput &input) {
+	auto r = (IS_MIN ? g_orig_min_bind : g_orig_max_bind)(input);
+	auto &fn = input.GetBoundFunction();
+	auto &args = fn.GetArguments();
+	if (fn.HasStateClusterUpdateCallback() && !args.empty()) {
+		auto ssz = StateSize(fn, r.get());
+		auto &o64 = IS_MIN ? g_orig_min64 : g_orig_max64;
+		auto &o32 = IS_MIN ? g_orig_min32 : g_orig_max32;
+		if (IsD(args[0]) && ssz == sizeof(MinMaxD) && OptionalLayoutIs(fn, r.get(), sizeof(double))) {
+			if (!o64) o64 = fn.GetStateClusterUpdateCallback();
+			fn.SetStateClusterUpdateCallback(IS_MIN ? MojoMin64 : MojoMax64);
+		} else if (IsF(args[0]) && ssz == sizeof(MinMaxF) && OptionalLayoutIs(fn, r.get(), sizeof(float))) {
+			if (!o32) o32 = fn.GetStateClusterUpdateCallback();
+			fn.SetStateClusterUpdateCallback(IS_MIN ? MojoMin32 : MojoMax32);
 		}
 	}
 	return r;
 }
 
+static const LogicalType &Arg(const SimpleFunction &f, idx_t i) {
+	return f.GetSignature().GetParameter(i).GetType();
+}
+static idx_t ArgCount(const SimpleFunction &f) {
+	return f.GetSignature().GetParameterCount();
+}
+
+// DuckDB 2.0: catalog function sets hold immutable shared_ptr<const T> overloads.
+// ApplyToFunctions replaces each overload with a modified copy, which is the
+// supported way to change them in place (before any query has bound them).
 static void WrapMinMaxBind(Catalog &cat, ClientContext &ctx, const char *name, bind_aggregate_function_t wrapper,
                            bind_aggregate_function_t &orig_slot) {
 	auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-	for (auto &f : e.functions.functions) {
+	e.functions.ApplyToFunctions([&](AggregateFunction &f) {
 		// the scalar templated overload: ANY -> ANY (skip the ANY -> ANY[] list variant)
-		if (f.return_type.id() == LogicalTypeId::ANY && f.bind) {
-			orig_slot = f.bind;
-			f.bind = wrapper;
+		if (f.GetReturnType().id() == LogicalTypeId::ANY && f.GetBindCallback()) {
+			orig_slot = f.GetBindCallback();
+			f.SetBindCallback(wrapper);
 		}
-	}
+	});
 }
 
 // sum/avg over DECIMAL are bind-dispatched too (one DECIMAL overload with a bind
@@ -433,23 +471,23 @@ static void WrapMinMaxBind(Catalog &cat, ClientContext &ctx, const char *name, b
 static void WrapDecimalAggBind(Catalog &cat, ClientContext &ctx, const char *name,
                                bind_aggregate_function_t wrapper, bind_aggregate_function_t &orig_slot) {
 	auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-	for (auto &f : e.functions.functions) {
-		if (!f.arguments.empty() && f.arguments[0].id() == LogicalTypeId::DECIMAL && f.bind) {
-			orig_slot = f.bind;
-			f.bind = wrapper;
+	e.functions.ApplyToFunctions([&](AggregateFunction &f) {
+		if (ArgCount(f) > 0 && Arg(f, 0).id() == LogicalTypeId::DECIMAL && f.GetBindCallback()) {
+			orig_slot = f.GetBindCallback();
+			f.SetBindCallback(wrapper);
 		}
-	}
+	});
 }
 
 static void OverrideScalar(Catalog &cat, ClientContext &ctx, const char *name, scalar_function_t wrapper,
                            scalar_function_t &orig_slot) {
 	auto &e = cat.GetEntry<ScalarFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-	for (auto &f : e.functions.functions) {
-		if (f.arguments.size() == 1 && IsD(f.arguments[0]) && IsD(f.return_type)) {
-			orig_slot = f.function;
-			f.function = wrapper;
+	e.functions.ApplyToFunctions([&](ScalarFunction &f) {
+		if (ArgCount(f) == 1 && IsD(Arg(f, 0)) && IsD(f.GetReturnType())) {
+			orig_slot = f.GetFunctionCallback();
+			f.SetFunctionCallback(wrapper);
 		}
-	}
+	});
 }
 
 // ---------------- array distance / similarity folds ----------------
@@ -466,23 +504,23 @@ template <class T, T (*KERNEL)(const T *, const T *, int64_t), FoldPost POST>
 static void MojoArrayFold(DataChunk &args, ExpressionState &state, Vector &result) {
 	const auto &lstate = state.Cast<ExecuteFunctionState>();
 	const auto &expr = lstate.expr.Cast<BoundFunctionExpression>();
-	const auto &func_name = expr.function.name;
+	const auto &func_name = expr.Function().GetName();
 
 	const auto count = args.size();
-	auto &lhs_child = ArrayVector::GetEntry(args.data[0]);
-	auto &rhs_child = ArrayVector::GetEntry(args.data[1]);
+	auto &lhs_child = ArrayVector::GetChild(args.data[0]);
+	auto &rhs_child = ArrayVector::GetChild(args.data[1]);
 
 	const auto &lhs_child_validity = FlatVector::Validity(lhs_child);
 	const auto &rhs_child_validity = FlatVector::Validity(rhs_child);
 
 	UnifiedVectorFormat lhs_format;
 	UnifiedVectorFormat rhs_format;
-	args.data[0].ToUnifiedFormat(count, lhs_format);
-	args.data[1].ToUnifiedFormat(count, rhs_format);
+	args.data[0].ToUnifiedFormat(lhs_format);
+	args.data[1].ToUnifiedFormat(rhs_format);
 
 	auto lhs_data = FlatVector::GetData<T>(lhs_child);
 	auto rhs_data = FlatVector::GetData<T>(rhs_child);
-	auto res_data = FlatVector::GetData<T>(result);
+	auto res_data = FlatVector::GetDataMutable<T>(result);
 
 	const auto array_size = ArrayType::GetSize(args.data[0].GetType());
 	D_ASSERT(array_size == ArrayType::GetSize(args.data[1].GetType()));
@@ -522,20 +560,35 @@ static void MojoArrayFold(DataChunk &args, ExpressionState &state, Vector &resul
 // Swap the FLOAT / DOUBLE array-array overloads' function pointer. The array
 // child type is set at catalog-registration time (the array *size* is not, but
 // we don't need it here); the bind (ArrayGenericBinaryBind) is left untouched.
+static bool ArrayChildFlat(const Vector &v) {
+	return ArrayVector::GetChild(v).GetVectorType() == VectorType::FLAT_VECTOR;
+}
+
+// scalar_function_t is a std::function in DuckDB 2.0, so the wrapper can capture the
+// original overload and fall back to it when an array child is not a FLAT vector.
+static scalar_function_t WithArrayFallback(scalar_function_t fast, scalar_function_t orig) {
+	return [fast, orig](DataChunk &args, ExpressionState &state, Vector &result) {
+		if (ArrayChildFlat(args.data[0]) && ArrayChildFlat(args.data[1])) {
+			fast(args, state, result);
+		} else {
+			orig(args, state, result);
+		}
+	};
+}
+
 static void OverrideArrayFold(Catalog &cat, ClientContext &ctx, const char *name, scalar_function_t f32_wrap,
                               scalar_function_t f64_wrap) {
 	auto &e = cat.GetEntry<ScalarFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-	for (auto &f : e.functions.functions) {
-		if (f.arguments.size() == 2 && f.arguments[0].id() == LogicalTypeId::ARRAY &&
-		    f.arguments[1].id() == LogicalTypeId::ARRAY) {
-			const auto child = ArrayType::GetChildType(f.arguments[0]).id();
+	e.functions.ApplyToFunctions([&](ScalarFunction &f) {
+		if (ArgCount(f) == 2 && Arg(f, 0).id() == LogicalTypeId::ARRAY && Arg(f, 1).id() == LogicalTypeId::ARRAY) {
+			const auto child = ArrayType::GetChildType(Arg(f, 0)).id();
 			if (child == LogicalTypeId::FLOAT) {
-				f.function = f32_wrap;
+				f.SetFunctionCallback(WithArrayFallback(f32_wrap, f.GetFunctionCallback()));
 			} else if (child == LogicalTypeId::DOUBLE) {
-				f.function = f64_wrap;
+				f.SetFunctionCallback(WithArrayFallback(f64_wrap, f.GetFunctionCallback()));
 			}
 		}
-	}
+	});
 }
 
 // ======================== fused sum/avg(transcendental) ========================
@@ -565,18 +618,39 @@ static double sf_log10(double x) { return std::log10(x); }
 
 template <plain_k_t PLAIN, masked_k_t MASKED, scalar_f_t SF, bool IS_AVG>
 struct FusedAgg {
-	static idx_t Size(const AggregateFunction &) { return sizeof(FusedState); }
-	static void Init(const AggregateFunction &, data_ptr_t s) {
-		auto &st = *reinterpret_cast<FusedState *>(s);
-		st.value = 0;
-		st.count = 0;
-		st.isset = false;
+	static idx_t Size(AggregateStateInput &) { return sizeof(FusedState); }
+	static void Init(AggregateStateInput &, data_ptr_t *states, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			auto &st = *reinterpret_cast<FusedState *>(states[i]);
+			st.value = 0;
+			st.count = 0;
+			st.isset = false;
+		}
 	}
-	static void SimpleUpdate(Vector in[], AggregateInputData &, idx_t, data_ptr_t sp, idx_t n) {
+	// cluster_update: one run over rows 0..n-1 (ungrouped) takes the SIMD path; any
+	// other run shape is applied row by row.
+	static void ClusterUpdate(Vector in[], AggregateInputData &, idx_t, const ClusteredAggr &cl, idx_t n) {
+		auto sp = SingleRunState(cl, n);
+		if (!sp) {
+			UnifiedVectorFormat id;
+			in[0].ToUnifiedFormat(id);
+			auto d = UnifiedVectorFormat::GetData<double>(id);
+			for (auto &run : cl.runs()) {
+				auto &st = *reinterpret_cast<FusedState *>(run.state);
+				for (idx_t j = 0; j < run.count; j++) {
+					auto ix = id.sel->get_index(run.sel ? run.sel[j] : j);
+					if (!id.validity.RowIsValid(ix)) { continue; }
+					st.value += SF(d[ix]);
+					st.count++;
+					st.isset = true;
+				}
+			}
+			return;
+		}
 		auto &st = *reinterpret_cast<FusedState *>(sp);
 		if (n > 0 && in[0].GetVectorType() == VectorType::FLAT_VECTOR) {
 			auto d = FlatVector::GetData<double>(in[0]);
-			if (FlatVector::Validity(in[0]).AllValid()) {
+			if (FlatVector::Validity(in[0]).CannotHaveNull()) {
 				st.value += PLAIN(d, (int64_t)n);
 				st.count += n;
 				st.isset = true;
@@ -591,7 +665,7 @@ struct FusedAgg {
 			return;
 		}
 		UnifiedVectorFormat id;
-		in[0].ToUnifiedFormat(n, id);
+		in[0].ToUnifiedFormat(id);
 		auto d = UnifiedVectorFormat::GetData<double>(id);
 		for (idx_t i = 0; i < n; i++) {
 			auto ix = id.sel->get_index(i);
@@ -603,8 +677,8 @@ struct FusedAgg {
 	}
 	static void Update(Vector in[], AggregateInputData &, idx_t, Vector &states, idx_t count) {
 		UnifiedVectorFormat id, sd;
-		in[0].ToUnifiedFormat(count, id);
-		states.ToUnifiedFormat(count, sd);
+		in[0].ToUnifiedFormat(id);
+		states.ToUnifiedFormat(sd);
 		auto d = UnifiedVectorFormat::GetData<double>(id);
 		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
 		for (idx_t i = 0; i < count; i++) {
@@ -618,7 +692,7 @@ struct FusedAgg {
 	}
 	static void Combine(Vector &state, Vector &combined, AggregateInputData &, idx_t count) {
 		UnifiedVectorFormat sd;
-		state.ToUnifiedFormat(count, sd);
+		state.ToUnifiedFormat(sd);
 		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
 		auto cp = FlatVector::GetData<data_ptr_t>(combined);
 		for (idx_t i = 0; i < count; i++) {
@@ -629,12 +703,12 @@ struct FusedAgg {
 			c.isset = c.isset || s.isset;
 		}
 	}
-	static void Finalize(Vector &state, AggregateInputData &, Vector &result, idx_t count, idx_t offset) {
+	static void Finalize(Vector &state, AggregateFinalizeInputData &, Vector &result, idx_t count, idx_t offset) {
 		UnifiedVectorFormat sd;
-		state.ToUnifiedFormat(count, sd);
+		state.ToUnifiedFormat(sd);
 		auto sp = UnifiedVectorFormat::GetData<data_ptr_t>(sd);
-		auto r = FlatVector::GetData<double>(result);
-		auto &rm = FlatVector::Validity(result);
+		auto r = FlatVector::GetDataMutable<double>(result);
+		auto &rm = FlatVector::ValidityMutable(result);
 		for (idx_t i = 0; i < count; i++) {
 			auto &st = *reinterpret_cast<FusedState *>(sp[sd.sel->get_index(i)]);
 			idx_t ri = i + offset;
@@ -655,7 +729,7 @@ struct FusedAgg {
 	}
 	static AggregateFunction Get() {
 		return AggregateFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE, Size, Init, Update, Combine, Finalize,
-		                         FunctionNullHandling::DEFAULT_NULL_HANDLING, SimpleUpdate);
+		                         FunctionNullHandling::DEFAULT_NULL_HANDLING, ClusterUpdate);
 	}
 };
 
@@ -671,12 +745,12 @@ static unique_ptr<Expression> BuildFusedAgg(const std::string &fname, bool is_av
 #define MOJO_FUSE_CASE(NM, PLAIN, MASKED, SF)                                                                          \
 	if (fname == NM) {                                                                                                 \
 		auto fused = is_avg ? FusedAgg<PLAIN, MASKED, SF, true>::Get() : FusedAgg<PLAIN, MASKED, SF, false>::Get();    \
-		fused.name = std::string(is_avg ? "__mojo_favg_" : "__mojo_fsum_") + NM;                                       \
+		fused.SetName(Identifier(std::string(is_avg ? "__mojo_favg_" : "__mojo_fsum_") + NM));                                 \
 		vector<unique_ptr<Expression>> nch;                                                                            \
 		nch.push_back(std::move(inner));                                                                               \
-		auto repl = make_uniq<BoundAggregateExpression>(std::move(fused), std::move(nch), nullptr, nullptr,           \
-		                                                AggregateType::NON_DISTINCT);                                  \
-		repl->alias = alias;                                                                                          \
+		auto repl = make_uniq<BoundAggregateExpression>(BoundAggregateFunction(std::move(fused)), std::move(nch),      \
+		                                                nullptr, nullptr, AggregateType::NON_DISTINCT);                \
+		repl->SetAlias(Identifier(alias));                                                                             \
 		return repl;                                                                                                  \
 	}
 	MOJO_FUSE_CASE("sqrt", mojo_fsum_sqrt_f64, mojo_fsum_sqrt_f64_masked, sf_sqrt)
@@ -692,19 +766,21 @@ static unique_ptr<Expression> BuildFusedAgg(const std::string &fname, bool is_av
 static void TryRewriteFusedAgg(unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) { return; }
 	auto &agg = expr->Cast<BoundAggregateExpression>();
-	if (agg.IsDistinct() || agg.filter || agg.order_bys) { return; }
-	if (agg.children.size() != 1) { return; }
-	bool is_avg = agg.function.name == "avg";
-	if (agg.function.name != "sum" && !is_avg) { return; }
-	if (agg.return_type.id() != LogicalTypeId::DOUBLE) { return; }
-	auto &child = *agg.children[0];
+	if (agg.IsDistinct() || agg.GetFilter() || agg.GetOrderBys()) { return; }
+	if (agg.GetChildren().size() != 1) { return; }
+	const std::string agg_name = agg.Function().GetName().GetIdentifierName();
+	bool is_avg = agg_name == "avg";
+	if (agg_name != "sum" && !is_avg) { return; }
+	if (agg.GetReturnType().id() != LogicalTypeId::DOUBLE) { return; }
+	auto &child = *agg.GetChildrenMutable()[0];
 	if (child.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return; }
 	auto &fn = child.Cast<BoundFunctionExpression>();
-	if (fn.children.size() != 1) { return; }
-	if (fn.return_type.id() != LogicalTypeId::DOUBLE) { return; }
-	if (fn.children[0]->return_type.id() != LogicalTypeId::DOUBLE) { return; }
-	if (!IsFusableTranscendental(fn.function.name)) { return; }
-	auto repl = BuildFusedAgg(fn.function.name, is_avg, std::move(fn.children[0]), agg.alias);
+	if (fn.GetChildren().size() != 1) { return; }
+	if (fn.GetReturnType().id() != LogicalTypeId::DOUBLE) { return; }
+	if (fn.GetChildren()[0]->GetReturnType().id() != LogicalTypeId::DOUBLE) { return; }
+	const std::string fn_name = fn.Function().GetName().GetIdentifierName();
+	if (!IsFusableTranscendental(fn_name)) { return; }
+	auto repl = BuildFusedAgg(fn_name, is_avg, std::move(fn.GetChildrenMutable()[0]), agg.GetAlias().GetIdentifierName());
 	if (repl) { expr = std::move(repl); }
 }
 
@@ -738,24 +814,24 @@ static void MaterializeFloatArrayColumn(ClientContext &context, const std::strin
 	Connection con(*context.db);
 	auto res = con.Query("SELECT " + column + " FROM " + table);
 	if (res->HasError()) { throw InvalidInputException(std::string(who) + ": " + res->GetError()); }
-	if (res->types[0].id() != LogicalTypeId::ARRAY) {
+	if (res->GetTypes()[0].id() != LogicalTypeId::ARRAY) {
 		throw InvalidInputException(std::string(who) + ": column must be FLOAT[K] (ARRAY), got " +
-		                            res->types[0].ToString());
+		                            res->GetTypes()[0].ToString());
 	}
-	if (ArrayType::GetChildType(res->types[0]).id() != LogicalTypeId::FLOAT) {
+	if (ArrayType::GetChildType(res->GetTypes()[0]).id() != LogicalTypeId::FLOAT) {
 		throw InvalidInputException(std::string(who) + ": array element type must be FLOAT");
 	}
-	K = ArrayType::GetSize(res->types[0]);
+	K = ArrayType::GetSize(res->GetTypes()[0]);
 	n_rows = 0;
 	while (true) {
 		auto chunk = res->Fetch();
 		if (!chunk || chunk->size() == 0) { break; }
 		auto n = chunk->size();
 		chunk->data[0].Flatten(n);
-		if (!FlatVector::Validity(chunk->data[0]).AllValid()) {
+		if (!FlatVector::Validity(chunk->data[0]).CannotHaveNull()) {
 			throw InvalidInputException(std::string(who) + ": NULL vectors are not supported");
 		}
-		auto &child = ArrayVector::GetEntry(chunk->data[0]);
+		auto &child = ArrayVector::GetChild(chunk->data[0]);
 		const float *cd = FlatVector::GetData<float>(child);
 		host.insert(host.end(), cd, cd + n * K);
 		n_rows += n;
@@ -773,7 +849,7 @@ struct MojoKnnState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<FunctionData> MojoKnnBind(ClientContext &context, TableFunctionBindInput &input,
-                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                            vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto emb_table = input.inputs[0].GetValue<string>();
 	auto emb_col = input.inputs[1].GetValue<string>();
 	auto q_table = input.inputs[2].GetValue<string>();
@@ -853,9 +929,9 @@ static void MojoKnnFunc(ClientContext &, TableFunctionInput &data, DataChunk &ou
 	auto &gs = data.global_state->Cast<MojoKnnState>();
 	idx_t n = MinValue<idx_t>(bd.n_emitted - gs.offset, STANDARD_VECTOR_SIZE);
 	if (n == 0) { output.SetCardinality(0); return; }
-	auto qrow = FlatVector::GetData<int64_t>(output.data[0]);
-	auto rowid = FlatVector::GetData<int64_t>(output.data[1]);
-	auto dist = FlatVector::GetData<float>(output.data[2]);
+	auto qrow = FlatVector::GetDataMutable<int64_t>(output.data[0]);
+	auto rowid = FlatVector::GetDataMutable<int64_t>(output.data[1]);
+	auto dist = FlatVector::GetDataMutable<float>(output.data[2]);
 	for (idx_t i = 0; i < n; i++) {
 		qrow[i] = bd.query_rowids[gs.offset + i];
 		rowid[i] = bd.ids[gs.offset + i];
@@ -870,7 +946,7 @@ static void RegisterMojoKnn(Catalog &cat, ClientContext &ctx) {
 	                 {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                  LogicalType::BIGINT},
 	                 MojoKnnFunc, MojoKnnBind, MojoKnnInit);
-	tf.named_parameters["metric"] = LogicalType::VARCHAR;
+	tf.GetSignature().AddKeywordOnly("metric", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
 	CreateTableFunctionInfo info(tf);
 	info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 	cat.CreateTableFunction(ctx, info);
@@ -910,42 +986,51 @@ void RegisterMojoOverrides(DatabaseInstance &db) {
 		OverrideScalar(cat, ctx, "log10", Mojo_log10, g_orig_log10);
 
 		// sum/avg have concrete per-type overloads in the catalog, so override simple_update directly.
-		auto agg = [&](const char *name, aggregate_simple_update_t wrap, aggregate_simple_update_t &orig,
-		               size_t mirror) {
+		auto agg = [&](const char *name, aggregate_cluster_update_t wrap, aggregate_cluster_update_t &orig,
+		               size_t mirror, std::function<bool(const BoundAggregateFunction &)> layout_ok) {
 			auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-			for (auto &f : e.functions.functions) {
-				if (f.arguments.size() == 1 && IsD(f.arguments[0]) && f.simple_update && f.state_size &&
-				    f.state_size(f) == mirror) {
-					orig = f.simple_update;
-					f.simple_update = wrap;
+			e.functions.ApplyToFunctions([&](AggregateFunction &f) {
+				if (ArgCount(f) != 1 || !IsD(Arg(f, 0)) || !f.HasStateClusterUpdateCallback()) { return; }
+				BoundAggregateFunction bf(f);
+				if (StateSize(bf, nullptr) == mirror && layout_ok(bf)) {
+					orig = f.GetStateClusterUpdateCallback();
+					f.SetStateClusterUpdateCallback(wrap);
 				}
-			}
+			});
 		};
-		agg("sum", MojoSum, g_orig_sum, sizeof(SumStateM));
-		agg("avg", MojoAvg, g_orig_avg, sizeof(AvgStateM));
+		agg("sum", MojoSum, g_orig_sum, sizeof(SumStateM),
+		    [](const BoundAggregateFunction &bf) { return OptionalLayoutIs(bf, nullptr, sizeof(double)); });
+		agg("avg", MojoAvg, g_orig_avg, sizeof(AvgStateM),
+		    [](const BoundAggregateFunction &bf) { return AvgLayoutIs(bf, nullptr, sizeof(uint64_t)); });
 
 		// HUGEINT sum/avg: concrete per-type overload, so override simple_update directly.
-		auto aggI128 = [&](const char *name, aggregate_simple_update_t wrap, aggregate_simple_update_t &orig,
-		                   size_t mirror) {
+		auto aggI128 = [&](const char *name, aggregate_cluster_update_t wrap, aggregate_cluster_update_t &orig,
+		                   size_t mirror, std::function<bool(const BoundAggregateFunction &)> layout_ok) {
 			auto &e = cat.GetEntry<AggregateFunctionCatalogEntry>(ctx, DEFAULT_SCHEMA, name);
-			for (auto &f : e.functions.functions) {
-				if (f.arguments.size() == 1 && f.arguments[0].id() == LogicalTypeId::HUGEINT && f.simple_update &&
-				    f.state_size && f.state_size(f) == mirror) {
-					if (!orig) orig = f.simple_update;
-					f.simple_update = wrap;
+			e.functions.ApplyToFunctions([&](AggregateFunction &f) {
+				if (ArgCount(f) != 1 || Arg(f, 0).id() != LogicalTypeId::HUGEINT ||
+				    !f.HasStateClusterUpdateCallback()) {
+					return;
 				}
-			}
+				BoundAggregateFunction bf(f);
+				if (StateSize(bf, nullptr) == mirror && layout_ok(bf)) {
+					if (!orig) orig = f.GetStateClusterUpdateCallback();
+					f.SetStateClusterUpdateCallback(wrap);
+				}
+			});
 		};
-		aggI128("sum", MojoSumHugeint, g_orig_sum_i128, sizeof(SumStateHugeint));
-		aggI128("avg", MojoAvgHugeint, g_orig_avg_i128, sizeof(AvgStateHugeint));
+		aggI128("sum", MojoSumHugeint, g_orig_sum_i128, sizeof(SumStateHugeint),
+		        [](const BoundAggregateFunction &bf) { return OptionalLayoutIs(bf, nullptr, sizeof(hugeint_t)); });
+		aggI128("avg", MojoAvgHugeint, g_orig_avg_i128, sizeof(AvgStateHugeint),
+		        [](const BoundAggregateFunction &bf) { return AvgLayoutIs(bf, nullptr, sizeof(uint64_t)); });
 
 		// DECIMAL(19..38) sum/avg resolve to the same INT128 state at bind, so wrap the bind.
 		WrapDecimalAggBind(cat, ctx, "sum", MojoSumDecimalBind, g_orig_sum_dec_bind);
 		WrapDecimalAggBind(cat, ctx, "avg", MojoAvgDecimalBind, g_orig_avg_dec_bind);
 
 		// min/max are bind-dispatched (ANY->ANY), so wrap the bind to swap f64/f32 simple_update.
-		WrapMinMaxBind(cat, ctx, "min", MojoMinBind, g_orig_min_bind);
-		WrapMinMaxBind(cat, ctx, "max", MojoMaxBind, g_orig_max_bind);
+		WrapMinMaxBind(cat, ctx, "min", MojoMinMaxBind<true>, g_orig_min_bind);
+		WrapMinMaxBind(cat, ctx, "max", MojoMinMaxBind<false>, g_orig_max_bind);
 
 		// array distance / similarity folds: swap the per-overload function pointer.
 		OverrideArrayFold(cat, ctx, "array_inner_product",

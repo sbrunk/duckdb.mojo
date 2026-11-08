@@ -16,10 +16,8 @@ Usage:
     pixi run mojo run benchmark/tpch_benchmark.mojo
 """
 
-from duckdb import *
-from duckdb.scalar_function import ScalarFunction, ScalarFunctionSet, FunctionInfo
-from duckdb.logical_type import LogicalType, decimal_type
-from duckdb._libduckdb import *
+import duckdb
+from duckdb import Connection, Decimal, LogicalType, ScalarArgs, ScalarFunction, VectorWriter
 from std.sys import simd_width_of
 from std import benchmark
 
@@ -27,9 +25,8 @@ from std import benchmark
 # ===--------------------------------------------------------------------===#
 # SIMD arithmetic kernels
 # ===--------------------------------------------------------------------===#
-# Plain SIMD functions with little boilerplate. The vectorized loop (SIMD-width
-# batches plus a scalar tail) is generated automatically by set_simd_function /
-# from_simd_function using the hardware-optimal SIMD width.
+# Plain SIMD functions. `decimal_op` below runs them over a chunk (SIMD-width
+# batches plus a scalar tail); `from_simd_function` does the same for DOUBLE.
 #
 # DECIMAL(15,2) is stored as Int64 internally (width 15 ≤ 18).
 # For add/sub the raw integers share the same scale, so we add/sub them directly.
@@ -69,49 +66,69 @@ def simd_divide_f64[w: SIMDLength](a: SIMD[DType.float64, w], b: SIMD[DType.floa
 # Registration
 # ===--------------------------------------------------------------------===#
 
+comptime Int64Op = def[w: SIMDLength](SIMD[DType.int64, w], SIMD[DType.int64, w]) thin -> SIMD[DType.int64, w]
+
+
+@always_inline
+def lanes[w: SIMDLength](p: Pointer[Int64, _], i: Int, constant: Bool) -> SIMD[DType.int64, w]:
+    """`w` values from row `i` on. A constant vector (a literal) repeats its value."""
+    if constant:
+        return SIMD[DType.int64, w](p[])
+    return p.unsafe_offset(i).unsafe_load[width=w]()
+
+
+def decimal_op[op: Int64Op](mut args: ScalarArgs, mut out: VectorWriter) raises:
+    """Applies `op` to two DECIMAL(18,4) arguments through their Int64 storage."""
+    var x = args.column[Decimal](0)
+    var y = args.column[Decimal](1)
+    var dst = out.data[Int64]()
+    var n = args.size()
+    var simple = (x.is_flat() or x.is_constant()) and (y.is_flat() or y.is_constant())
+    if not simple or x.has_nulls() or y.has_nulls():
+        # Dictionary vectors or NULLs: one row at a time.
+        for row in range(n):
+            var u = x.get(row)
+            var v = y.get(row)
+            if u and v:
+                dst[unsafe_offset=row] = op[1](Int64(u.value().value()), Int64(v.value().value()))[0]
+            else:
+                out.write_null(row)
+        return
+    comptime w = simd_width_of[DType.int64]()
+    var a = x.unsafe_data().unsafe_bitcast[Int64]()
+    var b = y.unsafe_data().unsafe_bitcast[Int64]()
+    var ca = x.is_constant()
+    var cb = y.is_constant()
+    var i = 0
+    while i + w <= n:
+        dst.unsafe_offset(i).unsafe_store(0, op[w](lanes[w](a, i, ca), lanes[w](b, i, cb)))
+        i += w
+    while i < n:
+        dst[unsafe_offset=i] = op[1](lanes[1](a, i, ca), lanes[1](b, i, cb))[0]
+        i += 1
+
+
 def register_functions(conn: Connection) raises:
     """Register mojo_add, mojo_subtract, mojo_multiply, mojo_divide.
 
-    DECIMAL functions use set_simd_function with manual type setup (DECIMAL
-    can't be auto-derived from DType).  Division uses from_simd_function
-    with DOUBLE types (fully auto-derived).
+    DECIMAL types can't be derived from a DType, so the DECIMAL functions are
+    chunk-level functions with explicit types. Division uses
+    from_simd_function with DOUBLE types.
     """
+    var d18_4 = LogicalType.decimal(18, 4)
 
-    var d18_4 = decimal_type(18, 4)
-
-    # --- mojo_add: (18,4) + (18,4) -> (18,4) ---
-    var add_fn = ScalarFunction()
-    add_fn.set_name("mojo_add")
-    add_fn.add_parameter(d18_4)
-    add_fn.add_parameter(d18_4)
-    add_fn.set_return_type(d18_4)
-    add_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_add]()
-    add_fn.register(conn)
-
-    # --- mojo_subtract: (18,4) - (18,4) -> (18,4) ---
-    var sub_fn = ScalarFunction()
-    sub_fn.set_name("mojo_subtract")
-    sub_fn.add_parameter(d18_4)
-    sub_fn.add_parameter(d18_4)
-    sub_fn.set_return_type(d18_4)
-    sub_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_subtract]()
-    sub_fn.register(conn)
-
-    # --- mojo_multiply: (18,4) * (18,4) -> (18,4) ---
+    # (18,4) op (18,4) -> (18,4)
+    conn.register(ScalarFunction.from_chunk_function[decimal_op[simd_add]]("mojo_add", [d18_4.copy(), d18_4.copy()], d18_4.copy()))
+    conn.register(
+        ScalarFunction.from_chunk_function[decimal_op[simd_subtract]]("mojo_subtract", [d18_4.copy(), d18_4.copy()], d18_4.copy())
+    )
     # Scale correction: (scale 4 * scale 4) / 10000 gives scale 4
-    var mul_fn = ScalarFunction()
-    mul_fn.set_name("mojo_multiply")
-    mul_fn.add_parameter(d18_4)
-    mul_fn.add_parameter(d18_4)
-    mul_fn.set_return_type(d18_4)
-    mul_fn.set_simd_function[DType.int64, DType.int64, DType.int64, simd_multiply]()
-    mul_fn.register(conn)
+    conn.register(
+        ScalarFunction.from_chunk_function[decimal_op[simd_multiply]]("mojo_multiply", [d18_4.copy(), d18_4.copy()], d18_4.copy())
+    )
 
-    # --- mojo_divide: (DOUBLE, DOUBLE) -> DOUBLE ---
-    # Division always goes through DOUBLE, so all types are derived automatically.
-    ScalarFunction.from_simd_function[
-        "mojo_divide", DType.float64, DType.float64, DType.float64, simd_divide_f64
-    ](conn)
+    # (DOUBLE, DOUBLE) -> DOUBLE: all types are derived automatically.
+    conn.register(ScalarFunction.from_simd_function["mojo_divide", DType.float64, DType.float64, DType.float64, simd_divide_f64]())
 
 
 # ===--------------------------------------------------------------------===#
@@ -246,10 +263,10 @@ def run_benchmark(
 
     # Warmup
     for _ in range(warmup_iters):
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     def bench_standard() raises {imm}:
-        _ = conn.execute(query_standard)
+        _ = conn.execute(query_standard).fetchall()
 
     var std_report = benchmark.run(bench_standard, max_iters=max_iters)
     var std_ms = std_report.mean("ms")
@@ -257,10 +274,10 @@ def run_benchmark(
 
     # Warmup Mojo
     for _ in range(warmup_iters):
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     def bench_mojo() raises {imm}:
-        _ = conn.execute(query_mojo)
+        _ = conn.execute(query_mojo).fetchall()
 
     var mojo_report = benchmark.run(bench_mojo, max_iters=max_iters)
     var mojo_ms = mojo_report.mean("ms")
@@ -292,23 +309,17 @@ def main() raises:
 
     # ---- Setup ----
     print("Setting up database...")
-    var conn = DuckDB.connect(":memory:")
+    var conn = duckdb.connect()
     _ = conn.execute("INSTALL tpch; LOAD tpch;")
 
     print("Generating TPC-H data (SF=" + String(scale_factor) + ")...")
     _ = conn.execute("CALL dbgen(sf=" + String(scale_factor) + ");")
 
-    var lineitem_count = conn.execute("SELECT count(*) FROM lineitem")
-    var li_chunk = lineitem_count.fetch_chunk()
-    print("  lineitem rows: " + String(li_chunk.get[Int64](col=0, row=0)))
+    print("  lineitem rows: " + String(conn.execute("SELECT count(*) FROM lineitem").get[Int64]()[0]))
 
-    var orders_count = conn.execute("SELECT count(*) FROM orders")
-    var o_chunk = orders_count.fetch_chunk()
-    print("  orders rows:   " + String(o_chunk.get[Int64](col=0, row=0)))
+    print("  orders rows:   " + String(conn.execute("SELECT count(*) FROM orders").get[Int64]()[0]))
 
-    var part_count = conn.execute("SELECT count(*) FROM part")
-    var p_chunk = part_count.fetch_chunk()
-    print("  part rows:     " + String(p_chunk.get[Int64](col=0, row=0)))
+    print("  part rows:     " + String(conn.execute("SELECT count(*) FROM part").get[Int64]()[0]))
 
     # ---- Register Mojo functions ----
     print("\nRegistering Mojo scalar functions...")
@@ -326,7 +337,7 @@ def main() raises:
         + " typeof(l_extendedprice * l_discount) AS stype"
         + " FROM lineitem LIMIT 1"
     )
-    var tc = type_check.fetch_chunk()
+    var tc = type_check^.fetchall()
     print("  mojo_multiply type: " + String(tc.get[String](col=0, row=0)))
     print("  native * type:      " + String(tc.get[String](col=1, row=0)))
 
@@ -339,9 +350,12 @@ def main() raises:
 
     # Validate Q6
     print("  Validating Q6 results match...")
-    _ = conn.execute(Q6_STANDARD)
-    _ = conn.execute(Q6_MOJO)
-    print("    Q6 ✓")
+    var q6_std = conn.execute(Q6_STANDARD).get[Decimal]()[0]
+    var q6_mojo = conn.execute(Q6_MOJO).get[Decimal]()[0]
+    print("    Standard Q6: " + String(q6_std))
+    print("    Mojo Q6:     " + String(q6_mojo))
+    if q6_std.value() != q6_mojo.value():
+        raise Error("Q6 results differ")
 
     # ---- Run benchmarks ----
     print("\n" + "=" * 70)

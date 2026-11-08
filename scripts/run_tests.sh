@@ -8,60 +8,38 @@ set -e
 # default, so builds target the native CPU.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 
-# Tests that compile quickly (no heavy generic monomorphization)
 TESTS=(
-    test/test_config.mojo
-    test/test_database.mojo
-    test/test_connection.mojo
-    test/test_duckdb_type.mojo
-    test/test_logical_type.mojo
-    test/test_value.mojo
-    test/test_vector.mojo
-    test/test_chunk.mojo
-    test/test_result.mojo
-    test/test_query_results.mojo
-    test/test_scalar_function.mojo
-    test/test_aggregate_function.mojo
-    test/test_table_function.mojo
-    test/test_appender.mojo
-    test/test_module_api.mojo
+    test/test_scalar_types.mojo
+    test/test_libduckdb_v2.mojo
+    test/test_foundations.mojo
+    test/test_results.mojo
     test/test_relation.mojo
-    test/test_lifecycle.mojo
-    test/test_readers.mojo
-    test/test_typed_access.mojo
-    test/test_errors.mojo
+    test/test_nested.mojo
+    test/test_functions.mojo
+    test/test_aggregates.mojo
+    test/test_tables.mojo
+    test/test_module_api.mojo
+    test/test_signatures.mojo
+    test/test_extend.mojo
+    test/test_observe.mojo
+    test/test_copy.mojo
 )
 
-# Generic tests require expensive monomorphization. The lightest ones
-# (scalars, tuples) can run on Linux CI with -j 2. The heavier ones
-# (struct/list/dict/variant generics) need >21 GB peak memory during
-# compilation and must be run locally.
-GENERIC_TESTS=(
-    test/test_typed_api_scalars.mojo
-    test/test_typed_api_tuples.mojo
-    test/test_prepared_statement.mojo
-    test/test_result_fetch.mojo
-)
-# These tests need too much memory for CI runners (>21 GB peak).
-# Run locally with: pixi run mojo run test/test_<name>.mojo
-# HEAVY_TESTS=(
-#     test/test_typed_api_mojo_type.mojo
-#     test/test_typed_api_table_structs.mojo
-#     test/test_typed_api_collections.mojo
-#     test/test_appender_list.mojo
-#     test/test_appender_map_variant.mojo
-# )
+# Fail if a test file in test/ is missing from the list above, so a new
+# test is never silently skipped.
+shopt -s nullglob
+for f in test/test_*.mojo; do
+    found=0
+    for t in "${TESTS[@]}"; do
+        [[ "$f" == "$t" ]] && found=1
+    done
+    if [[ "$found" == "0" ]]; then
+        echo "ERROR: $f is not listed in scripts/run_tests.sh" >&2
+        exit 1
+    fi
+done
 
 for f in "${TESTS[@]}"; do
     echo "--- Running: $f ---"
-    mojo run "${MOJO_TARGET[@]}" "$f"
+    mojo run ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$f"
 done
-
-if [[ "${CI:-}" == "true" && -z "${DUCKDB_MOJO_FULL_TESTS:-}" && "$(uname)" != "Linux" ]]; then
-    echo "--- Skipping generic tests on macOS CI (use full test run to include) ---"
-else
-    for f in "${GENERIC_TESTS[@]}"; do
-        echo "--- Running (-j 2): $f ---"
-        mojo run -j 2 "${MOJO_TARGET[@]}" "$f"
-    done
-fi

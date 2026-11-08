@@ -4,23 +4,23 @@ The Apple analogue of `tc_knn.mojo` (NVIDIA). It computes per-query top-k via a
 tiled MMA `Q.Emb^T` fused with a streaming per-query top-k, so the M x N
 similarity matrix is never materialized: only Emb is read, and only M x k results
 are written. Cosine metric, unit-normalized inputs (the common case for real
-embeddings); the same `(dist, rowid)` tie-break + stage-2 merge as the NVIDIA fused
-kernel, so a result is bit-for-bit a scalar single-query top-k.
+embeddings). The same `(dist, rowid)` tie-break and stage-2 merge as the NVIDIA
+fused kernel, so a result is bit-for-bit a scalar single-query top-k.
 
 The MMA core is the verified 8x8 `simdgroup_matrix` path from
 `.repos/modular/.../apple/matmul_8x8.mojo` (bit-exact on this M3, K=64, fp16):
   * `llvm.air.simdgroup_matrix_8x8_multiply_accumulate`, FRAG8=2 elems/lane,
     32-thread simdgroup, `_frag8_layout` per-lane mapping.
-  * A (queries) is M x K row-major; lane's 2 frag elems are consecutive K cols.
+  * A (queries) is M x K row-major. A lane's 2 frag elems are consecutive K cols.
   * B (embeddings) is N x K row-major. We need Emb^T, so we gather the
     transposed fragment manually (slot s differs in the N index, row index is
     the K coordinate). This is exactly the `transpose_b=True` path in the 8x8
     reference, reused element-for-element.
 
-Everything Apple-specific is inside `comptime if has_apple_gpu_accelerator()`
+Everything Apple-specific is inside `comptime if default_accelerator().is_apple_gpu()`
 (host) / `comptime if is_apple_gpu()` (kernel target), so nothing here compiles
 for an NVIDIA / Metal-absent target, mirroring the `tc_knn.mojo` gating. The
-`layout` package's `TensorCore` is never touched (it has no Apple support); the
+`layout` package's `TensorCore` is never touched (it has no Apple support). The
 MMA is the raw `llvm_intrinsic`.
 
 Tile shape (one simdgroup per block, kept simple, correctness first):
@@ -29,14 +29,14 @@ Tile shape (one simdgroup per block, kept simple, correctness first):
     MM x MN S-tile (= Q-tile . Emb-chunk^T) into the simdgroup-matrix fp32
     accumulator across all K (K%8==0), then updates a per-query streaming top-k.
   * Per-query top-k lives in shared memory (one (dist,id) buffer per query, kept
-    ascending by (dist,rowid)); the 8 S-tile columns are scanned by lane 0 (the
+    ascending by (dist,rowid)). The 8 S-tile columns are scanned by lane 0 (the
     8x8 S-tile is tiny and the scan is the same threshold-insert as the NVIDIA
     register top-k). Stage 2 (`tc_apple_merge_kernel`) reduces each query's
     NBLOCKS*k candidates to the final k, identical to the NVIDIA merge.
 """
 
 from std.sys import llvm_intrinsic
-from std.sys.info import is_apple_gpu, has_apple_gpu_accelerator
+from std.sys.info import is_apple_gpu, default_accelerator
 from max.gpu import lane_id, block_idx, thread_idx
 from max.gpu.sync import barrier
 from max.gpu.memory import AddressSpace
@@ -394,7 +394,7 @@ def _tc_apple_enorm_kernel(
 # host, uploads once, then tiles over M in MM-chunks; each tile launches the
 # fused stage-1 kernel (reads the full N matrix once) + the stage-2 merge, and
 # writes that tile's MM*k results into the caller's row-major M*k output.
-# Apple-only via the host `has_apple_gpu_accelerator()` gate (cosine only).
+# Apple-only via the host `default_accelerator().is_apple_gpu()` gate (cosine only).
 # ===-------------------------------------------------------------------===#
 def run_tc_knn_apple_batch(
     ctx: DeviceContext,
@@ -407,7 +407,7 @@ def run_tc_knn_apple_batch(
     out_ids: Pointer[Int64, MutUntrackedOrigin],
     out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
-    comptime if has_apple_gpu_accelerator():
+    comptime if default_accelerator().is_apple_gpu():
         # Host: fp16 query tile (padded to a multiple of MM rows so the kernel's
         # full-MM q tile is always in bounds), fp32 query L2 norms.
         var ntile = ((M + AP_MM - 1) // AP_MM) * AP_MM

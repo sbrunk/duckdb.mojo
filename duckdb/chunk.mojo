@@ -1,1040 +1,360 @@
-from duckdb._libduckdb import *
-from duckdb.vector import Vector
-from duckdb.duckdb_type import *
-from duckdb.logical_type import LogicalType
-from duckdb.typed_api import (
-    mojo_type_to_duckdb_type,
-    deserialize_from_vector,
-    deserialize_list_column,
-    _deserialize_table_field,
-    _NullableColumn,
-    _is_list_compatible_type,
-)
-from std.collections import Optional
-from std.memory import UnsafePointer
-from std.memory.alloc import unsafe_alloc, alloc, Layout
-from std.builtin.rebind import downcast, rebind_var
-from std.iter import Iterator, Iterable, StopIteration
-from std.reflection import Reflected
+"""Data chunks and typed column readers."""
+
+from std.memory import ArcPointer
+from std.reflection import reflect
+from duckdb._libduckdb_v2 import *
+from duckdb.api_v2 import null, null_error_info, str_to_string
+from duckdb._runtime import api_error, check, lib
+from duckdb.error import DuckDBError, ErrorCode
+from duckdb.mapping import ColumnMeta, RawData, is_mapped, mapped_accepts, mapped_read
+from duckdb.serde import _ReadTree, read_row, read_value
+from duckdb.types import LogicalType, TypeId
+from duckdb.value import Value
 
 
-struct Chunk[is_owned: Bool](Movable, Sized, Iterable):
-    """Represents a DuckDB data chunk.
-    
-    Data chunks represent a horizontal slice of a table. They hold a number of vectors,
-    that can each hold up to the VECTOR_SIZE rows (usually 2048).
-    
-    The Chunk can be either owning or non-owning (borrowed). Ownership is tracked
-    at compile-time via the `is_owned` parameter:
-    - `Chunk[is_owned=False]`: Borrowed from DuckDB, will not be destroyed
-    - `Chunk[is_owned=True]`: Owned by us, will be destroyed when it goes out of scope
-    
-    Parameters:
-        is_owned: Whether this Chunk owns its pointer and should destroy it (required).
+struct _Schema(Movable):
+    """Column names and types of a result, shared by its chunks."""
+
+    var names: List[String]
+    var types: List[LogicalType]
+
+    def __init__(out self, var names: List[String], var types: List[LogicalType]):
+        self.names = names^
+        self.types = types^
+
+
+def _read_schema(schema: duckdb_v2_schema_handle) raises DuckDBError -> _Schema:
+    """Copy a V2 schema's names and types (the schema keeps ownership of its own)."""
+    var err = null_error_info()
+    var names = List[String]()
+    var types = List[LogicalType]()
+    var n: idx_t = 0
+    check(lib().duckdb_v2_schema_get_count(schema, Pointer(to=n), Pointer(to=err)), err)
+    for i in range(Int(n)):
+        var name = duckdb_v2_str(null[Pointer[c_char, ImmUntrackedOrigin]](), 0)
+        var t = null[duckdb_v2_logical_type_handle]()  # borrowed from the schema
+        check(lib().duckdb_v2_schema_get_field(schema, idx_t(i), Pointer(to=name), Pointer(to=t), Pointer(to=err)), err)
+        var owned = null[duckdb_v2_logical_type_handle]()
+        check(lib().duckdb_v2_logical_type_copy(t, Pointer(to=owned), Pointer(to=err)), err)
+        types.append(LogicalType(_owned=owned))
+        names.append(str_to_string(name))
+    return _Schema(names^, types^)
+
+
+struct Chunk(Movable, Sized):
+    """An owned data chunk: a batch of rows, stored column by column.
+
+    V2 vectors do not carry their type, so a chunk keeps the schema of the
+    result it came from.
     """
 
-    comptime IteratorType[
-        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
-    ]: Iterator = _ChunkRowIter[Self.is_owned, ImmOrigin(iterable_origin)]
+    var _handle: duckdb_v2_data_chunk_handle
+    var _schema: ArcPointer[_Schema]
+    var _size: Int
 
-    var _chunk: duckdb_data_chunk
-
-    def __init__(out self: Chunk[is_owned=False], chunk: duckdb_data_chunk):
-        """Creates a borrowed (non-owning) Chunk from a duckdb_data_chunk pointer.
-        
-        This constructor creates a `Chunk[False]` which will not destroy the underlying
-        pointer when it goes out of scope. Use this for chunks obtained from DuckDB
-        (e.g., in result sets or scalar function callbacks).
-        
-        Args:
-            chunk: The underlying duckdb_data_chunk pointer.
-        """
-        self._chunk = chunk
-
-    def __init__(out self: Chunk[is_owned=True], var chunk: duckdb_data_chunk):
-        """Takes ownership of an existing duckdb_data_chunk.
-        
-        This constructor creates a `Chunk[is_owned=True]` that takes ownership of a chunk
-        returned by DuckDB (e.g., from duckdb_fetch_chunk). The chunk will be
-        destroyed when this object goes out of scope.
-        
-        Args:
-            chunk: The duckdb_data_chunk to take ownership of.
-        """
-        self._chunk = chunk
-
-    def __init__(out self: Chunk[is_owned=True], types: List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]):
-        """Creates an empty data chunk with the specified column types.
-        
-        This creates an owned `Chunk[True]` that will be destroyed when it goes out of scope.
-        Use this when you need to create a new chunk that you own.
-        
-        Args:
-            types: A list of logical types for each column.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        
-        # Create array of duckdb_logical_type pointers
-        var type_ptrs_mem = alloc(Layout[duckdb_logical_type](count=len(types))).into_managed()
-        var type_ptrs = type_ptrs_mem.unsafe_ptr()
-        for i in range(len(types)):
-            type_ptrs[unsafe_offset=i] = types[i]._logical_type
-        
-        var chunk = libduckdb.duckdb_create_data_chunk(type_ptrs, UInt64(len(types)))
-        deinit(type_ptrs_mem^)
-        
-        self._chunk = chunk
-
-    def __deinit__(deinit self):
-        """Destroys the chunk if owned.
-        
-        This uses compile-time conditional logic to only destroy owned chunks.
-        """
-        comptime if Self.is_owned:
-            ref libduckdb = DuckDB().libduckdb()
-            libduckdb.duckdb_destroy_data_chunk(Pointer(to=self._chunk))
+    def __init__(out self, *, _owned: duckdb_v2_data_chunk_handle, schema: ArcPointer[_Schema]) raises DuckDBError:
+        self._handle = _owned
+        self._schema = schema
+        var size: idx_t = 0
+        var err = null_error_info()
+        check(lib().duckdb_v2_data_chunk_get_size(self._handle, Pointer(to=size), Pointer(to=err)), err)
+        self._size = Int(size)
 
     def __init__(out self, *, deinit move: Self):
-        self._chunk = move._chunk
+        self._handle = move._handle
+        self._schema = move._schema^
+        self._size = move._size
 
-    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
-        """Iterate over rows in this chunk.
-        
-        Returns:
-            An iterator yielding `Row` proxies for each row.
-        
-        Example:
-            ```mojo
-            for row in chunk:
-                var name = row.get[String](col=0)
-            ```
-        """
-        return _ChunkRowIter(0, Pointer(to=self))
+    def __deinit__(deinit self):
+        # The C destroy NULLs the slot it is given, so destroying a chunk that
+        # a callback already handed over (and destroyed) is a no-op.
+        _ = lib().duckdb_v2_data_chunk_destroy(Pointer(to=self._handle))
 
     def __len__(self) -> Int:
-        """Returns the current number of tuples (rows) in the data chunk.
-        
-        Returns:
-            The number of tuples in the data chunk.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        return Int(libduckdb.duckdb_data_chunk_get_size(self._chunk))
+        """The number of rows."""
+        return self._size
 
     def column_count(self) -> Int:
-        """Returns the number of columns in the data chunk.
-        
-        Returns:
-            The number of columns in the data chunk.
+        return len(self._schema[].types)
+
+    def column_name(self, col: Int) -> String:
+        return self._schema[].names[col].copy()
+
+    def column_type(self, col: Int) -> LogicalType:
+        return self._schema[].types[col].copy()
+
+    def column[T: Movable & Deinitable](ref self, col: Int) raises DuckDBError -> ColumnReader[T, origin_of(self)]:
+        """A typed reader over column `col`.
+
+        `T` is a scalar type or a nested one (`List`, `Dict`, `Optional`,
+        `Variant`, `Tuple`, a struct). For scalars the type is checked once
+        and raises `ErrorCode.TYPE_MISMATCH`; nested types are checked per
+        value.
         """
-        ref libduckdb = DuckDB().libduckdb()
-        return Int(libduckdb.duckdb_data_chunk_get_column_count(self._chunk))
-
-    def set_size(mut self, size: Int):
-        """Sets the current number of tuples in the data chunk.
-        
-        Args:
-            size: The number of tuples in the data chunk.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_data_chunk_set_size(self._chunk, UInt64(size))
-
-    def reset(mut self):
-        """Resets the data chunk, clearing the validity masks and setting the cardinality to 0.
-        
-        After calling this method, you must call duckdb_vector_get_validity and 
-        duckdb_vector_get_data to obtain current data and validity pointers.
-        """
-        ref libduckdb = DuckDB().libduckdb()
-        libduckdb.duckdb_data_chunk_reset(self._chunk)
-
-    def get_span[
-        span_origin: Origin, //, dtype: DType
-    ](ref [span_origin] self, col: Int) raises -> Span[
-        Scalar[dtype], span_origin
-    ]:
-        """Returns a bounds-checked view of a fixed-width column's data.
-
-        Unlike `get_vector(col).get_data()` this does not hand out a raw pointer:
-        the chunk knows its own row count, so the length is not the caller's
-        problem, and the column's type is checked against `dtype` instead of
-        being asserted by an unchecked `bitcast`. The span carries the chunk's
-        origin, so it keeps the chunk alive and is mutable only if the chunk is
-        bound mutably.
-
-        Only valid for types with a fixed-width physical layout; VARCHAR and the
-        nested types (LIST/STRUCT/MAP) are rejected.
-
-        Parameters:
-            span_origin: Inferred from how the chunk is bound.
-            dtype: The expected element type of the column.
-
-        Args:
-            col: The column index.
-
-        Returns:
-            A span over the column's `len(self)` elements.
-
-        Raises:
-            If the column's type does not match `dtype`.
-        """
-        var vec = self.get_vector(col)
-        var actual = vec.get_column_type().get_type_id()
-        comptime expected = dtype_to_duckdb_type[dtype]()
-        if actual != expected:
-            raise Error(
-                "Column ",
-                col,
-                " is ",
-                String(actual),
-                ", not ",
-                String(expected),
-            )
-        # The buffer belongs to the chunk, not to the borrowed Vector handle, so
-        # re-anchor the pointer onto the chunk's origin.
-        return Span[Scalar[dtype], span_origin](
-            unsafe_ptr=vec.get_data()
-            .unsafe_bitcast[Scalar[dtype]]()
-            .unsafe_mut_cast[span_origin.mut]()
-            .unsafe_origin_cast[span_origin](),
-            length=len(self),
+        return column_reader[T, origin_of(self)](
+            self._vector(col), String("column ", col, " (", self._schema[].names[col], ")"), self._schema[].types[col], self._size
         )
 
-    def get_vector[
-        vec_origin: Origin, //
-    ](ref [vec_origin] self, col: Int) -> Vector[
-        is_owned=False, origin=vec_origin
-    ]:
-        """Retrieves the vector at the specified column index in the data chunk.
-        
-        The vector is valid for as long as the chunk is alive and does not need to
-        be destroyed. It carries the chunk's origin, so it keeps the chunk alive.
-        It is mutable only if `self` is bound mutably. You need to take the chunk as
-        `mut` to write to the returned vector.
-        
-        Args:
-            col: The column index.
-        
-        Returns:
-            A borrowed vector (not owned) at the specified column.
+    def array_span[T: Movable & Deinitable](self, col: Int) raises DuckDBError -> Optional[Span[T, origin_of(self)]]:
+        """The elements of an ARRAY column (`FLOAT[256]`, ...) as one span of
+        `len(self) * array_size` values in row order, without copying.
+
+        `None` when the column vector or the element vector is not flat or
+        when either has a NULL. Read those with `column[List[T]]`. `T` must
+        be the element's numeric type (`Float32` for FLOAT), else it raises
+        `ErrorCode.TYPE_MISMATCH`.
         """
-        ref libduckdb = DuckDB().libduckdb()
-        return Vector[False, origin_of(self)](
-            libduckdb.duckdb_data_chunk_get_vector(self._chunk, UInt64(col)),
+        comptime assert reflect[T].base_name() == "SIMD", "array_span() needs a fixed-width numeric type"
+        ref type = self._schema[].types[col]
+        var what = String("column ", col, " (", self._schema[].names[col], ") is ", type)
+        if type.id() != TypeId.ARRAY:
+            raise DuckDBError(ErrorCode.TYPE_MISMATCH, String(what, ", not an ARRAY"))
+        var element = type.child_types()[0][1].copy()
+        if not mapped_accepts[T](element.id()):
+            raise DuckDBError(ErrorCode.TYPE_MISMATCH, String(what, " and cannot be read as ", reflect_name[T](), " elements"))
+        var vec = self._vector(col)
+        var err = null_error_info()
+        var kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
+        check(lib().duckdb_v2_vector_get_vector_type(vec, Pointer(to=kind), Pointer(to=err)), err)
+        if kind != DUCKDB_V2_VECTOR_TYPE_FLAT:
+            return None
+        var child = null[duckdb_v2_vector_handle]()
+        check(lib().duckdb_v2_vector_get_child(vec, 0, Pointer(to=child), Pointer(to=err)), err)
+        # The elements are a flat span only when the child is FLAT: a
+        # DICTIONARY child is indexed through a selection, a CONSTANT child
+        # holds one element, and FSST, SEQUENCE and SHREDDED children have no
+        # view to take a span of.
+        var child_kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
+        check(lib().duckdb_v2_vector_get_vector_type(child, Pointer(to=child_kind), Pointer(to=err)), err)
+        if child_kind != DUCKDB_V2_VECTOR_TYPE_FLAT:
+            return None
+        var count = self._size * type.array_size()
+        var parent = _view(vec)
+        var elements = _view(child)
+        if not _all_valid(parent.validity, self._size) or not _all_valid(elements.validity, count):
+            return None
+        return Span[T, origin_of(self)](
+            unsafe_ptr=elements.data.unsafe_bitcast[T]().unsafe_origin_cast[origin_of(self)](), length=count
         )
 
-    @always_inline
-    def _check_bounds(self, col: Int) raises:
-        ref libduckdb = DuckDB().libduckdb()
-        if UInt64(col) >= libduckdb.duckdb_data_chunk_get_column_count(
-            self._chunk
-        ):
-            raise Error(String("Column {} out of bounds.").format(col))
+    def _vector(self, col: Int) raises DuckDBError -> duckdb_v2_vector_handle:
+        if col < 0 or col >= self.column_count():
+            raise api_error(String("column index ", col, " out of range (", self.column_count(), " columns)"))
+        var err = null_error_info()
+        var vec = null[duckdb_v2_vector_handle]()
+        check(lib().duckdb_v2_data_chunk_get_vector(self._handle, idx_t(col), Pointer(to=vec), Pointer(to=err)), err)
+        return vec
 
-    @always_inline
-    def _check_bounds(self, col: Int, row: Int) raises:
-        if row >= len(self):
-            raise Error(String("Row {} out of bounds.").format(row))
-        self._check_bounds(col)
+    def _read_tree(self) raises DuckDBError -> _ReadTree:
+        """Views of all columns for reading rows. Valid while the chunk lives."""
+        var vectors = List[duckdb_v2_vector_handle]()
+        for i in range(self.column_count()):
+            vectors.append(self._vector(i))
+        return _ReadTree(vectors, self._schema[].names, self._schema[].types)
 
-    @always_inline
-    def type(self, col: Int) -> DuckDBType:
-        """Returns the type of the specified column.
-        
-        Args:
-            col: The column index.
-        
-        Returns:
-            The DuckDBType of the column.
-        """
-        return self.get_vector(col).get_column_type().get_type_id()
+    def get[T: Movable & Deinitable](self, *, row: Int) raises DuckDBError -> T:
+        """Row `row` as `T`: a struct (columns matched to fields by name,
+        case-insensitively), a `Tuple` (by position), or a scalar when the
+        chunk has one column."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var tree = self._read_tree()
+        return read_row[T](tree, row)
 
-    def is_null(self, *, col: Int) -> Bool:
-        """Check whether every value in the column is NULL.
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> List[T]:
+        """All rows as `T` (see `get[T](row=)`)."""
+        var out = List[T](capacity=self._size)
+        self._append_rows[T](out)
+        return out^
 
-        Returns ``True`` only if the column is entirely NULL over the chunk's
-        current row count; ``False`` if any value is valid.
-        """
-        var validity_mask = self.get_vector(col).get_validity()
-        # validity mask is None if there are no NULL values at all.
-        if validity_mask is None:
-            return False
-        var n = len(self)
-        if n == 0:
-            return False
-        for row in range(n):
-            var entry_idx = row // 64
-            var idx_in_entry = row % 64
-            var is_valid = validity_mask.value()[unsafe_offset=entry_idx] & UInt64(
-                1 << idx_in_entry
+    def _append_rows[T: Movable & Deinitable](self, mut out: List[T]) raises DuckDBError:
+        var tree = self._read_tree()
+        for r in range(self._size):
+            out.append(read_row[T](tree, r))
+
+    def get[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> T:
+        """One value. Raises on NULL (use `get_optional` to allow it)."""
+        return self.column[T](col)[row]
+
+    def value(self, *, col: Int, row: Int) raises DuckDBError -> Value:
+        """One cell as a `Value`, of any type (NULL included). Slower than a
+        typed read. For code that does not know the column types."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var v = null[duckdb_v2_value_handle]()
+        var err = null_error_info()
+        check(lib().duckdb_v2_vector_get_value(self._vector(col), idx_t(row), Pointer(to=v), Pointer(to=err)), err)
+        return Value(_owned=v)
+
+    def get_optional[T: Movable & Deinitable](self, *, col: Int, row: Int) raises DuckDBError -> Optional[T]:
+        """One value, or `None` for NULL."""
+        return self.column[T](col).get(row)
+
+
+def column_reader[T: Movable & Deinitable, origin: ImmOrigin](
+    vec: duckdb_v2_vector_handle, what: String, type: LogicalType, size: Int
+) raises DuckDBError -> ColumnReader[T, origin]:
+    """A reader over `vec` (of `type`, `size` rows). For scalar `T` the type
+    is checked here. `what` names the vector in the error."""
+    var meta = ColumnMeta(type)
+    comptime if not is_mapped[T]():
+        var tree = _ReadTree([vec], ["v"], [type.copy()])
+        return ColumnReader[T, origin](vec, meta^, size, ArcPointer(tree^))
+    else:
+        if not mapped_accepts[T](meta.kind):
+            raise DuckDBError(
+                ErrorCode.TYPE_MISMATCH, String(what, " is ", type, " and cannot be read as ", reflect_name[T]())
             )
-            if is_valid:
-                return False
+        return ColumnReader[T, origin](vec, meta^, size)
+
+
+def _view(vec: duckdb_v2_vector_handle) raises DuckDBError -> duckdb_v2_vector_view:
+    var view = duckdb_v2_vector_view(
+        null[RawData](),
+        null[Pointer[UInt64, ImmUntrackedOrigin]](),
+        null[Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]](),
+        0,
+    )
+    var err = null_error_info()
+    check(lib().duckdb_v2_vector_get_view(vec, Pointer(to=view), Pointer(to=err)), err)
+    return view.copy()
+
+
+def _all_valid(validity: Pointer[UInt64, ImmUntrackedOrigin], count: Int) -> Bool:
+    """Whether the first `count` bits of a validity mask are set (no mask: all valid)."""
+    if Int(validity) == 0:
         return True
-
-    def is_null(self, *, col: Int, row: Int) -> Bool:
-        """Check if the value at the given row and column is NULL."""
-        var validity_mask = self.get_vector(col).get_validity()
-        # validity mask is None if there are no NULL values
-        if validity_mask is None:
+    for w in range(count >> 6):
+        if validity[unsafe_offset=w] != ~UInt64(0):
             return False
-        var entry_idx = row // 64
-        var idx_in_entry = row % 64
-        var is_valid = validity_mask.value()[unsafe_offset=entry_idx] & UInt64((1 << idx_in_entry))
-        return not is_valid
-
-    def get[
-        T: Copyable & Deinitable
-    ](self, *, col: Int, row: Int) raises -> T:
-        """Get a single typed value from the chunk.
-
-        When T is a plain type (e.g. Int64), raises on NULL.
-        When T is Optional[X], returns None for NULL values.
-
-        Parameters:
-            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
-
-        Args:
-            col: Column index.
-            row: Row index.
-
-        Returns:
-            The deserialized value (or Optional[X] when T is Optional).
-
-        Example:
-            ```mojo
-            var value = chunk.get[Int64](col=0, row=0)         # raises on NULL
-            var maybe = chunk.get[Optional[Int64]](col=0, row=0)  # None on NULL
-            ```
-        """
-        self._check_bounds(col, row)
-
-        # Validate column type matches expected Mojo type
-        var actual_type = self.type(col)
-
-        comptime if conforms_to(T, _NullableColumn):
-            var expected = downcast[
-                T, _NullableColumn
-            ]._expected_duckdb_type()
-            if actual_type != expected:
-                # Allow array/map when expected is list
-                if expected == DuckDBType.list:
-                    if not _is_list_compatible_type(actual_type):
-                        raise Error(
-                            "Type mismatch: expected list, array, or map"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                # Allow union when expected is struct
-                elif expected == DuckDBType.struct_t:
-                    if actual_type != DuckDBType.union:
-                        raise Error(
-                            "Type mismatch: expected struct or union"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                # Allow enum when expected is varchar
-                elif expected == DuckDBType.varchar:
-                    if actual_type != DuckDBType.enum:
-                        raise Error(
-                            "Type mismatch: expected "
-                            + String(expected)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-                else:
-                    raise Error(
-                        "Type mismatch: expected "
-                        + String(expected)
-                        + " but column has "
-                        + String(actual_type)
-                    )
-            var val = downcast[
-                T, _NullableColumn
-            ]._deserialize_single_nullable(
-                self.get_vector(col), row, self.is_null(col=col, row=row)
-            )
-            return rebind_var[T](val^)
-        else:
-            comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            comptime if expected_db_type == DuckDBType.list:
-                if not _is_list_compatible_type(actual_type):
-                    raise Error(
-                        "Type mismatch: expected list, array, or map"
-                        " but column has "
-                        + String(actual_type)
-                    )
-            else:
-                if actual_type != expected_db_type:
-                    comptime if expected_db_type == DuckDBType.struct_t:
-                        if actual_type != DuckDBType.union:
-                            raise Error(
-                                "Type mismatch: expected struct or union"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected_db_type == DuckDBType.varchar:
-                        if actual_type != DuckDBType.enum:
-                            raise Error(
-                                "Type mismatch: expected "
-                                + String(expected_db_type)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-                    else:
-                        raise Error(
-                            "Type mismatch: expected "
-                            + String(expected_db_type)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-            if self.is_null(col=col, row=row):
-                raise Error(
-                    "NULL value at col="
-                    + String(col)
-                    + ", row="
-                    + String(row)
-                    + ". Use get[Optional["
-                    + String(Reflected[T].name())
-                    + "]](col=, row=) for nullable values."
-                )
-            return _deserialize_table_field[T](self.get_vector(col), row)
-
-    def get[
-        T: Copyable & Deinitable
-    ](self, *, col: Int) raises -> List[T]:
-        """Get all typed values from a column.
-
-        When T is a plain type, raises if any value is NULL.
-        When T is Optional[X], NULL entries become None.
-
-        Parameters:
-            T: The Mojo type to deserialize. Use Optional[T] for nullable values.
-
-        Args:
-            col: Column index.
-
-        Returns:
-            List[T] containing all values.
-
-        Example:
-            ```mojo
-            var ints = chunk.get[Int64](col=0)               # raises on NULL
-            var maybes = chunk.get[Optional[Int64]](col=0)   # None on NULL
-            ```
-        """
-        self._check_bounds(col)
-
-        # Validate column type matches expected Mojo type
-        var actual_type = self.type(col)
-
-        comptime if conforms_to(T, _NullableColumn):
-            var expected = downcast[
-                T, _NullableColumn
-            ]._expected_duckdb_type()
-            if actual_type != expected:
-                # Allow array/map when expected is list
-                if expected == DuckDBType.list:
-                    if not _is_list_compatible_type(actual_type):
-                        raise Error(
-                            "Type mismatch: expected list, array, or map"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                # Allow union when expected is struct
-                elif expected == DuckDBType.struct_t:
-                    if actual_type != DuckDBType.union:
-                        raise Error(
-                            "Type mismatch: expected struct or union"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                # Allow enum when expected is varchar
-                elif expected == DuckDBType.varchar:
-                    if actual_type != DuckDBType.enum:
-                        raise Error(
-                            "Type mismatch: expected "
-                            + String(expected)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-                else:
-                    raise Error(
-                        "Type mismatch: expected "
-                        + String(expected)
-                        + " but column has "
-                        + String(actual_type)
-                    )
-            var result = downcast[
-                T, _NullableColumn
-            ]._deserialize_column_nullable(
-                self.get_vector(col), len(self), 0
-            )
-            return rebind_var[List[T]](result^)
-        else:
-            comptime expected_db_type = mojo_type_to_duckdb_type[T]()
-            comptime if expected_db_type == DuckDBType.list:
-                if not _is_list_compatible_type(actual_type):
-                    raise Error(
-                        "Type mismatch: expected list, array, or map"
-                        " but column has "
-                        + String(actual_type)
-                    )
-            else:
-                if actual_type != expected_db_type:
-                    comptime if expected_db_type == DuckDBType.struct_t:
-                        if actual_type != DuckDBType.union:
-                            raise Error(
-                                "Type mismatch: expected struct or union"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected_db_type == DuckDBType.varchar:
-                        if actual_type != DuckDBType.enum:
-                            raise Error(
-                                "Type mismatch: expected "
-                                + String(expected_db_type)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-                    else:
-                        raise Error(
-                            "Type mismatch: expected "
-                            + String(expected_db_type)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-            var opt_result = deserialize_from_vector[T](
-                self.get_vector(col), len(self), 0
-            )
-            var result = List[T](capacity=len(opt_result))
-            for i in range(len(opt_result)):
-                if not opt_result[i]:
-                    raise Error(
-                        "NULL value at row "
-                        + String(i)
-                        + ". Use get[Optional["
-                        + String(Reflected[T].name())
-                        + "]](col=) for nullable values."
-                    )
-                result.append(opt_result[i].value().copy())
-            return result^
-
-    def get[
-        T: Copyable & Deinitable
-    ](self, *, row: Int) raises -> T:
-        """Deserialize a table row into a Mojo struct.
-
-        Maps each column in the chunk to a field in T by position.
-        Non-Optional fields raise on NULL; Optional fields become None.
-
-        Parameters:
-            T: A Mojo struct whose fields correspond to table columns.
-
-        Args:
-            row: Row index.
-
-        Returns:
-            The deserialized struct.
-
-        Example:
-            ```mojo
-            @fieldwise_init
-            struct User(Copyable, Movable):
-                var name: String
-                var age: Optional[Int64]  # nullable
-
-            var user = chunk.get[User](row=0)
-            ```
-        """
-        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "get[T](row=) is for struct types. For scalar/list values, use get[T](col=, row=)."
-
-        if row < 0 or row >= len(self):
-            raise Error(String("Row {} out of bounds.").format(row))
-
-        comptime field_count_ = Reflected[T].field_count()
-
-        # Validate column count matches field count
-        if self.column_count() != field_count_:
-            raise Error(
-                "Column count mismatch: struct "
-                + String(Reflected[T].name())
-                + " has "
-                + String(field_count_)
-                + " fields but chunk has "
-                + String(self.column_count())
-                + " columns"
-            )
-
-        # Validate column types match field types
-        comptime for idx in range(field_count_):
-            comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Deinitable]
-            var actual_type = self.type(idx)
-
-            comptime if conforms_to(FT, _NullableColumn):
-                var expected = downcast[
-                    FT, _NullableColumn
-                ]._expected_duckdb_type()
-                if actual_type != expected:
-                    if expected == DuckDBType.list:
-                        if not _is_list_compatible_type(actual_type):
-                            comptime field_name = Reflected[T].field_names()[idx]
-                            raise Error(
-                                "Type mismatch for field '"
-                                + String(field_name)
-                                + "': expected list, array, or map"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected == DuckDBType.struct_t:
-                        if actual_type != DuckDBType.union:
-                            comptime field_name = Reflected[T].field_names()[idx]
-                            raise Error(
-                                "Type mismatch for field '"
-                                + String(field_name)
-                                + "': expected struct or union"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected == DuckDBType.varchar:
-                        if actual_type != DuckDBType.enum:
-                            comptime field_name = Reflected[T].field_names()[idx]
-                            raise Error(
-                                "Type mismatch for field '"
-                                + String(field_name)
-                                + "': expected "
-                                + String(expected)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-                    else:
-                        comptime field_name = Reflected[T].field_names()[idx]
-                        raise Error(
-                            "Type mismatch for field '"
-                            + String(field_name)
-                            + "': expected "
-                            + String(expected)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-            else:
-                comptime expected_db_type = mojo_type_to_duckdb_type[FT]()
-                comptime if expected_db_type == DuckDBType.list:
-                    if not _is_list_compatible_type(actual_type):
-                        comptime field_name = Reflected[T].field_names()[idx]
-                        raise Error(
-                            "Type mismatch for field '"
-                            + String(field_name)
-                            + "': expected list, array, or map"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                else:
-                    if actual_type != expected_db_type:
-                        comptime if expected_db_type == DuckDBType.struct_t:
-                            if actual_type != DuckDBType.union:
-                                comptime field_name = Reflected[T].field_names()[idx]
-                                raise Error(
-                                    "Type mismatch for field '"
-                                    + String(field_name)
-                                    + "': expected struct or union"
-                                    " but column has "
-                                    + String(actual_type)
-                                )
-                        elif expected_db_type == DuckDBType.varchar:
-                            if actual_type != DuckDBType.enum:
-                                comptime field_name = Reflected[T].field_names()[idx]
-                                raise Error(
-                                    "Type mismatch for field '"
-                                    + String(field_name)
-                                    + "': expected "
-                                    + String(expected_db_type)
-                                    + " but column has "
-                                    + String(actual_type)
-                                )
-                        else:
-                            comptime field_name = Reflected[T].field_names()[idx]
-                            raise Error(
-                                "Type mismatch for field '"
-                                + String(field_name)
-                                + "': expected "
-                                + String(expected_db_type)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-
-        # Check non-Optional fields for NULL before allocating
-        comptime for idx in range(field_count_):
-            comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Deinitable]
-
-            comptime if not conforms_to(FT, _NullableColumn):
-                if self.is_null(col=idx, row=row):
-                    comptime field_name = Reflected[T].field_names()[idx]
-                    raise Error(
-                        "NULL value for non-optional field '"
-                        + String(field_name)
-                        + "'. Declare as Optional["
-                        + String(Reflected[FT].name())
-                        + "] to handle NULLs."
-                    )
-
-        # Deserialize each field from its column vector
-        var ptr = unsafe_alloc[T](1)
-
-        comptime for idx in range(field_count_):
-            comptime FieldType = Reflected[T].field_types()[idx]
-            comptime FT = downcast[FieldType, Copyable & Deinitable]
-            var vector = self.get_vector(idx)
-            var dst = Pointer(to=__struct_field_ref(idx, ptr[]))
-
-            comptime if conforms_to(FT, _NullableColumn):
-                var val = downcast[
-                    FT, _NullableColumn
-                ]._deserialize_single_nullable(
-                    vector, row, self.is_null(col=idx, row=row)
-                )
-                dst.unsafe_bitcast[FT]().unsafe_write(rebind_var[FT](val^))
-            else:
-                var val = _deserialize_table_field[FT](vector, row)
-                dst.unsafe_bitcast[FT]().unsafe_write(val^)
-
-        var result = ptr.unsafe_take_pointee()
-        ptr.unsafe_free()
-        return result^
-
-    def get[
-        T: Copyable & Deinitable
-    ](self) raises -> List[T]:
-        """Deserialize all table rows into Mojo structs.
-
-        Parameters:
-            T: A Mojo struct whose fields correspond to table columns.
-
-        Returns:
-            List[T] with one struct per row.
-
-        Example:
-            ```mojo
-            @fieldwise_init
-            struct User(Copyable, Movable):
-                var name: String
-                var age: Optional[Int64]  # nullable
-
-            var users = chunk.get[User]()
-            ```
-        """
-        comptime assert mojo_type_to_duckdb_type[T]() == DuckDBType.struct_t, "get[T]() is for struct types. For column values, use get[T](col=)."
-
-        var result = List[T](capacity=len(self))
-        for row in range(len(self)):
-            result.append(self.get[T](row=row))
-        return result^
-
-    def get_tuple[
-        *Ts: Copyable & Deinitable
-    ](self, *, row: Int) raises -> Tuple[*Ts]:
-        """Deserialize a table row into a Mojo Tuple.
-
-        Maps each column to the corresponding Tuple element by position.
-        Non-Optional elements raise on NULL; Optional elements become None.
-
-        Parameters:
-            Ts: The Mojo types for each column.
-
-        Args:
-            row: Row index.
-
-        Returns:
-            A Tuple whose elements are deserialized from the columns.
-
-        Example:
-            ```mojo
-            var t = chunk.get_tuple[String, Int64](row=0)
-            print(t[0], t[1])
-            ```
-        """
-        comptime T = Tuple[*Ts]
-        comptime n = T.__len__()
-
-        if row < 0 or row >= len(self):
-            raise Error(String("Row {} out of bounds.").format(row))
-
-        if self.column_count() != n:
-            raise Error(
-                "Column count mismatch: tuple has "
-                + String(n)
-                + " elements but chunk has "
-                + String(self.column_count())
-                + " columns"
-            )
-
-        # Validate types and NULL constraints
-        comptime for idx in range(n):
-            comptime ET = T.Ts[idx]
-            comptime ETC = downcast[ET, Copyable & Deinitable]
-            var actual_type = self.type(idx)
-
-            comptime if conforms_to(ETC, _NullableColumn):
-                var expected = downcast[
-                    ETC, _NullableColumn
-                ]._expected_duckdb_type()
-                if actual_type != expected:
-                    if expected == DuckDBType.list:
-                        if not _is_list_compatible_type(actual_type):
-                            raise Error(
-                                "Type mismatch for tuple element "
-                                + String(idx)
-                                + ": expected list, array, or map"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected == DuckDBType.struct_t:
-                        if actual_type != DuckDBType.union:
-                            raise Error(
-                                "Type mismatch for tuple element "
-                                + String(idx)
-                                + ": expected struct or union"
-                                " but column has "
-                                + String(actual_type)
-                            )
-                    elif expected == DuckDBType.varchar:
-                        if actual_type != DuckDBType.enum:
-                            raise Error(
-                                "Type mismatch for tuple element "
-                                + String(idx)
-                                + ": expected "
-                                + String(expected)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-                    else:
-                        raise Error(
-                            "Type mismatch for tuple element "
-                            + String(idx)
-                            + ": expected "
-                            + String(expected)
-                            + " but column has "
-                            + String(actual_type)
-                        )
-            else:
-                comptime expected_db_type = mojo_type_to_duckdb_type[ETC]()
-                comptime if expected_db_type == DuckDBType.list:
-                    if not _is_list_compatible_type(actual_type):
-                        raise Error(
-                            "Type mismatch for tuple element "
-                            + String(idx)
-                            + ": expected list, array, or map"
-                            " but column has "
-                            + String(actual_type)
-                        )
-                else:
-                    if actual_type != expected_db_type:
-                        comptime if expected_db_type == DuckDBType.struct_t:
-                            if actual_type != DuckDBType.union:
-                                raise Error(
-                                    "Type mismatch for tuple element "
-                                    + String(idx)
-                                    + ": expected struct or union"
-                                    " but column has "
-                                    + String(actual_type)
-                                )
-                        elif expected_db_type == DuckDBType.varchar:
-                            if actual_type != DuckDBType.enum:
-                                raise Error(
-                                    "Type mismatch for tuple element "
-                                    + String(idx)
-                                    + ": expected "
-                                    + String(expected_db_type)
-                                    + " but column has "
-                                    + String(actual_type)
-                                )
-                        else:
-                            raise Error(
-                                "Type mismatch for tuple element "
-                                + String(idx)
-                                + ": expected "
-                                + String(expected_db_type)
-                                + " but column has "
-                                + String(actual_type)
-                            )
-                if self.is_null(col=idx, row=row):
-                    raise Error(
-                        "NULL value for non-optional tuple element "
-                        + String(idx)
-                        + ". Use Optional["
-                        + String(Reflected[ETC].name())
-                        + "] to handle NULLs."
-                    )
-
-        # Construct the tuple element by element
-        var ptr = unsafe_alloc[T](1)
-        __mlir_op.`lit.ownership.mark_initialized`(
-            __get_mvalue_as_litref(ptr[]._mlir_value)
-        )
-
-        comptime for idx in range(n):
-            comptime ET = T.Ts[idx]
-            comptime ETC = downcast[ET, Copyable & Deinitable]
-            var vector = self.get_vector(idx)
-
-            comptime if conforms_to(ETC, _NullableColumn):
-                var val = downcast[
-                    ETC, _NullableColumn
-                ]._deserialize_single_nullable(
-                    vector, row, self.is_null(col=idx, row=row)
-                )
-                Pointer(to=ptr[][idx]).unsafe_write(
-                    rebind_var[ET](val^)
-                )
-            else:
-                var val = _deserialize_table_field[ETC](vector, row)
-                Pointer(to=ptr[][idx]).unsafe_write(
-                    rebind_var[ET](val^)
-                )
-
-        var result = ptr.unsafe_take_pointee()
-        ptr.unsafe_free()
-        return result^
-
-    def get_tuple[
-        *Ts: Copyable & Deinitable
-    ](self) raises -> List[downcast[Tuple[*Ts], Copyable & Deinitable]]:
-        """Deserialize all rows into Mojo Tuples.
-
-        Parameters:
-            Ts: The Mojo types for each column.
-
-        Returns:
-            List[Tuple[*Ts]] with one tuple per row.
-
-        Example:
-            ```mojo
-            var rows = chunk.get_tuple[String, Int64]()
-            for i in range(len(rows)):
-                print(rows[i][0], rows[i][1])
-            ```
-        """
-        var result = List[downcast[Tuple[*Ts], Copyable & Deinitable]](capacity=len(self))
-        for row in range(len(self)):
-            result.append(rebind_var[downcast[Tuple[*Ts], Copyable & Deinitable]](self.get_tuple[*Ts](row=row)))
-        return result^
+    var rest = count & 63
+    if rest != 0:
+        var mask = (UInt64(1) << UInt64(rest)) - 1
+        if validity[unsafe_offset=count >> 6] & mask != mask:
+            return False
+    return True
 
 
-# ──────────────────────────────────────────────────────────────────
-# Row proxy
-# ──────────────────────────────────────────────────────────────────
+def reflect_name[T: AnyType]() -> String:
+    return String(reflect[T].name())
 
 
-struct Row(Movable, Copyable):
-    """A lightweight proxy for accessing a single row in a chunk.
+struct ColumnReader[T: Movable & Deinitable, origin: ImmOrigin](Sized):
+    """Reads the values of one column as `T`.
 
-    Row does not own the underlying data. It holds a raw pointer to the
-    chunk's memory and a row index.  It is only valid while the chunk it
-    was created from is alive (guaranteed by the ``for`` loop contract).
+    Works on every vector representation: flat, constant and dictionary
+    vectors are read through their selection, other representations
+    (sequence, compressed) are flattened first. It borrows the chunk, so it
+    cannot outlive it. Nested types are read through emberserde.
     """
 
-    var _chunk_ptr: duckdb_data_chunk
-    var _row: Int
-    var _num_cols: Int
+    var _data: RawData
+    var _validity: Pointer[UInt64, ImmUntrackedOrigin]
+    var _sel: Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]
+    var _meta: ColumnMeta
+    var _size: Int
+    var _constant: Bool
+    var _tree: Optional[ArcPointer[_ReadTree]]  # nested types only
 
-    def __init__(out self, chunk_ptr: duckdb_data_chunk, row: Int, num_cols: Int):
-        self._chunk_ptr = chunk_ptr
-        self._row = row
-        self._num_cols = num_cols
+    def __init__(
+        out self, vec: duckdb_v2_vector_handle, var meta: ColumnMeta, size: Int, tree: Optional[ArcPointer[_ReadTree]] = None
+    ) raises DuckDBError:
+        var err = null_error_info()
+        var kind: DUCKDB_V2_VECTOR_TYPE = DUCKDB_V2_VECTOR_TYPE_OTHER
+        check(lib().duckdb_v2_vector_get_vector_type(vec, Pointer(to=kind), Pointer(to=err)), err)
+        if kind == DUCKDB_V2_VECTOR_TYPE_OTHER:
+            check(lib().duckdb_v2_vector_flatten(vec, Pointer(to=err)), err)
+        var view = duckdb_v2_vector_view(
+            null[RawData](),
+            null[Pointer[UInt64, ImmUntrackedOrigin]](),
+            null[Pointer[duckdb_v2_sel_t, ImmUntrackedOrigin]](),
+            0,
+        )
+        check(lib().duckdb_v2_vector_get_view(vec, Pointer(to=view), Pointer(to=err)), err)
+        self._data = view.data
+        self._validity = view.validity
+        self._sel = view.sel
+        self._meta = meta^
+        self._size = size
+        self._constant = kind == DUCKDB_V2_VECTOR_TYPE_CONSTANT
+        self._tree = tree
 
-    def get[T: Copyable & Deinitable](self, *, col: Int) raises -> T:
-        """Get a typed value from this row.
+    def __len__(self) -> Int:
+        return self._size
 
-        Parameters:
-            T: The Mojo type to deserialize.
+    @always_inline
+    def _index(self, row: Int) -> Int:
+        return Int(self._sel[unsafe_offset=row]) if Int(self._sel) != 0 else row
 
-        Args:
-            col: Column index.
+    @always_inline
+    def _valid_at(self, idx: Int) -> Bool:
+        if Int(self._validity) == 0:
+            return True
+        return (self._validity[unsafe_offset=idx >> 6] >> UInt64(idx & 63)) & 1 == 1
 
-        Returns:
-            The deserialized value.
+    def span(self) -> Optional[Span[Self.T, Self.origin]]:
+        """The values without copying, when the vector is flat and has no
+        NULLs, else `None`. Only for fixed-width numeric `T`."""
+        comptime assert reflect[Self.T].base_name() == "SIMD", "span() needs a fixed-width numeric type"
+        if Int(self._sel) != 0 or self.has_nulls():
+            return None
+        return Span[Self.T, Self.origin](
+            unsafe_ptr=self._data.unsafe_bitcast[Self.T]().unsafe_origin_cast[Self.origin](), length=self._size
+        )
 
-        Example:
-            ```mojo
-            for row in chunk:
-                var name = row.get[String](col=0)
-                var age = row.get[Int64](col=1)
-            ```
-        """
-        var chunk = Chunk[is_owned=False](self._chunk_ptr)
-        return chunk.get[T](col=col, row=self._row)
+    def is_flat(self) -> Bool:
+        """Whether row i is stored at index i (no selection: not a constant or dictionary vector)."""
+        return Int(self._sel) == 0
 
-    def is_null(self, *, col: Int) -> Bool:
-        """Check whether the value at the given column is NULL.
+    def is_constant(self) -> Bool:
+        """Whether every row is stored at index 0 (a constant vector, such
+        as a literal argument of a function)."""
+        return self._constant
 
-        Args:
-            col: Column index.
-        """
-        var chunk = Chunk[is_owned=False](self._chunk_ptr)
-        return chunk.is_null(col=col, row=self._row)
+    def has_nulls(self) -> Bool:
+        if Int(self._validity) == 0:
+            return False
+        for i in range(self._size):
+            if not self._valid_at(self._index(i)):
+                return True
+        return False
 
-    def column_count(self) -> Int:
-        """Returns the number of columns."""
-        return self._num_cols
+    def unsafe_data(self) -> RawData:
+        """The storage (indexed through the selection, see `is_flat`)."""
+        return self._data
 
-    def row_index(self) -> Int:
-        """Returns the row index within the chunk."""
-        return self._row
+    def is_valid(self, row: Int) -> Bool:
+        """Whether row `row` is not NULL."""
+        return self._valid_at(self._index(row))
 
-    def get_tuple[
-        *Ts: Copyable & Deinitable
-    ](self) raises -> Tuple[*Ts]:
-        """Deserialize this row into a Mojo Tuple.
+    def __getitem__(self, row: Int) raises DuckDBError -> Self.T:
+        """The value at `row`. Raises on NULL and for rows out of range."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        comptime if not is_mapped[Self.T]():
+            # NULLs: an Optional reads them as None, other types raise.
+            return read_value[Self.T](self._tree.value()[], 1, row)
+        else:
+            var idx = self._index(row)
+            if not self._valid_at(idx):
+                raise api_error(String("row ", row, " is NULL (use get() to read NULLs as None)"))
+            return mapped_read[Self.T](self._meta, self._data, idx)
 
-        Parameters:
-            Ts: The Mojo types for each column.
+    def get(self, row: Int) raises DuckDBError -> Optional[Self.T]:
+        """The value at `row`, or `None` for NULL."""
+        if row < 0 or row >= self._size:
+            raise api_error(String("row ", row, " out of range (", self._size, " rows)"))
+        var idx = self._index(row)
+        if not self._valid_at(idx):
+            return None
+        comptime if not is_mapped[Self.T]():
+            return Optional[Self.T](read_value[Self.T](self._tree.value()[], 1, row))
+        else:
+            return Optional[Self.T](mapped_read[Self.T](self._meta, self._data, idx))
 
-        Returns:
-            A Tuple whose elements are deserialized from the columns.
-
-        Example:
-            ```mojo
-            for row in chunk:
-                var t = row.get_tuple[String, Int64]()
-                print(t[0], t[1])
-            ```
-        """
-        var chunk = Chunk[is_owned=False](self._chunk_ptr)
-        return chunk.get_tuple[*Ts](row=self._row)
-
-
-# ──────────────────────────────────────────────────────────────────
-# Chunk row iterator: makes Chunk iterable over Row proxies
-# ──────────────────────────────────────────────────────────────────
-
-
-@fieldwise_init
-struct _ChunkRowIter[
-    is_owned: Bool, origin: ImmOrigin
-](ImplicitlyCopyable, Iterable, Iterator):
-    """Iterates over rows within a single Chunk, yielding Row proxies."""
-
-    comptime Element = Row
-    comptime IteratorType[
-        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
-    ]: Iterator = Self
-
-    var _index: Int
-    var _chunk: Pointer[Chunk[Self.is_owned], Self.origin]
-
-    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
-        return self.copy()
-
-    def __next__(mut self) raises StopIteration -> Row:
-        if self._index >= len(self._chunk[]):
-            raise StopIteration()
-        var row = Row(self._chunk[]._chunk, self._index, self._chunk[].column_count())
-        self._index += 1
-        return row^
-
-    def bounds(self) -> Tuple[Int, Optional[Int]]:
-        var remaining = len(self._chunk[]) - self._index
-        return (remaining, {remaining})
-
-
+    def to_list(self) raises DuckDBError -> List[Optional[Self.T]]:
+        """All values, NULLs as `None`."""
+        var out = List[Optional[Self.T]](capacity=self._size)
+        for i in range(self._size):
+            out.append(self.get(i))
+        return out^

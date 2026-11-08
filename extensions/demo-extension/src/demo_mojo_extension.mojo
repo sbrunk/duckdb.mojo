@@ -1,8 +1,7 @@
 """Demo DuckDB extension written in Mojo.
 
-This extension demonstrates how to create a DuckDB extension in Mojo using
-the C Extension API. It registers a scalar function `mojo_add_numbers` that
-adds two BIGINT values together.
+Registers a scalar function `mojo_add_numbers(a BIGINT, b BIGINT) -> BIGINT`
+through the V2 high-level API (`duckdb.Extension`).
 
 Build with pixi (from the workspace root):
     pixi run build-demo-extension
@@ -11,22 +10,15 @@ Or manually:
     mojo build extensions/demo-extension/src/demo_mojo_extension.mojo --emit shared-lib \
         -o extensions/demo-extension/build/demo_mojo.duckdb_extension
     python3 scripts/append_extension_metadata.py \
-        extensions/demo-extension/build/demo_mojo.duckdb_extension
+        extensions/demo-extension/build/demo_mojo.duckdb_extension --abi-type C_STRUCT_UNSTABLE
 
 Load in DuckDB:
     LOAD 'extensions/demo-extension/build/demo_mojo.duckdb_extension';
     SELECT mojo_add_numbers(40, 2);  -- Returns 42
 """
 
-from duckdb._libduckdb import duckdb_extension_info
-from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.connection import Connection
-from duckdb.scalar_function import ScalarFunction
-
-
-# ===--------------------------------------------------------------------===#
-# Scalar function: mojo_add_numbers(a BIGINT, b BIGINT) -> BIGINT
-# ===--------------------------------------------------------------------===#
+from duckdb._libduckdb_v2 import duckdb_v2_extension_input
+from duckdb import Extension, ScalarFunction
 
 
 def add_numbers(a: Int64, b: Int64) -> Int64:
@@ -34,22 +26,12 @@ def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
 
-# ===--------------------------------------------------------------------===#
-# Extension entry point
-# ===--------------------------------------------------------------------===#
+def init(ext: Extension) raises:
+    """Register the extension's functions."""
+    ext.register(ScalarFunction.from_function["mojo_add_numbers", add_numbers]())
 
 
-def init(conn: Connection) raises:
-    """Register extension functions."""
-    ScalarFunction.from_function[
-        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
-    ](conn)
-
-
-@export("demo_mojo_init_c_api")
-def demo_mojo_init_c_api(
-    info: duckdb_extension_info,
-    access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
-) abi("C") -> Bool:
+@export("demo_mojo_init_c_api_v2")
+def demo_mojo_init_c_api_v2(input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]) abi("C"):
     """Entry point called by DuckDB when loading this extension."""
-    return Extension.run[init](info, access)
+    Extension.run[init](input)

@@ -19,10 +19,6 @@ read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 # Files that can't be compiled in the default environment. Keep this list short
 # and explain every entry. Anything excluded here is not checked for drift.
 EXCLUDE=(
-    # Requires the `full` environment (duckdb-from-source + the
-    # operator_replacement package). Covered separately; see the full-env CI
-    # job rather than this default-env check.
-    "benchmark/tpch_benchmark_op_replacement.mojo"
     # Requires the `gpu` environment (max.gpu).
     "examples/gpu_knn.mojo"
 )
@@ -54,7 +50,7 @@ for dir in "$@"; do
         # spuriously fails on linux for math-using files (mojo doesn't put -lm on
         # the link line: "libm.so.6: DSO missing from command line"). Skipping
         # the link sidesteps that and is faster.
-        if mojo build --emit object "${MOJO_TARGET[@]}" "$f" -o "$OUT_DIR/$(basename "$f").o"; then
+        if mojo build --emit object ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$f" -o "$OUT_DIR/$(basename "$f").o"; then
             checked=$((checked + 1))
         else
             echo "ERROR: failed to compile $f"

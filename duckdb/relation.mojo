@@ -1,15 +1,10 @@
 """Lazy, composable relations (DuckDB's `DuckDBPyRelation` for Mojo).
 
-A `Relation` is a symbolic query: it holds a borrowed reference to a connection
-plus the SQL text built so far, and executes nothing until a terminal method is
-called. Every transform (`filter`, `select`, `order`, ...) returns a *new*
-relation that wraps the previous SQL as a subquery, so transforms compose
-without mutating and without prematurely running anything:
+A `Relation` is a symbolic query: a connection plus the SQL text built so far.
+Nothing runs until a terminal method is called. Every transform returns a new
+relation that wraps the previous SQL as a subquery:
 
 ```mojo
-from duckdb import DuckDB, col, lit
-
-var con = DuckDB.connect(":memory:")
 var top = (
     con.sql("FROM read_csv('trips.csv')")
        .filter("fare > 0")
@@ -17,57 +12,52 @@ var top = (
        .order("total DESC")
        .limit(10)
 )
-top.show()                      # executes here
-var rows = top.fetchall()       # re-executes; relations are re-runnable
+top.show()                    # executes here
+var rows = top.fetchall()     # runs again, relations can be re-run
 ```
 
-Design notes:
-
-- A relation borrows its connection through an origin-tracked `Pointer`, so the
-  connection is kept alive for as long as the relation (and anything derived
-  from it) lives. The `origin` parameter threads through every transform.
-- Values are interpolated through `lit` / `quote_literal`, never through bound
-  parameters. Parameterized queries use `Connection.execute(...)` directly.
-- Each transform nests in its own subquery (`SELECT ... FROM (<parent>)`), which
-  keeps clause semantics correct (a `filter` after an `aggregate` becomes a
-  `WHERE` over the grouped result, never a malformed fused clause). DuckDB's
+- A relation borrows its connection through an origin-tracked pointer, so
+  the connection outlives it.
+- Values are interpolated with `lit`, never bound as parameters. For
+  parameterized queries use `Connection.execute` directly.
+- Each transform nests in its own subquery, which keeps clause semantics
+  correct (a `filter` after an `aggregate` filters the grouped rows). DuckDB's
   optimizer flattens the nesting.
 """
 
-from duckdb._libduckdb import *
-from duckdb.api import DuckDB
-from duckdb.result import Result, MaterializedResult, ResultError, ErrorType
-from duckdb.logical_type import LogicalType
+from duckdb._runtime import api_error
 from duckdb._sql_util import _quote_ident, _quote_literal, _quote_qualified
+from duckdb.database import Connection
+from duckdb.error import DuckDBError
+from duckdb.result import Column, MaterializedResult, Result
 
 
-struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
-    """A lazy, composable SQL relation. See module docstring.
+def _reader_call(fn_name: String, path: String, options: Dict[String, String]) -> String:
+    """`read_*('path', key=value, ...)`. The path is quoted, option values are verbatim."""
+    var out = String(fn_name, "(", _quote_literal(path))
+    for entry in options.items():
+        out += String(", ", entry.key, "=", entry.value)
+    out += ")"
+    return out^
+
+
+struct Relation[origin: ImmOrigin](Copyable, Movable):
+    """A lazy, composable SQL relation. See the module docs.
 
     Parameters:
-        origin: The origin of the borrowed connection. Threaded through
-            transforms so the connection outlives the relation.
+        origin: The origin of the borrowed connection.
     """
 
-    var _conn_ptr: Pointer[duckdb_connection, Self.origin]
+    var _conn: Pointer[Connection, Self.origin]
     var _sql: String
     var _alias: String
 
-    def __init__(
-        out self,
-        conn_ptr: Pointer[duckdb_connection, Self.origin],
-        query: String,
-        relation_alias: String = "",
-    ):
-        """Wrap ``query`` as a relation borrowing the connection at ``conn_ptr``."""
-        self._conn_ptr = conn_ptr
-        self._sql = query.copy()
-        self._alias = relation_alias.copy()
+    def __init__(out self, conn: Pointer[Connection, Self.origin], query: String, relation_alias: String = ""):
+        self._conn = conn
+        self._sql = query
+        self._alias = relation_alias
 
     # ── Composition internals ──────────────────────────────────────
-
-    def _conn(self) -> duckdb_connection:
-        return self._conn_ptr[]
 
     def _from(self) -> String:
         """This relation as a FROM-clause subquery, with its alias if set."""
@@ -76,65 +66,28 @@ struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
         return String("(", self._sql, ")")
 
     def _wrap(self, query: String) -> Self:
-        """A new relation wrapping ``query`` (alias resets)."""
-        return Self(self._conn_ptr, query)
+        return Self(self._conn, query)
 
-    def _run(self, query: String) raises ResultError -> Result:
-        """Execute ``query`` on this relation's connection (mirrors `Connection.execute`)."""
-        var result = duckdb_result()
-        var result_ptr = Pointer(to=result)
-        var _query = query.copy()
-        ref libduckdb = DuckDB().libduckdb()
-        var state = libduckdb.duckdb_query(
-            self._conn_ptr[], _query.as_c_string_span().ptr(), result_ptr
-        )
-        if state == DuckDBError:
-            var error_msg = String(
-                unsafe_from_utf8_ptr=libduckdb.duckdb_result_error(result_ptr)
-            )
-            var error_type_value = libduckdb.duckdb_result_error_type(result_ptr)
-            libduckdb.duckdb_destroy_result(result_ptr)
-            raise ResultError(error_msg, ErrorType(error_type_value))
-        return Result(result)
+    def _run(self, query: String) raises DuckDBError -> Result:
+        return self._conn[].execute(query)
 
     # ── Introspection ──────────────────────────────────────────────
 
     def sql_query(self) -> String:
-        """The composed SQL text (Python ``rel.sql_query()``)."""
+        """The composed SQL text."""
         return self._sql.copy()
 
     def alias(self) -> String:
-        """This relation's current alias (empty if unset)."""
         return self._alias.copy()
 
     def set_alias(self, relation_alias: String) -> Self:
-        """Return a copy of this relation with the given subquery alias.
+        """A copy with the given subquery alias, so `join` conditions can qualify columns."""
+        return Self(self._conn, self._sql, relation_alias)
 
-        Useful before `join` so a join condition can qualify columns
-        (``a.id = b.id``).
-        """
-        return Self(self._conn_ptr, self._sql, relation_alias)
-
-    # ── Transforms (each returns a new lazy relation) ──────────────
+    # ── Transforms ─────────────────────────────────────────────────
 
     def select(self, *cols: String) -> Self:
-        """Project the given columns/expressions (Python ``select``/``project``).
-
-        Each argument is a raw SQL fragment; build them with `col`, `lit`,
-        `fn_`, or plain strings. Pass one comma-separated string or several
-        fragments.
-        """
-        var proj = String("")
-        for i in range(len(cols)):
-            if i > 0:
-                proj += ", "
-            proj += cols[i]
-        if len(cols) == 0:
-            proj = "*"
-        return self._wrap(String("SELECT ", proj, " FROM ", self._from()))
-
-    def project(self, *cols: String) -> Self:
-        """Alias for `select` (same projection semantics)."""
+        """Project columns or expressions (SQL fragments, see `col`, `lit`, `fn_`)."""
         var proj = String("")
         for i in range(len(cols)):
             if i > 0:
@@ -145,290 +98,162 @@ struct Relation[origin: ImmOrigin](Copyable, Movable, Writable):
         return self._wrap(String("SELECT ", proj, " FROM ", self._from()))
 
     def filter(self, predicate: String) -> Self:
-        """Keep rows matching ``predicate`` (Python ``filter``)."""
-        return self._wrap(
-            String("SELECT * FROM ", self._from(), " WHERE ", predicate)
-        )
+        return self._wrap(String("SELECT * FROM ", self._from(), " WHERE ", predicate))
 
     def order(self, expr: String) -> Self:
-        """Order by ``expr`` (Python ``order``)."""
-        return self._wrap(
-            String("SELECT * FROM ", self._from(), " ORDER BY ", expr)
-        )
-
-    def sort(self, expr: String) -> Self:
-        """Alias for `order`."""
-        return self.order(expr)
+        return self._wrap(String("SELECT * FROM ", self._from(), " ORDER BY ", expr))
 
     def limit(self, n: Int, offset: Int = 0) -> Self:
-        """Keep at most ``n`` rows, skipping ``offset`` (Python ``limit``)."""
         var s = String("SELECT * FROM ", self._from(), " LIMIT ", n)
         if offset > 0:
             s += String(" OFFSET ", offset)
         return self._wrap(s)
 
     def distinct(self) -> Self:
-        """Remove duplicate rows (Python ``distinct``)."""
         return self._wrap(String("SELECT DISTINCT * FROM ", self._from()))
 
     def aggregate(self, aggr: String, group: String = "") -> Self:
-        """Aggregate with ``aggr`` projection, optionally grouped by ``group``.
-
-        ``rel.aggregate("k, sum(v) AS s", group="k")`` becomes
-        ``SELECT k, sum(v) AS s FROM (...) GROUP BY k``.
-        """
+        """`rel.aggregate("k, sum(v) AS s", group="k")` is `SELECT k, sum(v) AS s FROM (...) GROUP BY k`."""
         var s = String("SELECT ", aggr, " FROM ", self._from())
         if group.byte_length() != 0:
             s += String(" GROUP BY ", group)
         return self._wrap(s)
 
-    # ── Joins / set operations ─────────────────────────────────────
+    # ── Joins and set operations ───────────────────────────────────
 
-    def join[
-        o2: ImmOrigin
-    ](self, other: Relation[o2], on: String, how: String = "inner") -> Self:
-        """Join with ``other`` on ``on`` (Python ``join``).
+    def join[o2: ImmOrigin](self, other: Relation[o2], on: String, how: String = "inner") raises DuckDBError -> Self:
+        """Join on `on`. `how` is `inner`, `left`, `right`, `outer`, `semi` or `anti`.
 
-        ``how`` is ``inner``/``left``/``right``/``outer``/``semi``/``anti``.
-        Set aliases via `set_alias` first so ``on`` can qualify columns.
+        Raises a `DuckDBError` for any other `how` (case-insensitive): `how`
+        is spliced into the SQL, so an unknown word would build broken SQL or
+        an unintended join kind.
         """
-        return self._wrap(
-            String(
-                "SELECT * FROM ",
-                self._from(),
-                " ",
-                how,
-                " JOIN ",
-                other._from(),
-                " ON ",
-                on,
-            )
-        )
+        var kind = String(how).lower()
+        if (
+            kind != "inner"
+            and kind != "left"
+            and kind != "right"
+            and kind != "outer"
+            and kind != "semi"
+            and kind != "anti"
+        ):
+            raise api_error(String("unknown join kind '", how, "'; expected one of inner, left, right, outer, semi, anti"))
+        return self._wrap(String("SELECT * FROM ", self._from(), " ", kind, " JOIN ", other._from(), " ON ", on))
 
     def cross[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
-        """Cartesian product with ``other`` (Python ``cross``)."""
-        return self._wrap(
-            String(
-                "SELECT * FROM ", self._from(), " CROSS JOIN ", other._from()
-            )
-        )
+        return self._wrap(String("SELECT * FROM ", self._from(), " CROSS JOIN ", other._from()))
 
     def union[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
-        """``UNION`` (deduplicated) with ``other`` (Python ``union``)."""
-        return Self(
-            self._conn_ptr, String("(", self._sql, ") UNION (", other._sql, ")")
-        )
+        return Self(self._conn, String("(", self._sql, ") UNION (", other._sql, ")"))
 
     def union_all[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
-        """``UNION ALL`` (keeps duplicates) with ``other``."""
-        return Self(
-            self._conn_ptr,
-            String("(", self._sql, ") UNION ALL (", other._sql, ")"),
-        )
+        return Self(self._conn, String("(", self._sql, ") UNION ALL (", other._sql, ")"))
 
     def except_[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
-        """Rows in this relation but not ``other`` (Python ``except_``)."""
-        return Self(
-            self._conn_ptr, String("(", self._sql, ") EXCEPT (", other._sql, ")")
-        )
+        return Self(self._conn, String("(", self._sql, ") EXCEPT (", other._sql, ")"))
 
     def intersect[o2: ImmOrigin](self, other: Relation[o2]) -> Self:
-        """Rows in both this relation and ``other`` (Python ``intersect``)."""
-        return Self(
-            self._conn_ptr,
-            String("(", self._sql, ") INTERSECT (", other._sql, ")"),
-        )
+        return Self(self._conn, String("(", self._sql, ") INTERSECT (", other._sql, ")"))
 
     # ── Aggregate shorthands ───────────────────────────────────────
 
     def _agg(self, fn_name: String, column: String, group: String) -> Self:
         var proj = String(fn_name, "(", column, ")")
         if group.byte_length() != 0:
-            return self._wrap(
-                String(
-                    "SELECT ",
-                    group,
-                    ", ",
-                    proj,
-                    " FROM ",
-                    self._from(),
-                    " GROUP BY ",
-                    group,
-                )
-            )
+            return self._wrap(String("SELECT ", group, ", ", proj, " FROM ", self._from(), " GROUP BY ", group))
         return self._wrap(String("SELECT ", proj, " FROM ", self._from()))
 
     def sum(self, column: String, group: String = "") -> Self:
-        """``sum(column)`` (Python ``sum``)."""
         return self._agg("sum", column, group)
 
     def avg(self, column: String, group: String = "") -> Self:
-        """``avg(column)`` (Python ``avg``/``mean``)."""
-        return self._agg("avg", column, group)
-
-    def mean(self, column: String, group: String = "") -> Self:
-        """Alias for `avg`."""
         return self._agg("avg", column, group)
 
     def min(self, column: String, group: String = "") -> Self:
-        """``min(column)`` (Python ``min``)."""
         return self._agg("min", column, group)
 
     def max(self, column: String, group: String = "") -> Self:
-        """``max(column)`` (Python ``max``)."""
         return self._agg("max", column, group)
 
     def median(self, column: String, group: String = "") -> Self:
-        """``median(column)`` (Python ``median``)."""
         return self._agg("median", column, group)
 
     def stddev(self, column: String, group: String = "") -> Self:
-        """``stddev(column)`` (Python ``std``/``stddev``)."""
         return self._agg("stddev", column, group)
 
     def var(self, column: String, group: String = "") -> Self:
-        """``var_samp(column)`` (Python ``var``/``variance``)."""
+        """`var_samp(column)`."""
         return self._agg("var_samp", column, group)
 
     def count(self, column: String = "*", group: String = "") -> Self:
-        """``count(column)`` (default ``count(*)``) (Python ``count``)."""
         return self._agg("count", column, group)
 
-    # ── Terminals (execute) ────────────────────────────────────────
+    # ── Terminals (these execute) ──────────────────────────────────
 
-    def to_result(self) raises ResultError -> Result:
-        """Execute and return a streaming `Result` (also `execute`).
-
-        Iterate the returned result for rows:
-        ``for row in rel.to_result(): ...``
-        """
+    def execute(self) raises DuckDBError -> Result:
+        """Execute and return the streaming `Result`."""
         return self._run(self._sql)
 
-    def execute(self) raises ResultError -> Result:
-        """Execute and return a `Result` (alias for `to_result`)."""
-        return self._run(self._sql)
-
-    def fetchall(self) raises -> MaterializedResult:
-        """Execute and fetch all rows into memory (Python ``fetchall``)."""
+    def fetchall(self) raises DuckDBError -> MaterializedResult:
+        """Execute and read all rows into memory."""
         return self._run(self._sql).fetchall()
 
-    def fetchone[
-        *Ts: Copyable & Deinitable
-    ](self) raises -> Optional[Tuple[*Ts]]:
-        """Execute and fetch the first row as a typed tuple, or ``None``."""
-        var r = self._run(self._sql)
-        return r.fetchone[*Ts]()
+    def get[T: Movable & Deinitable](self) raises DuckDBError -> List[T]:
+        """Execute and read all rows as `T` (a struct, a `Tuple`, or a
+        scalar for one column)."""
+        return self._run(self._sql).get[T]()
 
-    def fetchmany[
-        *Ts: Copyable & Deinitable
-    ](self, size: Int = 1) raises -> List[Tuple[*Ts]]:
-        """Execute and fetch up to ``size`` rows as typed tuples."""
-        var r = self._run(self._sql)
-        return r.fetchmany[*Ts](size)
+    def show(self, max_rows: Int = 20, max_width: Int = 0, max_col_width: Int = 0) raises DuckDBError:
+        """Execute and print a box table."""
+        self._run(self._sql).show(max_rows, max_width, max_col_width)
 
-    def get[
-        T: Copyable & Deinitable
-    ](self) raises -> List[T]:
-        """Execute and decode all rows into ``List[T]`` (struct/scalar)."""
-        return self._run(self._sql).fetchall().get[T]()
+    def render(self, max_rows: Int = 20, max_width: Int = 0, max_col_width: Int = 0) raises DuckDBError -> String:
+        """Execute and return the box table `show` prints."""
+        return self._run(self._sql).render(max_rows, max_width, max_col_width)
 
-    def show(self, *, max_rows: Int = 40, max_col_width: Int = 32) raises:
-        """Execute and print a formatted table (Python ``show``)."""
-        self._run(self._sql).show(max_rows=max_rows, max_col_width=max_col_width)
+    def columns(self) raises DuckDBError -> List[Column]:
+        """The result columns, without running the query."""
+        return self._conn[].describe(self._sql).columns.copy()
 
-    def columns(self) raises -> List[String]:
-        """Column names without fetching rows (Python ``columns``)."""
-        var q = String("SELECT * FROM ", self._from(), " LIMIT 0")
-        return self._run(q).columns()
-
-    def types(
-        self,
-    ) raises -> List[LogicalType[is_owned=True, origin=MutUntrackedOrigin]]:
-        """Column logical types without fetching rows (Python ``dtypes``)."""
-        var q = String("SELECT * FROM ", self._from(), " LIMIT 0")
-        return self._run(q).column_types()
-
-    def shape(self) raises -> Tuple[Int, Int]:
-        """``(row_count, column_count)`` (Python ``shape``).
-
-        Runs a ``count(*)`` rather than materializing all rows.
-        """
-        var n = self.aggregate("count(*) AS n").fetchone[Int64]()
-        var rows = Int(n.value()[0]) if n else 0
-        return (rows, len(self.columns()))
+    def shape(self) raises DuckDBError -> Tuple[Int, Int]:
+        """`(row_count, column_count)`. Runs a `count(*)`, not the whole query."""
+        var n = self.aggregate("count(*)::BIGINT AS n").fetchall().get[Int64](col=0, row=0)
+        return (Int(n), len(self.columns()))
 
     def describe(self) -> Self:
-        """Summary statistics per column as a relation (Python ``describe``)."""
+        """The columns and types as a relation (`DESCRIBE`)."""
         return self._wrap(String("DESCRIBE ", self._sql))
 
-    def explain(self) raises -> String:
-        """The query plan as text (Python ``explain``)."""
-        var query = String("EXPLAIN ", self._sql)
-        var res = self._run(query)
+    def explain(self) raises DuckDBError -> String:
+        """The physical plan as text."""
+        var plan = self._run(String("EXPLAIN ", self._sql)).fetchall()
+        # The plan text is the `explain_value` column; look it up by name so a
+        # DuckDB column change fails loudly instead of reading the wrong cell.
+        var col = plan.column_index("explain_value")
         var out = String("")
-        var first = True
-        for row in res:
-            if not first:
+        for i in range(len(plan)):
+            if i > 0:
                 out += "\n"
-            out += row.get[String](col=1)
-            first = False
+            out += plan.get[String](col=col, row=i)
         return out^
 
-    def create(self, table: String) raises:
-        """Persist as a new table ``CREATE TABLE table AS <sql>`` (Python ``create``)."""
-        var q = String("CREATE TABLE ", _quote_qualified(table), " AS ", self._sql)
-        _ = self._run(q)
+    def create(self, table: String) raises DuckDBError:
+        """`CREATE TABLE table AS <query>`."""
+        _ = self._run(String("CREATE TABLE ", _quote_qualified(table), " AS ", self._sql))
 
-    def to_table(self, table: String) raises:
-        """Alias for `create`."""
-        self.create(table)
-
-    def create_view(self, name: String, replace: Bool = True) raises -> Self:
-        """Persist as a view and return a relation over it (Python ``create_view``)."""
+    def create_view(self, name: String, replace: Bool = True) raises DuckDBError -> Self:
+        """Persist as a view and return a relation over it."""
         var or_replace = String("OR REPLACE ") if replace else String("")
-        var q = String(
-            "CREATE ", or_replace, "VIEW ", _quote_qualified(name), " AS ", self._sql
-        )
-        _ = self._run(q)
-        return Self(
-            self._conn_ptr, String("SELECT * FROM ", _quote_qualified(name))
-        )
+        _ = self._run(String("CREATE ", or_replace, "VIEW ", _quote_qualified(name), " AS ", self._sql))
+        return Self(self._conn, String("SELECT * FROM ", _quote_qualified(name)))
 
-    def insert_into(self, table: String) raises:
-        """Append rows into an existing table (Python ``insert_into``)."""
-        var q = String("INSERT INTO ", _quote_qualified(table), " ", self._sql)
-        _ = self._run(q)
+    def insert_into(self, table: String) raises DuckDBError:
+        """Append the rows to an existing table."""
+        _ = self._run(String("INSERT INTO ", _quote_qualified(table), " ", self._sql))
 
-    def to_parquet(self, path: String) raises:
-        """Write to a Parquet file (Python ``to_parquet``/``write_parquet``)."""
-        var q = String(
-            "COPY (", self._sql, ") TO ", _quote_literal(path), " (FORMAT parquet)"
-        )
-        _ = self._run(q)
+    def to_parquet(self, path: String) raises DuckDBError:
+        _ = self._run(String("COPY (", self._sql, ") TO ", _quote_literal(path), " (FORMAT parquet)"))
 
-    def to_csv(self, path: String, *, header: Bool = True) raises:
-        """Write to a CSV file (Python ``to_csv``/``write_csv``)."""
+    def to_csv(self, path: String, *, header: Bool = True) raises DuckDBError:
         var hdr = String("true") if header else String("false")
-        var q = String(
-            "COPY (", self._sql, ") TO ", _quote_literal(path),
-            " (FORMAT csv, HEADER ", hdr, ")",
-        )
-        _ = self._run(q)
-
-    # ── Display ────────────────────────────────────────────────────
-
-    def write_to[W: Writer](self, mut writer: W):
-        """Render as a formatted table for ``print`` / ``String(...)``.
-
-        Executes the query; on error the message is written into the output
-        (``write_to`` cannot raise).
-        """
-        try:
-            var rendered = (
-                self._run(self._sql)
-                .fetchall()
-                ._render_table(max_rows=40, max_col_width=32)
-            )
-            writer.write(rendered)
-        except e:
-            writer.write("<relation error: ", String(e), ">")
+        _ = self._run(String("COPY (", self._sql, ") TO ", _quote_literal(path), " (FORMAT csv, HEADER ", hdr, ")"))

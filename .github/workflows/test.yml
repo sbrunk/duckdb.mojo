@@ -24,9 +24,16 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.74.0
+          pixi-version: v0.84.1
           cache: true
           environments: default
+
+      # The generator reads the DuckDB version from `git describe` in the
+      # submodule. The shallow checkout has no tags, so describe returns the
+      # commit hash. Fetch the tag the submodule is pinned to.
+      - name: Fetch DuckDB release tag
+        run: |
+          git -C third_party/duckdb fetch --depth 1 --no-tags origin tag v2.0.0
 
       - name: Check generated bindings are up to date
         run: |
@@ -64,7 +71,7 @@ jobs:
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.74.0
+          pixi-version: v0.84.1
           cache: true
           environments: default
 
@@ -93,8 +100,6 @@ jobs:
             mojo-cache-v3-${{ matrix.target }}-${{ steps.cpu.outputs.key }}-
 
       - name: Run test suite
-        env:
-          DUCKDB_MOJO_FULL_TESTS: "1"
         run: |
           source $HOME/.bash_profile
           pixi run test
@@ -135,13 +140,45 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # emberserde 0.2.0 is not on a channel yet. Build it from the 0.2.0 tag
+      # (the commit pixi.lock pins) and pass it to rattler-build as a local
+      # channel.
+      - name: Setup pixi
+        uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          pixi-version: v0.84.1
+          cache: false
+          run-install: false
+
+      - name: Build emberserde from git
+        run: |
+          source $HOME/.bash_profile
+          git clone --depth 1 --no-checkout --branch 0.2.0 \
+            https://github.com/bgreni/EmberSerde.git "$RUNNER_TEMP/emberserde"
+          git -C "$RUNNER_TEMP/emberserde" checkout \
+            7fe1cb953d4585ed8cd0462fd7a7147c664a4791
+          # pixi writes artifacts flat, rattler-build reads packages only from
+          # <channel>/<platform>/, so build into that subdir.
+          (cd "$RUNNER_TEMP/emberserde" && pixi build \
+            -o "$RUNNER_TEMP/emberserde-channel/${{ matrix.target }}")
+
+      # pixi writes no repodata and rattler-build needs one: index the channel.
+      - name: Index emberserde channel
+        run: |
+          source $HOME/.bash_profile
+          pixi exec -s rattler-index -- rattler-index fs "$RUNNER_TEMP/emberserde-channel"
+
       - name: Build and test conda recipe
         uses: prefix-dev/rattler-build-action@v0.2.38
         with:
           recipe-path: conda.recipe/recipe.local.yaml
-          # Channels rattler-build resolves dependencies from (mojo-compiler and
-          # libduckdb). Matches the local build command in the README.
+          # The action default v0.65.0 panics on local channels. 0.80.0 does
+          # not.
+          rattler-build-version: v0.80.0
+          # Channels to resolve from. emberserde comes from the local channel
+          # built above until it is published.
           build-args: >-
+            -c ${{ runner.temp }}/emberserde-channel
             -c conda-forge
             -c https://conda.modular.com/max
             -c https://repo.prefix.dev/modular-community

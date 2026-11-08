@@ -160,13 +160,10 @@ Build the extension first (`pixi run overrides-build`), then load it like any
 other extension: allow unsigned extensions when connecting and run `LOAD`:
 
 ```mojo
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 
-var config = Config()
-config.set("allow_unsigned_extensions", "true")
-var conn = DuckDB.connect(":memory:", config)
-_ = conn.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
+var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+_ = con.execute("LOAD 'extensions/mojo-kernel-overrides/build/mojo_overrides.duckdb_extension'")
 ```
 
 `LOAD` validates the CPP metadata footer, so a `.so` built for a different DuckDB
@@ -184,10 +181,12 @@ catalog holds function pointers into it.
 ## Caveats
 
 - Version and ABI locked: a CPP-ABI extension only loads into the exact DuckDB version it was
-  built against (the footer is `--duckdb-version`, default `v1.5.6`). Rebuild for each version.
+  built against (the footer is `--duckdb-version`, default `v2.0.0`). Rebuild for each version.
 - Needs the C++ internal headers and an ABI-matched libduckdb, not the stable C extension API.
-- State layout: the copied aggregate state structs must match DuckDB's. The `state_size`
-  runtime check catches size mismatches but not a change in field order.
+- State layout: the copied aggregate state structs must match DuckDB's. Before swapping a
+  callback, the extension checks the state size and the field offsets DuckDB reports, and
+  keeps the stock function if they differ. DuckDB 2.0 reordered `SumState`'s fields without
+  changing its size, which a size check alone would miss.
 - Requires `allow_unsigned_extensions` (set in the benchmark driver; use `-unsigned` in the CLI).
 - Mutates shared system-catalog functions for the whole DB instance; applied once at load.
 - Correctness: SIMD reductions add and compare in a different order, so floating-point results

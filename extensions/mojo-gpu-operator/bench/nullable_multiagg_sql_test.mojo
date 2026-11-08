@@ -17,8 +17,7 @@ Run: GPU_OP_NULLABLE=1 pixi run mojo run -I extensions/mojo-gpu-operator/src \
         extensions/mojo-gpu-operator/bench/nullable_multiagg_sql_test.mojo
 """
 
-from duckdb import DuckDB
-from duckdb.config import Config
+import duckdb
 from std.os import getenv, setenv
 from std.sys import has_accelerator
 from std.testing import assert_true
@@ -36,8 +35,7 @@ def main() raises:
         "extensions/mojo-gpu-operator/build/mojo_gpu_operator.duckdb_extension",
     )
     _ = setenv("GPU_OP_NULLABLE", "1", True)
-    var config = Config({"allow_unsigned_extensions": "true"})
-    var con = DuckDB.connect(":memory:", config^)
+    var con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     _ = con.execute("LOAD '" + ext + "'")
     _ = con.execute(
         String(
@@ -84,13 +82,9 @@ def main() raises:
     var allok = True
     for k in range(len(sqls)):
         _ = setenv("GPU_OP_GENERIC", "off", True)
-        var s = con.execute(sqls[k]).fetch_chunk().get[Optional[String]](
-            col=0, row=0
-        )
+        var s = con.execute(sqls[k]).get[Optional[String]]()[0]
         _ = setenv("GPU_OP_GENERIC", "", True)
-        var o = con.execute(sqls[k]).fetch_chunk().get[Optional[String]](
-            col=0, row=0
-        )
+        var o = con.execute(sqls[k]).get[Optional[String]]()[0]
         var sv = s.value() if Bool(s) else String("<NULL>")
         var ov = o.value() if Bool(o) else String("<NULL>")
         var ok = sv == ov

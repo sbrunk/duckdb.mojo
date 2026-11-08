@@ -12,7 +12,8 @@ connection. Skips an engine if its extension or feature is unavailable.
 Tune N/M/K/k via the comptime constants. Extensions must be built first:
   pixi run overrides-build && pixi run gpu-op-build
 """
-from duckdb import DuckDB, Config, Connection
+import duckdb
+from duckdb import Connection
 from std.time import perf_counter_ns
 from std.sys import has_accelerator
 from std.collections import List
@@ -42,18 +43,18 @@ def vec_literal() raises -> String:
 
 
 def new_con(unsigned: Bool) raises -> Connection:
-    var cfg = Config()
+    var config = Dict[String, String]()
     if unsigned:
-        cfg.set("allow_unsigned_extensions", "true")
-    return DuckDB.connect(DB_PATH, cfg)
+        config["allow_unsigned_extensions"] = "true"
+    return duckdb.connect(DB_PATH, config=config)
 
 
-def consume(mut con: Connection, sql: String) raises:
-    for _ in con.execute(sql):
+def consume(con: Connection, sql: String) raises:
+    for _ in con.execute(sql).chunks():
         pass
 
 
-def time_query(mut con: Connection, sql: String) raises -> Float64:
+def time_query(con: Connection, sql: String) raises -> Float64:
     for _ in range(WARMUP):
         consume(con, sql)
     var times = List[Int]()
@@ -64,11 +65,8 @@ def time_query(mut con: Connection, sql: String) raises -> Float64:
     return warm_median(times)
 
 
-def topk_ids(mut con: Connection, sql: String) raises -> List[Int64]:
-    var ids = List[Int64]()
-    for row in con.execute(sql):
-        ids.append(row.get[Int64](col=0))
-    return ids^
+def topk_ids(con: Connection, sql: String) raises -> List[Int64]:
+    return con.execute(sql).get[Int64]()
 
 
 

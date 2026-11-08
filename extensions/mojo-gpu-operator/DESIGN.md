@@ -435,9 +435,10 @@ Linux build notes:
   for the first time. It costs more on a discrete GPU (full PCIe upload) than on
   Apple's unified memory, and the warm speedup needs a repeated workload to make
   up for it. A GPU-direct decoder now exists
-  ([src/native_decode.mojo](src/native_decode.mojo)). It reads DuckDB v1.5.4
-  native column segments directly from the live buffer manager (pinned in
-  process, no file re-read) and decodes them on the GPU in Mojo (portable; the
+  ([src/native_decode.mojo](src/native_decode.mojo)). It reads DuckDB's
+  native column segments (the BitPacking layout is unchanged from v1.5 to
+  v2.0) directly from the live buffer manager (pinned in process, no file
+  re-read) and decodes them on the GPU in Mojo (portable; the
   reference implementation, Sirius, is CUDA-only). It is validated bit-exact end
   to end on both platforms: all 6,001,215 `l_shipdate` values decoded GPU-direct
   from BitPacking/FOR storage are identical to DuckDB's scan

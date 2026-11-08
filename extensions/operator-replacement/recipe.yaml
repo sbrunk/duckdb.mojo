@@ -74,10 +74,6 @@ build:
     # Install Mojo bindings
     mkdir -p $PREFIX/lib/mojo
     cp -r ../src $PREFIX/lib/mojo/operator_replacement
-    
-    # Install examples
-    mkdir -p $PREFIX/share/operator_replacement
-    cp -r ../examples $PREFIX/share/operator_replacement/
 
 requirements:
   build:
@@ -87,7 +83,7 @@ requirements:
     - ninja
 
   host:
-    - duckdb-from-source ==1.5.6
+    - duckdb-from-source ==2.0.0
 
   run:
-    - duckdb-from-source ==1.5.6
+    - duckdb-from-source ==2.0.0

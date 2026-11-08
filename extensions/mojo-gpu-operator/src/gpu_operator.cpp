@@ -28,15 +28,16 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
-#include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/types/date.hpp"
 // Storage-internal headers for the GPU-direct native-storage decode path
 // (Phase A reachability + Phase C end-to-end slice). These are DuckDB-internal
@@ -67,6 +68,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -384,12 +386,12 @@ public:
 
     // Flatten the array column so its child data is a contiguous n*K float block.
     input.data[v_index].Flatten(n);
-    auto &child = ArrayVector::GetEntry(input.data[v_index]);
+    auto &child = ArrayVector::GetChild(input.data[v_index]);
     const float *emb = FlatVector::GetData<float>(child);
 
     chunk.SetCardinality(n);
     chunk.data[0].SetVectorType(VectorType::FLAT_VECTOR);
-    float *out = FlatVector::GetData<float>(chunk.data[0]);
+    float *out = FlatVector::GetDataMutable<float>(chunk.data[0]);
 
     int32_t rc = -1;
     if (gstate.handle) {
@@ -412,16 +414,16 @@ public:
 // ---------------------------------------------------------------------------
 class LogicalGpuCosine : public LogicalExtensionOperator {
 public:
-  LogicalGpuCosine(idx_t table_index, unique_ptr<Expression> cosine_expr)
+  LogicalGpuCosine(TableIndex table_index, unique_ptr<Expression> cosine_expr)
       : table_index(table_index) {
     expressions.push_back(std::move(cosine_expr));
     types.push_back(LogicalType::FLOAT);
   }
 
-  idx_t table_index;
+  TableIndex table_index;
 
   vector<ColumnBinding> GetColumnBindings() override {
-    return {ColumnBinding(table_index, 0)};
+    return {ColumnBinding(table_index, ProjectionIndex(0))};
   }
 
   void ResolveTypes() override { types = {LogicalType::FLOAT}; }
@@ -436,11 +438,11 @@ public:
     // BoundReferenceExpression (physical index of v in the input chunk); the
     // second is the constant query array.
     auto &fn = expressions[0]->Cast<BoundFunctionExpression>();
-    auto &ref = fn.children[0]->Cast<BoundReferenceExpression>();
-    idx_t v_index = ref.index;
+    auto &ref = fn.GetChildren()[0]->Cast<BoundReferenceExpression>();
+    idx_t v_index = ref.Index();
 
-    auto &cst = fn.children[1]->Cast<BoundConstantExpression>();
-    auto &kids = ArrayValue::GetChildren(cst.value);
+    auto &cst = fn.GetChildren()[1]->Cast<BoundConstantExpression>();
+    auto &kids = ArrayValue::GetChildren(cst.GetValue());
     idx_t K = kids.size();
     vector<float> query;
     query.reserve(K);
@@ -463,13 +465,14 @@ public:
 bool MatchCosineProjection(LogicalProjection &proj) {
   if (proj.expressions.size() != 1) { return false; }
   auto &e = proj.expressions[0];
-  if (e->type != ExpressionType::BOUND_FUNCTION) { return false; }
+  if (e->GetExpressionType() != ExpressionType::BOUND_FUNCTION) { return false; }
   auto &fn = e->Cast<BoundFunctionExpression>();
-  if (fn.function.name != COSINE_FN || fn.children.size() != 2) { return false; }
+  if (fn.Function().GetName() != COSINE_FN || fn.GetChildren().size() != 2) { return false; }
   // second arg must be a constant array
-  if (fn.children[1]->type != ExpressionType::VALUE_CONSTANT) { return false; }
-  auto &cst = fn.children[1]->Cast<BoundConstantExpression>();
-  if (cst.value.type().id() != LogicalTypeId::ARRAY) { return false; }
+  auto &arg = *fn.GetChildren()[1];
+  if (arg.GetExpressionType() != ExpressionType::VALUE_CONSTANT) { return false; }
+  auto &cst = arg.Cast<BoundConstantExpression>();
+  if (cst.GetValue().type().id() != LogicalTypeId::ARRAY) { return false; }
   return true;
 }
 
@@ -795,18 +798,18 @@ void MaterializeFloatColumn(ClientContext &context, const std::string &table,
   Connection con(*context.db);
   auto res = con.Query("SELECT " + column + " FROM " + table);
   if (res->HasError()) { throw InvalidInputException(std::string(who) + ": " + res->GetError()); }
-  if (res->types[0].id() != LogicalTypeId::ARRAY) {
+  if (res->GetTypes()[0].id() != LogicalTypeId::ARRAY) {
     throw InvalidInputException(std::string(who) + ": column must be FLOAT[K] (ARRAY), got " +
-                                res->types[0].ToString());
+                                res->GetTypes()[0].ToString());
   }
-  K = ArrayType::GetSize(res->types[0]);
+  K = ArrayType::GetSize(res->GetTypes()[0]);
   n_rows = 0;
   while (true) {
     auto chunk = res->Fetch();
     if (!chunk || chunk->size() == 0) { break; }
     auto n = chunk->size();
     chunk->data[0].Flatten(n);
-    auto &child = ArrayVector::GetEntry(chunk->data[0]);
+    auto &child = ArrayVector::GetChild(chunk->data[0]);
     const float *cd = FlatVector::GetData<float>(child);
     host.insert(host.end(), cd, cd + n * K);
     n_rows += n;
@@ -918,7 +921,7 @@ struct GpuCosineTFGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> GpuCosineBind(ClientContext &context, TableFunctionBindInput &input,
-                                       vector<LogicalType> &return_types, vector<string> &names) {
+                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   auto &qkids = ListValue::GetChildren(input.inputs[2]);
@@ -956,8 +959,8 @@ void GpuCosineFunc(ClientContext &, TableFunctionInput &data, DataChunk &output)
   auto &gs = data.global_state->Cast<GpuCosineTFGlobalState>();
   idx_t n = MinValue<idx_t>(bd.n_rows - gs.offset, STANDARD_VECTOR_SIZE);
   if (n == 0) { output.SetCardinality(0); return; }
-  auto rowid = FlatVector::GetData<int64_t>(output.data[0]);
-  auto dist = FlatVector::GetData<float>(output.data[1]);
+  auto rowid = FlatVector::GetDataMutable<int64_t>(output.data[0]);
+  auto dist = FlatVector::GetDataMutable<float>(output.data[1]);
   for (idx_t i = 0; i < n; i++) {
     rowid[i] = NumericCast<int64_t>(gs.offset + i);
     dist[i] = bd.distances[gs.offset + i];
@@ -992,7 +995,7 @@ struct GpuCosineTopkBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuCosineTopkBind(ClientContext &context, TableFunctionBindInput &input,
-                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                           vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   auto &qkids = ListValue::GetChildren(input.inputs[2]);
@@ -1061,8 +1064,8 @@ void GpuCosineTopkFunc(ClientContext &, TableFunctionInput &data, DataChunk &out
   // n_valid <= k <= 1024 < STANDARD_VECTOR_SIZE, so this emits in a single chunk.
   idx_t n = MinValue<idx_t>(bd.n_valid - gs.offset, STANDARD_VECTOR_SIZE);
   if (n == 0) { output.SetCardinality(0); return; }
-  auto rowid = FlatVector::GetData<int64_t>(output.data[0]);
-  auto dist = FlatVector::GetData<float>(output.data[1]);
+  auto rowid = FlatVector::GetDataMutable<int64_t>(output.data[0]);
+  auto dist = FlatVector::GetDataMutable<float>(output.data[1]);
   for (idx_t i = 0; i < n; i++) {
     rowid[i] = bd.ids[gs.offset + i];
     dist[i] = bd.dists[gs.offset + i];
@@ -1078,7 +1081,7 @@ void RegisterGpuCosineTopkTableFunction(ExtensionLoader &loader) {
                    GpuCosineTopkFunc, GpuCosineTopkBind, GpuCosineInit);
   // Optional precision selector: default 'fp16' (resident half-precision path);
   // 'fp32'/'exact' for full-precision exact distances.
-  tf.named_parameters["precision"] = LogicalType::VARCHAR;
+  tf.GetSignature().AddKeywordOnly("precision", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
   loader.RegisterFunction(tf);
 }
 
@@ -1105,7 +1108,7 @@ struct GpuCosineTopkBatchBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuCosineTopkBatchBind(ClientContext &context, TableFunctionBindInput &input,
-                                                vector<LogicalType> &return_types, vector<string> &names) {
+                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto emb_table = input.inputs[0].GetValue<string>();
   auto emb_col = input.inputs[1].GetValue<string>();
   auto query_table = input.inputs[2].GetValue<string>();
@@ -1232,9 +1235,9 @@ void GpuCosineTopkBatchFunc(ClientContext &, TableFunctionInput &data, DataChunk
   auto &gs = data.global_state->Cast<GpuCosineTFGlobalState>();
   idx_t n = MinValue<idx_t>(bd.n_emitted - gs.offset, STANDARD_VECTOR_SIZE);
   if (n == 0) { output.SetCardinality(0); return; }
-  auto qrow = FlatVector::GetData<int64_t>(output.data[0]);
-  auto rowid = FlatVector::GetData<int64_t>(output.data[1]);
-  auto dist = FlatVector::GetData<float>(output.data[2]);
+  auto qrow = FlatVector::GetDataMutable<int64_t>(output.data[0]);
+  auto rowid = FlatVector::GetDataMutable<int64_t>(output.data[1]);
+  auto dist = FlatVector::GetDataMutable<float>(output.data[2]);
   for (idx_t i = 0; i < n; i++) {
     qrow[i] = bd.query_rowids[gs.offset + i];
     rowid[i] = bd.ids[gs.offset + i];
@@ -1249,14 +1252,19 @@ void RegisterGpuCosineTopkBatchTableFunction(ExtensionLoader &loader) {
                    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
                     LogicalType::VARCHAR, LogicalType::BIGINT},
                    GpuCosineTopkBatchFunc, GpuCosineTopkBatchBind, GpuCosineInit);
-  tf.named_parameters["precision"] = LogicalType::VARCHAR;
+  tf.GetSignature().AddKeywordOnly("precision", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
   // metric: 'cosine' (default), 'l2'/'euclidean' (array_distance), or 'ip'
   // (array_negative_inner_product). Non-cosine routes to the fused tensor-core
   // path (NVIDIA + GPU_OP_TENSORCORE + supported K/k); see GpuCosineTopkBatchBind.
-  tf.named_parameters["metric"] = LogicalType::VARCHAR;
+  tf.GetSignature().AddKeywordOnly("metric", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
   loader.RegisterFunction(tf);
 }
 
+
+// Function name of a bound scalar function expression as a plain string.
+std::string FnName(const BoundFunctionExpression &fn) {
+  return fn.Function().GetName().GetIdentifierName();
+}
 
 // Resolve a BoundColumnRef against a set of GETs (by table_index) to its table
 // column name + which table it belongs to. Returns "" if it matches no GET.
@@ -1264,12 +1272,13 @@ struct ColResolve { std::string table_name; std::string col_name; };
 ColResolve ResolveJoinColref(const BoundColumnRefExpression &ref,
                              const std::vector<LogicalGet *> &gets) {
   for (auto *g : gets) {
-    if (ref.binding.table_index != g->table_index) { continue; }
+    if (ref.Binding().table_index != g->table_index) { continue; }
     const auto &col_ids = g->GetColumnIds();
-    idx_t pos = ref.binding.column_index;
+    idx_t pos = ref.Binding().column_index;
     if (pos >= col_ids.size()) { return {}; }
     auto te = g->GetTable();
-    return {te ? te->name : std::string(), g->GetColumnName(col_ids[pos])};
+    return {te ? te->name.GetIdentifierName() : std::string(),
+            g->GetColumnName(col_ids[pos]).GetIdentifierName()};
   }
   return {};
 }
@@ -1279,16 +1288,17 @@ ColResolve ResolveJoinColref(const BoundColumnRefExpression &ref,
 bool IsPromoPredicate(const Expression &e, const std::vector<LogicalGet *> &gets) {
   if (e.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return false; }
   auto &fn = e.Cast<BoundFunctionExpression>();
-  const std::string &nm = fn.function.name;
+  const std::string nm = FnName(fn);
   bool is_prefix = (nm == "prefix");
   bool is_like = (nm == "~~" || nm == "like");
   if (!is_prefix && !is_like) { return false; }
-  if (fn.children.size() != 2) { return false; }
-  if (fn.children[0]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) { return false; }
-  if (fn.children[1]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) { return false; }
-  auto col = ResolveJoinColref(fn.children[0]->Cast<BoundColumnRefExpression>(), gets);
+  auto &kids = fn.GetChildren();
+  if (kids.size() != 2) { return false; }
+  if (kids[0]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) { return false; }
+  if (kids[1]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) { return false; }
+  auto col = ResolveJoinColref(kids[0]->Cast<BoundColumnRefExpression>(), gets);
   if (col.col_name != "p_type") { return false; }
-  auto &cval = fn.children[1]->Cast<BoundConstantExpression>().value;
+  auto &cval = kids[1]->Cast<BoundConstantExpression>().GetValue();
   if (cval.type().id() != LogicalTypeId::VARCHAR || cval.IsNull()) { return false; }
   std::string pat = cval.GetValue<std::string>();
   if (is_prefix) { return pat == "PROMO"; }
@@ -1344,8 +1354,8 @@ bool CollectJoinTree(LogicalOperator *op, JoinTree &out) {
     if (join.join_type != JoinType::INNER) { return false; }
     if (join.children.size() != 2) { return false; }
     for (auto &cond : join.conditions) {
-      if (cond.comparison != ExpressionType::COMPARE_EQUAL) { return false; }
-      out.raw_conds.emplace_back(cond.left.get(), cond.right.get());
+      if (!cond.IsComparison() || cond.GetComparisonType() != ExpressionType::COMPARE_EQUAL) { return false; }
+      out.raw_conds.emplace_back(&cond.GetLHS(), &cond.GetRHS());
     }
     return CollectJoinTree(join.children[0].get(), out) &&
            CollectJoinTree(join.children[1].get(), out);
@@ -1578,14 +1588,14 @@ bool JoinDimKeysProvablyUnique(const JoinTree &jt,
     if (!te) { return false; }
     if ((int64_t)g->estimated_cardinality > fact_card) {
       fact_card = (int64_t)g->estimated_cardinality;
-      fact_table = te->name;
+      fact_table = te->name.GetIdentifierName();
     }
   }
   if (fact_table.empty()) { return false; }
   if (dbg) {
     fprintf(stderr, "[gpu-uniq] fact=%s gets:", fact_table.c_str());
     for (auto *g : jt.gets) { auto te = g->GetTable(); fprintf(stderr, " %s(%lld)",
-        te ? te->name.c_str() : "?", (long long)g->estimated_cardinality); }
+        te ? te->name.GetIdentifierName().c_str() : "?", (long long)g->estimated_cardinality); }
     fprintf(stderr, "\n[gpu-uniq] eqs:");
     for (auto &e : eqs) { fprintf(stderr, " %s.%s=%s.%s", e.lt.c_str(), e.lc.c_str(),
         e.rt.c_str(), e.rc.c_str()); }
@@ -1636,13 +1646,13 @@ std::string ResolveGroupColref(const Expression &e, const JoinTree &jt) {
 bool IsRevenueExpr(const Expression &e, const JoinTree &jt) {
   if (e.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return false; }
   auto &mul = e.Cast<BoundFunctionExpression>();
-  if (mul.function.name != "*" && mul.function.name != "multiply") { return false; }
-  if (mul.children.size() != 2) { return false; }
+  if (FnName(mul) != "*" && FnName(mul) != "multiply") { return false; }
+  if (mul.GetChildren().size() != 2) { return false; }
   // One child is l_extendedprice colref; the other is (1 - l_discount).
   const Expression *price = nullptr;
   const Expression *sub = nullptr;
   for (idx_t i = 0; i < 2; i++) {
-    auto &c = *mul.children[i];
+    auto &c = *mul.GetChildren()[i];
     if (c.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
         ResolveGroupColref(c, jt) == "l_extendedprice") {
       price = &c;
@@ -1653,12 +1663,12 @@ bool IsRevenueExpr(const Expression &e, const JoinTree &jt) {
   if (!price || !sub) { return false; }
   if (sub->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return false; }
   auto &subfn = sub->Cast<BoundFunctionExpression>();
-  if (subfn.function.name != "-" && subfn.function.name != "subtract") { return false; }
-  if (subfn.children.size() != 2) { return false; }
+  if (FnName(subfn) != "-" && FnName(subfn) != "subtract") { return false; }
+  if (subfn.GetChildren().size() != 2) { return false; }
   // children: a constant (1 / 1.00) and l_discount colref (either order).
   bool seen_disc = false, seen_const = false;
   for (idx_t i = 0; i < 2; i++) {
-    auto &c = *subfn.children[i];
+    auto &c = *subfn.GetChildren()[i];
     if (c.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) { seen_const = true; }
     else if (c.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
              ResolveGroupColref(c, jt) == "l_discount") { seen_disc = true; }
@@ -2006,8 +2016,8 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // projection expression and recurse; it may itself be arithmetic
     // (l_extendedprice*(1-l_discount)) or a plain GET colref (l_quantity).
     auto &ref = e.Cast<BoundColumnRefExpression>();
-    if (proj && ref.binding.table_index == proj->table_index) {
-      idx_t idx = ref.binding.column_index;
+    if (proj && ref.Binding().table_index == proj->table_index) {
+      idx_t idx = ref.Binding().column_index;
       if (idx < proj->expressions.size()) {
         return EmitProgram(*proj->expressions[idx], jt, b, prog, proj);
       }
@@ -2021,7 +2031,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // the whole plan declines to stock CPU (correct, only not accelerated).
     if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
         GpuOpFlagOn("GPU_OP_STATS")) {
-      auto pt = ref.return_type.InternalType();
+      auto pt = ref.GetReturnType().InternalType();
       if (pt == PhysicalType::FLOAT || pt == PhysicalType::DOUBLE) {
         return false;
       }
@@ -2041,8 +2051,8 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     //     TINYINT (INT8), SMALLINT (INT16), HUGEINT (INT128). INTEGER (INT32) and
     //     BIGINT (INT64) still route.
     {
-      auto wpt = ref.return_type.InternalType();
-      if (ref.return_type.id() == LogicalTypeId::DECIMAL) {
+      auto wpt = ref.GetReturnType().InternalType();
+      if (ref.GetReturnType().id() == LogicalTypeId::DECIMAL) {
         if (wpt != PhysicalType::INT64) { return false; }
       } else {
         if (wpt != PhysicalType::INT32 && wpt != PhysicalType::INT64) {
@@ -2057,21 +2067,23 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     return true;
   }
   if (cls == ExpressionClass::BOUND_CONSTANT) {
-    int64_t cid = AddValueConst(b, e.Cast<BoundConstantExpression>().value);
+    int64_t cid = AddValueConst(b, e.Cast<BoundConstantExpression>().GetValue());
     if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT): fail closed
     prog.push_back({rp::OP_PUSH_CONST, cid, 0});
     return true;
   }
-  if (cls == ExpressionClass::BOUND_FUNCTION) {
+  // DuckDB 2.0 binds casts as function expressions; they are handled below.
+  if (cls == ExpressionClass::BOUND_FUNCTION && !BoundCastExpression::IsCast(e)) {
     auto &fn = e.Cast<BoundFunctionExpression>();
-    const std::string &nm = fn.function.name;
+    auto &kids = fn.GetChildren();
+    const std::string nm = FnName(fn);
     int64_t binop = 0;
     if (nm == "*" || nm == "multiply") { binop = rp::OP_MUL; }
     else if (nm == "-" || nm == "subtract") { binop = rp::OP_SUB; }
     else if (nm == "+" || nm == "add") { binop = rp::OP_ADD; }
-    if (binop && fn.children.size() == 2) {
-      if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
-      if (!EmitProgram(*fn.children[1], jt, b, prog, proj)) { return false; }
+    if (binop && kids.size() == 2) {
+      if (!EmitProgram(*kids[0], jt, b, prog, proj)) { return false; }
+      if (!EmitProgram(*kids[1], jt, b, prog, proj)) { return false; }
       prog.push_back({binop, 0, 0});
       return true;
     }
@@ -2083,18 +2095,18 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // silently wrong. We fail closed (decline) on fractional or non-constant (column)
     // exponents. Returns DOUBLE, so it is routed to the f64 accumulator like the unary ops.
     if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") &&
-        (nm == "pow" || nm == "power") && fn.children.size() == 2) {
-      const Expression *ec = fn.children[1].get();
-      while (ec->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        ec = ec->Cast<BoundCastExpression>().child.get();
+        (nm == "pow" || nm == "power") && kids.size() == 2) {
+      const Expression *ec = kids[1].get();
+      while (BoundCastExpression::IsCast(*ec)) {
+        ec = &BoundCastExpression::Child(ec->Cast<BoundFunctionExpression>());
       }
       if (ec->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-        const Value &ev = ec->Cast<BoundConstantExpression>().value;
+        const Value &ev = ec->Cast<BoundConstantExpression>().GetValue();
         if (!ev.IsNull() && ev.type().IsNumeric()) {
           double d = ev.GetValue<double>();
           double r = (double)std::llround(d);
           if (r == d && std::fabs(r) <= 64.0) {
-            if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
+            if (!EmitProgram(*kids[0], jt, b, prog, proj)) { return false; }
             int64_t cid = AddValueConst(b, ev);
             if (cid < 0) { return false; }  // (never for integer values; defensive)
             prog.push_back({rp::OP_PUSH_CONST, cid, 0});
@@ -2111,7 +2123,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
     // is off these stay unrecognized and fail closed (decline, prior behavior).
     // The scope guard (UNGROUPED-only + DOUBLE accumulator) is enforced on the Mojo
     // side (build_descriptor_impl + finalize); anything else declines to CPU.
-    if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") && fn.children.size() == 1) {
+    if (GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") && kids.size() == 1) {
       int64_t uop = 0;
       // DuckDB semantics: ln(x)=natural log; log(x)==log10(x)=base-10; log10(x)
       // base-10. (Verified: SELECT ln(10),log(10),log10(10) returns 2.302,1.0,1.0.)
@@ -2131,7 +2143,7 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       // else if (nm == "sin") { uop = rp::OP_SIN; }  // declined: f32-only, imprecise
       // else if (nm == "cos") { uop = rp::OP_COS; }  // declined: f32-only, imprecise
       if (uop) {
-        if (!EmitProgram(*fn.children[0], jt, b, prog, proj)) { return false; }
+        if (!EmitProgram(*kids[0], jt, b, prog, proj)) { return false; }
         prog.push_back({uop, 0, 0});
         return true;
       }
@@ -2140,12 +2152,12 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   if (cls == ExpressionClass::BOUND_CASE) {
     // Q14 promo CASE: PROMO_PRED(p_type); <then-program>; PUSH_CONST(0); SELECT.
     auto &ce = e.Cast<BoundCaseExpression>();
-    if (ce.case_checks.size() == 1) {
-      auto &chk = ce.case_checks[0];
+    if (ce.CaseChecks().size() == 1) {
+      auto &chk = ce.CaseChecks()[0];
       // PROMO predicate becomes OP_PROMO_PRED(p_type table_strid, col_strid).
       if (IsPromoPredicate(*chk.when_expr, jt.gets)) {
         auto &pf = chk.when_expr->Cast<BoundFunctionExpression>();
-        auto col = ResolveJoinColref(pf.children[0]->Cast<BoundColumnRefExpression>(), jt.gets);
+        auto col = ResolveJoinColref(pf.GetChildren()[0]->Cast<BoundColumnRefExpression>(), jt.gets);
         prog.push_back({rp::OP_PROMO_PRED, b.intern(col.table_name), b.intern(col.col_name)});
       } else {
         if (!EmitProgram(*chk.when_expr, jt, b, prog, proj)) { return false; }
@@ -2170,10 +2182,10 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
   // argument in is likewise a value-level no-op. Pass the child through.
   if ((GpuOpFlagOn("GPU_OP_TRANSCENDENTAL") ||
        GpuOpFlagOn("GPU_OP_STATS")) &&
-      cls == ExpressionClass::BOUND_CAST) {
-    auto &ce = e.Cast<BoundCastExpression>();
-    auto tid = e.return_type.id();
-    auto sid = ce.child->return_type.id();
+      BoundCastExpression::IsCast(e)) {
+    auto &child = BoundCastExpression::Child(e.Cast<BoundFunctionExpression>());
+    auto tid = e.GetReturnType().id();
+    auto sid = child.GetReturnType().id();
     auto is_num = [](LogicalTypeId id) {
       return id == LogicalTypeId::DOUBLE || id == LogicalTypeId::FLOAT ||
              id == LogicalTypeId::DECIMAL || id == LogicalTypeId::BIGINT ||
@@ -2187,10 +2199,10 @@ bool EmitProgram(const Expression &e, const JoinTree &jt, RawPlanBuilder &b,
       // Fail closed and decline to stock. (The int128 aggregate paths read hugeint
       // correctly; only this f64 expr-VM is int64-limited. A 16-byte-aware f64 feed
       // that keeps the win on wide decimals is a follow-up.)
-      if (ce.child->return_type.InternalType() == PhysicalType::INT128) {
+      if (child.GetReturnType().InternalType() == PhysicalType::INT128) {
         return false;
       }
-      return EmitProgram(*ce.child, jt, b, prog, proj);
+      return EmitProgram(child, jt, b, prog, proj);
     }
   }
 
@@ -2259,8 +2271,8 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
   const Expression *cur = &e;
   if (proj && cur->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
     auto &ref = cur->Cast<BoundColumnRefExpression>();
-    if (ref.binding.table_index == proj->table_index) {
-      idx_t idx = ref.binding.column_index;
+    if (ref.Binding().table_index == proj->table_index) {
+      idx_t idx = ref.Binding().column_index;
       if (idx >= proj->expressions.size()) { return false; }
       auto &pe = proj->expressions[idx];
       if (pe->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) { return false; }
@@ -2273,6 +2285,29 @@ bool ResolveGroupTableCol(const Expression &e, const JoinTree &jt,
   table = c.table_name;
   col = c.col_name;
   return true;
+}
+
+// True if an aggregate argument can never be NULL: a non-NULL constant, or a
+// (possibly through-projection) column with a NOT NULL constraint.
+bool AggArgNotNull(const Expression &e, const JoinTree &jt, optional_ptr<LogicalProjection> proj) {
+  if (e.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+    return !e.Cast<BoundConstantExpression>().GetValue().IsNull();
+  }
+  std::string table, col;
+  if (!ResolveGroupTableCol(e, jt, proj, table, col)) { return false; }
+  LogicalGet *g = FindGet(jt, table.c_str());
+  auto te = g ? g->GetTable() : nullptr;
+  if (!te) { return false; }
+  Identifier name(col);
+  auto lidx = te->GetColumnIndex(name, /*if_exists=*/true);
+  if (!lidx.IsValid()) { return false; }
+  for (auto &cons : te->GetConstraints()) {
+    if (cons->type == ConstraintType::NOT_NULL &&
+        cons->Cast<NotNullConstraint>().index.index == lidx.index) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // NR3 (GPU_OP_FILTER_OR): serialize a residual single-table filter expression
@@ -2303,38 +2338,41 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
   if (op_count > 64) { return false; }
   auto cls = e.GetExpressionClass();
   if (cls == ExpressionClass::BOUND_CONJUNCTION) {
-    auto &conj = e.Cast<BoundConjunctionExpression>();
-    if (conj.children.size() < 2) { return false; }
+    auto &kids = e.Cast<BoundConjunctionExpression>().GetChildren();
+    if (kids.size() < 2) { return false; }
     int64_t combine;
-    if (e.type == ExpressionType::CONJUNCTION_OR) { combine = rp::OP_ADD; }
-    else if (e.type == ExpressionType::CONJUNCTION_AND) { combine = rp::OP_MUL; }
+    if (e.GetExpressionType() == ExpressionType::CONJUNCTION_OR) { combine = rp::OP_ADD; }
+    else if (e.GetExpressionType() == ExpressionType::CONJUNCTION_AND) { combine = rp::OP_MUL; }
     else { return false; }
-    if (!EmitOrEq(*conj.children[0], gets, b, prog, op_count)) { return false; }
-    for (idx_t i = 1; i < conj.children.size(); i++) {
-      if (!EmitOrEq(*conj.children[i], gets, b, prog, op_count)) { return false; }
+    if (!EmitOrEq(*kids[0], gets, b, prog, op_count)) { return false; }
+    for (idx_t i = 1; i < kids.size(); i++) {
+      if (!EmitOrEq(*kids[i], gets, b, prog, op_count)) { return false; }
       prog.push_back({combine, 0, 0});
       op_count++;
       if (op_count > 64) { return false; }
     }
     return true;
   }
-  if (cls == ExpressionClass::BOUND_COMPARISON) {
+  // DuckDB 2.0 binds comparisons as function expressions.
+  if (cls == ExpressionClass::BOUND_FUNCTION && BoundComparisonExpression::IsComparison(e)) {
     // Map the DuckDB comparison type to the emittable int expr-VM opcode. Only the
     // six 0/1 range/equality comparisons are supported; anything else (DISTINCT_FROM,
     // NOT_DISTINCT_FROM, IN-as-comparison, ...) fails closed below. The mapping is
     // written for column on the left (lhs=col, rhs=const); when the column is on the
     // right we invert it (5 > a == a < 5), so LT<->GT and LE<->GE swap, EQ/NE stay.
-    auto &cmp = e.Cast<BoundComparisonExpression>();
+    auto &cmp = e.Cast<BoundFunctionExpression>();
+    auto &left = BoundComparisonExpression::Left(cmp);
+    auto &right = BoundComparisonExpression::Right(cmp);
     // One side a colref on this get, the other a bound constant (either order).
     const Expression *col_side = nullptr;
     const Expression *const_side = nullptr;
     bool col_on_right = false;
-    if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-        cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-      col_side = cmp.left.get(); const_side = cmp.right.get();
-    } else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-               cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-      col_side = cmp.right.get(); const_side = cmp.left.get();
+    if (left.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+        right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+      col_side = &left; const_side = &right;
+    } else if (right.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+               left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+      col_side = &right; const_side = &left;
       col_on_right = true;
     } else {
       return false;  // colref-vs-colref / function side / etc.: decline
@@ -2342,7 +2380,7 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     // Resolve the opcode for the canonical (col <op> const) orientation, inverting
     // the comparator when the column was on the right so lhs=column, rhs=const holds.
     int64_t cmp_op = 0;
-    switch (e.type) {
+    switch (e.GetExpressionType()) {
     case ExpressionType::COMPARE_EQUAL:    cmp_op = rp::OP_EQ; break;
     case ExpressionType::COMPARE_NOTEQUAL: cmp_op = rp::OP_NE; break;
     case ExpressionType::COMPARE_LESSTHAN:
@@ -2359,7 +2397,7 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     auto &ref = col_side->Cast<BoundColumnRefExpression>();
     // Type gate: only INTEGER / DATE go down the int eval path. Exclude everything
     // else (VARCHAR/DECIMAL/BIGINT/BOOLEAN/...) and fail closed before AddValueConst.
-    auto tid = ref.return_type.id();
+    auto tid = ref.GetReturnType().id();
     if (tid != LogicalTypeId::INTEGER && tid != LogicalTypeId::DATE) { return false; }
     auto col = ResolveJoinColref(ref, gets);
     if (col.col_name.empty()) { return false; }  // not on this GET
@@ -2367,7 +2405,7 @@ bool EmitOrEq(const Expression &e, const std::vector<LogicalGet *> &gets,
     int64_t c = b.intern(col.col_name);
     // The const must match the column's INTEGER/DATE family (same id) so the int
     // limb is exact; AddValueConst returns -1 only for fractional doubles (n/a here).
-    auto &cval = const_side->Cast<BoundConstantExpression>().value;
+    auto &cval = const_side->Cast<BoundConstantExpression>().GetValue();
     if (cval.type().id() != tid) { return false; }
     int64_t cid = AddValueConst(b, cval);
     if (cid < 0) { return false; }
@@ -2387,8 +2425,8 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   if (!agg.grouping_functions.empty()) { return false; }
 
   // 1. HEADER.
-  out.group_index = agg.groups.empty() ? rp::IDX_NONE : (int64_t)agg.group_index;
-  out.aggregate_index = (int64_t)agg.aggregate_index;
+  out.group_index = agg.groups.empty() ? rp::IDX_NONE : (int64_t)agg.group_index.index;
+  out.aggregate_index = (int64_t)agg.aggregate_index.index;
 
   // 2. Descend the child: skip an optional PROJECTION, then a single GET or a
   //    COMPARISON_JOIN tree.
@@ -2478,10 +2516,10 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     auto te = g->GetTable();
     if (!te) { return false; }
     RawPlanBuilder::Get ge;
-    ge.table_strid = out.intern(te->name);
+    ge.table_strid = out.intern(te->name.GetIdentifierName());
     ge.est_cardinality = (int64_t)g->estimated_cardinality;
-    // Filters: keyed by table column index into get->names. Map to name, cmp, const.
-    auto add_filter = [&](idx_t col_idx, const ConstantFilter &cf) -> bool {
+    // Filters: col_idx is a table column index into get->names. Map to name, cmp, const.
+    auto add_filter = [&](idx_t col_idx, ExpressionType cmp_type, const Value &constant) -> bool {
       if (col_idx >= g->names.size()) { return false; }
       // Type gate (fix 2): a pushed-down zone-map filter column is materialized and
       // fed like any other column, so it must be one of the physical types the feed
@@ -2510,36 +2548,68 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       } else {
         return false;  // can't verify the filter column type: fail closed
       }
-      int64_t cmp = MapCmp(cf.comparison_type);
+      int64_t cmp = MapCmp(cmp_type);
       if (cmp == 0) { return false; }
-      int64_t cid = AddValueConst(out, cf.constant);
+      int64_t cid = AddValueConst(out, constant);
       if (cid < 0) { return false; }  // inexact (fractional DOUBLE/FLOAT) filter const: decline
-      ge.filters.push_back({out.intern(g->names[col_idx]), cmp, cid});
+      ge.filters.push_back({out.intern(g->names[col_idx].GetIdentifierName()), cmp, cid});
       return true;
     };
-    for (auto &kv : g->table_filters.filters) {
-      idx_t col_idx = kv.first;
-      TableFilter &tf = *kv.second;
-      if (tf.filter_type == TableFilterType::CONSTANT_COMPARISON) {
-        if (!add_filter(col_idx, tf.Cast<ConstantFilter>())) { return false; }
-      } else if (tf.filter_type == TableFilterType::CONJUNCTION_AND) {
-        auto &conj = tf.Cast<ConjunctionAndFilter>();
-        for (auto &cfp : conj.child_filters) {
-          if (cfp->filter_type != TableFilterType::CONSTANT_COMPARISON) { return false; }
-          if (!add_filter(col_idx, cfp->Cast<ConstantFilter>())) { return false; }
-        }
-      } else if (tf.filter_type == TableFilterType::OPTIONAL_FILTER && residual_filter) {
-        // NR3 (GPU_OP_FILTER_OR): an OptionalFilter is a zone-map pruning hint only,
+    // DuckDB 2.0 pushes every filter as an ExpressionFilter over a column
+    // placeholder. Accept `col <cmp> const`, BETWEEN with constant bounds, and an
+    // AND of those; anything else declines.
+    std::function<bool(idx_t, const Expression &)> add_expr = [&](idx_t col_idx,
+                                                                   const Expression &fe) -> bool {
+      if (ExpressionFilter::IsRootOptionalExpression(fe)) {
+        // NR3 (GPU_OP_FILTER_OR): an optional filter is a zone-map pruning hint only,
         // never authoritative for correctness. DuckDB pushes one as the partial copy
         // of the residual IN/OR predicate that also remains as the LogicalFilter we
         // captured above this GET. Since we serialize that residual into the
         // PASS_PROGRAM below, the optional copy is covered by it and is safe to skip.
-        // Gated on residual_filter so the flag-off path keeps declining on OPTIONAL_FILTER
-        // exactly as before (byte-identical default behavior).
-        continue;
-      } else {
-        return false;  // unmodeled filter shape
+        // Gated on residual_filter so the flag-off path keeps declining on optional
+        // filters exactly as before.
+        return residual_filter != nullptr;
       }
+      if (fe.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+        for (auto &c : fe.Cast<BoundConjunctionExpression>().GetChildren()) {
+          if (!add_expr(col_idx, *c)) { return false; }
+        }
+        return true;
+      }
+      if (fe.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) { return false; }
+      auto &fn = fe.Cast<BoundFunctionExpression>();
+      if (BoundComparisonExpression::IsComparison(fe)) {
+        ExpressionType cmp_type;
+        auto cst = ExpressionFilter::TryGetColumnConstantComparison(fn, cmp_type);
+        return cst && add_filter(col_idx, cmp_type, cst->GetValue());
+      }
+      if (fe.GetExpressionType() == ExpressionType::COMPARE_BETWEEN &&
+          BoundBetweenExpression::HasValidBindData(fn)) {
+        auto &lo = BoundBetweenExpression::LowerBound(fn);
+        auto &hi = BoundBetweenExpression::UpperBound(fn);
+        if (!ExpressionFilter::IsSimpleFilterColumnRef(BoundBetweenExpression::Input(fn)) ||
+            lo.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
+            hi.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+          return false;
+        }
+        return add_filter(col_idx, BoundBetweenExpression::LowerComparisonType(fn),
+                          lo.Cast<BoundConstantExpression>().GetValue()) &&
+               add_filter(col_idx, BoundBetweenExpression::UpperComparisonType(fn),
+                          hi.Cast<BoundConstantExpression>().GetValue());
+      }
+      return false;
+    };
+    if (g->table_filters.HasMultiColumnFilters()) { return false; }
+    const auto &col_ids = g->GetColumnIds();
+    for (auto &entry : g->table_filters) {
+      // Filters are keyed by projection position, an index into GetColumnIds().
+      idx_t pos = entry.GetIndex();
+      if (pos >= col_ids.size() || col_ids[pos].IsRowIdColumn() || col_ids[pos].IsVirtualColumn()) {
+        return false;
+      }
+      auto &tf = entry.Filter();
+      if (tf.filter_type != TableFilterType::EXPRESSION_FILTER) { return false; }
+      if (!add_expr(col_ids[pos].GetPrimaryIndex(), *tf.Cast<ExpressionFilter>().expr)) { return false; }
     }
     out.gets.push_back(std::move(ge));
   }
@@ -2600,7 +2670,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       auto te = g->GetTable();
       if (te && (int64_t)g->estimated_cardinality > best) {
         best = (int64_t)g->estimated_cardinality;
-        fact_table = te->name;
+        fact_table = te->name.GetIdentifierName();
       }
     }
   }
@@ -2632,12 +2702,12 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
   // 6. OUT_TYPES: group columns first (group-key order), then aggregate columns.
   for (idx_t i = 0; i < agg.groups.size(); i++) {
     int64_t tag, scale, width;
-    MapType(agg.groups[i]->return_type, tag, scale, width);
+    MapType(agg.groups[i]->GetReturnType(), tag, scale, width);
     out.out_types.push_back({tag, scale, width});
   }
   for (idx_t i = 0; i < agg.expressions.size(); i++) {
     int64_t tag, scale, width;
-    MapType(agg.expressions[i]->return_type, tag, scale, width);
+    MapType(agg.expressions[i]->GetReturnType(), tag, scale, width);
     out.out_types.push_back({tag, scale, width});
   }
 
@@ -2647,17 +2717,33 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
       return false;
     }
     auto &ag = agg.expressions[i]->Cast<BoundAggregateExpression>();
-    if (ag.IsDistinct() || ag.filter) { return false; }
-    int64_t kind = MapAggKind(ag.function.name);
+    if (ag.IsDistinct() || ag.GetFilter()) { return false; }
+    auto &args = ag.GetChildren();
+    const std::string agg_name = ag.Function().GetName().GetIdentifierName();
+    int64_t kind = MapAggKind(agg_name);
+    // DuckDB 2.0 rewrites avg(x) into sum(x) / count(x) (AvgRewriteRule), so TPC-H
+    // Q1 now carries count(x). Over a NOT NULL argument that is count(*). Over a
+    // nullable plain column it is COUNT_STAR carrying the column's program, and the
+    // Mojo finalize counts only the rows where it is valid. Such a plan only routes
+    // through the GPU_OP_NULLABLE slice below. Other count arguments decline.
+    bool count_nullable = false;
+    if (agg_name == "count" && args.size() == 1) {
+      kind = rp::AGG_COUNT_STAR;
+      if (!AggArgNotNull(*args[0], jt, proj)) {
+        std::string t, c;
+        if (!ResolveGroupTableCol(*args[0], jt, proj, t, c)) { return false; }
+        count_nullable = true;
+      }
+    }
     if (kind == 0) { return false; }
     RawPlanBuilder::Agg ae;
     ae.kind_tag = kind;
     int64_t tag, scale, width;
-    MapType(ag.return_type, tag, scale, width);
+    MapType(ag.GetReturnType(), tag, scale, width);
     ae.ret_type_tag = tag;
     ae.ret_scale = scale;
     ae.ret_width = width;
-    ae.ret_is_int128 = (ag.return_type.InternalType() == PhysicalType::INT128) ? 1 : 0;
+    ae.ret_is_int128 = (ag.GetReturnType().InternalType() == PhysicalType::INT128) ? 1 : 0;
     // Program: empty for COUNT_STAR; a statistical aggregate emits its argument
     // program(s) into Agg.program: 1-arg (stddev/var) is only the x program;
     // 2-arg (covar/corr/regr_*) emits the dependent-y program, OP_ARGSEP, then the
@@ -2665,16 +2751,16 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
     // metric lowering splits on OP_ARGSEP and builds the shared-sum metrics.
     if (IsStatAggKind(kind)) {
       if (IsStat2Arg(kind)) {
-        if (ag.children.size() != 2) { return false; }
-        if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
+        if (args.size() != 2) { return false; }
+        if (!EmitProgram(*args[0], jt, out, ae.program, proj)) { return false; }
         ae.program.push_back({rp::OP_ARGSEP, 0, 0});
-        if (!EmitProgram(*ag.children[1], jt, out, ae.program, proj)) { return false; }
+        if (!EmitProgram(*args[1], jt, out, ae.program, proj)) { return false; }
       } else {
-        if (ag.children.size() != 1) { return false; }
-        if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
+        if (args.size() != 1) { return false; }
+        if (!EmitProgram(*args[0], jt, out, ae.program, proj)) { return false; }
       }
-    } else if (kind != rp::AGG_COUNT_STAR && ag.children.size() == 1) {
-      if (!EmitProgram(*ag.children[0], jt, out, ae.program, proj)) { return false; }
+    } else if ((kind != rp::AGG_COUNT_STAR || count_nullable) && args.size() == 1) {
+      if (!EmitProgram(*args[0], jt, out, ae.program, proj)) { return false; }
     }
     out.aggregates.push_back(std::move(ae));
   }
@@ -2810,7 +2896,7 @@ bool SerializeMatchedPlan(LogicalAggregate &agg, RawPlanBuilder &out) {
                 break;
               }
             }
-            if (!nn) { nullable_names.insert(te->GetColumn(LogicalIndex(cidx)).Name()); }
+            if (!nn) { nullable_names.insert(te->GetColumn(LogicalIndex(cidx)).Name().GetIdentifierName()); }
           }
         }
         if (g_ok) {
@@ -3060,7 +3146,7 @@ public:
           throw InvalidInputException("GPU_AGG: materialize query failed: " + res->GetError());
         }
         idx_t total_rows = res->RowCount();
-        idx_t n_cols = res->types.size();
+        idx_t n_cols = res->GetTypes().size();
 
         // SKIP-MATERIALIZE landmine #1: set st.n_rows for the fact request from the
         // observed row count before the feed loop. Required so the finalize knows
@@ -3104,7 +3190,7 @@ public:
           for (idx_t c = 0; c < n_cols; c++) { buf_valid[c].reserve(total_rows); }
         }
         for (idx_t c = 0; c < n_cols; c++) {
-          const LogicalType &ct = res->types[c];
+          const LogicalType &ct = res->GetTypes()[c];
           if (ct.id() == LogicalTypeId::VARCHAR) {
             buf_str[c].reserve(total_rows);
             buf_strdata[c].reserve(total_rows);
@@ -3128,7 +3214,7 @@ public:
           auto n = chunk->size();
           for (idx_t c = 0; c < n_cols; c++) {
             chunk->data[c].Flatten(n);
-            const LogicalType &ct = res->types[c];
+            const LogicalType &ct = res->GetTypes()[c];
             // GPU_OP_NULLABLE: capture validity for every column (before the VARCHAR
             // branch's `continue`) so buf_valid[c] stays row-aligned. A NULL row is
             // read as raw garbage data, so the finalize must know to exclude it.
@@ -3184,7 +3270,7 @@ public:
         // feed deep-copies these again into its own heap, but stable pointers here
         // are required so that deep copy reads valid bytes.
         for (idx_t c = 0; c < n_cols; c++) {
-          if (res->types[c].id() != LogicalTypeId::VARCHAR) { continue; }
+          if (res->GetTypes()[c].id() != LogicalTypeId::VARCHAR) { continue; }
           for (auto &s : buf_strdata[c]) {
             buf_str[c].emplace_back(s.data(), (uint32_t)s.size());
           }
@@ -3192,7 +3278,7 @@ public:
 
         // Feed each column once (the contract TypeTag describes the element type).
         for (idx_t c = 0; c < n_cols; c++) {
-          const LogicalType &ct = res->types[c];
+          const LogicalType &ct = res->GetTypes()[c];
           int64_t tag = LogicalTypeToTag(ct);
           void *ptr = nullptr;
           if (ct.id() == LogicalTypeId::VARCHAR) {
@@ -3296,43 +3382,43 @@ public:
           hugeint_t hv;
           hv.lower = (uint64_t)lo;
           hv.upper = hi;
-          FlatVector::GetData<hugeint_t>(chunk.data[c])[r] = hv;
+          FlatVector::GetDataMutable<hugeint_t>(chunk.data[c])[r] = hv;
           break;
         }
         case LogicalTypeId::DOUBLE: {
-          FlatVector::GetData<double>(chunk.data[c])[r] = mojo_gpu_result_f64(h, row, (int64_t)c);
+          FlatVector::GetDataMutable<double>(chunk.data[c])[r] = mojo_gpu_result_f64(h, row, (int64_t)c);
           break;
         }
         case LogicalTypeId::DATE:
         case LogicalTypeId::INTEGER: {
           int64_t v = mojo_gpu_result_i64(h, row, (int64_t)c);
-          FlatVector::GetData<int32_t>(chunk.data[c])[r] = (int32_t)v;
+          FlatVector::GetDataMutable<int32_t>(chunk.data[c])[r] = (int32_t)v;
           break;
         }
         case LogicalTypeId::BIGINT: {
-          FlatVector::GetData<int64_t>(chunk.data[c])[r] = mojo_gpu_result_i64(h, row, (int64_t)c);
+          FlatVector::GetDataMutable<int64_t>(chunk.data[c])[r] = mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
         // Unsigned integer results (GPU_OP_STATS: regr_count). The assembler stores
         // the non-negative count as a signed int64 (res_lo); narrow to the column's
         // unsigned physical width here so the output vector matches the parent plan.
         case LogicalTypeId::UTINYINT: {
-          FlatVector::GetData<uint8_t>(chunk.data[c])[r] =
+          FlatVector::GetDataMutable<uint8_t>(chunk.data[c])[r] =
               (uint8_t)mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
         case LogicalTypeId::USMALLINT: {
-          FlatVector::GetData<uint16_t>(chunk.data[c])[r] =
+          FlatVector::GetDataMutable<uint16_t>(chunk.data[c])[r] =
               (uint16_t)mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
         case LogicalTypeId::UINTEGER: {
-          FlatVector::GetData<uint32_t>(chunk.data[c])[r] =
+          FlatVector::GetDataMutable<uint32_t>(chunk.data[c])[r] =
               (uint32_t)mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
         case LogicalTypeId::UBIGINT: {
-          FlatVector::GetData<uint64_t>(chunk.data[c])[r] =
+          FlatVector::GetDataMutable<uint64_t>(chunk.data[c])[r] =
               (uint64_t)mojo_gpu_result_i64(h, row, (int64_t)c);
           break;
         }
@@ -3343,7 +3429,7 @@ public:
           if (len > 0) {
             mojo_gpu_result_str(h, row, (int64_t)c, reinterpret_cast<uint8_t *>(&s[0]), len);
           }
-          FlatVector::GetData<string_t>(chunk.data[c])[r] =
+          FlatVector::GetDataMutable<string_t>(chunk.data[c])[r] =
               StringVector::AddString(chunk.data[c], s);
           break;
         }
@@ -3388,7 +3474,7 @@ public:
     if (group_index == rp::IDX_NONE) {
       // Ungrouped: all outputs are aggregate columns.
       for (int64_t i = 0; i < arity; i++) {
-        result.emplace_back((idx_t)aggregate_index, (idx_t)i);
+        result.emplace_back(TableIndex((idx_t)aggregate_index), ProjectionIndex((idx_t)i));
       }
     } else {
       // Grouped: group cols first (at group_index), then agg cols (at aggregate_index).
@@ -3400,10 +3486,10 @@ public:
       n_groups = arity - n_aggs;
       if (n_groups < 0) { n_groups = 0; }
       for (int64_t i = 0; i < n_groups; i++) {
-        result.emplace_back((idx_t)group_index, (idx_t)i);
+        result.emplace_back(TableIndex((idx_t)group_index), ProjectionIndex((idx_t)i));
       }
       for (int64_t i = 0; i < arity - n_groups; i++) {
-        result.emplace_back((idx_t)aggregate_index, (idx_t)i);
+        result.emplace_back(TableIndex((idx_t)aggregate_index), ProjectionIndex((idx_t)i));
       }
     }
     return result;
@@ -3535,10 +3621,11 @@ struct NativeColumnRef {
 
 NativeColumnRef ResolveNativeColumn(ClientContext &context, const std::string &table_name,
                                     const std::string &column_name) {
-  auto &entry = Catalog::GetEntry<TableCatalogEntry>(context, INVALID_CATALOG, DEFAULT_SCHEMA, table_name);
+  auto &entry = Catalog::GetEntry<TableCatalogEntry>(
+      context, QualifiedName(Identifier(), Identifier(DEFAULT_SCHEMA), Identifier(table_name)));
   auto &duck_table = entry.Cast<DuckTableEntry>();
 
-  std::string col = column_name;
+  Identifier col(column_name);
   auto logical = entry.GetColumnIndex(col, /*if_exists=*/true);
   if (!logical.IsValid()) {
     throw InvalidInputException("gpu_native: column '" + column_name + "' not found in '" + table_name + "'");
@@ -3606,7 +3693,7 @@ void ForEachColumnSegment(ClientContext &context, NativeColumnRef &ref, FN &&fn)
 
     vector<ColumnSegmentInfo> seg_infos;
     column_data.GetColumnSegmentInfo(QueryContext(context), rg, {ref.storage_index.GetPrimaryIndex()},
-                                     seg_infos);
+                                     seg_infos, ColumnSegmentInfoScanOptions());
 
     for (auto &si : seg_infos) {
       PinnedSegment ps;
@@ -3618,12 +3705,13 @@ void ForEachColumnSegment(ClientContext &context, NativeColumnRef &ref, FN &&fn)
       // base so the caller can handle (Phase A prints; Phase C is told).
       auto ct = EnumUtil::FromString<CompressionType>(si.compression_type.c_str());
       if (si.persistent && si.block_id >= 0) {
-        auto segment = ColumnSegment::CreatePersistentSegment(
-            db, block_manager, si.block_id, si.block_offset, ref.type,
-            si.segment_count, ct, BaseStatistics::CreateEmpty(ref.type),
-            /*segment_state=*/nullptr);
+        DataPointer dp(BaseStatistics::CreateEmpty(ref.type));
+        dp.block_pointer = BlockPointer(si.block_id, NumericCast<uint32_t>(si.block_offset));
+        dp.tuple_count = si.segment_count;
+        dp.compression_type = ct;
+        auto segment = ColumnSegment::CreatePersistentSegment(db, block_manager, dp);
         ps.seg_bytes = segment->SegmentSize();
-        ps.handle = buffer_manager.Pin(segment->block);
+        ps.handle = buffer_manager.Pin(segment->GetBlockHandle());
         ps.base = ps.handle.Ptr() + segment->GetBlockOffset();
         ps.segment = std::move(segment);
       }
@@ -3695,7 +3783,7 @@ void ParseBitpackingGroup0(const_data_ptr_t base, idx_t seg_bytes, idx_t type_si
 }
 
 unique_ptr<FunctionData> GpuNativeSegInfoBind(ClientContext &context, TableFunctionBindInput &input,
-                                              vector<LogicalType> &return_types, vector<string> &names) {
+                                              vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   auto ref = ResolveNativeColumn(context, table, column);
@@ -3734,12 +3822,12 @@ void GpuNativeSegInfoFunc(ClientContext &, TableFunctionInput &data, DataChunk &
   auto &gs = data.global_state->Cast<GpuNativeTFState>();
   idx_t n = MinValue<idx_t>(bd.rows.size() - gs.offset, STANDARD_VECTOR_SIZE);
   if (n == 0) { output.SetCardinality(0); return; }
-  auto c_idx = FlatVector::GetData<int64_t>(output.data[0]);
-  auto c_start = FlatVector::GetData<int64_t>(output.data[3]);
-  auto c_count = FlatVector::GetData<int64_t>(output.data[4]);
-  auto c_block = FlatVector::GetData<int64_t>(output.data[5]);
-  auto c_frame = FlatVector::GetData<int64_t>(output.data[6]);
-  auto c_width = FlatVector::GetData<int64_t>(output.data[7]);
+  auto c_idx = FlatVector::GetDataMutable<int64_t>(output.data[0]);
+  auto c_start = FlatVector::GetDataMutable<int64_t>(output.data[3]);
+  auto c_count = FlatVector::GetDataMutable<int64_t>(output.data[4]);
+  auto c_block = FlatVector::GetDataMutable<int64_t>(output.data[5]);
+  auto c_frame = FlatVector::GetDataMutable<int64_t>(output.data[6]);
+  auto c_width = FlatVector::GetDataMutable<int64_t>(output.data[7]);
   for (idx_t i = 0; i < n; i++) {
     auto &r = bd.rows[gs.offset + i];
     c_idx[i] = NumericCast<int64_t>(r.segment_index);
@@ -3774,7 +3862,7 @@ struct GpuNativeGroupDumpBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuNativeGroupDumpBind(ClientContext &context, TableFunctionBindInput &input,
-                                                vector<LogicalType> &return_types, vector<string> &names) {
+                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   auto ref = ResolveNativeColumn(context, table, column);
@@ -3811,14 +3899,14 @@ void GpuNativeGroupDumpFunc(ClientContext &, TableFunctionInput &data, DataChunk
   if (n == 0) { output.SetCardinality(0); return; }
   for (idx_t i = 0; i < n; i++) {
     auto &r = bd.rows[gs.offset + i];
-    FlatVector::GetData<int64_t>(output.data[0])[i] = NumericCast<int64_t>(r.seg_index);
-    FlatVector::GetData<int64_t>(output.data[1])[i] = NumericCast<int64_t>(r.group_idx);
-    FlatVector::GetData<int64_t>(output.data[2])[i] = NumericCast<int64_t>(r.group_rows);
-    FlatVector::GetData<int64_t>(output.data[3])[i] = NumericCast<int64_t>(r.global_start);
+    FlatVector::GetDataMutable<int64_t>(output.data[0])[i] = NumericCast<int64_t>(r.seg_index);
+    FlatVector::GetDataMutable<int64_t>(output.data[1])[i] = NumericCast<int64_t>(r.group_idx);
+    FlatVector::GetDataMutable<int64_t>(output.data[2])[i] = NumericCast<int64_t>(r.group_rows);
+    FlatVector::GetDataMutable<int64_t>(output.data[3])[i] = NumericCast<int64_t>(r.global_start);
     output.data[4].SetValue(i, Value(r.mode));
-    FlatVector::GetData<int64_t>(output.data[5])[i] = r.frame;
-    FlatVector::GetData<int64_t>(output.data[6])[i] = r.width;
-    FlatVector::GetData<int64_t>(output.data[7])[i] = r.data_off;
+    FlatVector::GetDataMutable<int64_t>(output.data[5])[i] = r.frame;
+    FlatVector::GetDataMutable<int64_t>(output.data[6])[i] = r.width;
+    FlatVector::GetDataMutable<int64_t>(output.data[7])[i] = r.data_off;
   }
   output.SetCardinality(n);
   gs.offset += n;
@@ -3978,7 +4066,7 @@ struct GpuNativeDecodeCheckBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuNativeDecodeCheckBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   auto ref = ResolveNativeColumn(context, table, column);
@@ -4139,13 +4227,13 @@ void GpuNativeDecodeCheckFunc(ClientContext &, TableFunctionInput &data, DataChu
   auto &gs = data.global_state->Cast<GpuNativeTFState>();
   if (gs.offset > 0) { output.SetCardinality(0); return; }
   output.data[0].SetValue(0, Value(bd.status));
-  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.checked_rows;
-  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.mismatches;
-  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.first_mismatch_row;
-  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.skipped_segments;
-  FlatVector::GetData<int64_t>(output.data[5])[0] = bd.first_got;
-  FlatVector::GetData<int64_t>(output.data[6])[0] = bd.first_want;
-  FlatVector::GetData<int64_t>(output.data[7])[0] = bd.deferred_rows;
+  FlatVector::GetDataMutable<int64_t>(output.data[1])[0] = bd.checked_rows;
+  FlatVector::GetDataMutable<int64_t>(output.data[2])[0] = bd.mismatches;
+  FlatVector::GetDataMutable<int64_t>(output.data[3])[0] = bd.first_mismatch_row;
+  FlatVector::GetDataMutable<int64_t>(output.data[4])[0] = bd.skipped_segments;
+  FlatVector::GetDataMutable<int64_t>(output.data[5])[0] = bd.first_got;
+  FlatVector::GetDataMutable<int64_t>(output.data[6])[0] = bd.first_want;
+  FlatVector::GetDataMutable<int64_t>(output.data[7])[0] = bd.deferred_rows;
   output.SetCardinality(1);
   gs.offset = 1;
 }
@@ -4177,7 +4265,7 @@ struct GpuPinStatusBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuPinStatusBind(ClientContext &, TableFunctionBindInput &,
-                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto bd = make_uniq<GpuPinStatusBindData>();
   {
     std::lock_guard<std::mutex> g(g_pin_mu);
@@ -4213,13 +4301,13 @@ void GpuPinStatusFunc(ClientContext &, TableFunctionInput &data, DataChunk &outp
     auto &r = bd.rows[gs.offset + i];
     output.data[0].SetValue(i, Value(r.key));
     output.data[1].SetValue(i, Value(r.kind));
-    FlatVector::GetData<int64_t>(output.data[2])[i] = r.bytes;
-    FlatVector::GetData<int64_t>(output.data[3])[i] = r.n_rows;
-    FlatVector::GetData<int64_t>(output.data[4])[i] = r.K;
-    FlatVector::GetData<int64_t>(output.data[5])[i] = r.last_use_age;
-    FlatVector::GetData<int64_t>(output.data[6])[i] = r.in_use;
-    FlatVector::GetData<int64_t>(output.data[7])[i] = bd.resident_mb;
-    FlatVector::GetData<int64_t>(output.data[8])[i] = bd.budget_mb;
+    FlatVector::GetDataMutable<int64_t>(output.data[2])[i] = r.bytes;
+    FlatVector::GetDataMutable<int64_t>(output.data[3])[i] = r.n_rows;
+    FlatVector::GetDataMutable<int64_t>(output.data[4])[i] = r.K;
+    FlatVector::GetDataMutable<int64_t>(output.data[5])[i] = r.last_use_age;
+    FlatVector::GetDataMutable<int64_t>(output.data[6])[i] = r.in_use;
+    FlatVector::GetDataMutable<int64_t>(output.data[7])[i] = bd.resident_mb;
+    FlatVector::GetDataMutable<int64_t>(output.data[8])[i] = bd.budget_mb;
   }
   output.SetCardinality(n);
   gs.offset += n;
@@ -4250,7 +4338,7 @@ struct GpuColPoolStatusBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuColPoolStatusBind(ClientContext &, TableFunctionBindInput &,
-                                              vector<LogicalType> &return_types, vector<string> &names) {
+                                              vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto bd = make_uniq<GpuColPoolStatusBindData>();
   bd->uploaded_bytes = mojo_gpu_colpool_uploaded_bytes();
   bd->pool_bytes = mojo_gpu_colpool_pool_bytes();
@@ -4276,16 +4364,16 @@ void GpuColPoolStatusFunc(ClientContext &, TableFunctionInput &data, DataChunk &
   auto &bd = data.bind_data->Cast<GpuColPoolStatusBindData>();
   auto &gs = data.global_state->Cast<GpuNativeTFState>();
   if (gs.offset > 0) { output.SetCardinality(0); return; }
-  FlatVector::GetData<int64_t>(output.data[0])[0] = bd.uploaded_bytes;
-  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.pool_bytes;
-  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.pin2_bytes;
-  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.budget_mb;
-  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.hits;
-  FlatVector::GetData<int64_t>(output.data[5])[0] = bd.misses;
-  FlatVector::GetData<int64_t>(output.data[6])[0] = bd.evictions;
-  FlatVector::GetData<int64_t>(output.data[7])[0] = bd.resident_cols;
-  FlatVector::GetData<int64_t>(output.data[8])[0] = bd.promoted_cols;
-  FlatVector::GetData<int64_t>(output.data[9])[0] = bd.costaware;
+  FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = bd.uploaded_bytes;
+  FlatVector::GetDataMutable<int64_t>(output.data[1])[0] = bd.pool_bytes;
+  FlatVector::GetDataMutable<int64_t>(output.data[2])[0] = bd.pin2_bytes;
+  FlatVector::GetDataMutable<int64_t>(output.data[3])[0] = bd.budget_mb;
+  FlatVector::GetDataMutable<int64_t>(output.data[4])[0] = bd.hits;
+  FlatVector::GetDataMutable<int64_t>(output.data[5])[0] = bd.misses;
+  FlatVector::GetDataMutable<int64_t>(output.data[6])[0] = bd.evictions;
+  FlatVector::GetDataMutable<int64_t>(output.data[7])[0] = bd.resident_cols;
+  FlatVector::GetDataMutable<int64_t>(output.data[8])[0] = bd.promoted_cols;
+  FlatVector::GetDataMutable<int64_t>(output.data[9])[0] = bd.costaware;
   output.SetCardinality(1);
   gs.offset += 1;
 }
@@ -4304,7 +4392,7 @@ struct GpuUnpinBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuUnpinBindImpl(ClientContext &, TableFunctionBindInput &input,
-                                          vector<LogicalType> &return_types, vector<string> &names,
+                                          vector<LogicalType> &return_types, vector<Identifier> &names,
                                           bool all) {
   auto bd = make_uniq<GpuUnpinBindData>();
   std::lock_guard<std::mutex> g(g_pin_mu);
@@ -4338,11 +4426,11 @@ unique_ptr<FunctionData> GpuUnpinBindImpl(ClientContext &, TableFunctionBindInpu
 }
 
 unique_ptr<FunctionData> GpuUnpinBind(ClientContext &context, TableFunctionBindInput &input,
-                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
   return GpuUnpinBindImpl(context, input, return_types, names, /*all=*/false);
 }
 unique_ptr<FunctionData> GpuUnpinAllBind(ClientContext &context, TableFunctionBindInput &input,
-                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
   return GpuUnpinBindImpl(context, input, return_types, names, /*all=*/true);
 }
 
@@ -4350,8 +4438,8 @@ void GpuUnpinFunc(ClientContext &, TableFunctionInput &data, DataChunk &output) 
   auto &bd = data.bind_data->Cast<GpuUnpinBindData>();
   auto &gs = data.global_state->Cast<GpuNativeTFState>();
   if (gs.offset > 0) { output.SetCardinality(0); return; }
-  FlatVector::GetData<int64_t>(output.data[0])[0] = bd.freed;
-  FlatVector::GetData<int64_t>(output.data[1])[0] = bd.skipped_in_use;
+  FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = bd.freed;
+  FlatVector::GetDataMutable<int64_t>(output.data[1])[0] = bd.skipped_in_use;
   output.SetCardinality(1);
   gs.offset = 1;
 }
@@ -4374,7 +4462,7 @@ struct GpuPinTableBindData : public TableFunctionData {
 };
 
 unique_ptr<FunctionData> GpuPinTableBind(ClientContext &context, TableFunctionBindInput &input,
-                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
   auto table = input.inputs[0].GetValue<string>();
   auto column = input.inputs[1].GetValue<string>();
   bool use_fp16 = true;  // default fp16, matching gpu_cosine_topk*
@@ -4420,9 +4508,9 @@ void GpuPinTableFunc(ClientContext &, TableFunctionInput &data, DataChunk &outpu
   if (gs.offset > 0) { output.SetCardinality(0); return; }
   output.data[0].SetValue(0, Value(bd.key));
   output.data[1].SetValue(0, Value(bd.kind));
-  FlatVector::GetData<int64_t>(output.data[2])[0] = bd.n_rows;
-  FlatVector::GetData<int64_t>(output.data[3])[0] = bd.K;
-  FlatVector::GetData<int64_t>(output.data[4])[0] = bd.bytes;
+  FlatVector::GetDataMutable<int64_t>(output.data[2])[0] = bd.n_rows;
+  FlatVector::GetDataMutable<int64_t>(output.data[3])[0] = bd.K;
+  FlatVector::GetDataMutable<int64_t>(output.data[4])[0] = bd.bytes;
   output.SetCardinality(1);
   gs.offset = 1;
 }

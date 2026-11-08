@@ -1,6 +1,6 @@
 # Demo Mojo Extension for DuckDB
 
-This is a demo DuckDB extension written in [Mojo](https://www.modular.com/mojo) using the [duckdb.mojo](https://github.com/sbrunk/duckdb.mojo) bindings and the [DuckDB C Extension API](https://duckdb.org/docs/extensions/extending_duckdb/c_extensions).
+This is a demo DuckDB extension written in [Mojo](https://www.modular.com/mojo) using the [duckdb.mojo](https://github.com/sbrunk/duckdb.mojo) bindings and DuckDB's V2 C extension API.
 
 It demonstrates how to create DuckDB extensions in Mojo, following a similar pattern to [DuckDB's demo_capi extension](https://github.com/duckdb/duckdb/tree/main/extension/demo_capi) and the [extension-template](https://github.com/duckdb/extension-template).
 
@@ -51,9 +51,9 @@ mojo build extensions/demo-extension/src/demo_mojo_extension.mojo \
     --emit shared-lib \
     -o extensions/demo-extension/build/demo_mojo.duckdb_extension
 
-# Append metadata footer
+# Append metadata footer (unstable V2 target)
 python3 scripts/append_extension_metadata.py \
-    extensions/demo-extension/build/demo_mojo.duckdb_extension
+    extensions/demo-extension/build/demo_mojo.duckdb_extension --abi-type C_STRUCT_UNSTABLE
 ```
 
 ## Testing
@@ -75,11 +75,12 @@ pixi run duckdb -unsigned -c "
 
 Expected output: `42`
 
-## API version
+## DuckDB version
 
-`Extension.run` requests extension API version v1.5.6. DuckDB 1.5.6
-stabilized every function that used to be unstable, so extensions get the full
-C API, and they load in DuckDB 1.5.6 or newer.
+The extension uses DuckDB's V2 C API. Every V2 function is still marked
+unstable, so the extension carries the `C_STRUCT_UNSTABLE` footer and loads
+only into the exact DuckDB build it was compiled against (like DuckDB's C++
+extensions). Rebuild it for each DuckDB release.
 
 ## Limitations
 
@@ -93,76 +94,35 @@ C API, and they load in DuckDB 1.5.6 or newer.
 To create your own Mojo extension for DuckDB:
 
 1. Copy this directory as a starting point
-2. Write your functions using the duckdb.mojo API (`ScalarFunction`, `AggregateFunction`, `TableFunction`)
-3. Create an init function that registers them via a `Connection`
-4. Export the entry point using `@export("{name}_init_c_api")` with the `abi("C")` effect
+2. Write your functions as plain Mojo functions (`ScalarFunction.from_function`), SIMD functions (`from_simd_function`) or chunk-level functions (`from_chunk_function`)
+3. Create an init function that registers them on the `Extension`
+4. Export the entry point `{name}_init_c_api_v2` with the `abi("C")` effect
 5. Build and load it using the pixi tasks or manual steps above
 
-### Entry Point Convention
+### Entry point convention
 
-The entry point function must be named `{extension_name}_init_c_api` and have this signature:
-
-```mojo
-@export("my_extension_init_c_api")
-def my_extension_init_c_api(
-    info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
-) abi("C") -> Bool:
-    ...
-```
-
-The `{extension_name}` part must match the filename stem of the `.duckdb_extension` file (for example, `demo_mojo.duckdb_extension` needs `demo_mojo_init_c_api`).
-
-### Using `Extension.run` (recommended)
-
-This is the easiest way to implement the entry point. Write an init function that
-receives a `Connection` and registers your functions, then pass it to `Extension.run`:
+The entry point must be named `{extension_name}_init_c_api_v2`, where
+`{extension_name}` is the file name stem of the `.duckdb_extension` file (for
+example, `demo_mojo.duckdb_extension` needs `demo_mojo_init_c_api_v2`):
 
 ```mojo
-from duckdb._libduckdb import duckdb_extension_info
-from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.connection import Connection
-from duckdb.scalar_function import ScalarFunction
+from duckdb._libduckdb_v2 import duckdb_v2_extension_input
+from duckdb import Extension, ScalarFunction
 
 def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-def init(conn: Connection) raises:
-    ScalarFunction.from_function[
-        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
-    ](conn)
+def init(ext: Extension) raises:
+    ext.register(ScalarFunction.from_function["mojo_add_numbers", add_numbers]())
 
-@export("my_extension_init_c_api")
-def my_extension_init_c_api(
-    info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
-) abi("C") -> Bool:
-    return Extension.run[init](info, access)
+@export("my_extension_init_c_api_v2")
+def my_extension_init_c_api_v2(input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]) abi("C"):
+    Extension.run[init](input)
 ```
 
-`Extension.run` creates the connection and reports errors back to DuckDB. If `init` raises, the error message is forwarded to
-DuckDB via `set_error`.
+`Extension.run` loads the V2 API and runs `init`. If `init` raises, the load
+fails with its message. An extension has no `Connection`: it cannot run SQL.
 
-The `Connection` has the full C API. See the [API version](#api-version)
-section above for details.
-
-### Using `Extension` directly
-
-For more control (for example to access the `Database` handle or report custom errors),
-create an `Extension` manually:
-
-```mojo
-@export("my_extension_init_c_api")
-def my_extension_init_c_api(
-    info: duckdb_extension_info,
-    access: UnsafePointer[duckdb_extension_access, MutUntrackedOrigin],
-) abi("C") -> Bool:
-    var ext = Extension(info, access)
-    try:
-        var conn = ext.connect()
-        # Register functions via conn ...
-    except e:
-        ext.set_error(String(e))
-        return False
-    return True
-```
+The signature comes from the Mojo function: arguments and results can be
+numbers, strings, dates, lists, maps and structs. A NULL argument gives NULL
+without calling the function, unless the argument is an `Optional`.

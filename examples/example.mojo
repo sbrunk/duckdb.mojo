@@ -1,16 +1,24 @@
-from duckdb import *
+import duckdb
 
-# Define a struct matching the query columns. Fields map to columns by position.
+
+# Rows map to struct fields by column name.
 @fieldwise_init
-struct StationCount(Writable, Copyable, Movable):
+struct StationCount(Copyable, Defaultable, Movable, Writable):
     var station: String
     var num_services: Int64
 
+    def __init__(out self):
+        self.station = ""
+        self.num_services = 0
+
+
 def main() raises:
-    var con = DuckDB.connect(":memory:")
+    var con = duckdb.connect()
+    # httpfs reads files over HTTP. Installed explicitly: autoinstall fails
+    # with the conda-forge libduckdb 2.0.0 build.
     _ = con.execute("""
-    SET autoinstall_known_extensions=1;
-    SET autoload_known_extensions=1;
+    INSTALL httpfs;
+    LOAD httpfs;
 
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
@@ -18,29 +26,31 @@ def main() raises:
 
     var query = """
     -- Get the top-3 busiest train stations
-    SELECT "Stop:Station name", count(*) AS num_services
+    SELECT "Stop:Station name" AS station, count(*) AS num_services
     FROM train_services
     GROUP BY ALL
     ORDER BY num_services DESC
     LIMIT 3;
     """
 
-    # Iterate over rows directly
-    for row in con.execute(query):
-        print(row.get[String](col=0), " ", row.get[Int64](col=1))
+    # Print the result as a table
+    con.execute(query).show()
 
-    # Iterate over chunks, then rows within each chunk
+    # Read all rows, then access cells by column and row
+    var result = con.execute(query).fetchall()
+    for row in result.rows():
+        print(row.get[String](0), " ", row.get[Int64](1))
+
+    # Stream chunks and read columns
     for chunk in con.execute(query).chunks():
-        for row in chunk:
-            print(row.get[String](col=0), " ", row.get[Int64](col=1))
+        var names = chunk.column[String](0)
+        for i in range(len(chunk)):
+            print(names.get(i).value())
 
-    # Decode directly into tuples
-    for row in con.execute(query):
-        var t = row.get_tuple[String, Int64]()
+    # Rows as tuples
+    for t in con.execute(query).get[Tuple[String, Int64]]():
         print(t[0], ": ", t[1])
 
-    # Typed struct access
-    var result = con.execute(query).fetchall()
-    var stations: List[StationCount] = result.get[StationCount]()
-    for i in range(len(stations)):
-        print(stations[i])
+    # Rows as structs
+    for s in con.execute(query).get[StationCount]():
+        print(s)

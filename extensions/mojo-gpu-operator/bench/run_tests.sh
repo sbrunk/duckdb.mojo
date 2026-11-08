@@ -15,6 +15,8 @@ SRC="$ROOT/extensions/mojo-gpu-operator/src"
 FILTER="${1:-}"
 cd "$ROOT"
 
+# Guarded expansion: bash 3.2 on macOS runners treats an empty array as
+# unset, which aborts under set -u.
 read -ra MOJO_TARGET <<< "${MOJO_TARGET_FLAGS:-}"
 LOGS="$(mktemp -d)"
 trap 'rm -rf "$LOGS"' EXIT
@@ -79,7 +81,7 @@ for entry in "${TESTS[@]}"; do
     # Only stdout is checked for FAIL: compiler diagnostics go to stderr and
     # quote source lines, which can contain the same words.
     # shellcheck disable=SC2086
-    out="$(env $vars mojo run "${MOJO_TARGET[@]}" -I "$SRC" "$HERE/$name.mojo" 2> "$LOGS/$name.err")"
+    out="$(env $vars mojo run ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} -I "$SRC" "$HERE/$name.mojo" 2> "$LOGS/$name.err")"
     rc=$?
     if [[ $rc -ne 0 ]] || grep -qE '\bFAIL\b|MISMATCH' <<< "$out"; then
         echo "$out" | tail -15

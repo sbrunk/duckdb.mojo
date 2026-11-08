@@ -14,19 +14,28 @@ source:
 build:
   number: 0
   script:
-    - mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
+    # The Mojo compiler only searches MODULAR_MOJO_MAX_IMPORT_PATH. pixi sets
+    # it on activation, a conda build does not, so the build script sets it to
+    # the host prefix, where emberserde.mojoc is installed.
+    - MODULAR_MOJO_MAX_IMPORT_PATH="${{ PREFIX }}/lib/mojo" mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
 
 requirements:
   build:
-    - mojo-compiler ==1.1.0
+    - mojo-compiler ==1.2.0
   host:
-    - mojo-compiler ==1.1.0
+    - mojo-compiler ==1.2.0
+    - emberserde ==0.2.0
   run:
     # Exact pin, not pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would allow a newer
     # release at install time, which fails with a version-mismatch error.
-    - mojo-compiler ==1.1.0
-    - libduckdb >=1.5.6,<1.6
+    - mojo-compiler ==1.2.0
+    # Exact pin: every function of DuckDB's V2 C API is still unstable.
+    - libduckdb ==2.0.0
+    # User code compiles the generic type mapping against emberserde. 0.2.0 is
+    # not on a channel yet, so the conda-recipe CI job builds it from git and
+    # passes it as a local channel.
+    - emberserde ==0.2.0
 
 tests:
   - script:
@@ -38,7 +47,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=1.5.6,<1.6
+        - libduckdb ==2.0.0
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

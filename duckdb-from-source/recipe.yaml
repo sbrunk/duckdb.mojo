@@ -1,6 +1,9 @@
+context:
+  version: 2.0.0
+
 package:
   name: duckdb-from-source
-  version: 1.5.6
+  version: ${{ version }}
 
 source:
   # Build from the in-repo DuckDB source submodule (third_party/duckdb), pinned
@@ -27,6 +30,7 @@ build:
       -GNinja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DOVERRIDE_GIT_DESCRIBE=v${{ version }} \
       ../..
     
     ninja

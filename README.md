@@ -18,7 +18,7 @@ You can use duckdb.mojo to:
    built-in functions, and GPU execution of aggregations and vector search,
    without changing the SQL.
 
-Requirements: Mojo 1.1.0 and DuckDB 1.5.6, on Linux (x86_64, aarch64) and macOS
+Requirements: Mojo 1.2.0 and DuckDB 2.0.0, on Linux (x86_64, aarch64) and macOS
 (Apple silicon). Writing extensions and the acceleration extensions are
 experimental.
 
@@ -42,19 +42,27 @@ pixi run mojo run examples/example.mojo
 queries it:
 
 ```mojo
-from duckdb import *
+import duckdb
 
-# Define a struct matching the query columns. Fields map to columns by position.
+
+# Rows map to struct fields by column name.
 @fieldwise_init
-struct StationCount(Writable, Copyable, Movable):
+struct StationCount(Copyable, Defaultable, Movable, Writable):
     var station: String
     var num_services: Int64
 
+    def __init__(out self):
+        self.station = ""
+        self.num_services = 0
+
+
 def main() raises:
-    var con = DuckDB.connect(":memory:")
+    var con = duckdb.connect()
+    # httpfs reads files over HTTP. Installed explicitly: autoinstall fails
+    # with the conda-forge libduckdb 2.0.0 build.
     _ = con.execute("""
-    SET autoinstall_known_extensions=1;
-    SET autoload_known_extensions=1;
+    INSTALL httpfs;
+    LOAD httpfs;
 
     CREATE TABLE train_services AS
     FROM 'https://blobs.duckdb.org/nl-railway/services-2025-03.csv.gz';
@@ -62,55 +70,67 @@ def main() raises:
 
     var query = """
     -- Get the top-3 busiest train stations
-    SELECT "Stop:Station name", count(*) AS num_services
+    SELECT "Stop:Station name" AS station, count(*) AS num_services
     FROM train_services
     GROUP BY ALL
     ORDER BY num_services DESC
     LIMIT 3;
     """
 
-    # Iterate over rows directly
-    for row in con.execute(query):
-        print(row.get[String](col=0), " ", row.get[Int64](col=1))
+    # Print the result as a table
+    con.execute(query).show()
 
-    # Iterate over chunks, then rows within each chunk
+    # Read all rows, then access cells by column and row
+    var result = con.execute(query).fetchall()
+    for row in result.rows():
+        print(row.get[String](0), " ", row.get[Int64](1))
+
+    # Stream chunks and read columns
     for chunk in con.execute(query).chunks():
-        for row in chunk:
-            print(row.get[String](col=0), " ", row.get[Int64](col=1))
+        var names = chunk.column[String](0)
+        for i in range(len(chunk)):
+            print(names.get(i).value())
 
-    # Decode directly into tuples
-    for row in con.execute(query):
-        var t = row.get_tuple[String, Int64]()
+    # Rows as tuples
+    for t in con.execute(query).get[Tuple[String, Int64]]():
         print(t[0], ": ", t[1])
 
-    # Typed struct access
-    var result = con.execute(query).fetchall()
-    var stations: List[StationCount] = result.get[StationCount]()
-    for i in range(len(stations)):
-        print(stations[i])
+    # Rows as structs
+    for s in con.execute(query).get[StationCount]():
+        print(s)
 ```
 
 More examples are in [`examples/`](examples/).
 
 ## Client API
 
-Results decode into Mojo scalars, `String`, `Optional`, `List`, `Dict`,
-`Tuple`, `Variant` and structs, including nested `LIST`, `STRUCT` and `MAP`
-columns. `Result.show()` prints any result as a table, for every DuckDB type.
-Build nested types with `list_type`, `map_type`, `array_type`, `struct_type`,
-`decimal_type`, and `enum_type`.
+The bindings are built on DuckDB's V2 C API. One type mapping is used in both
+directions: for results, parameters, values, the appender and function
+signatures. It covers Mojo scalars, `String`, `Optional` (NULL), `List`,
+`Dict`, `Tuple`, `Variant`, structs and the value types `Date`, `Time`,
+`Timestamp`, `Interval`, `Decimal`, `UUID` and `Bit`, including nested
+`LIST`, `ARRAY`, `STRUCT`, `MAP` and `UNION` columns. Structs map to columns
+and `STRUCT` fields by name (case-insensitive), tuples by position. A struct
+read from DuckDB must be `Defaultable` when it has fields such as `String` or
+`List`.
+
+`execute` returns a streaming `Result`. Read it with `get[T]()` (all rows),
+`fetchone[T]()`, `fetchmany[T](n)`, `chunks()`, `fetchall()` (all chunks in
+memory) or `show()`. Errors are `DuckDBError`s with a `code` (`ErrorCode`)
+and a message.
 
 ### Relation API (lazy, composable)
 
-`con.sql(...)`, `con.table(...)`/`con.view(...)`, and the `read_*` readers return
-a lazy `Relation`: a query you build with chainable transforms that runs only at
-a terminal (`show`/`fetchall`/`get[T]`/`to_table`/...). It mirrors DuckDB's
-Python relational API and reuses the typed decoding shown above.
+`con.sql(...)`, `con.table(...)` and the `read_*` readers return a lazy
+`Relation`: a query you build with chainable transforms that runs only at a
+terminal (`show`/`fetchall`/`get[T]`/`create`/...). It follows DuckDB's
+Python relational API.
 
 ```mojo
-from duckdb import *
+import duckdb
+from duckdb import col, lit
 
-var con = DuckDB.connect(":memory:")
+var con = duckdb.connect()
 _ = con.execute("CREATE TABLE trips AS SELECT * FROM 'trips.parquet'")
 
 # Build lazily, execute at a terminal.
@@ -124,234 +144,227 @@ con.sql("FROM trips") \
 # Readers are relations, so they chain directly.
 con.read_csv("more_trips.csv").filter("fare > 0").count().show()
 
-# Terminals reuse typed decoding. Print renders the table.
+# Terminals decode into Mojo types.
 var payments = con.table("trips").select("payment").distinct().get[String]()
-print(con.sql("SELECT 1 AS a, 'hi' AS b"))
 
-# lit() quotes values, col() quotes identifiers (injection-safe by default).
+# lit() quotes values, col() quotes identifiers.
 con.table("people").filter(col("name") + " = " + lit("O'Brien")).show()
 
 # Set operations, joins, and persistence.
 var ab = con.sql("SELECT 1 AS x").union(con.sql("SELECT 2 AS x"))
 con.table("orders").set_alias("o") \
    .join(con.table("items").set_alias("i"), on="o.id = i.order_id") \
-   .to_table("orders_items")
+   .create("orders_items")
 ```
 
-### Connection lifecycle, transactions, and errors
+### Transactions and errors
 
 ```mojo
-from duckdb import *
+import duckdb
+from duckdb import ErrorCode
 
-with DuckDB.connect("my.db") as con:          # disconnects at block exit
-    con.begin()
-    _ = con.execute("INSERT INTO t VALUES (1)")
-    con.commit()                              # or con.rollback()
+var con = duckdb.connect("my.db")
+con.begin()
+_ = con.execute("INSERT INTO t VALUES (1)")
+con.commit()                                  # or con.rollback()
 
-    con.install_extension("httpfs")
-    con.load_extension("httpfs")
-
-    var cur = con.cursor()                    # second connection, same database
-
-    try:
-        _ = con.execute("SELECT * FROM missing")
-    except e:
-        # Coarse error categories for branching on the kind of failure.
-        if e.type.is_programming_error():
-            print("bad SQL:", e)              # CATALOG/PARSER/BINDER/...
+try:
+    _ = con.execute("SELECT * FROM missing")
+except e:
+    if e.code == ErrorCode.CATALOG:           # or e.code.is_query(), is_io(), ...
+        print("no such table:", e)
 ```
 
-### Parameterized queries
+### Parameters and prepared statements
 
-Bind parameters positionally (`?` / `$1`) or by name (`$name`). Plain Mojo
-scalars are bound directly; `Optional[T]` binds SQL `NULL` for `None`:
+Bind parameters by position (`?`, `$1`) or by name (`$name`). Any mapped
+type works as a parameter, including lists and structs; `None` binds NULL:
 
 ```mojo
-from duckdb import *
+import duckdb
+from duckdb import Params
 
-var con = DuckDB.connect(":memory:")
-_ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR)")
+var con = duckdb.connect()
+_ = con.execute("CREATE TABLE t (id INTEGER, name VARCHAR, tags VARCHAR[])")
 
 # Positional parameters
-_ = con.execute("INSERT INTO t VALUES (?, ?)", 1, String("Mark"))
+_ = con.execute("INSERT INTO t VALUES (?, ?, ?)", Int32(1), String("Mark"), [String("a"), String("b")])
 
-# Bulk insert: prepares once, re-binds per row
-var rows: List[Tuple[Int32, String]] = [
-    (Int32(2), String("Hannes")),
-    (Int32(3), String("Pedro")),
-]
-con.executemany("INSERT INTO t VALUES (?, ?)", rows)
+# Named parameters, from a builder or from a struct's fields
+var p = Params()
+p.set("id", Int32(1))
+var names = con.execute("SELECT name FROM t WHERE id = $id", params=p^).get[String]()
 
-# Named parameters
-var r = con.execute_named(
-    "SELECT name FROM t WHERE id = $id", {"id": 1}
-).fetchall()
-
-# Or prepare explicitly and reuse
+# Prepare once, run many times
 var stmt = con.prepare("SELECT $1 + $2")
-stmt.bind(1, Int32(40))
-stmt.bind(2, Int32(2))
-var sum = stmt.execute().fetchall()
+var sum = stmt.execute(Int32(40), Int32(2)).get[Int32]()[0]
 ```
 
-### Module-level API and result helpers
+### Module-level API
 
-A Python-style top-level API runs against a lazily-created, process-wide
-in-memory default connection:
+A Python-style top-level API runs on a process-wide in-memory connection,
+created on first use:
 
 ```mojo
 import duckdb
 
-# Default connection
-duckdb.sql("CREATE TABLE t AS SELECT * FROM range(5) r(i)")
-duckdb.sql("SELECT * FROM t").show()        # formatted table
+_ = duckdb.execute("CREATE TABLE t AS SELECT * FROM range(5) r(i)")
+duckdb.sql("SELECT * FROM t").show()
+var csv = duckdb.read_csv("data.csv").fetchall()
 
-var con = duckdb.connect("my.db", read_only=True)
-
-# Read files directly
-var csv = con.read_csv("data.csv").fetchall()
-
-# Typed fetching (column types given as parameters)
-var result = con.execute("SELECT i FROM t")
-var first = result.fetchone[Int64]()        # Optional[Tuple[Int64]]
-var batch = result.fetchmany[Int64](size=2)
-
-# Column metadata
-print(result.columns())                     # List[String] of names
-print(result.description())                 # List[Column] (index/name/type)
+var con = duckdb.connect("my.db", read_only=True)   # a separate database
 ```
 
 ### Appender
 
 The Appender loads rows faster than `INSERT` statements. Rows can be structs
-or tuples ([`examples/appender.mojo`](examples/appender.mojo)):
+(by field name) or tuples (by position)
+([`examples/appender.mojo`](examples/appender.mojo)):
 
 ```mojo
 var appender = Appender(con, "people")
 appender.append_row(Person(1, "Mark"))
-appender.append_rows([Person(2, "Hannes"), Person(3, "Pedro")])
+appender.append_row((Int32(2), String("Hannes")))
 appender.close()
 ```
 
+It flushes every 204,800 rows and on `close()`. `on_conflict=` turns the
+inserts into `INSERT OR IGNORE` / `OR REPLACE`, and `append_default` uses a
+column's default value.
+
+### More
+
+`Connection` also gives access to settings (`con.settings()`), the file
+system (`con.file_system()`), profiling (`con.enable_profiling()`,
+`con.query_metrics()`), logging, Arrow import and export
+(`con.execute_arrow`, `con.arrow_scan`) and non-blocking execution
+(`result.step()`).
+
 ## User-defined functions
 
-Register Mojo functions as DuckDB scalar, aggregate and table functions. They
-work in client code and inside extensions.
+Register Mojo functions as DuckDB scalar, aggregate and table functions with
+`con.register(...)`. The same definitions work inside extensions.
 
 ### Scalar functions
 
 Pass Mojo stdlib math functions directly, write your own SIMD kernel, or write
 a function that handles one row at a time. SIMD functions get the input in
-batches of the hardware SIMD width
+batches of the hardware SIMD width. Row-at-a-time functions take and return
+any mapped type, and their SQL signature is inferred from the Mojo one
 ([`examples/scalar_function.mojo`](examples/scalar_function.mojo)):
 
 ```mojo
 import std.math as math
-from duckdb import *
-from duckdb.scalar_function import ScalarFunction
+import duckdb
+from duckdb import ScalarFunction
 
 def sin_plus_cos[w: SIMDLength](x: SIMD[DType.float64, w]) -> SIMD[DType.float64, w]:
     return math.sin(x) + math.cos(x)
 
-def add_one(x: Int32) -> Int32:
-    return x + 1
+def greet(name: String) -> String:
+    return String("hello ", name)
+
+# An Optional argument sees NULLs; otherwise NULL rows skip the call.
+def or_zero(x: Optional[Int64]) -> Int64:
+    return x.value() if x else 0
 
 def main() raises:
-    var conn = DuckDB.connect(":memory:")
+    var con = duckdb.connect()
 
     # Stdlib math functions
-    ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt](conn)
-    ScalarFunction.from_simd_function["mojo_atan2", DType.float64, math.atan2](conn)
-
+    con.register(ScalarFunction.from_simd_function["mojo_sqrt", DType.float64, math.sqrt]())
     # A custom SIMD kernel
-    ScalarFunction.from_simd_function[
-        "mojo_sin_plus_cos", DType.float64, DType.float64, sin_plus_cos
-    ](conn)
-
+    con.register(ScalarFunction.from_simd_function["mojo_sin_plus_cos", DType.float64, DType.float64, sin_plus_cos]())
     # One row at a time
-    ScalarFunction.from_function["add_one", DType.int32, DType.int32, add_one](conn)
+    con.register(ScalarFunction.from_function["greet", greet]())
+    con.register(ScalarFunction.from_function["or_zero", or_zero]())
 
-    conn.execute("SELECT mojo_sqrt(2.0), mojo_sin_plus_cos(1.0), add_one(41)").show()
+    con.execute("SELECT mojo_sqrt(2.0), mojo_sin_plus_cos(1.0), greet('duck'), or_zero(NULL)").show()
 ```
+
+`ScalarFunction.from_chunk_function` processes whole chunks with explicit
+types (for example `DECIMAL`), with optional bind data and per-thread state.
+Functions can have named parameters with defaults (`.named(...)`,
+`.default(...)`), variadic arguments and `ANY` types.
 
 ### Aggregate functions
 
-Common reductions are one line of code. `from_reduce` builds an aggregate from a SIMD
-combine function and its identity value, optionally accumulating into a wider
-type:
+Common reductions are one line of code. `from_reduce` builds an aggregate from
+a SIMD combine function and its identity value. For anything else, write a
+state struct: `update` takes one row's arguments, `combine` merges states
+computed in parallel, and `finalize` returns the result
+([`examples/aggregate_function.mojo`](examples/aggregate_function.mojo)):
 
 ```mojo
-AggregateFunction.from_sum["mojo_sum", DType.float64](conn)
-AggregateFunction.from_max["mojo_max", DType.float64](conn)  # also from_min, from_mean, from_product
+con.register(AggregateFunction.from_sum["mojo_sum", DType.float64]())  # also from_min/max/mean/product
 
-def add[w: SIMDLength](a: SIMD[DType.int64, w], b: SIMD[DType.int64, w]) -> SIMD[DType.int64, w]:
-    return a + b
+struct Avg(AggregateState):
+    comptime Result = Float64
+    var sum: Float64
+    var n: Int
 
-def zero() -> Scalar[DType.int64]:
-    return 0
+    def __init__(out self):
+        self.sum = 0
+        self.n = 0
 
-# INTEGER input, BIGINT result
-AggregateFunction.from_reduce["wide_sum", DType.int32, DType.int64, add, zero](conn)
+    def update(mut self, x: Float64):
+        self.sum += x
+        self.n += 1
+
+    def combine(mut self, other: Self):
+        self.sum += other.sum
+        self.n += other.n
+
+    def finalize(self) -> Float64:
+        return self.sum / Float64(self.n)
+
+# The SQL signature is inferred from Avg.update.
+con.register(AggregateFunction.from_state["my_avg", Avg.update]())
 ```
-
-For full control, you can implement the callbacks yourself (state size, init, update,
-combine, finalize, and an optional destructor) and register them with
-`AggregateFunction.set_functions`. See
-[`examples/aggregate_function.mojo`](examples/aggregate_function.mojo).
 
 ### Table functions
 
-A table function has three callbacks: bind declares the output columns and
-reads the parameters, init sets up a scan, and the main function fills output
-chunks until it returns an empty one. See
-[`examples/table_function.mojo`](examples/table_function.mojo), which registers
-`generate_ints(n)`:
+A table function is a struct: `bind` reads the arguments and declares the
+output columns, `init` creates the state of one scan, and `scan` fills an
+output chunk and returns its row count (0 ends the scan). Columns the query
+doesn't use are skipped (`out.wants(col)`), scans can run in parallel, and
+filters can be pushed down. See
+[`examples/table_function.mojo`](examples/table_function.mojo), which
+registers `squares(n)`:
 
 ```mojo
-var tf = TableFunction()
-tf.set_name("generate_ints")
-tf.add_parameter(LogicalType(DuckDBType.integer))
-tf.set_bind[counter_bind]()
-tf.set_init[counter_init]()
-tf.set_function[counter_function]()
-tf.register(conn)
-
-conn.execute("SELECT sum(i) FROM generate_ints(100)").show()
+con.register(TableFunction.from_impl[Squares]("squares", param_types[Int64]()))
+con.execute("SELECT sum(square) FROM squares(100)").show()
 ```
+
+Casts, replacement scans, macros, pragmas, `COPY` formats, custom types,
+options and log sinks can be registered the same way.
 
 ## Writing extensions
 
 Build DuckDB extensions as shared libraries in Mojo. Write an init function
-that receives a `Connection` and registers your functions, then pass it to
-`Extension.run`:
+that registers your functions, then pass it to `Extension.run`:
 
 ```mojo
-from duckdb._libduckdb import duckdb_extension_info
-from duckdb.extension import duckdb_extension_access, Extension
-from duckdb.connection import Connection
-from duckdb.scalar_function import ScalarFunction
+from duckdb._libduckdb_v2 import duckdb_v2_extension_input
+from duckdb import Extension, ScalarFunction
 
 def add_numbers(a: Int64, b: Int64) -> Int64:
     return a + b
 
-def init(conn: Connection) raises:
-    ScalarFunction.from_function[
-        "mojo_add_numbers", DType.int64, DType.int64, DType.int64, add_numbers
-    ](conn)
+def init(ext: Extension) raises:
+    ext.register(ScalarFunction.from_function["mojo_add_numbers", add_numbers]())
 
-@export("my_ext_init_c_api")
-def my_ext_init_c_api(
-    info: duckdb_extension_info,
-    access: Pointer[duckdb_extension_access, MutUntrackedOrigin],
-) abi("C") -> Bool:
-    return Extension.run[init](info, access)
+@export("my_ext_init_c_api_v2")
+def my_ext_init_c_api_v2(input: Pointer[duckdb_v2_extension_input, MutUntrackedOrigin]) abi("C"):
+    Extension.run[init](input)
 ```
 
 Build it and append the metadata footer that DuckDB checks on `LOAD`:
 
 ```sh
 mojo build my_ext.mojo --emit shared-lib -o my_ext.duckdb_extension
-python3 scripts/append_extension_metadata.py my_ext.duckdb_extension
+python3 scripts/append_extension_metadata.py my_ext.duckdb_extension --abi-type C_STRUCT_UNSTABLE
 ```
 
 ```sql
@@ -359,16 +372,20 @@ LOAD 'my_ext.duckdb_extension';  -- needs allow_unsigned_extensions
 SELECT mojo_add_numbers(40, 2);  -- 42
 ```
 
-The extension uses DuckDB's
-[C extension API](https://github.com/duckdb/duckdb/tree/v1.5.6/api_spec/v1),
-which hands the extension a
-[struct of function pointers](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb_extension.h)
-for a requested API version. `Extension.run` requests v1.5.6, which covers the
-whole C API, so extensions need DuckDB 1.5.6 or newer. The struct only grows
-between releases, so a compiled extension keeps working with later DuckDB 1.x
-releases without a rebuild.
+Extensions use DuckDB's V2 C API. Every V2 function is still unstable in
+DuckDB 2.0.0, so an extension loads only into the exact DuckDB version it was
+built for, like DuckDB's C++ extensions, and needs a rebuild for every
+release. The [demo extension](extensions/demo-extension/) is a complete
+example.
 
-See the [demo extension](extensions/demo-extension/) for a complete example.
+### Raw C API bindings
+
+The generated bindings are part of the package: `duckdb._libduckdb_v2`
+(`LibDuckDBV2`, DuckDB's V2 C API, `api_spec/v2`) and `duckdb._libduckdb`
+(the V1 C API). `duckdb.extension_v2.ExtensionV2` is the extension entrypoint
+on the raw V2 API; see
+[`test_v2_extension.mojo`](extensions/test-extension/src/test_v2_extension.mojo).
+
 Extensions that need DuckDB internals, such as replacing built-in functions or
 hooking the optimizer, have to use the C++ API instead; see
 [CPP-ABI extensions](docs/cpp-abi-extensions.md).
@@ -379,15 +396,15 @@ There are multiple ways to run Mojo kernels inside DuckDB.
 
 ### 1. Named SIMD functions (part of the package)
 
-`duckdb.kernels.register_simd_math(conn)` registers `mojo_sqrt`, `mojo_sin`,
+`duckdb.register_simd_math(con)` registers `mojo_sqrt`, `mojo_sin`,
 `mojo_cos`, `mojo_ln`, `mojo_exp` and `mojo_log10` as scalar functions. They are
 part of the `duckdb` package, so there is nothing extra to build or `LOAD`:
 
 ```mojo
-from duckdb.kernels import register_simd_math
+from duckdb import register_simd_math
 
-register_simd_math(conn)
-_ = conn.execute("SELECT mojo_sqrt(x) FROM t")
+register_simd_math(con)
+_ = con.execute("SELECT mojo_sqrt(x) FROM t")
 ```
 
 The kernels in `duckdb.kernels.simd` can also be used in your own functions.
@@ -444,8 +461,10 @@ pixi run bench-sql <group> --engines=stock,cpu,gpu    # for example tpch/sf1/q06
 pixi run bench-knn                                    # vector search: latency and recall
 ```
 
-`benchmark/math_benchmark.mojo` and `benchmark/reduction_benchmark.mojo`
-compare Mojo scalar and aggregate functions with DuckDB built-ins:
+`benchmark/math_benchmark.mojo`, `benchmark/reduction_benchmark.mojo` and
+`benchmark/udf_bench.mojo` compare Mojo scalar and aggregate functions with
+DuckDB built-ins; `benchmark/serde_bench.mojo` measures reading rows into Mojo
+values and appending them:
 
 ```shell
 pixi run mojo run benchmark/math_benchmark.mojo
@@ -489,8 +508,9 @@ pixi run overrides-test       # build and test mojo-kernel-overrides
 pixi run -e gpu gpu-op-test   # build and test mojo-gpu-operator (needs a GPU)
 ```
 
-The low-level bindings in `duckdb/_libduckdb.mojo` are generated from DuckDB's
-API spec in the `third_party/duckdb` submodule. Regenerate them with
+The low-level bindings in `duckdb/_libduckdb.mojo` and
+`duckdb/_libduckdb_v2.mojo` are generated from DuckDB's API spec in the
+`third_party/duckdb` submodule. Regenerate them with
 `pixi run generate-api` after updating DuckDB.
 
 `pixi build` builds a conda package of the bindings, and

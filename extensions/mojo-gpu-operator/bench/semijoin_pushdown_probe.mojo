@@ -11,7 +11,8 @@ a subquery), so DuckDB cannot optimize the scan away and the comparison is fair.
 Run: pixi run mojo run extensions/mojo-gpu-operator/bench/semijoin_pushdown_probe.mojo
 """
 
-from duckdb import *
+import duckdb
+from duckdb import Connection
 from std.time import perf_counter_ns
 
 
@@ -59,10 +60,7 @@ comptime COUNT_B = String(
 
 
 def scalar_count(con: Connection, sql: String) raises -> Int64:
-    var out = Int64(0)
-    for row in con.execute(sql):
-        out = row.get[Int64](col=0)
-    return out
+    return con.execute(sql).get[Int64]()[0]
 
 
 def median_of(mut times: List[Float64]) raises -> Float64:
@@ -86,8 +84,7 @@ def time_agg4(con: Connection, body: String, runs: Int) raises -> Float64:
     var times = List[Float64]()
     for _ in range(runs):
         var t0 = perf_counter_ns()
-        for row in con.execute(sql):
-            _ = row.get[Float64](col=0)
+        _ = con.execute(sql).get[Float64]()
         times.append(Float64(perf_counter_ns() - t0) / 1e6)
     return median_of(times)
 
@@ -107,7 +104,7 @@ def time_ctas(con: Connection, body: String, runs: Int) raises -> Float64:
 
 def run_scale(sf: Int, runs: Int) raises:
     print("================ SF", sf, "================")
-    var con = DuckDB.connect(":memory:")
+    var con = duckdb.connect()
     _ = con.execute(
         "SET autoinstall_known_extensions=1;"
         " SET autoload_known_extensions=1;"

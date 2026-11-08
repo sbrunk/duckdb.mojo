@@ -2274,7 +2274,7 @@ struct HashGroupResult(Movable):
 # ---------------------------------------------------------------------------
 # segreduce_run_hash: the HASH_GROUP driver. NVIDIA/AMD only (the kernel body is
 # comptime-gated on 64-bit atomics; the host must only call this when
-# has_nvidia_gpu_accelerator()/has_amd_gpu_accelerator()).
+# default_accelerator().is_nvidia_gpu()/default_accelerator().is_amd_gpu()).
 #
 # Allocates a device hash table (slot_key[cap] init HASH_EMPTY, slot_acc[cap*M]
 # init 0), launches one thread per fact row (grid-stride) to atomic-accumulate

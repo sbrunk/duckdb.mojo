@@ -15,27 +15,36 @@ source:
 build:
   number: 0
   script:
-    # Precompile the `duckdb` package into $PREFIX/lib/mojo/. Installing it at
-    # this path lets the Mojo compiler find the package automatically.
-    - mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
+    # Precompile the `duckdb` package into $PREFIX/lib/mojo/. The Mojo
+    # compiler only searches MODULAR_MOJO_MAX_IMPORT_PATH. pixi sets it on
+    # activation, a conda build does not, so the build script sets it to the
+    # host prefix, where emberserde.mojoc is installed.
+    - MODULAR_MOJO_MAX_IMPORT_PATH="${{ PREFIX }}/lib/mojo" mojo precompile duckdb -o ${{ PREFIX }}/lib/mojo/duckdb.mojoc
 
 requirements:
   build:
     # Pinned to the compiler in pixi.toml. .mojoc artifacts are compiler-version
     # specific, so this must match the version used to build the package.
-    - mojo-compiler ==1.1.0
+    - mojo-compiler ==1.2.0
   host:
-    - mojo-compiler ==1.1.0
+    - mojo-compiler ==1.2.0
+    - emberserde ==0.2.0
   run:
     # Exact pin, not pin_compatible: a precompiled .mojoc only loads under the
     # exact compiler it was built with. pin_compatible would let a newer
     # release satisfy the install and fail with a version-mismatch error at
     # import time.
-    - mojo-compiler ==1.1.0
-    # The bindings dlopen libduckdb at runtime (duckdb/_libduckdb.mojo), so the
-    # shared library must be present. Track the DuckDB minor the FFI bindings
-    # were generated against.
-    - libduckdb >=1.5.6,<1.6
+    - mojo-compiler ==1.2.0
+    # The bindings dlopen libduckdb at runtime, so the shared library must be
+    # present. Exact pin: every function of DuckDB's V2 C API is still
+    # unstable, so the bindings only work with the DuckDB version they were
+    # generated against (checked when the bindings are first used).
+    - libduckdb ==2.0.0
+    # User code compiles the generic type mapping against emberserde. 0.2.0 is
+    # not on a channel yet, so the conda-recipe CI job builds it from git and
+    # passes it as a local channel. Once it is published to
+    # modular-community, the CI workaround can go.
+    - emberserde ==0.2.0
 
 tests:
   - script:
@@ -47,7 +56,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb >=1.5.6,<1.6
+        - libduckdb ==2.0.0
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

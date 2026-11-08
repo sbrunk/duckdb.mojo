@@ -11,7 +11,8 @@ Needs the `gpu` environment (it provides `max.gpu`):
     pixi run -e gpu mojo run examples/gpu_knn.mojo
 """
 
-from duckdb import *
+import duckdb
+from duckdb import Connection
 from max.gpu import block_idx, thread_idx, WARP_SIZE
 from max.gpu.primitives import warp
 from max.gpu.host import DeviceContext
@@ -77,14 +78,12 @@ def copy_vectors(
     """Copy a FLOAT[K] column into a contiguous row-major buffer."""
     var offset = 0
     for chunk in con.execute(sql).chunks():
-        var rows = len(chunk)
-        var values = chunk.get_vector(0).array_get_child()
-        unsafe_memcpy(
-            dest=dest.unsafe_offset(offset * K),
-            src=values.get_data().unsafe_bitcast[Float32](),
-            count=rows * K,
-        )
-        offset += rows
+        var values = chunk.array_span[Float32](0)
+        if not values:
+            raise Error("expected a flat FLOAT[K] column without NULLs")
+        var span = values.value()
+        unsafe_memcpy(dest=dest.unsafe_offset(offset), src=span.unsafe_ptr(), count=len(span))
+        offset += len(span)
 
 
 def ms(start: Int, end: Int) -> Float64:
@@ -102,9 +101,9 @@ def main() raises:
         print("No GPU found, nothing to compare.")
         return
 
-    var con = DuckDB.connect(":memory:")
+    var con = duckdb.connect()
     var random_vector = String(
-        "list_transform(range(", K, "), x -> random()::FLOAT)::FLOAT[", K, "]"
+        "list_transform(range(", K, "), lambda x: random()::FLOAT)::FLOAT[", K, "]"
     )
     _ = con.execute(
         String(
@@ -124,13 +123,11 @@ def main() raises:
     for qid in range(-1, QUERIES):
         if qid == 0:
             start = perf_counter_ns()
-        var ids = List[Int64]()
         var sql = String(
             "SELECT id FROM emb ORDER BY array_cosine_distance(v, ",
             "(SELECT v FROM queries WHERE qid = ", max(qid, 0), ")) LIMIT ", TOP_K,
         )
-        for row in con.execute(sql):
-            ids.append(row.get[Int64](col=0))
+        var ids = con.execute(sql).get[Int64]()
         if qid >= 0:
             cpu_results.append(ids^)
     var cpu_ms = ms(start, perf_counter_ns())
