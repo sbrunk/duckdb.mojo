@@ -333,10 +333,14 @@ RTX 4090 (clustered unit-norm embeddings, warm):
     fp32, `transpose_b`): up to ~60× per query at large batch sizes (M=1000 over
     1M×768), bound by HBM reads at ~69% of peak, recall@10 = 1.0 (exact ids).
   - Apple Silicon 8×8 `simdgroup_matrix`
-    ([src/tc_knn_apple.mojo](src/tc_knn_apple.mojo), M1 to M4): ~3 to 7× per
-    query on an M3 Max, bound by unified memory bandwidth, recall@10 = 1.0.
-    (Apple's 16×16 MMA is M5-only, and `layout.tensor_core` has no Apple path, so
-    this backend uses the 8×8 intrinsic directly.)
+    ([src/tc_knn_apple.mojo](src/tc_knn_apple.mojo), M1 to M4): on an M3 a warm
+    batch of 100 queries over 1M x 1536 fp16, top-10, went from ~620 ms to
+    ~150 ms, and the ids match an exact scan on real 1536-dim data. Apple's
+    16×16 MMA is available only on M5, and `layout.tensor_core` has no Apple
+    path, so this backend uses the 8×8 intrinsic. That unit runs at
+    ~10.1 TF/s fp16 on M1-M4, about 1.9× the fp32 FMA rate. The stage-1 MMA
+    phase is ~50 ms against a 39 ms issue limit, so further speedup has to come
+    from reading fewer rows, for example with a bucketed prefilter.
   Both backends do cosine. NVIDIA also does L2 (`array_distance`) and inner
   product (`array_inner_product`) by switching only the final distance step,
   exposed as `gpu_cosine_topk_batch(..., metric := 'l2'|'ip')`. (Non-normalized
