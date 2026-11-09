@@ -660,6 +660,10 @@ struct PinStateF16(Movable):
     var cand_cap: Int
     var n_rows: Int
     var K: Int
+    # Per-pin cache of the embedding reciprocal L2 norms (n_rows floats) for the
+    # fused Apple kNN path.
+    var renorm_cache: Optional[DeviceBuffer[DType.float32]]
+    var renorm_ready: Int  # 0 = not computed, 1 = renorm_cache is valid
 
     def __init__(
         out self,
@@ -686,6 +690,8 @@ struct PinStateF16(Movable):
         self.cand_cap = cand_cap
         self.n_rows = n_rows
         self.K = K
+        self.renorm_cache = Optional[DeviceBuffer[DType.float32]]()
+        self.renorm_ready = 0
 
 
 # Pin a column as fp16: takes the same fp32 host embedding data, converts it to
@@ -815,6 +821,7 @@ def mojo_gpu_pin_free_f16(
     ref st = p[]
     st.cand_dist_h.unsafe_free()
     st.cand_id_h.unsafe_free()
+    # renorm_cache is a DeviceBuffer field, freed by the deinit below.
     p.unsafe_deinit_pointee()
     p.unsafe_free()
 
@@ -1477,6 +1484,8 @@ def _run_topk_batch[
     M: Int,
     k: Int,
     metric: Int,
+    mut renorm_cache: Optional[DeviceBuffer[DType.float32]],
+    mut renorm_ready: Int,
     out_ids: Pointer[Int64, MutUntrackedOrigin],
     out_dists: Pointer[Float32, MutUntrackedOrigin],
 ) raises:
@@ -1518,8 +1527,19 @@ def _run_topk_batch[
             and metric == 0
             and tc_knn_apple_supported(K, k)
         ):
+            # The fused Apple kernel takes the per-pin norm cache.
             run_tc_knn_apple_batch(
-                ctx, emb16, n_rows, K, qs, M, k, out_ids, out_dists
+                ctx,
+                emb16,
+                renorm_cache,
+                renorm_ready,
+                n_rows,
+                K,
+                qs,
+                M,
+                k,
+                out_ids,
+                out_dists,
             )
             return
 
@@ -1667,6 +1687,9 @@ def mojo_gpu_pin_query_topk_batch(
         ref st = s[]
         # 0-length fp16 placeholder (unused on the fp32 path).
         var emb16 = st.ctx.enqueue_create_buffer[DType.float16](1)
+        # fp32 pins have no fused Apple path, so this cache stays empty.
+        var renorm_cache = Optional[DeviceBuffer[DType.float32]]()
+        var renorm_ready = 0
         _run_topk_batch[False](
             st.ctx,
             st.emb_dev,
@@ -1677,6 +1700,8 @@ def mojo_gpu_pin_query_topk_batch(
             M,
             k,
             0,  # metric = cosine
+            renorm_cache,
+            renorm_ready,
             out_ids,
             out_dists,
         )
@@ -1723,6 +1748,8 @@ def _pin_query_topk_batch_f16_impl(
             M,
             k,
             metric,
+            st.renorm_cache,
+            st.renorm_ready,
             out_ids,
             out_dists,
         )
