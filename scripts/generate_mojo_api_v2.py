@@ -261,21 +261,31 @@ def _stable_since(fn: dict) -> str | None:
 def ext_api_layout(spec: Spec) -> tuple[list[dict], list[str]]:
     """Return the stable bands and the unstable tail of ``duckdb_ext_api_v2``.
 
-    Stable functions have an ``offset`` and sit at that position, grouped into
-    bands by the version in which they became stable (raised to the spec's
-    ``version_floor``). Everything that is still unstable follows, ordered by
-    the date of its current lifecycle entry and then by name. That is the
-    order DuckDB's generator uses; ``check_layout`` verifies it.
+    Functions with an ``offset`` sit at that slot, grouped into bands by the
+    version in which they became stable (raised to the spec's
+    ``version_floor``). Functions the spec calls stable without an offset close
+    the stable region, ordered by name. The unstable ones follow, ordered by
+    the date of their current lifecycle entry and then by name. That is the
+    order DuckDB's generator uses; ``check_layout`` verifies it against
+    ``duckdb_extension_v2.h``, including where its unstable guard sits.
     """
     floor = Version(spec.metadata["version_floor"])
+    unplaced = [f for f in spec.functions if "offset" not in f]
+    for fn in unplaced:
+        if _current_state(fn)[0] not in ("unstable", "stable"):
+            raise ValueError(
+                f"{fn['name']} is {_current_state(fn)[0]} but has no offset: the generator does not know its slot"
+            )
     stable = sorted((f for f in spec.functions if "offset" in f), key=lambda f: f["offset"])
     if [f["offset"] for f in stable] != list(range(len(stable))):
         raise ValueError("V2 extension API offsets are not contiguous")
+    # Stable without a slot of its own: they close the stable region.
+    unslotted = sorted((f for f in unplaced if _current_state(f)[0] == "stable"), key=lambda f: f["name"])
     bands: list[dict] = []
-    for fn in stable:
+    for fn in stable + unslotted:
         since = _stable_since(fn)
         if since is None:
-            raise ValueError(f"{fn['name']} has a struct slot but was never stable")
+            raise ValueError(f"{fn['name']} is in the stable region but was never stable")
         version = "v" + str(max(Version(since), floor))
         if bands and Version(version) < Version(bands[-1]["version"]):
             raise ValueError(f"{fn['name']} is out of version order in the struct")
@@ -283,13 +293,10 @@ def ext_api_layout(spec: Spec) -> tuple[list[dict], list[str]]:
             bands.append({"version": version, "entries": []})
         bands[-1]["entries"].append(fn["name"])
 
-    unplaced = [f for f in spec.functions if "offset" not in f]
-    for fn in unplaced:
-        if _current_state(fn)[0] != "unstable":
-            raise ValueError(
-                f"{fn['name']} is {_current_state(fn)[0]} but has no offset: the generator does not know its slot"
-            )
-    unstable = [f["name"] for f in sorted(unplaced, key=lambda f: (str(_current_state(f)[2]), f["name"]))]
+    unstable = [f["name"] for f in sorted(
+        (f for f in unplaced if _current_state(f)[0] == "unstable"),
+        key=lambda f: (str(_current_state(f)[2]), f["name"]),
+    )]
     return bands, unstable
 
 

@@ -60,11 +60,11 @@ def test_logging_and_sinks() raises:
     var con = Database().connect()
     con.register(LogSink.from_function[collect]("collector"))
     _ = con.execute("SET enable_logging = true")
-    _ = con.execute("SET logging_storage = 'collector'")
+    _ = con.execute("SET logging_sink = 'collector'")
     con.log(LogLevel.INFO, "test_type", "first")
     con.log(LogLevel.WARNING, "test_type", "second")
     _ = con.execute("SELECT 1").fetchall()  # entries may be flushed later
-    _ = con.execute("SET logging_storage = 'memory'")
+    _ = con.execute("SET logging_sink = 'memory'")
     var msgs = seen().copy()
     assert_true(len(msgs) >= 2, String(len(msgs)))
     assert_equal(msgs[0], "INFO first")

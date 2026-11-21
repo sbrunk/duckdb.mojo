@@ -18,7 +18,7 @@ You can use duckdb.mojo to:
    built-in functions, and GPU execution of aggregations and vector search,
    without changing the SQL.
 
-Requirements: Mojo 1.2.0 and DuckDB 2.0.0, on Linux (x86_64, aarch64) and macOS
+Requirements: Mojo 1.2.0 and DuckDB 2.0.1, on Linux (x86_64, aarch64) and macOS
 (Apple silicon). Writing extensions and the acceleration extensions are
 experimental.
 
@@ -59,7 +59,7 @@ struct StationCount(Copyable, Defaultable, Movable, Writable):
 def main() raises:
     var con = duckdb.connect()
     # httpfs reads files over HTTP. Installed explicitly: autoinstall fails
-    # with the conda-forge libduckdb 2.0.0 build.
+    # with the conda-forge libduckdb 2.0.1 build.
     _ = con.execute("""
     INSTALL httpfs;
     LOAD httpfs;
@@ -372,11 +372,10 @@ LOAD 'my_ext.duckdb_extension';  -- needs allow_unsigned_extensions
 SELECT mojo_add_numbers(40, 2);  -- 42
 ```
 
-Extensions use DuckDB's V2 C API. Every V2 function is still unstable in
-DuckDB 2.0.0, so an extension loads only into the exact DuckDB version it was
-built for, like DuckDB's C++ extensions, and needs a rebuild for every
-release. The [demo extension](extensions/demo-extension/) is a complete
-example.
+Extensions use DuckDB's V2 C API. Its stable surface is still empty, so an
+extension loads only into the exact DuckDB version it was built for, like
+DuckDB's C++ extensions, and needs a rebuild for every release. The
+[demo extension](extensions/demo-extension/) is a complete example.
 
 ### Raw C API bindings
 

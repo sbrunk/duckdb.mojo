@@ -57,7 +57,7 @@ struct _Session:
         var iterator = duckdb_v2_statement_iterator_handle.unsafe_dangling()
         var sql_copy = sql.copy()
         var code = self.lib.duckdb_v2_parse_sql(
-            self.conn, sql_copy.as_c_string_span().ptr(), Pointer(to=iterator), Pointer(to=err)
+            self.conn, sql_copy.as_c_string_span().ptr(), True, Pointer(to=iterator), Pointer(to=err)
         )
         _ = sql_copy^  # keep the text alive until parse_sql has returned
         if code != DUCKDB_V2_ERROR_NONE:

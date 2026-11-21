@@ -33,7 +33,7 @@ jobs:
       # commit hash. Fetch the tag the submodule is pinned to.
       - name: Fetch DuckDB release tag
         run: |
-          git -C third_party/duckdb fetch --depth 1 --no-tags origin tag v2.0.0
+          git -C third_party/duckdb fetch --depth 1 --no-tags origin tag v2.0.1
 
       - name: Check generated bindings are up to date
         run: |

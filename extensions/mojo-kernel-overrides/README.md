@@ -181,7 +181,7 @@ catalog holds function pointers into it.
 ## Caveats
 
 - Version and ABI locked: a CPP-ABI extension only loads into the exact DuckDB version it was
-  built against (the footer is `--duckdb-version`, default `v2.0.0`). Rebuild for each version.
+  built against (the footer is `--duckdb-version`, default `v2.0.1`). Rebuild for each version.
 - Needs the C++ internal headers and an ABI-matched libduckdb, not the stable C extension API.
 - State layout: the copied aggregate state structs must match DuckDB's. Before swapping a
   callback, the extension checks the state size and the field offsets DuckDB reports, and

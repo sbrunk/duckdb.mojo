@@ -31,7 +31,7 @@ requirements:
     # release at install time, which fails with a version-mismatch error.
     - mojo-compiler ==1.2.0
     # Exact pin: every function of DuckDB's V2 C API is still unstable.
-    - libduckdb ==2.0.0
+    - libduckdb ==2.0.1
     # User code compiles the generic type mapping against emberserde. 0.2.0 is
     # not on a channel yet, so the conda-recipe CI job builds it from git and
     # passes it as a local channel.
@@ -47,7 +47,7 @@ tests:
         - smoke_test.mojo
     requirements:
       run:
-        - libduckdb ==2.0.0
+        - libduckdb ==2.0.1
 
 about:
   homepage: https://github.com/sbrunk/duckdb.mojo

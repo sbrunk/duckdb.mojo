@@ -10,8 +10,8 @@ different entrypoint:
   flattens the others) and NULLs.
 - `mojo_v2_fail` (C_STRUCT_UNSTABLE): its init function raises, so the load
   fails with that message.
-- `mojo_v2_stable` (C_STRUCT v2.0.0): uses the stable target. DuckDB 2.0.0 has
-  no stable V2 functions and refuses to load it.
+- `mojo_v2_stable` (C_STRUCT v2.0.1): uses the stable target, which DuckDB
+  refuses to load.
 """
 
 from duckdb._libduckdb_v2 import *

@@ -604,7 +604,7 @@ DuckDB does not print the tree of every query unless `print_profile=True`,
 named metrics, and `con.log(level, type, message)` writes an entry.
 `LogSink.from_function[f](name)` registers a Mojo log sink (`LogSink`),
 whose callback receives `LogEntry` values once the database selects it with
-`SET logging_storage = '<name>'`.
+`SET logging_sink = '<name>'`.
 
 The file system is reachable as `con.file_system()`, `args.file_system()`
 and `ext.file_system()`: `exists`, `is_remote`, `expand`, `glob`, `move`,
@@ -799,6 +799,9 @@ The single list of open work. Update it when something is done or found.
   copies its value). Revisit with a newer Mojo.
 - **Stable V2 target:** extensions load only into the exact DuckDB build;
   revisit when DuckDB marks V2 functions stable.
+- **V2 statistics callbacks:** `*_function_set_stats_callback` and the
+  `stats_*` functions are bound but not exposed, so registered functions
+  cannot narrow their result statistics.
 - **Expanding statements and `describe`:** `PIVOT` and similar statements
   learn their columns while they run; `Result` re-reads the metadata per
   chunk (`_resolve_deferred`), but `Connection.describe` and
