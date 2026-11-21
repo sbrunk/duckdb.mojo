@@ -36,19 +36,22 @@ DuckDB source lives in the `third_party/duckdb` git submodule, pinned (via the
 gitlink in the index, with `branch`/`shallow` recorded in `.gitmodules`) to the
 release tag the FFI bindings were generated against. The `libduckdb`/`duckdb-cli`
 conda pins and the submodule pin must match. `pixi run clone-duckdb` warns
-when they drift. To bump (for example from `2.0.0` to `2.0.1`):
+when they drift. To bump (for example from `2.0.1` to `2.0.2`):
 
 1. Move the submodule pin to the new tag and stage it:
    ```shell
-   git -C third_party/duckdb fetch --depth 1 origin tag v2.0.1
-   git -C third_party/duckdb checkout tags/v2.0.1
+   git -C third_party/duckdb fetch --depth 1 origin tag v2.0.2
+   git -C third_party/duckdb checkout tags/v2.0.2
    git add third_party/duckdb
    ```
-   Optionally bump `branch = v2.0.1` in `.gitmodules`.
+   Optionally bump `branch = v2.0.2` in `.gitmodules`.
 2. Bump the conda pins to match: `libduckdb-devel`/`duckdb-cli` in `pixi.toml`,
-   the `libduckdb >=…` ranges in both `conda.recipe/recipe*.yaml`, and the
-   `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}` plus the
-   `duckdb-from-source ==…` pins in `extensions/operator-replacement/recipe.yaml`.
+   the `libduckdb ==…` pins in both `conda.recipe/recipe*.yaml`, the
+   `version`/`tag` in `duckdb-from-source/{pixi.toml,recipe.yaml}`, the
+   `duckdb-from-source ==…` pins in `extensions/operator-replacement/recipe.yaml`,
+   the `--duckdb-version`/`--capi-version` defaults in the extension `build.sh`
+   scripts, and the tag `check-generated-api` fetches in
+   `.github/workflows/test.yml`.
 3. `pixi install` to refresh the lockfile.
 4. `pixi run generate-api` to regenerate `duckdb/_libduckdb.mojo` and
    `duckdb/_libduckdb_v2.mojo` from the new source, then commit them (CI

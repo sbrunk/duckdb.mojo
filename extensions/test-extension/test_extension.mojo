@@ -132,7 +132,7 @@ def test_v2_init_error_is_reported() raises:
 
 
 def test_v2_stable_target_refused() raises:
-    """DuckDB 2.0.0 has no stable V2 functions, so it refuses stable V2 extensions.
+    """DuckDB refuses stable V2 extensions: it has no stable V2 surface.
 
     Once a DuckDB release stabilizes part of the V2 API, this extension should
     load there, and this test needs to change.

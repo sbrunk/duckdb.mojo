@@ -122,6 +122,10 @@ def test_option_validation_and_reading() raises:
         message = e.message
     assert_true("must not be negative" in message, message)
     _ = con.execute("RESET my_level")
+    # RESET clears the local override, so the connection falls back to the
+    # global value (10). RESET GLOBAL restores the option default.
+    assert_equal(con.settings().get[Int64]("my_level").value(), 10)
+    _ = con.execute("RESET GLOBAL my_level")
     assert_equal(con.settings().get[Int64]("my_level").value(), 3)
 
 

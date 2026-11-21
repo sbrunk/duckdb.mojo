@@ -15,7 +15,7 @@ struct StationCount(Copyable, Defaultable, Movable, Writable):
 def main() raises:
     var con = duckdb.connect()
     # httpfs reads files over HTTP. Installed explicitly: autoinstall fails
-    # with the conda-forge libduckdb 2.0.0 build.
+    # with the conda-forge libduckdb 2.0.1 build.
     _ = con.execute("""
     INSTALL httpfs;
     LOAD httpfs;

@@ -12,9 +12,9 @@ An extension picks one of two targets when it is built:
 | `unstable=True`              | `--abi-type C_STRUCT_UNSTABLE`                   | exactly `DUCKDB_V2_SOURCE_VERSION`      |
 
 With the stable target only the stable V2 functions can be used. The others are
-bound to stubs that abort when called. DuckDB 2.0.0 has no stable V2 functions
-yet and refuses to load stable V2 extensions, so for now only the unstable
-target is useful. The footer must match the target: an unstable build with a
+bound to stubs that abort when called. DuckDB has no stable V2 surface yet
+and refuses stable-target extensions, so for now only the unstable target
+is useful. The footer must match the target: an unstable build with a
 stable footer could load into a DuckDB whose V2 API has a different layout.
 
 Example:

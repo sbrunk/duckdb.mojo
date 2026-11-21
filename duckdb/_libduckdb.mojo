@@ -3884,6 +3884,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_date:
         """
         Re-compose a `duckdb_date` from year, month and date (`duckdb_date_struct`).
+
+        If the year, month and day do not form a valid date the result will be 0.
         """
         return self._duckdb_to_date(date)
 
@@ -3950,6 +3952,8 @@ struct LibDuckDB(Movable):
     ) -> duckdb_timestamp:
         """
         Re-compose a `duckdb_timestamp` from a duckdb_timestamp_struct.
+
+        If the date is not valid or the timestamp is out of range the result will be 0.
         """
         return self._duckdb_to_timestamp(ts)
 

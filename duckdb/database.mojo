@@ -464,7 +464,10 @@ struct _Statements(Movable):
         self._handle = null[duckdb_v2_statement_iterator_handle]()
         var text = String(sql)  # parse_sql needs a NUL-terminated string and copies it
         var err = null_error_info()
-        var code = lib().duckdb_v2_parse_sql(conn, text.as_c_string_span().ptr(), Pointer(to=self._handle), Pointer(to=err))
+        # Parsed to be executed, so a parse error invalidates the transaction.
+        var code = lib().duckdb_v2_parse_sql(
+            conn, text.as_c_string_span().ptr(), True, Pointer(to=self._handle), Pointer(to=err)
+        )
         _ = text^
         check(code, err)
 

@@ -5,7 +5,7 @@
 # <file name>_init_c_api_v2, so each copy runs a different entrypoint):
 #   mojo_v2.duckdb_extension         unstable target (C_STRUCT_UNSTABLE)
 #   mojo_v2_fail.duckdb_extension    unstable target, init raises
-#   mojo_v2_stable.duckdb_extension  stable target (C_STRUCT v2.0.0)
+#   mojo_v2_stable.duckdb_extension  stable target (C_STRUCT v2.0.1)
 # V2 high-level API (duckdb.Extension):
 #   mojo_v2_api.duckdb_extension     unstable target (C_STRUCT_UNSTABLE)
 set -euo pipefail
@@ -26,7 +26,7 @@ cp "$BUILD/mojo_v2.so" "$BUILD/mojo_v2_stable.duckdb_extension"
 rm "$BUILD/mojo_v2.so"
 $META "$BUILD/mojo_v2.duckdb_extension" --abi-type C_STRUCT_UNSTABLE
 $META "$BUILD/mojo_v2_fail.duckdb_extension" --abi-type C_STRUCT_UNSTABLE
-$META "$BUILD/mojo_v2_stable.duckdb_extension" --capi-version v2.0.0
+$META "$BUILD/mojo_v2_stable.duckdb_extension" --capi-version v2.0.1
 
 mojo build ${MOJO_TARGET[@]+"${MOJO_TARGET[@]}"} "$HERE/src/test_v2_api_extension.mojo" --emit shared-lib -o "$BUILD/mojo_v2_api.duckdb_extension"
 $META "$BUILD/mojo_v2_api.duckdb_extension" --abi-type C_STRUCT_UNSTABLE

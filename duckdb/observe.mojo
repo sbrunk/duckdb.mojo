@@ -12,7 +12,7 @@ def print_entry(entry: LogEntry):
     print(entry.level, entry.type, entry.message)
 
 con.register(LogSink.from_function[print_entry]("printer"))
-_ = con.execute("SET enable_logging = true; SET logging_storage = 'printer'")
+_ = con.execute("SET enable_logging = true; SET logging_sink = 'printer'")
 ```
 
 Which metrics exist and how the operator tree looks may change between
@@ -163,7 +163,7 @@ struct LogSink(Movable):
     """Receives DuckDB's log entries in Mojo.
 
     Registered under a name. DuckDB sends entries to it after
-    `SET logging_storage = '<name>'` (and `SET enable_logging = true`). The
+    `SET logging_sink = '<name>'` (and `SET enable_logging = true`). The
     function may run on any DuckDB thread, also concurrently, and must not
     log itself. A raised error is dropped (logging never fails the operation
     that logged). The sink lives as long as the database.

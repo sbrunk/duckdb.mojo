@@ -94,8 +94,8 @@ compile-check = { cmd = "bash scripts/compile_check.sh benchmark examples" }
 
 # for local development
 [dependencies]
-libduckdb-devel = "=2.0.0"
-duckdb-cli = "=2.0.0"
+libduckdb-devel = "=2.0.1"
+duckdb-cli = "=2.0.1"
 pyyaml = "*"
 mojo = "==1.2.0"
 # Serde framework behind the V2 type mapping (docs/design/v2-high-level-api.md, "Substrate: emberserde").

@@ -10,7 +10,7 @@ from std.os import abort
 from std.memory import Pointer
 from duckdb._libduckdb import idx_t, _dylib_function
 
-comptime DUCKDB_V2_SOURCE_VERSION = "v2.0.0"
+comptime DUCKDB_V2_SOURCE_VERSION = "v2.0.1"
 """The DuckDB release these bindings were generated from.
 
 The unstable part of the V2 API may change in any release, so it only
@@ -795,6 +795,13 @@ struct _duckdb_v2_aggregate_function_bind_info:
     var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
 comptime duckdb_v2_aggregate_function_bind_info_handle = Pointer[_duckdb_v2_aggregate_function_bind_info, MutUntrackedOrigin]
 
+#! A borrowed opaque handle to the arguments supplied to an aggregate function during the "stats" phase of query
+#! optimization. The "stats" callback receives this handle and can use it to read the statistics of the arguments
+#! of the call site and narrow the statistics of its result.
+struct _duckdb_v2_aggregate_function_stats_info:
+    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_v2_aggregate_function_stats_info_handle = Pointer[_duckdb_v2_aggregate_function_stats_info, MutUntrackedOrigin]
+
 #! A borrowed opaque handle to the arguments supplied to an aggregate function during the state sizing "size"
 #! phase. The "size" callback receives this handle and must use it to report the size of a single aggregate
 #! state in bytes.
@@ -838,6 +845,8 @@ struct _duckdb_v2_aggregate_function_destroy_info:
 comptime duckdb_v2_aggregate_function_destroy_info_handle = Pointer[_duckdb_v2_aggregate_function_destroy_info, MutUntrackedOrigin]
 
 comptime duckdb_v2_aggregate_function_bind_callback_fn = def(duckdb_v2_function_bind_info_handle, duckdb_v2_aggregate_function_bind_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
+
+comptime duckdb_v2_aggregate_function_stats_callback_fn = def(duckdb_v2_aggregate_function_stats_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 comptime duckdb_v2_aggregate_function_size_callback_fn = def(duckdb_v2_aggregate_function_size_info_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
@@ -1216,6 +1225,13 @@ struct _duckdb_v2_scalar_function_exec_info:
     var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
 comptime duckdb_v2_scalar_function_exec_info_handle = Pointer[_duckdb_v2_scalar_function_exec_info, MutUntrackedOrigin]
 
+#! A borrowed opaque handle to the arguments supplied to a scalar function during the "stats" phase of query
+#! optimization. The "stats" callback receives this handle and can use it to read the statistics of the arguments
+#! of the call site and narrow the statistics of its result.
+struct _duckdb_v2_scalar_function_stats_info:
+    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_v2_scalar_function_stats_info_handle = Pointer[_duckdb_v2_scalar_function_stats_info, MutUntrackedOrigin]
+
 comptime duckdb_v2_scalar_function_resolve_types_callback_fn = def(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_resolve_types_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 comptime duckdb_v2_scalar_function_bind_callback_fn = def(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_bind_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
@@ -1223,6 +1239,8 @@ comptime duckdb_v2_scalar_function_bind_callback_fn = def(duckdb_v2_function_bin
 comptime duckdb_v2_scalar_function_init_callback_fn = def(duckdb_v2_scalar_function_init_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 comptime duckdb_v2_scalar_function_exec_callback_fn = def(duckdb_v2_scalar_function_exec_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
+
+comptime duckdb_v2_scalar_function_stats_callback_fn = def(duckdb_v2_scalar_function_stats_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 
 # ===--------------------------------------------------------------------===#
@@ -1330,6 +1348,13 @@ struct _duckdb_v2_table_function_partition_data_info:
     var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
 comptime duckdb_v2_table_function_partition_data_info_handle = Pointer[_duckdb_v2_table_function_partition_data_info, MutUntrackedOrigin]
 
+#! A borrowed opaque handle to the arguments supplied to a table function during the "stats" phase of query
+#! optimization. The engine invokes the callback once per column the query reads, and the callback can use the
+#! handle to narrow the statistics of that column.
+struct _duckdb_v2_table_function_stats_info:
+    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_v2_table_function_stats_info_handle = Pointer[_duckdb_v2_table_function_stats_info, MutUntrackedOrigin]
+
 #! A borrowed opaque handle to the arguments supplied to a table function during the "partitioning" phase
 #! of query optimization. The engine invokes the callback once per candidate `GROUP BY` column set, before
 #! execution starts, to decide whether the scan can feed a partitioned aggregate directly instead of hashing.
@@ -1380,6 +1405,8 @@ comptime duckdb_v2_table_function_partition_data_callback_fn = def(duckdb_v2_tab
 comptime duckdb_v2_table_function_partitioning_callback_fn = def(duckdb_v2_table_function_partitioning_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 comptime duckdb_v2_table_function_claim_batch_callback_fn = def(duckdb_v2_table_function_claim_batch_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
+
+comptime duckdb_v2_table_function_stats_callback_fn = def(duckdb_v2_table_function_stats_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
 comptime duckdb_v2_table_function_get_bind_info_callback_fn = def(duckdb_v2_table_function_get_bind_info_info_handle, duckdb_v2_context_handle, Pointer[duckdb_v2_error_info_handle, MutUntrackedOrigin]) thin abi("C") -> NoneType
 
@@ -1697,6 +1724,22 @@ comptime duckdb_v2_statement_iterator_handle = Pointer[_duckdb_v2_statement_iter
 
 
 # ===--------------------------------------------------------------------===#
+# Types: Stats
+# ===--------------------------------------------------------------------===#
+
+
+#! A borrowed opaque handle to the statistics of an expression or a column. A stats callback receives it for the
+#! result it describes and for each of its arguments; it is valid only for the duration of that callback.
+#!
+#! The statistics of an argument are read-only, and the setters fail on them. The statistics of the result start
+#! out unknown, with every kind of value possible, and the callback narrows them through the setters. A callback
+#! that leaves the result unchanged tells the engine nothing.
+struct _duckdb_v2_stats:
+    var internal_ptr: Pointer[NoneType, MutUntrackedOrigin]
+comptime duckdb_v2_stats_handle = Pointer[_duckdb_v2_stats, MutUntrackedOrigin]
+
+
+# ===--------------------------------------------------------------------===#
 # Types: Tokenizer
 # ===--------------------------------------------------------------------===#
 
@@ -1787,20 +1830,63 @@ struct duckdb_ext_api_v2:
     """The stable part of the V2 extension API function pointer struct.
 
     Holds the functions that are stable as of `DUCKDB_V2_EXTENSION_API_VERSION`
-    (0 function pointers). An extension that only uses these loads
+    (21 function pointers). An extension that only uses these loads
     in that DuckDB version and every later 2.x release."""
 
-    # No V2 function is stable yet.
-    pass
+    # --- v2.0.0 ---
+    var duckdb_v2_aggregate_function_set_stats_callback: def(duckdb_v2_aggregate_function_handle, duckdb_v2_aggregate_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_arg_count: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_arg_stats: def(duckdb_v2_aggregate_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_bind_data: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_result_stats: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_user_data: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_set_stats_callback: def(duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_arg_count: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_arg_stats: def(duckdb_v2_scalar_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_bind_data: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_result_stats: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_user_data: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_can_have_null: def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_can_have_valid: def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_set_can_have_null: def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_set_can_have_valid: def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_set_stats_callback: def(duckdb_v2_table_function_handle, duckdb_v2_table_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_bind_data: def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_column_index: def(duckdb_v2_table_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_result_stats: def(duckdb_v2_table_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_user_data: def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 
 
 @fieldwise_init
 struct duckdb_ext_api_v2_unstable:
     """The complete V2 extension API function pointer struct, including the unstable part.
 
-    Holds 620 function pointers. The unstable part may change in
+    Holds 641 function pointers. The unstable part may change in
     any release, so an extension that uses it only loads in the exact DuckDB
     version these bindings were generated from (`DUCKDB_V2_SOURCE_VERSION`)."""
+
+    # --- v2.0.0 ---
+    var duckdb_v2_aggregate_function_set_stats_callback: def(duckdb_v2_aggregate_function_handle, duckdb_v2_aggregate_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_arg_count: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_arg_stats: def(duckdb_v2_aggregate_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_bind_data: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_result_stats: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_aggregate_function_stats_get_user_data: def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_set_stats_callback: def(duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_arg_count: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_arg_stats: def(duckdb_v2_scalar_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_bind_data: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_result_stats: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_scalar_function_stats_get_user_data: def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_can_have_null: def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_can_have_valid: def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_set_can_have_null: def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_stats_set_can_have_valid: def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_set_stats_callback: def(duckdb_v2_table_function_handle, duckdb_v2_table_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_bind_data: def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_column_index: def(duckdb_v2_table_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_result_stats: def(duckdb_v2_table_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_table_function_stats_get_user_data: def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 
     # --- unstable ---
     var duckdb_v2_arena_allocate: def(duckdb_v2_arena_handle, idx_t, Pointer[Pointer[UInt8, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
@@ -1865,7 +1951,7 @@ struct duckdb_ext_api_v2_unstable:
     var duckdb_v2_option_get_default_value: def(duckdb_v2_option_handle, Pointer[duckdb_v2_value_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
     var duckdb_v2_option_get_description: def(duckdb_v2_option_handle, Pointer[duckdb_v2_str, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
     var duckdb_v2_option_get_name: def(duckdb_v2_option_handle, Pointer[duckdb_v2_identifier_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
-    var duckdb_v2_parse_sql: def(duckdb_v2_connection_handle, Pointer[c_char, ImmutAnyOrigin], Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    var duckdb_v2_parse_sql: def(duckdb_v2_connection_handle, Pointer[c_char, ImmutAnyOrigin], Bool, Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
     var duckdb_v2_result_destroy: def(Pointer[duckdb_v2_result_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
     var duckdb_v2_result_drain: def(duckdb_v2_result_handle, Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
     var duckdb_v2_result_fetch_chunk: def(duckdb_v2_result_handle, Pointer[duckdb_v2_data_chunk_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
@@ -2584,6 +2670,7 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_aggregate_function_set_combine_callback: _duckdb_v2_aggregate_function_set_combine_callback.fn_type
     var _duckdb_v2_aggregate_function_set_finalize_callback: _duckdb_v2_aggregate_function_set_finalize_callback.fn_type
     var _duckdb_v2_aggregate_function_set_destroy_callback: _duckdb_v2_aggregate_function_set_destroy_callback.fn_type
+    var _duckdb_v2_aggregate_function_set_stats_callback: _duckdb_v2_aggregate_function_set_stats_callback.fn_type
     var _duckdb_v2_aggregate_function_bind_set_return_type: _duckdb_v2_aggregate_function_bind_set_return_type.fn_type
     var _duckdb_v2_aggregate_function_size_get_user_data: _duckdb_v2_aggregate_function_size_get_user_data.fn_type
     var _duckdb_v2_aggregate_function_size_get_bind_data: _duckdb_v2_aggregate_function_size_get_bind_data.fn_type
@@ -2613,6 +2700,11 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_aggregate_function_destroy_get_bind_data: _duckdb_v2_aggregate_function_destroy_get_bind_data.fn_type
     var _duckdb_v2_aggregate_function_destroy_get_state_count: _duckdb_v2_aggregate_function_destroy_get_state_count.fn_type
     var _duckdb_v2_aggregate_function_destroy_get_states: _duckdb_v2_aggregate_function_destroy_get_states.fn_type
+    var _duckdb_v2_aggregate_function_stats_get_user_data: _duckdb_v2_aggregate_function_stats_get_user_data.fn_type
+    var _duckdb_v2_aggregate_function_stats_get_bind_data: _duckdb_v2_aggregate_function_stats_get_bind_data.fn_type
+    var _duckdb_v2_aggregate_function_stats_get_arg_count: _duckdb_v2_aggregate_function_stats_get_arg_count.fn_type
+    var _duckdb_v2_aggregate_function_stats_get_arg_stats: _duckdb_v2_aggregate_function_stats_get_arg_stats.fn_type
+    var _duckdb_v2_aggregate_function_stats_get_result_stats: _duckdb_v2_aggregate_function_stats_get_result_stats.fn_type
     var _duckdb_v2_connection_register_aggregate_function: _duckdb_v2_connection_register_aggregate_function.fn_type
     var _duckdb_v2_extension_register_aggregate_function: _duckdb_v2_extension_register_aggregate_function.fn_type
     var _duckdb_v2_aggregate_function_destroy: _duckdb_v2_aggregate_function_destroy.fn_type
@@ -2762,6 +2854,7 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_scalar_function_set_bind_callback: _duckdb_v2_scalar_function_set_bind_callback.fn_type
     var _duckdb_v2_scalar_function_set_init_callback: _duckdb_v2_scalar_function_set_init_callback.fn_type
     var _duckdb_v2_scalar_function_set_exec_callback: _duckdb_v2_scalar_function_set_exec_callback.fn_type
+    var _duckdb_v2_scalar_function_set_stats_callback: _duckdb_v2_scalar_function_set_stats_callback.fn_type
     var _duckdb_v2_scalar_function_resolve_types_set_return_type: _duckdb_v2_scalar_function_resolve_types_set_return_type.fn_type
     var _duckdb_v2_scalar_function_bind_set_bind_data: _duckdb_v2_scalar_function_bind_set_bind_data.fn_type
     var _duckdb_v2_scalar_function_init_get_user_data: _duckdb_v2_scalar_function_init_get_user_data.fn_type
@@ -2774,6 +2867,11 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_scalar_function_exec_get_arg_count: _duckdb_v2_scalar_function_exec_get_arg_count.fn_type
     var _duckdb_v2_scalar_function_exec_get_arg: _duckdb_v2_scalar_function_exec_get_arg.fn_type
     var _duckdb_v2_scalar_function_exec_get_result: _duckdb_v2_scalar_function_exec_get_result.fn_type
+    var _duckdb_v2_scalar_function_stats_get_user_data: _duckdb_v2_scalar_function_stats_get_user_data.fn_type
+    var _duckdb_v2_scalar_function_stats_get_bind_data: _duckdb_v2_scalar_function_stats_get_bind_data.fn_type
+    var _duckdb_v2_scalar_function_stats_get_arg_count: _duckdb_v2_scalar_function_stats_get_arg_count.fn_type
+    var _duckdb_v2_scalar_function_stats_get_arg_stats: _duckdb_v2_scalar_function_stats_get_arg_stats.fn_type
+    var _duckdb_v2_scalar_function_stats_get_result_stats: _duckdb_v2_scalar_function_stats_get_result_stats.fn_type
     var _duckdb_v2_connection_register_scalar_function: _duckdb_v2_connection_register_scalar_function.fn_type
     var _duckdb_v2_extension_register_scalar_function: _duckdb_v2_extension_register_scalar_function.fn_type
     var _duckdb_v2_scalar_function_destroy: _duckdb_v2_scalar_function_destroy.fn_type
@@ -2793,6 +2891,7 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_table_function_set_filter_pushdown_callback: _duckdb_v2_table_function_set_filter_pushdown_callback.fn_type
     var _duckdb_v2_table_function_set_partition_data_callback: _duckdb_v2_table_function_set_partition_data_callback.fn_type
     var _duckdb_v2_table_function_set_partitioning_callback: _duckdb_v2_table_function_set_partitioning_callback.fn_type
+    var _duckdb_v2_table_function_set_stats_callback: _duckdb_v2_table_function_set_stats_callback.fn_type
     var _duckdb_v2_table_function_bind_add_result_column: _duckdb_v2_table_function_bind_add_result_column.fn_type
     var _duckdb_v2_table_function_bind_set_cardinality: _duckdb_v2_table_function_bind_set_cardinality.fn_type
     var _duckdb_v2_table_function_bind_set_order_preservation: _duckdb_v2_table_function_bind_set_order_preservation.fn_type
@@ -2841,6 +2940,10 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_table_function_partitioning_get_partition_column_count: _duckdb_v2_table_function_partitioning_get_partition_column_count.fn_type
     var _duckdb_v2_table_function_partitioning_get_partition_column_index: _duckdb_v2_table_function_partitioning_get_partition_column_index.fn_type
     var _duckdb_v2_table_function_partitioning_set_partition_info: _duckdb_v2_table_function_partitioning_set_partition_info.fn_type
+    var _duckdb_v2_table_function_stats_get_user_data: _duckdb_v2_table_function_stats_get_user_data.fn_type
+    var _duckdb_v2_table_function_stats_get_bind_data: _duckdb_v2_table_function_stats_get_bind_data.fn_type
+    var _duckdb_v2_table_function_stats_get_column_index: _duckdb_v2_table_function_stats_get_column_index.fn_type
+    var _duckdb_v2_table_function_stats_get_result_stats: _duckdb_v2_table_function_stats_get_result_stats.fn_type
     var _duckdb_v2_connection_register_table_function: _duckdb_v2_connection_register_table_function.fn_type
     var _duckdb_v2_extension_register_table_function: _duckdb_v2_extension_register_table_function.fn_type
     var _duckdb_v2_table_function_destroy: _duckdb_v2_table_function_destroy.fn_type
@@ -2954,6 +3057,10 @@ struct LibDuckDBV2(Movable):
     var _duckdb_v2_sql_statement_get_parameter_name: _duckdb_v2_sql_statement_get_parameter_name.fn_type
     var _duckdb_v2_sql_statement_destroy: _duckdb_v2_sql_statement_destroy.fn_type
     var _duckdb_v2_statement_iterator_destroy: _duckdb_v2_statement_iterator_destroy.fn_type
+    var _duckdb_v2_stats_can_have_null: _duckdb_v2_stats_can_have_null.fn_type
+    var _duckdb_v2_stats_can_have_valid: _duckdb_v2_stats_can_have_valid.fn_type
+    var _duckdb_v2_stats_set_can_have_null: _duckdb_v2_stats_set_can_have_null.fn_type
+    var _duckdb_v2_stats_set_can_have_valid: _duckdb_v2_stats_set_can_have_valid.fn_type
     var _duckdb_v2_tokenize_sql: _duckdb_v2_tokenize_sql.fn_type
     var _duckdb_v2_token_iterator_next: _duckdb_v2_token_iterator_next.fn_type
     var _duckdb_v2_token_iterator_ends_unterminated: _duckdb_v2_token_iterator_ends_unterminated.fn_type
@@ -3210,6 +3317,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_set_combine_callback = _duckdb_v2_aggregate_function_set_combine_callback.load()
         self._duckdb_v2_aggregate_function_set_finalize_callback = _duckdb_v2_aggregate_function_set_finalize_callback.load()
         self._duckdb_v2_aggregate_function_set_destroy_callback = _duckdb_v2_aggregate_function_set_destroy_callback.load()
+        self._duckdb_v2_aggregate_function_set_stats_callback = _duckdb_v2_aggregate_function_set_stats_callback.load()
         self._duckdb_v2_aggregate_function_bind_set_return_type = _duckdb_v2_aggregate_function_bind_set_return_type.load()
         self._duckdb_v2_aggregate_function_size_get_user_data = _duckdb_v2_aggregate_function_size_get_user_data.load()
         self._duckdb_v2_aggregate_function_size_get_bind_data = _duckdb_v2_aggregate_function_size_get_bind_data.load()
@@ -3239,6 +3347,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_destroy_get_bind_data = _duckdb_v2_aggregate_function_destroy_get_bind_data.load()
         self._duckdb_v2_aggregate_function_destroy_get_state_count = _duckdb_v2_aggregate_function_destroy_get_state_count.load()
         self._duckdb_v2_aggregate_function_destroy_get_states = _duckdb_v2_aggregate_function_destroy_get_states.load()
+        self._duckdb_v2_aggregate_function_stats_get_user_data = _duckdb_v2_aggregate_function_stats_get_user_data.load()
+        self._duckdb_v2_aggregate_function_stats_get_bind_data = _duckdb_v2_aggregate_function_stats_get_bind_data.load()
+        self._duckdb_v2_aggregate_function_stats_get_arg_count = _duckdb_v2_aggregate_function_stats_get_arg_count.load()
+        self._duckdb_v2_aggregate_function_stats_get_arg_stats = _duckdb_v2_aggregate_function_stats_get_arg_stats.load()
+        self._duckdb_v2_aggregate_function_stats_get_result_stats = _duckdb_v2_aggregate_function_stats_get_result_stats.load()
         self._duckdb_v2_connection_register_aggregate_function = _duckdb_v2_connection_register_aggregate_function.load()
         self._duckdb_v2_extension_register_aggregate_function = _duckdb_v2_extension_register_aggregate_function.load()
         self._duckdb_v2_aggregate_function_destroy = _duckdb_v2_aggregate_function_destroy.load()
@@ -3388,6 +3501,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_set_bind_callback = _duckdb_v2_scalar_function_set_bind_callback.load()
         self._duckdb_v2_scalar_function_set_init_callback = _duckdb_v2_scalar_function_set_init_callback.load()
         self._duckdb_v2_scalar_function_set_exec_callback = _duckdb_v2_scalar_function_set_exec_callback.load()
+        self._duckdb_v2_scalar_function_set_stats_callback = _duckdb_v2_scalar_function_set_stats_callback.load()
         self._duckdb_v2_scalar_function_resolve_types_set_return_type = _duckdb_v2_scalar_function_resolve_types_set_return_type.load()
         self._duckdb_v2_scalar_function_bind_set_bind_data = _duckdb_v2_scalar_function_bind_set_bind_data.load()
         self._duckdb_v2_scalar_function_init_get_user_data = _duckdb_v2_scalar_function_init_get_user_data.load()
@@ -3400,6 +3514,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_exec_get_arg_count = _duckdb_v2_scalar_function_exec_get_arg_count.load()
         self._duckdb_v2_scalar_function_exec_get_arg = _duckdb_v2_scalar_function_exec_get_arg.load()
         self._duckdb_v2_scalar_function_exec_get_result = _duckdb_v2_scalar_function_exec_get_result.load()
+        self._duckdb_v2_scalar_function_stats_get_user_data = _duckdb_v2_scalar_function_stats_get_user_data.load()
+        self._duckdb_v2_scalar_function_stats_get_bind_data = _duckdb_v2_scalar_function_stats_get_bind_data.load()
+        self._duckdb_v2_scalar_function_stats_get_arg_count = _duckdb_v2_scalar_function_stats_get_arg_count.load()
+        self._duckdb_v2_scalar_function_stats_get_arg_stats = _duckdb_v2_scalar_function_stats_get_arg_stats.load()
+        self._duckdb_v2_scalar_function_stats_get_result_stats = _duckdb_v2_scalar_function_stats_get_result_stats.load()
         self._duckdb_v2_connection_register_scalar_function = _duckdb_v2_connection_register_scalar_function.load()
         self._duckdb_v2_extension_register_scalar_function = _duckdb_v2_extension_register_scalar_function.load()
         self._duckdb_v2_scalar_function_destroy = _duckdb_v2_scalar_function_destroy.load()
@@ -3419,6 +3538,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_set_filter_pushdown_callback = _duckdb_v2_table_function_set_filter_pushdown_callback.load()
         self._duckdb_v2_table_function_set_partition_data_callback = _duckdb_v2_table_function_set_partition_data_callback.load()
         self._duckdb_v2_table_function_set_partitioning_callback = _duckdb_v2_table_function_set_partitioning_callback.load()
+        self._duckdb_v2_table_function_set_stats_callback = _duckdb_v2_table_function_set_stats_callback.load()
         self._duckdb_v2_table_function_bind_add_result_column = _duckdb_v2_table_function_bind_add_result_column.load()
         self._duckdb_v2_table_function_bind_set_cardinality = _duckdb_v2_table_function_bind_set_cardinality.load()
         self._duckdb_v2_table_function_bind_set_order_preservation = _duckdb_v2_table_function_bind_set_order_preservation.load()
@@ -3467,6 +3587,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_partitioning_get_partition_column_count = _duckdb_v2_table_function_partitioning_get_partition_column_count.load()
         self._duckdb_v2_table_function_partitioning_get_partition_column_index = _duckdb_v2_table_function_partitioning_get_partition_column_index.load()
         self._duckdb_v2_table_function_partitioning_set_partition_info = _duckdb_v2_table_function_partitioning_set_partition_info.load()
+        self._duckdb_v2_table_function_stats_get_user_data = _duckdb_v2_table_function_stats_get_user_data.load()
+        self._duckdb_v2_table_function_stats_get_bind_data = _duckdb_v2_table_function_stats_get_bind_data.load()
+        self._duckdb_v2_table_function_stats_get_column_index = _duckdb_v2_table_function_stats_get_column_index.load()
+        self._duckdb_v2_table_function_stats_get_result_stats = _duckdb_v2_table_function_stats_get_result_stats.load()
         self._duckdb_v2_connection_register_table_function = _duckdb_v2_connection_register_table_function.load()
         self._duckdb_v2_extension_register_table_function = _duckdb_v2_extension_register_table_function.load()
         self._duckdb_v2_table_function_destroy = _duckdb_v2_table_function_destroy.load()
@@ -3580,6 +3704,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_sql_statement_get_parameter_name = _duckdb_v2_sql_statement_get_parameter_name.load()
         self._duckdb_v2_sql_statement_destroy = _duckdb_v2_sql_statement_destroy.load()
         self._duckdb_v2_statement_iterator_destroy = _duckdb_v2_statement_iterator_destroy.load()
+        self._duckdb_v2_stats_can_have_null = _duckdb_v2_stats_can_have_null.load()
+        self._duckdb_v2_stats_can_have_valid = _duckdb_v2_stats_can_have_valid.load()
+        self._duckdb_v2_stats_set_can_have_null = _duckdb_v2_stats_set_can_have_null.load()
+        self._duckdb_v2_stats_set_can_have_valid = _duckdb_v2_stats_set_can_have_valid.load()
         self._duckdb_v2_tokenize_sql = _duckdb_v2_tokenize_sql.load()
         self._duckdb_v2_token_iterator_next = _duckdb_v2_token_iterator_next.load()
         self._duckdb_v2_token_iterator_ends_unterminated = _duckdb_v2_token_iterator_ends_unterminated.load()
@@ -3833,6 +3961,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_set_combine_callback = api[].duckdb_v2_aggregate_function_set_combine_callback
         self._duckdb_v2_aggregate_function_set_finalize_callback = api[].duckdb_v2_aggregate_function_set_finalize_callback
         self._duckdb_v2_aggregate_function_set_destroy_callback = api[].duckdb_v2_aggregate_function_set_destroy_callback
+        self._duckdb_v2_aggregate_function_set_stats_callback = api[].duckdb_v2_aggregate_function_set_stats_callback
         self._duckdb_v2_aggregate_function_bind_set_return_type = api[].duckdb_v2_aggregate_function_bind_set_return_type
         self._duckdb_v2_aggregate_function_size_get_user_data = api[].duckdb_v2_aggregate_function_size_get_user_data
         self._duckdb_v2_aggregate_function_size_get_bind_data = api[].duckdb_v2_aggregate_function_size_get_bind_data
@@ -3862,6 +3991,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_destroy_get_bind_data = api[].duckdb_v2_aggregate_function_destroy_get_bind_data
         self._duckdb_v2_aggregate_function_destroy_get_state_count = api[].duckdb_v2_aggregate_function_destroy_get_state_count
         self._duckdb_v2_aggregate_function_destroy_get_states = api[].duckdb_v2_aggregate_function_destroy_get_states
+        self._duckdb_v2_aggregate_function_stats_get_user_data = api[].duckdb_v2_aggregate_function_stats_get_user_data
+        self._duckdb_v2_aggregate_function_stats_get_bind_data = api[].duckdb_v2_aggregate_function_stats_get_bind_data
+        self._duckdb_v2_aggregate_function_stats_get_arg_count = api[].duckdb_v2_aggregate_function_stats_get_arg_count
+        self._duckdb_v2_aggregate_function_stats_get_arg_stats = api[].duckdb_v2_aggregate_function_stats_get_arg_stats
+        self._duckdb_v2_aggregate_function_stats_get_result_stats = api[].duckdb_v2_aggregate_function_stats_get_result_stats
         self._duckdb_v2_connection_register_aggregate_function = api[].duckdb_v2_connection_register_aggregate_function
         self._duckdb_v2_extension_register_aggregate_function = api[].duckdb_v2_extension_register_aggregate_function
         self._duckdb_v2_aggregate_function_destroy = api[].duckdb_v2_aggregate_function_destroy
@@ -4011,6 +4145,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_set_bind_callback = api[].duckdb_v2_scalar_function_set_bind_callback
         self._duckdb_v2_scalar_function_set_init_callback = api[].duckdb_v2_scalar_function_set_init_callback
         self._duckdb_v2_scalar_function_set_exec_callback = api[].duckdb_v2_scalar_function_set_exec_callback
+        self._duckdb_v2_scalar_function_set_stats_callback = api[].duckdb_v2_scalar_function_set_stats_callback
         self._duckdb_v2_scalar_function_resolve_types_set_return_type = api[].duckdb_v2_scalar_function_resolve_types_set_return_type
         self._duckdb_v2_scalar_function_bind_set_bind_data = api[].duckdb_v2_scalar_function_bind_set_bind_data
         self._duckdb_v2_scalar_function_init_get_user_data = api[].duckdb_v2_scalar_function_init_get_user_data
@@ -4023,6 +4158,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_exec_get_arg_count = api[].duckdb_v2_scalar_function_exec_get_arg_count
         self._duckdb_v2_scalar_function_exec_get_arg = api[].duckdb_v2_scalar_function_exec_get_arg
         self._duckdb_v2_scalar_function_exec_get_result = api[].duckdb_v2_scalar_function_exec_get_result
+        self._duckdb_v2_scalar_function_stats_get_user_data = api[].duckdb_v2_scalar_function_stats_get_user_data
+        self._duckdb_v2_scalar_function_stats_get_bind_data = api[].duckdb_v2_scalar_function_stats_get_bind_data
+        self._duckdb_v2_scalar_function_stats_get_arg_count = api[].duckdb_v2_scalar_function_stats_get_arg_count
+        self._duckdb_v2_scalar_function_stats_get_arg_stats = api[].duckdb_v2_scalar_function_stats_get_arg_stats
+        self._duckdb_v2_scalar_function_stats_get_result_stats = api[].duckdb_v2_scalar_function_stats_get_result_stats
         self._duckdb_v2_connection_register_scalar_function = api[].duckdb_v2_connection_register_scalar_function
         self._duckdb_v2_extension_register_scalar_function = api[].duckdb_v2_extension_register_scalar_function
         self._duckdb_v2_scalar_function_destroy = api[].duckdb_v2_scalar_function_destroy
@@ -4042,6 +4182,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_set_filter_pushdown_callback = api[].duckdb_v2_table_function_set_filter_pushdown_callback
         self._duckdb_v2_table_function_set_partition_data_callback = api[].duckdb_v2_table_function_set_partition_data_callback
         self._duckdb_v2_table_function_set_partitioning_callback = api[].duckdb_v2_table_function_set_partitioning_callback
+        self._duckdb_v2_table_function_set_stats_callback = api[].duckdb_v2_table_function_set_stats_callback
         self._duckdb_v2_table_function_bind_add_result_column = api[].duckdb_v2_table_function_bind_add_result_column
         self._duckdb_v2_table_function_bind_set_cardinality = api[].duckdb_v2_table_function_bind_set_cardinality
         self._duckdb_v2_table_function_bind_set_order_preservation = api[].duckdb_v2_table_function_bind_set_order_preservation
@@ -4090,6 +4231,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_partitioning_get_partition_column_count = api[].duckdb_v2_table_function_partitioning_get_partition_column_count
         self._duckdb_v2_table_function_partitioning_get_partition_column_index = api[].duckdb_v2_table_function_partitioning_get_partition_column_index
         self._duckdb_v2_table_function_partitioning_set_partition_info = api[].duckdb_v2_table_function_partitioning_set_partition_info
+        self._duckdb_v2_table_function_stats_get_user_data = api[].duckdb_v2_table_function_stats_get_user_data
+        self._duckdb_v2_table_function_stats_get_bind_data = api[].duckdb_v2_table_function_stats_get_bind_data
+        self._duckdb_v2_table_function_stats_get_column_index = api[].duckdb_v2_table_function_stats_get_column_index
+        self._duckdb_v2_table_function_stats_get_result_stats = api[].duckdb_v2_table_function_stats_get_result_stats
         self._duckdb_v2_connection_register_table_function = api[].duckdb_v2_connection_register_table_function
         self._duckdb_v2_extension_register_table_function = api[].duckdb_v2_extension_register_table_function
         self._duckdb_v2_table_function_destroy = api[].duckdb_v2_table_function_destroy
@@ -4203,6 +4348,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_sql_statement_get_parameter_name = api[].duckdb_v2_sql_statement_get_parameter_name
         self._duckdb_v2_sql_statement_destroy = api[].duckdb_v2_sql_statement_destroy
         self._duckdb_v2_statement_iterator_destroy = api[].duckdb_v2_statement_iterator_destroy
+        self._duckdb_v2_stats_can_have_null = api[].duckdb_v2_stats_can_have_null
+        self._duckdb_v2_stats_can_have_valid = api[].duckdb_v2_stats_can_have_valid
+        self._duckdb_v2_stats_set_can_have_null = api[].duckdb_v2_stats_set_can_have_null
+        self._duckdb_v2_stats_set_can_have_valid = api[].duckdb_v2_stats_set_can_have_valid
         self._duckdb_v2_tokenize_sql = api[].duckdb_v2_tokenize_sql
         self._duckdb_v2_token_iterator_next = api[].duckdb_v2_token_iterator_next
         self._duckdb_v2_token_iterator_ends_unterminated = api[].duckdb_v2_token_iterator_ends_unterminated
@@ -4459,6 +4608,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_set_combine_callback = _unstable_duckdb_v2_aggregate_function_set_combine_callback
         self._duckdb_v2_aggregate_function_set_finalize_callback = _unstable_duckdb_v2_aggregate_function_set_finalize_callback
         self._duckdb_v2_aggregate_function_set_destroy_callback = _unstable_duckdb_v2_aggregate_function_set_destroy_callback
+        self._duckdb_v2_aggregate_function_set_stats_callback = api[].duckdb_v2_aggregate_function_set_stats_callback
         self._duckdb_v2_aggregate_function_bind_set_return_type = _unstable_duckdb_v2_aggregate_function_bind_set_return_type
         self._duckdb_v2_aggregate_function_size_get_user_data = _unstable_duckdb_v2_aggregate_function_size_get_user_data
         self._duckdb_v2_aggregate_function_size_get_bind_data = _unstable_duckdb_v2_aggregate_function_size_get_bind_data
@@ -4488,6 +4638,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_destroy_get_bind_data = _unstable_duckdb_v2_aggregate_function_destroy_get_bind_data
         self._duckdb_v2_aggregate_function_destroy_get_state_count = _unstable_duckdb_v2_aggregate_function_destroy_get_state_count
         self._duckdb_v2_aggregate_function_destroy_get_states = _unstable_duckdb_v2_aggregate_function_destroy_get_states
+        self._duckdb_v2_aggregate_function_stats_get_user_data = api[].duckdb_v2_aggregate_function_stats_get_user_data
+        self._duckdb_v2_aggregate_function_stats_get_bind_data = api[].duckdb_v2_aggregate_function_stats_get_bind_data
+        self._duckdb_v2_aggregate_function_stats_get_arg_count = api[].duckdb_v2_aggregate_function_stats_get_arg_count
+        self._duckdb_v2_aggregate_function_stats_get_arg_stats = api[].duckdb_v2_aggregate_function_stats_get_arg_stats
+        self._duckdb_v2_aggregate_function_stats_get_result_stats = api[].duckdb_v2_aggregate_function_stats_get_result_stats
         self._duckdb_v2_connection_register_aggregate_function = _unstable_duckdb_v2_connection_register_aggregate_function
         self._duckdb_v2_extension_register_aggregate_function = _unstable_duckdb_v2_extension_register_aggregate_function
         self._duckdb_v2_aggregate_function_destroy = _unstable_duckdb_v2_aggregate_function_destroy
@@ -4637,6 +4792,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_set_bind_callback = _unstable_duckdb_v2_scalar_function_set_bind_callback
         self._duckdb_v2_scalar_function_set_init_callback = _unstable_duckdb_v2_scalar_function_set_init_callback
         self._duckdb_v2_scalar_function_set_exec_callback = _unstable_duckdb_v2_scalar_function_set_exec_callback
+        self._duckdb_v2_scalar_function_set_stats_callback = api[].duckdb_v2_scalar_function_set_stats_callback
         self._duckdb_v2_scalar_function_resolve_types_set_return_type = _unstable_duckdb_v2_scalar_function_resolve_types_set_return_type
         self._duckdb_v2_scalar_function_bind_set_bind_data = _unstable_duckdb_v2_scalar_function_bind_set_bind_data
         self._duckdb_v2_scalar_function_init_get_user_data = _unstable_duckdb_v2_scalar_function_init_get_user_data
@@ -4649,6 +4805,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_exec_get_arg_count = _unstable_duckdb_v2_scalar_function_exec_get_arg_count
         self._duckdb_v2_scalar_function_exec_get_arg = _unstable_duckdb_v2_scalar_function_exec_get_arg
         self._duckdb_v2_scalar_function_exec_get_result = _unstable_duckdb_v2_scalar_function_exec_get_result
+        self._duckdb_v2_scalar_function_stats_get_user_data = api[].duckdb_v2_scalar_function_stats_get_user_data
+        self._duckdb_v2_scalar_function_stats_get_bind_data = api[].duckdb_v2_scalar_function_stats_get_bind_data
+        self._duckdb_v2_scalar_function_stats_get_arg_count = api[].duckdb_v2_scalar_function_stats_get_arg_count
+        self._duckdb_v2_scalar_function_stats_get_arg_stats = api[].duckdb_v2_scalar_function_stats_get_arg_stats
+        self._duckdb_v2_scalar_function_stats_get_result_stats = api[].duckdb_v2_scalar_function_stats_get_result_stats
         self._duckdb_v2_connection_register_scalar_function = _unstable_duckdb_v2_connection_register_scalar_function
         self._duckdb_v2_extension_register_scalar_function = _unstable_duckdb_v2_extension_register_scalar_function
         self._duckdb_v2_scalar_function_destroy = _unstable_duckdb_v2_scalar_function_destroy
@@ -4668,6 +4829,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_set_filter_pushdown_callback = _unstable_duckdb_v2_table_function_set_filter_pushdown_callback
         self._duckdb_v2_table_function_set_partition_data_callback = _unstable_duckdb_v2_table_function_set_partition_data_callback
         self._duckdb_v2_table_function_set_partitioning_callback = _unstable_duckdb_v2_table_function_set_partitioning_callback
+        self._duckdb_v2_table_function_set_stats_callback = api[].duckdb_v2_table_function_set_stats_callback
         self._duckdb_v2_table_function_bind_add_result_column = _unstable_duckdb_v2_table_function_bind_add_result_column
         self._duckdb_v2_table_function_bind_set_cardinality = _unstable_duckdb_v2_table_function_bind_set_cardinality
         self._duckdb_v2_table_function_bind_set_order_preservation = _unstable_duckdb_v2_table_function_bind_set_order_preservation
@@ -4716,6 +4878,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_partitioning_get_partition_column_count = _unstable_duckdb_v2_table_function_partitioning_get_partition_column_count
         self._duckdb_v2_table_function_partitioning_get_partition_column_index = _unstable_duckdb_v2_table_function_partitioning_get_partition_column_index
         self._duckdb_v2_table_function_partitioning_set_partition_info = _unstable_duckdb_v2_table_function_partitioning_set_partition_info
+        self._duckdb_v2_table_function_stats_get_user_data = api[].duckdb_v2_table_function_stats_get_user_data
+        self._duckdb_v2_table_function_stats_get_bind_data = api[].duckdb_v2_table_function_stats_get_bind_data
+        self._duckdb_v2_table_function_stats_get_column_index = api[].duckdb_v2_table_function_stats_get_column_index
+        self._duckdb_v2_table_function_stats_get_result_stats = api[].duckdb_v2_table_function_stats_get_result_stats
         self._duckdb_v2_connection_register_table_function = _unstable_duckdb_v2_connection_register_table_function
         self._duckdb_v2_extension_register_table_function = _unstable_duckdb_v2_extension_register_table_function
         self._duckdb_v2_table_function_destroy = _unstable_duckdb_v2_table_function_destroy
@@ -4829,6 +4995,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_sql_statement_get_parameter_name = _unstable_duckdb_v2_sql_statement_get_parameter_name
         self._duckdb_v2_sql_statement_destroy = _unstable_duckdb_v2_sql_statement_destroy
         self._duckdb_v2_statement_iterator_destroy = _unstable_duckdb_v2_statement_iterator_destroy
+        self._duckdb_v2_stats_can_have_null = api[].duckdb_v2_stats_can_have_null
+        self._duckdb_v2_stats_can_have_valid = api[].duckdb_v2_stats_can_have_valid
+        self._duckdb_v2_stats_set_can_have_null = api[].duckdb_v2_stats_set_can_have_null
+        self._duckdb_v2_stats_set_can_have_valid = api[].duckdb_v2_stats_set_can_have_valid
         self._duckdb_v2_tokenize_sql = _unstable_duckdb_v2_tokenize_sql
         self._duckdb_v2_token_iterator_next = _unstable_duckdb_v2_token_iterator_next
         self._duckdb_v2_token_iterator_ends_unterminated = _unstable_duckdb_v2_token_iterator_ends_unterminated
@@ -5081,6 +5251,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_set_combine_callback = move._duckdb_v2_aggregate_function_set_combine_callback
         self._duckdb_v2_aggregate_function_set_finalize_callback = move._duckdb_v2_aggregate_function_set_finalize_callback
         self._duckdb_v2_aggregate_function_set_destroy_callback = move._duckdb_v2_aggregate_function_set_destroy_callback
+        self._duckdb_v2_aggregate_function_set_stats_callback = move._duckdb_v2_aggregate_function_set_stats_callback
         self._duckdb_v2_aggregate_function_bind_set_return_type = move._duckdb_v2_aggregate_function_bind_set_return_type
         self._duckdb_v2_aggregate_function_size_get_user_data = move._duckdb_v2_aggregate_function_size_get_user_data
         self._duckdb_v2_aggregate_function_size_get_bind_data = move._duckdb_v2_aggregate_function_size_get_bind_data
@@ -5110,6 +5281,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_aggregate_function_destroy_get_bind_data = move._duckdb_v2_aggregate_function_destroy_get_bind_data
         self._duckdb_v2_aggregate_function_destroy_get_state_count = move._duckdb_v2_aggregate_function_destroy_get_state_count
         self._duckdb_v2_aggregate_function_destroy_get_states = move._duckdb_v2_aggregate_function_destroy_get_states
+        self._duckdb_v2_aggregate_function_stats_get_user_data = move._duckdb_v2_aggregate_function_stats_get_user_data
+        self._duckdb_v2_aggregate_function_stats_get_bind_data = move._duckdb_v2_aggregate_function_stats_get_bind_data
+        self._duckdb_v2_aggregate_function_stats_get_arg_count = move._duckdb_v2_aggregate_function_stats_get_arg_count
+        self._duckdb_v2_aggregate_function_stats_get_arg_stats = move._duckdb_v2_aggregate_function_stats_get_arg_stats
+        self._duckdb_v2_aggregate_function_stats_get_result_stats = move._duckdb_v2_aggregate_function_stats_get_result_stats
         self._duckdb_v2_connection_register_aggregate_function = move._duckdb_v2_connection_register_aggregate_function
         self._duckdb_v2_extension_register_aggregate_function = move._duckdb_v2_extension_register_aggregate_function
         self._duckdb_v2_aggregate_function_destroy = move._duckdb_v2_aggregate_function_destroy
@@ -5259,6 +5435,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_set_bind_callback = move._duckdb_v2_scalar_function_set_bind_callback
         self._duckdb_v2_scalar_function_set_init_callback = move._duckdb_v2_scalar_function_set_init_callback
         self._duckdb_v2_scalar_function_set_exec_callback = move._duckdb_v2_scalar_function_set_exec_callback
+        self._duckdb_v2_scalar_function_set_stats_callback = move._duckdb_v2_scalar_function_set_stats_callback
         self._duckdb_v2_scalar_function_resolve_types_set_return_type = move._duckdb_v2_scalar_function_resolve_types_set_return_type
         self._duckdb_v2_scalar_function_bind_set_bind_data = move._duckdb_v2_scalar_function_bind_set_bind_data
         self._duckdb_v2_scalar_function_init_get_user_data = move._duckdb_v2_scalar_function_init_get_user_data
@@ -5271,6 +5448,11 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_scalar_function_exec_get_arg_count = move._duckdb_v2_scalar_function_exec_get_arg_count
         self._duckdb_v2_scalar_function_exec_get_arg = move._duckdb_v2_scalar_function_exec_get_arg
         self._duckdb_v2_scalar_function_exec_get_result = move._duckdb_v2_scalar_function_exec_get_result
+        self._duckdb_v2_scalar_function_stats_get_user_data = move._duckdb_v2_scalar_function_stats_get_user_data
+        self._duckdb_v2_scalar_function_stats_get_bind_data = move._duckdb_v2_scalar_function_stats_get_bind_data
+        self._duckdb_v2_scalar_function_stats_get_arg_count = move._duckdb_v2_scalar_function_stats_get_arg_count
+        self._duckdb_v2_scalar_function_stats_get_arg_stats = move._duckdb_v2_scalar_function_stats_get_arg_stats
+        self._duckdb_v2_scalar_function_stats_get_result_stats = move._duckdb_v2_scalar_function_stats_get_result_stats
         self._duckdb_v2_connection_register_scalar_function = move._duckdb_v2_connection_register_scalar_function
         self._duckdb_v2_extension_register_scalar_function = move._duckdb_v2_extension_register_scalar_function
         self._duckdb_v2_scalar_function_destroy = move._duckdb_v2_scalar_function_destroy
@@ -5290,6 +5472,7 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_set_filter_pushdown_callback = move._duckdb_v2_table_function_set_filter_pushdown_callback
         self._duckdb_v2_table_function_set_partition_data_callback = move._duckdb_v2_table_function_set_partition_data_callback
         self._duckdb_v2_table_function_set_partitioning_callback = move._duckdb_v2_table_function_set_partitioning_callback
+        self._duckdb_v2_table_function_set_stats_callback = move._duckdb_v2_table_function_set_stats_callback
         self._duckdb_v2_table_function_bind_add_result_column = move._duckdb_v2_table_function_bind_add_result_column
         self._duckdb_v2_table_function_bind_set_cardinality = move._duckdb_v2_table_function_bind_set_cardinality
         self._duckdb_v2_table_function_bind_set_order_preservation = move._duckdb_v2_table_function_bind_set_order_preservation
@@ -5338,6 +5521,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_table_function_partitioning_get_partition_column_count = move._duckdb_v2_table_function_partitioning_get_partition_column_count
         self._duckdb_v2_table_function_partitioning_get_partition_column_index = move._duckdb_v2_table_function_partitioning_get_partition_column_index
         self._duckdb_v2_table_function_partitioning_set_partition_info = move._duckdb_v2_table_function_partitioning_set_partition_info
+        self._duckdb_v2_table_function_stats_get_user_data = move._duckdb_v2_table_function_stats_get_user_data
+        self._duckdb_v2_table_function_stats_get_bind_data = move._duckdb_v2_table_function_stats_get_bind_data
+        self._duckdb_v2_table_function_stats_get_column_index = move._duckdb_v2_table_function_stats_get_column_index
+        self._duckdb_v2_table_function_stats_get_result_stats = move._duckdb_v2_table_function_stats_get_result_stats
         self._duckdb_v2_connection_register_table_function = move._duckdb_v2_connection_register_table_function
         self._duckdb_v2_extension_register_table_function = move._duckdb_v2_extension_register_table_function
         self._duckdb_v2_table_function_destroy = move._duckdb_v2_table_function_destroy
@@ -5451,6 +5638,10 @@ struct LibDuckDBV2(Movable):
         self._duckdb_v2_sql_statement_get_parameter_name = move._duckdb_v2_sql_statement_get_parameter_name
         self._duckdb_v2_sql_statement_destroy = move._duckdb_v2_sql_statement_destroy
         self._duckdb_v2_statement_iterator_destroy = move._duckdb_v2_statement_iterator_destroy
+        self._duckdb_v2_stats_can_have_null = move._duckdb_v2_stats_can_have_null
+        self._duckdb_v2_stats_can_have_valid = move._duckdb_v2_stats_can_have_valid
+        self._duckdb_v2_stats_set_can_have_null = move._duckdb_v2_stats_set_can_have_null
+        self._duckdb_v2_stats_set_can_have_valid = move._duckdb_v2_stats_set_can_have_valid
         self._duckdb_v2_tokenize_sql = move._duckdb_v2_tokenize_sql
         self._duckdb_v2_token_iterator_next = move._duckdb_v2_token_iterator_next
         self._duckdb_v2_token_iterator_ends_unterminated = move._duckdb_v2_token_iterator_ends_unterminated
@@ -6086,8 +6277,8 @@ struct LibDuckDBV2(Movable):
         partial: an unqualified or schema-qualified name resolves through the connection's search path, exactly as the
         same name resolves in SQL. A two-part name tries the first part as a schema and as an attached database, as SQL
         does, and is rejected when both readings exist. A name that resolves to nothing is rejected with the engine's
-        missing-table error; a name that resolves to a view is rejected with the engine's not-a-table error, since a
-        description snapshots a base table.
+        missing-table error. A name that resolves to a view is rejected with the same error: a description snapshots a
+        base table, and a view is not one, so it is reported as a table that does not exist.
 
         Args:
             conn: The connection whose catalogs and search path resolve the name.
@@ -8710,6 +8901,27 @@ struct LibDuckDBV2(Movable):
         """
         return self._duckdb_v2_aggregate_function_set_destroy_callback(function_, callback, err.as_unsafe_any_origin())
 
+    def duckdb_v2_aggregate_function_set_stats_callback[err_origin: MutOrigin](
+        self,
+        function_: duckdb_v2_aggregate_function_handle,
+        callback: duckdb_v2_aggregate_function_stats_callback_fn,
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Sets the optional stats callback of the aggregate function.
+
+        The stats callback is invoked during query optimization for each call site of the function, after it has been
+        bound. Through its `duckdb_v2_aggregate_function_stats_info` it reads the statistics of the arguments and narrows the
+        statistics of the result, which the engine then uses to simplify the query. A function without a stats callback
+        gives the engine no statistics for its result.
+
+        Args:
+            function_: The function to set the stats callback of.
+            callback: The stats callback to set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_set_stats_callback(function_, callback, err.as_unsafe_any_origin())
+
     def duckdb_v2_aggregate_function_bind_set_return_type[err_origin: MutOrigin](
         self,
         info: duckdb_v2_aggregate_function_bind_info_handle,
@@ -9217,6 +9429,105 @@ struct LibDuckDBV2(Movable):
             err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
         """
         return self._duckdb_v2_aggregate_function_destroy_get_states(info, states.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_aggregate_function_stats_get_user_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_aggregate_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the user data set via `duckdb_v2_aggregate_function_set_user_data`.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the user data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_stats_get_user_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_aggregate_function_stats_get_bind_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_aggregate_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the bind data set by the function's bind callback.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the bind data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_stats_get_bind_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_aggregate_function_stats_get_arg_count[positional_fixed_origin: MutOrigin, positional_variadic_origin: MutOrigin, named_fixed_origin: MutOrigin, named_variadic_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_aggregate_function_stats_info_handle,
+        positional_fixed: Pointer[idx_t, positional_fixed_origin],
+        positional_variadic: Pointer[idx_t, positional_variadic_origin],
+        named_fixed: Pointer[idx_t, named_fixed_origin],
+        named_variadic: Pointer[idx_t, named_variadic_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Returns how many arguments the call site has, split into the four parts of the argument list.
+
+        The parts and their order are those the bind callback saw through `duckdb_v2_function_bind_get_arg_count`, and the
+        arguments are at the same indices. Valid indices for `duckdb_v2_aggregate_function_stats_get_arg_stats` are [0, the sum of
+        the four counts). Every out-parameter may be NULL, in which case nothing is written to it.
+
+        Args:
+            info: The stats info handle.
+            positional_fixed: Optional. Receives the number of positional-only and standard parameters.
+            positional_variadic: Optional. Receives the number of arguments `*args` received, 0 when the signature has none.
+            named_fixed: Optional. Receives the number of named-only parameters.
+            named_variadic: Optional. Receives the number of arguments `**kwargs` received, 0 when the signature has none.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_stats_get_arg_count(info, positional_fixed.as_unsafe_any_origin(), positional_variadic.as_unsafe_any_origin(), named_fixed.as_unsafe_any_origin(), named_variadic.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_aggregate_function_stats_get_arg_stats[stats_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_aggregate_function_stats_info_handle,
+        index: idx_t,
+        stats: Pointer[duckdb_v2_stats_handle, stats_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the statistics of the argument at the given index.
+
+        The index is the one the bind callback used for the argument. The statistics are read-only. Fails if the index
+        is out of bounds. Borrowed; valid only for the duration of the callback.
+
+        Args:
+            info: The stats info handle.
+            index: The index of the argument.
+            stats: Receives the borrowed, read-only statistics of the argument.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_stats_get_arg_stats(info, index, stats.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_aggregate_function_stats_get_result_stats[stats_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_aggregate_function_stats_info_handle,
+        stats: Pointer[duckdb_v2_stats_handle, stats_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the statistics of the call site's result, for the callback to narrow.
+
+        The statistics start out unknown, with every kind of value possible. They describe every result the
+        aggregate produces, including the result of a group with no input rows, such as an ungrouped aggregate over
+        an empty table. Borrowed; valid only for the duration of the callback.
+
+        Args:
+            info: The stats info handle.
+            stats: Receives the borrowed, writable statistics of the call site's result.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_aggregate_function_stats_get_result_stats(info, stats.as_unsafe_any_origin(), err.as_unsafe_any_origin())
 
     def duckdb_v2_connection_register_aggregate_function[err_origin: MutOrigin](
         self,
@@ -12213,6 +12524,27 @@ struct LibDuckDBV2(Movable):
         """
         return self._duckdb_v2_scalar_function_set_exec_callback(function_, callback, err.as_unsafe_any_origin())
 
+    def duckdb_v2_scalar_function_set_stats_callback[err_origin: MutOrigin](
+        self,
+        function_: duckdb_v2_scalar_function_handle,
+        callback: duckdb_v2_scalar_function_stats_callback_fn,
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Sets the optional stats callback of the scalar function.
+
+        The stats callback is invoked during query optimization for each call site of the function, after it has been
+        bound. Through its `duckdb_v2_scalar_function_stats_info` it reads the statistics of the arguments and narrows the
+        statistics of the result, which the engine then uses to simplify the query. A function without a stats callback
+        gives the engine no statistics for its result.
+
+        Args:
+            function_: The function to set the stats callback of.
+            callback: The stats callback to set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_set_stats_callback(function_, callback, err.as_unsafe_any_origin())
+
     def duckdb_v2_scalar_function_resolve_types_set_return_type[err_origin: MutOrigin](
         self,
         info: duckdb_v2_scalar_function_resolve_types_info_handle,
@@ -12440,6 +12772,104 @@ struct LibDuckDBV2(Movable):
             err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
         """
         return self._duckdb_v2_scalar_function_exec_get_result(info, vector.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_scalar_function_stats_get_user_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_scalar_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the user data set via `duckdb_v2_scalar_function_set_user_data`.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the user data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_stats_get_user_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_scalar_function_stats_get_bind_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_scalar_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the bind data set by the function's bind callback.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the bind data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_stats_get_bind_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_scalar_function_stats_get_arg_count[positional_fixed_origin: MutOrigin, positional_variadic_origin: MutOrigin, named_fixed_origin: MutOrigin, named_variadic_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_scalar_function_stats_info_handle,
+        positional_fixed: Pointer[idx_t, positional_fixed_origin],
+        positional_variadic: Pointer[idx_t, positional_variadic_origin],
+        named_fixed: Pointer[idx_t, named_fixed_origin],
+        named_variadic: Pointer[idx_t, named_variadic_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Returns how many arguments the call site has, split into the four parts of the argument list.
+
+        The parts and their order are those the bind callback saw through `duckdb_v2_function_bind_get_arg_count`, and the
+        arguments are at the same indices. Valid indices for `duckdb_v2_scalar_function_stats_get_arg_stats` are [0, the sum of
+        the four counts). Every out-parameter may be NULL, in which case nothing is written to it.
+
+        Args:
+            info: The stats info handle.
+            positional_fixed: Optional. Receives the number of positional-only and standard parameters.
+            positional_variadic: Optional. Receives the number of arguments `*args` received, 0 when the signature has none.
+            named_fixed: Optional. Receives the number of named-only parameters.
+            named_variadic: Optional. Receives the number of arguments `**kwargs` received, 0 when the signature has none.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_stats_get_arg_count(info, positional_fixed.as_unsafe_any_origin(), positional_variadic.as_unsafe_any_origin(), named_fixed.as_unsafe_any_origin(), named_variadic.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_scalar_function_stats_get_arg_stats[stats_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_scalar_function_stats_info_handle,
+        index: idx_t,
+        stats: Pointer[duckdb_v2_stats_handle, stats_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the statistics of the argument at the given index.
+
+        The index is the one the bind callback used for the argument. The statistics are read-only. Fails if the index
+        is out of bounds. Borrowed; valid only for the duration of the callback.
+
+        Args:
+            info: The stats info handle.
+            index: The index of the argument.
+            stats: Receives the borrowed, read-only statistics of the argument.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_stats_get_arg_stats(info, index, stats.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_scalar_function_stats_get_result_stats[stats_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_scalar_function_stats_info_handle,
+        stats: Pointer[duckdb_v2_stats_handle, stats_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the statistics of the call site's result, for the callback to narrow.
+
+        The statistics start out unknown, with every kind of value possible. Borrowed; valid only for the
+        duration of the callback.
+
+        Args:
+            info: The stats info handle.
+            stats: Receives the borrowed, writable statistics of the call site's result.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_scalar_function_stats_get_result_stats(info, stats.as_unsafe_any_origin(), err.as_unsafe_any_origin())
 
     def duckdb_v2_connection_register_scalar_function[err_origin: MutOrigin](
         self,
@@ -12863,6 +13293,26 @@ struct LibDuckDBV2(Movable):
             err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
         """
         return self._duckdb_v2_table_function_set_partitioning_callback(function_, callback, err.as_unsafe_any_origin())
+
+    def duckdb_v2_table_function_set_stats_callback[err_origin: MutOrigin](
+        self,
+        function_: duckdb_v2_table_function_handle,
+        callback: duckdb_v2_table_function_stats_callback_fn,
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Sets the optional stats callback of the table function.
+
+        The stats callback is invoked during query optimization once for each declared column the query reads. Through
+        its `duckdb_v2_table_function_stats_info` it narrows the statistics of that column, which the engine then uses to
+        simplify the query. A function without a stats callback gives the engine no statistics for its columns.
+
+        Args:
+            function_: The function to set the stats callback of.
+            callback: The stats callback to set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_table_function_set_stats_callback(function_, callback, err.as_unsafe_any_origin())
 
     def duckdb_v2_table_function_bind_add_result_column[name_origin: ImmOrigin, err_origin: MutOrigin](
         self,
@@ -13798,6 +14248,75 @@ struct LibDuckDBV2(Movable):
             err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
         """
         return self._duckdb_v2_table_function_partitioning_set_partition_info(info, partition_info, err.as_unsafe_any_origin())
+
+    def duckdb_v2_table_function_stats_get_user_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_table_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the user data set via `duckdb_v2_table_function_set_user_data`.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the user data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_table_function_stats_get_user_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_table_function_stats_get_bind_data[data_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_table_function_stats_info_handle,
+        data: Pointer[Pointer[NoneType, MutUntrackedOrigin], data_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the bind data set by the function's bind callback.
+
+        Args:
+            info: The stats info handle.
+            data: Receives the bind data pointer, or null if none was set.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_table_function_stats_get_bind_data(info, data.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_table_function_stats_get_column_index[column_index_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_table_function_stats_info_handle,
+        column_index: Pointer[idx_t, column_index_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Returns which declared column the statistics describe.
+
+        The result indexes the columns declared with `duckdb_v2_table_function_bind_add_result_column`, in declaration order.
+
+        Args:
+            info: The stats info handle.
+            column_index: Receives the index of the declared column.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_table_function_stats_get_column_index(info, column_index.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_table_function_stats_get_result_stats[stats_origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        info: duckdb_v2_table_function_stats_info_handle,
+        stats: Pointer[duckdb_v2_stats_handle, stats_origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Retrieves the statistics of the column, for the callback to narrow.
+
+        The statistics start out unknown, with every kind of value possible. They describe every value the scan
+        produces for the column. Borrowed; valid only for the duration of the callback.
+
+        Args:
+            info: The stats info handle.
+            stats: Receives the borrowed, writable statistics of the column.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_table_function_stats_get_result_stats(info, stats.as_unsafe_any_origin(), err.as_unsafe_any_origin())
 
     def duckdb_v2_connection_register_table_function[err_origin: MutOrigin](
         self,
@@ -16354,27 +16873,34 @@ struct LibDuckDBV2(Movable):
         self,
         conn: duckdb_v2_connection_handle,
         sql: Pointer[c_char, sql_origin],
+        apply_invalidation_policy: Bool,
         out_iterator: Pointer[duckdb_v2_statement_iterator_handle, out_iterator_origin],
         err: Pointer[duckdb_v2_error_info_handle, err_origin],
     ) -> DUCKDB_V2_ERROR:
         """
         Parses a SQL string into an iterator over its statements.
 
-        Parses and nothing more: no binding, no catalog access, no transaction.
-        The connection supplies the parser options and parser extensions, and is
-        not otherwise touched. Statements are raw parser output; statement-level
-        rewrites happen inside statement_execute. The SQL string is copied, so
-        the caller may free it once this call returns. An input with no
-        statements — empty, whitespace, or separators only — yields an iterator
-        that is immediately exhausted.
+        Parses and nothing more: no binding and no catalog access. The connection
+        supplies the parser options and parser extensions. With
+        apply_invalidation_policy, a parse error invalidates the connection's
+        active transaction according to the transaction invalidation policy, like
+        an error from running the statement would; pass that when the statements
+        are parsed to be run. Without it, a parse error leaves the transaction
+        usable, for callers that only inspect the statements, for example with
+        `duckdb_v2_statement_bind`.
+        Statements are raw parser output; statement-level rewrites happen inside
+        statement_execute. The SQL string is copied, so the caller may free it
+        once this call returns. An input with no statements — empty, whitespace,
+        or separators only — yields an iterator that is immediately exhausted.
 
         Args:
             conn: The connection supplying the parser configuration.
             sql: Null-terminated SQL string; may contain any number of statements.
+            apply_invalidation_policy: Whether a parse error invalidates the active transaction, according to the transaction invalidation policy.
             out_iterator: Receives the new iterator handle.
             err: Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
         """
-        return self._duckdb_v2_parse_sql(conn, sql.as_unsafe_any_origin(), out_iterator.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+        return self._duckdb_v2_parse_sql(conn, sql.as_unsafe_any_origin(), apply_invalidation_policy, out_iterator.as_unsafe_any_origin(), err.as_unsafe_any_origin())
 
     def duckdb_v2_statement_iterator_next[out_statement_origin: MutOrigin, err_origin: MutOrigin](
         self,
@@ -16609,6 +17135,88 @@ struct LibDuckDBV2(Movable):
             iterator: The iterator to destroy.
         """
         return self._duckdb_v2_statement_iterator_destroy(iterator.as_unsafe_any_origin())
+
+
+    # ===--------------------------------------------------------------------===#
+    # Stats
+    # ===--------------------------------------------------------------------===#
+
+    def duckdb_v2_stats_can_have_null[out__origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        stats: duckdb_v2_stats_handle,
+        out_: Pointer[Bool, out__origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Returns whether the values described can include NULL.
+
+        False guarantees that every value is non-NULL.
+
+        Args:
+            stats: The statistics to read.
+            out_: Receives true if a value can be NULL, false if none can.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_stats_can_have_null(stats, out_.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_stats_can_have_valid[out__origin: MutOrigin, err_origin: MutOrigin](
+        self,
+        stats: duckdb_v2_stats_handle,
+        out_: Pointer[Bool, out__origin],
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Returns whether the values described can include a valid, non-NULL value.
+
+        False guarantees that every value is NULL. When both this and `duckdb_v2_stats_can_have_null` are false, there are no
+        values at all.
+
+        Args:
+            stats: The statistics to read.
+            out_: Receives true if a value can be non-NULL, false if none can.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_stats_can_have_valid(stats, out_.as_unsafe_any_origin(), err.as_unsafe_any_origin())
+
+    def duckdb_v2_stats_set_can_have_null[err_origin: MutOrigin](
+        self,
+        stats: duckdb_v2_stats_handle,
+        value: Bool,
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Sets whether the values described can include NULL.
+
+        Setting false is a guarantee the engine relies on: a NULL among the values then produces wrong query results.
+        Setting true is always safe. Fails with `ERROR_INPUT_INVALID` on read-only statistics, such as those of an
+        argument.
+
+        Args:
+            stats: The statistics to modify.
+            value: True if a value can be NULL, false if none can.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_stats_set_can_have_null(stats, value, err.as_unsafe_any_origin())
+
+    def duckdb_v2_stats_set_can_have_valid[err_origin: MutOrigin](
+        self,
+        stats: duckdb_v2_stats_handle,
+        value: Bool,
+        err: Pointer[duckdb_v2_error_info_handle, err_origin],
+    ) -> DUCKDB_V2_ERROR:
+        """
+        Sets whether the values described can include a valid, non-NULL value.
+
+        Setting false is a guarantee the engine relies on: a non-NULL value among the values then produces wrong query
+        results. Setting true is always safe. Fails with `ERROR_INPUT_INVALID` on read-only statistics, such as those of
+        an argument.
+
+        Args:
+            stats: The statistics to modify.
+            value: True if a value can be non-NULL, false if none can.
+            err: Optional. On failure, receives an opaque info handle the caller must destroy via `duckdb_v2_error_info_destroy`.
+        """
+        return self._duckdb_v2_stats_set_can_have_valid(stats, value, err.as_unsafe_any_origin())
 
 
     # ===--------------------------------------------------------------------===#
@@ -19582,6 +20190,10 @@ comptime _duckdb_v2_aggregate_function_set_destroy_callback = _dylib_function["d
     def(duckdb_v2_aggregate_function_handle, duckdb_v2_aggregate_function_destroy_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
+comptime _duckdb_v2_aggregate_function_set_stats_callback = _dylib_function["duckdb_v2_aggregate_function_set_stats_callback",
+    def(duckdb_v2_aggregate_function_handle, duckdb_v2_aggregate_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
 comptime _duckdb_v2_aggregate_function_bind_set_return_type = _dylib_function["duckdb_v2_aggregate_function_bind_set_return_type",
     def(duckdb_v2_aggregate_function_bind_info_handle, duckdb_v2_logical_type_handle, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
@@ -19696,6 +20308,26 @@ comptime _duckdb_v2_aggregate_function_destroy_get_state_count = _dylib_function
 
 comptime _duckdb_v2_aggregate_function_destroy_get_states = _dylib_function["duckdb_v2_aggregate_function_destroy_get_states",
     def(duckdb_v2_aggregate_function_destroy_info_handle, Pointer[Pointer[Pointer[NoneType, MutUntrackedOrigin], MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_aggregate_function_stats_get_user_data = _dylib_function["duckdb_v2_aggregate_function_stats_get_user_data",
+    def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_aggregate_function_stats_get_bind_data = _dylib_function["duckdb_v2_aggregate_function_stats_get_bind_data",
+    def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_aggregate_function_stats_get_arg_count = _dylib_function["duckdb_v2_aggregate_function_stats_get_arg_count",
+    def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_aggregate_function_stats_get_arg_stats = _dylib_function["duckdb_v2_aggregate_function_stats_get_arg_stats",
+    def(duckdb_v2_aggregate_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_aggregate_function_stats_get_result_stats = _dylib_function["duckdb_v2_aggregate_function_stats_get_result_stats",
+    def(duckdb_v2_aggregate_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_connection_register_aggregate_function = _dylib_function["duckdb_v2_connection_register_aggregate_function",
@@ -20294,6 +20926,10 @@ comptime _duckdb_v2_scalar_function_set_exec_callback = _dylib_function["duckdb_
     def(duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_exec_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
+comptime _duckdb_v2_scalar_function_set_stats_callback = _dylib_function["duckdb_v2_scalar_function_set_stats_callback",
+    def(duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
 comptime _duckdb_v2_scalar_function_resolve_types_set_return_type = _dylib_function["duckdb_v2_scalar_function_resolve_types_set_return_type",
     def(duckdb_v2_scalar_function_resolve_types_info_handle, duckdb_v2_logical_type_handle, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
@@ -20340,6 +20976,26 @@ comptime _duckdb_v2_scalar_function_exec_get_arg = _dylib_function["duckdb_v2_sc
 
 comptime _duckdb_v2_scalar_function_exec_get_result = _dylib_function["duckdb_v2_scalar_function_exec_get_result",
     def(duckdb_v2_scalar_function_exec_info_handle, Pointer[duckdb_v2_vector_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_scalar_function_stats_get_user_data = _dylib_function["duckdb_v2_scalar_function_stats_get_user_data",
+    def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_scalar_function_stats_get_bind_data = _dylib_function["duckdb_v2_scalar_function_stats_get_bind_data",
+    def(duckdb_v2_scalar_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_scalar_function_stats_get_arg_count = _dylib_function["duckdb_v2_scalar_function_stats_get_arg_count",
+    def(duckdb_v2_scalar_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_scalar_function_stats_get_arg_stats = _dylib_function["duckdb_v2_scalar_function_stats_get_arg_stats",
+    def(duckdb_v2_scalar_function_stats_info_handle, idx_t, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_scalar_function_stats_get_result_stats = _dylib_function["duckdb_v2_scalar_function_stats_get_result_stats",
+    def(duckdb_v2_scalar_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_connection_register_scalar_function = _dylib_function["duckdb_v2_connection_register_scalar_function",
@@ -20416,6 +21072,10 @@ comptime _duckdb_v2_table_function_set_partition_data_callback = _dylib_function
 
 comptime _duckdb_v2_table_function_set_partitioning_callback = _dylib_function["duckdb_v2_table_function_set_partitioning_callback",
     def(duckdb_v2_table_function_handle, duckdb_v2_table_function_partitioning_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_table_function_set_stats_callback = _dylib_function["duckdb_v2_table_function_set_stats_callback",
+    def(duckdb_v2_table_function_handle, duckdb_v2_table_function_stats_callback_fn, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_table_function_bind_add_result_column = _dylib_function["duckdb_v2_table_function_bind_add_result_column",
@@ -20608,6 +21268,22 @@ comptime _duckdb_v2_table_function_partitioning_get_partition_column_index = _dy
 
 comptime _duckdb_v2_table_function_partitioning_set_partition_info = _dylib_function["duckdb_v2_table_function_partitioning_set_partition_info",
     def(duckdb_v2_table_function_partitioning_info_handle, DUCKDB_V2_TABLE_PARTITION_INFO, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_table_function_stats_get_user_data = _dylib_function["duckdb_v2_table_function_stats_get_user_data",
+    def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_table_function_stats_get_bind_data = _dylib_function["duckdb_v2_table_function_stats_get_bind_data",
+    def(duckdb_v2_table_function_stats_info_handle, Pointer[Pointer[NoneType, MutUntrackedOrigin], MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_table_function_stats_get_column_index = _dylib_function["duckdb_v2_table_function_stats_get_column_index",
+    def(duckdb_v2_table_function_stats_info_handle, Pointer[idx_t, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_table_function_stats_get_result_stats = _dylib_function["duckdb_v2_table_function_stats_get_result_stats",
+    def(duckdb_v2_table_function_stats_info_handle, Pointer[duckdb_v2_stats_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_connection_register_table_function = _dylib_function["duckdb_v2_connection_register_table_function",
@@ -21023,7 +21699,7 @@ comptime _duckdb_v2_schema_destroy = _dylib_function["duckdb_v2_schema_destroy",
 ]
 
 comptime _duckdb_v2_parse_sql = _dylib_function["duckdb_v2_parse_sql",
-    def(duckdb_v2_connection_handle, Pointer[c_char, ImmutAnyOrigin], Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+    def(duckdb_v2_connection_handle, Pointer[c_char, ImmutAnyOrigin], Bool, Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_statement_iterator_next = _dylib_function["duckdb_v2_statement_iterator_next",
@@ -21060,6 +21736,22 @@ comptime _duckdb_v2_sql_statement_destroy = _dylib_function["duckdb_v2_sql_state
 
 comptime _duckdb_v2_statement_iterator_destroy = _dylib_function["duckdb_v2_statement_iterator_destroy",
     def(Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_stats_can_have_null = _dylib_function["duckdb_v2_stats_can_have_null",
+    def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_stats_can_have_valid = _dylib_function["duckdb_v2_stats_can_have_valid",
+    def(duckdb_v2_stats_handle, Pointer[Bool, MutAnyOrigin], Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_stats_set_can_have_null = _dylib_function["duckdb_v2_stats_set_can_have_null",
+    def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
+]
+
+comptime _duckdb_v2_stats_set_can_have_valid = _dylib_function["duckdb_v2_stats_set_can_have_valid",
+    def(duckdb_v2_stats_handle, Bool, Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) thin abi("C") -> DUCKDB_V2_ERROR
 ]
 
 comptime _duckdb_v2_tokenize_sql = _dylib_function["duckdb_v2_tokenize_sql",
@@ -22997,7 +23689,7 @@ def _unstable_duckdb_v2_schema_get_field(a0: duckdb_v2_schema_handle, a1: idx_t,
 def _unstable_duckdb_v2_schema_destroy(a0: Pointer[duckdb_v2_schema_handle, MutAnyOrigin]) abi("C") -> DUCKDB_V2_ERROR:
     abort("duckdb_v2_schema_destroy is not part of the stable V2 extension API")
 
-def _unstable_duckdb_v2_parse_sql(a0: duckdb_v2_connection_handle, a1: Pointer[c_char, ImmutAnyOrigin], a2: Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], a3: Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) abi("C") -> DUCKDB_V2_ERROR:
+def _unstable_duckdb_v2_parse_sql(a0: duckdb_v2_connection_handle, a1: Pointer[c_char, ImmutAnyOrigin], a2: Bool, a3: Pointer[duckdb_v2_statement_iterator_handle, MutAnyOrigin], a4: Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) abi("C") -> DUCKDB_V2_ERROR:
     abort("duckdb_v2_parse_sql is not part of the stable V2 extension API")
 
 def _unstable_duckdb_v2_statement_iterator_next(a0: duckdb_v2_statement_iterator_handle, a1: Pointer[duckdb_v2_sql_statement_handle, MutAnyOrigin], a2: Pointer[duckdb_v2_error_info_handle, MutAnyOrigin]) abi("C") -> DUCKDB_V2_ERROR:
