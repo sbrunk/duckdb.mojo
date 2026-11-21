@@ -22,6 +22,7 @@ TESTS=(
     test/test_signatures.mojo
     test/test_extend.mojo
     test/test_observe.mojo
+    test/test_arrow.mojo
     test/test_copy.mojo
 )
 

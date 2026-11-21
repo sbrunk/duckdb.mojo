@@ -34,7 +34,7 @@ from duckdb.extend import CastFunction, CustomOption, CustomType, MacroFunction,
 from duckdb.settings import SettingScope, Settings
 from duckdb.files import File, FileSystem
 from duckdb.observe import LogEntry, LogLevel, LogSink, MetricsNode, QueryMetrics
-from duckdb.arrow import ArrowResult, OwnedArrowArray, OwnedArrowSchema, OwnedArrowStream
+from duckdb.arrow import ArrowBatch, ArrowColumnReader, ArrowResult, OwnedArrowArray, OwnedArrowSchema, OwnedArrowStream
 from duckdb.copy import CopyFromFormat, CopyFunction, CopyInfo, CopyToFormat
 from duckdb.scalar_types import (
     Bit,

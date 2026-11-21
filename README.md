@@ -237,8 +237,8 @@ column's default value.
 `Connection` also gives access to settings (`con.settings()`), the file
 system (`con.file_system()`), profiling (`con.enable_profiling()`,
 `con.query_metrics()`), logging, Arrow import and export
-(`con.execute_arrow`, `con.arrow_scan`) and non-blocking execution
-(`result.step()`).
+(`con.execute_arrow`, `ArrowResult.fetch_batch()`, `con.arrow_scan`) and
+non-blocking execution (`result.step()`).
 
 ## User-defined functions
 

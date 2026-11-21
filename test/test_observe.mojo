@@ -104,50 +104,5 @@ def test_file_system() raises:
     assert_true(fs.remove(dir + "_probe.csv"))
 
 
-def test_arrow_export() raises:
-    var con = Database().connect()
-    var r = con.execute_arrow("SELECT i, 'row ' || i AS s FROM range(5000) t(i)", batch_size=1000)
-    var schema = r.schema()
-    assert_equal(schema.n_children(), 2)
-    var rows = 0
-    var batches = 0
-    while True:
-        var a = r.fetch_array()
-        if not a:
-            break
-        rows += len(a.value())
-        batches += 1
-    assert_equal(rows, 5000)
-    assert_equal(batches, 5)
-
-
-def test_arrow_round_trip() raises:
-    # An exported stream keeps its connection busy until it is read, so the
-    # export runs on its own connection.
-    var db = Database()
-    var src = db.connect()
-    var con = db.connect()
-    var stream = src.execute_arrow(
-        "SELECT i, 'name number ' || i AS s, [i, i + 1] AS l, {'x': i} AS st, CASE WHEN i % 2 = 0 THEN i END AS n"
-        " FROM range(5000) t(i)"
-    ).into_stream()
-    var back = con.arrow_scan(stream).fetchall()
-    _ = stream^
-    assert_equal(len(back), 5000)
-    assert_equal(back.get[String](col=1, row=4999), "name number 4999")
-    assert_equal(back.get[List[Int64]](col=2, row=3)[1], 4)
-    assert_false(back.get_optional[Int64](col=4, row=1).__bool__())
-    # SQL over a stream, with only some columns.
-    var s2 = src.execute_arrow("SELECT i, i * 2 AS d FROM range(10000) t(i)").into_stream()
-    var agg = con.arrow_scan(s2).filter("i % 2 = 0").aggregate("sum(d)").get[Int128]()
-    _ = s2^
-    assert_equal(agg[0], 49990000)
-    # A stream is read once: reading it again gives no rows.
-    var s3 = src.execute_arrow("SELECT 1").into_stream()
-    assert_equal(len(con.arrow_scan(s3).fetchall()), 1)
-    assert_equal(len(con.arrow_scan(s3).fetchall()), 0)
-    _ = s3^
-
-
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

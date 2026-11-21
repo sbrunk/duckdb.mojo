@@ -613,15 +613,19 @@ in Mojo they are named `readable`/`writable`) returning an owned `File`
 with `read`, `read_at`, `write`, `write_at`, `seek`, `tell`, `size`, `sync`
 and `close`, plus `read_all`/`write_all` on the file system itself.
 
-Arrow data leaves the API through `con.execute_arrow(sql, *args,
-batch_size=)`, which returns an `ArrowResult` that can be inspected
-(`schema()`, `fetch_array()`) or handed on as a standard `ArrowArrayStream`
-(`into_stream()`). It enters through `con.arrow_scan(stream)`, a relation
-over a stream that is read by a hidden table function (`__mojo_arrow_scan`)
-referencing the imported vectors without copying. An exported stream keeps
-its connection busy until it has been read, so a full round trip needs two
-connections. Nested columns, NULLs, filters and projections are supported
-through the Arrow path.
+Arrow data leaves through `con.execute_arrow(sql, *args, batch_size=)` and
+enters through `con.arrow_scan(stream)`, whose hidden table function
+(`__mojo_arrow_scan`) references the imported vectors without copying. An
+exported stream holds its connection until it is read, so a round trip
+needs two connections. `ArrowResult` answers `schema()` and `fetch_array()`
+as C structs, `into_stream()` as an `ArrowArrayStream`, and `fetch_batch()`
+as an `ArrowBatch` over its own array: `column[T]()`, `get[T]()` and
+`get_optional[T]()` decode the buffers in Mojo, and DuckDB is called only
+when a batch is fetched. `ArrowBatch` reads the layouts DuckDB exports, the
+large and view variants, and dictionary-encoded columns. Nested values,
+durations, float16 and a sliced top-level array raise. `release_to(dst)` moves
+the struct into an empty struct the consumer allocated, and that consumer calls
+its `release` when it no longer needs it.
 
 `COPY` formats are registered with
 `CopyFunction(name, extension=).writes[W]().reads[R]()`. A `CopyToFormat`
@@ -717,10 +721,10 @@ from an owner (`x.handle()`, `list.unsafe_ptr()`, a chunk's data) and
 handed to DuckDB is therefore freed before the C call may even run, unless
 the owner is kept alive past the call (`_ = owner^`) or the borrower holds
 the owner's origin. This applies to every borrow in the API: `Settings`,
-`FileSystem`, `MetricsNode`, `Row` and `ColumnReader` hold their owner's
-origin for exactly this reason; without it, the last statement of a block
-destroys the owner first, which shows up as misleading DuckDB errors rather
-than as a clean failure.
+`FileSystem`, `MetricsNode`, `Row`, `ColumnReader` and `ArrowColumnReader`
+hold their owner's origin for exactly this reason. Without it, the last
+statement of a block destroys the owner first, which shows up as misleading
+DuckDB errors.
 
 **Raising iterators.** `Iterator.__next__` may only raise `StopIteration`,
 which a `for` loop swallows. Iteration that can fail uses the alternative
@@ -776,8 +780,10 @@ The single list of open work. Update it when something is done or found.
   options), multi-file functions.
 - Copy functions: parallel `COPY ... FROM`, progress for it, the batch size
   and statistics callbacks of `COPY ... TO`.
-- Arrow converters inside callbacks (the importer and exporter as their own
-  types; today only `arrow_scan` uses the importer).
+- Arrow converters inside callbacks: the importer and exporter as their own
+  types. Currently only `arrow_scan` uses the importer.
+- Arrow batch reading: the formats `ArrowBatch` refuses, plus `BIGNUM`,
+  `Dict` and struct values, and `List[Optional[T]]` for NULL list elements.
 - Log sinks: the flush callback.
 - `ANY` parameters for aggregates.
 - `BIGNUM` (new in DuckDB 2.0, bytes-backed): `TypeId.BIGNUM` exists but no
